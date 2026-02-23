@@ -1,6 +1,7 @@
 use smithay::{
     backend::{
         renderer::{
+            ImportDma,
             damage::OutputDamageTracker,
             element::{Kind, memory::MemoryRenderBufferRenderElement},
             gles::GlesRenderer,
@@ -27,10 +28,13 @@ pub fn init_winit(
     event_loop: &mut EventLoop<'static, CalloopData>,
     data: &mut CalloopData,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let (mut backend, mut winit_evt) = winit::init::<GlesRenderer>()?;
+    let (backend, mut winit_evt) = winit::init::<GlesRenderer>()?;
+
+    // Store backend on state so protocol handlers can access the renderer
+    data.state.backend = Some(backend);
 
     // Create an Output representing the winit window (a virtual monitor)
-    let size = backend.window_size();
+    let size = data.state.backend.as_ref().unwrap().window_size();
     let output = Output::new(
         "winit".to_string(),
         PhysicalProperties {
@@ -49,6 +53,14 @@ pub fn init_winit(
 
     // Advertise the output as a wl_output global so clients can see it
     output.create_global::<crate::state::DriftWm>(&data.display.handle());
+
+    // Create DMA-BUF global — advertise GPU buffer formats to clients
+    let formats = data.state.backend.as_mut().unwrap().renderer().dmabuf_formats();
+    let dmabuf_global = data.state.dmabuf_state.create_global::<crate::state::DriftWm>(
+        &data.display.handle(),
+        formats,
+    );
+    data.state.dmabuf_global = Some(dmabuf_global);
 
     // Map the output into the space at (0, 0)
     data.state.space.map_output(&output, (0, 0));
@@ -102,6 +114,9 @@ pub fn init_winit(
             // --- Sync camera → output position ---
             data.state.update_output_from_camera();
 
+            // --- Take backend to split borrow from state ---
+            let mut backend = data.state.backend.take().unwrap();
+
             // --- Build cursor element ---
             let cursor_elements = build_cursor_elements(
                 &mut data.state,
@@ -138,6 +153,9 @@ pub fn init_winit(
             {
                 tracing::warn!("Submit error: {err:?}");
             }
+
+            // --- Put backend back ---
+            data.state.backend = Some(backend);
 
             // --- Post-render: send frame callbacks to clients ---
             let time = data.state.start_time.elapsed();

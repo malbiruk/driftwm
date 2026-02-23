@@ -4,13 +4,17 @@ use crate::grabs::{ResizeState, has_left, has_top};
 use crate::state::{ClientState, DriftWm};
 use smithay::{
     delegate_compositor, delegate_shm,
-    reexports::wayland_server::{protocol::wl_buffer::WlBuffer, Client},
+    reexports::{
+        calloop::Interest,
+        wayland_server::{Resource, protocol::wl_buffer::WlBuffer, Client},
+    },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            get_parent, is_sync_subsurface, with_states, CompositorClientState,
-            CompositorHandler, CompositorState,
+            add_blocker, get_parent, is_sync_subsurface, with_states, BufferAssignment,
+            CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
         },
+        dmabuf::get_dmabuf,
         shell::xdg::XdgToplevelSurfaceData,
         shm::{ShmHandler, ShmState},
     },
@@ -26,6 +30,43 @@ impl CompositorHandler for DriftWm {
     }
 
     fn commit(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+        // DMA-BUF readiness blocker: if a pending buffer is a dmabuf, add a
+        // calloop source that waits for the GPU fence and then unblocks the
+        // compositor transaction. Without this, GPU-rendered frames may commit
+        // before the buffer is ready.
+        let maybe_dmabuf = with_states(surface, |surface_data| {
+            surface_data
+                .cached_state
+                .get::<SurfaceAttributes>()
+                .pending()
+                .buffer
+                .as_ref()
+                .and_then(|assignment| match assignment {
+                    BufferAssignment::NewBuffer(buffer) => get_dmabuf(buffer).cloned().ok(),
+                    _ => None,
+                })
+        });
+        if let Some(dmabuf) = maybe_dmabuf
+            && let Ok((blocker, source)) = dmabuf.generate_blocker(Interest::READ)
+            && let Some(client) = surface.client()
+        {
+            let ok = self
+                .loop_handle
+                .insert_source(source, move |_, _, data| {
+                    if let Some(client_state) = client.get_data::<ClientState>() {
+                        let dh = data.display.handle();
+                        client_state
+                            .compositor_state
+                            .blocker_cleared(&mut data.state, &dh);
+                    }
+                    Ok(())
+                })
+                .is_ok();
+            if ok {
+                add_blocker(surface, blocker);
+            }
+        }
+
         // Update renderer surface state (buffer dimensions, surface_view, textures).
         // Without this, bbox_from_surface_tree() can't see any surfaces and returns 0x0.
         smithay::backend::renderer::utils::on_commit_buffer_handler::<DriftWm>(surface);

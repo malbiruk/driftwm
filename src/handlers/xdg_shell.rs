@@ -1,10 +1,13 @@
 use std::cell::RefCell;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::DriftWm;
+use crate::state::{DriftWm, FocusTarget};
 use smithay::{
     delegate_xdg_shell,
-    desktop::Window,
+    desktop::{
+        PopupKeyboardGrab, PopupKind, PopupPointerGrab, PopupUngrabStrategy, Window,
+        find_popup_root_surface,
+    },
     input::pointer::{CursorIcon, CursorImageStatus, Focus, GrabStartData},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -46,15 +49,61 @@ impl XdgShellHandler for DriftWm {
         // Send initial configure — the client won't render until it gets this
         window.toplevel().unwrap().send_configure();
 
-        self.space.map_element(window, pos, true);
+        self.space.map_element(window.clone(), pos, true);
+        self.space.raise_element(&window, true);
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
         self.pending_center.insert(wl_surface);
     }
 
-    fn new_popup(&mut self, surface: PopupSurface, _positioner: PositionerState) {
-        let _ = self.popups.track_popup(smithay::desktop::PopupKind::Xdg(surface));
+    fn new_popup(&mut self, surface: PopupSurface, positioner: PositionerState) {
+        tracing::info!("New popup surface");
+
+        // Set initial geometry from the positioner and send configure —
+        // the client won't commit a buffer until it receives this.
+        surface.with_pending_state(|state| {
+            state.geometry = positioner.get_geometry();
+        });
+        surface.send_configure().ok();
+
+        let popup = PopupKind::Xdg(surface);
+        if let Err(err) = self.popups.track_popup(popup) {
+            tracing::warn!("error tracking popup: {err}");
+        }
     }
 
-    fn grab(&mut self, _surface: PopupSurface, _seat: wl_seat::WlSeat, _serial: Serial) {}
+    fn grab(&mut self, surface: PopupSurface, _seat: wl_seat::WlSeat, serial: Serial) {
+        tracing::info!("Popup grab requested");
+        let kind = PopupKind::Xdg(surface);
+        let Ok(root) = find_popup_root_surface(&kind) else {
+            return;
+        };
+
+        let root_focus = FocusTarget(root);
+        let Ok(mut grab) =
+            self.popups
+                .grab_popup(root_focus, kind, &self.seat, serial)
+        else {
+            return;
+        };
+
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let pointer = self.seat.get_pointer().unwrap();
+
+        if keyboard.is_grabbed()
+            && !(keyboard.has_grab(serial)
+                || grab
+                    .previous_serial()
+                    .is_none_or(|s| keyboard.has_grab(s)))
+        {
+            grab.ungrab(PopupUngrabStrategy::All);
+            return;
+        }
+
+        keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+    }
 
     fn reposition_request(
         &mut self,

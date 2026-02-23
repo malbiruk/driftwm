@@ -12,13 +12,33 @@ trackpad gestures. No workspaces, no tiling — just drift.
 - **Rendering**: smithay's built-in OpenGL or Vulkan backend
 - **Input**: libinput (via smithay) — provides trackpad gesture events (swipe, pinch, hold)
 - **Event loop**: [calloop](https://github.com/Smithay/calloop) — smithay's event loop. All async sources (libinput, wayland clients, timers for animations/edge-pan) are wired through it
-- **Protocols to support**:
-  - `xdg-shell` — core window management (every app uses this)
-  - `xdg-decoration` — negotiate SSD vs CSD per window
-  - `wlr-layer-shell` — for bars, launchers, wallpaper tools
-  - `xdg-output` — multi-monitor info
-  - `wlr-screencopy` — screenshots
-  - XWayland — run X11 apps
+- **Protocols**:
+
+  Implemented:
+  - `wl_compositor` — surface management
+  - `wl_shm` — CPU shared-memory buffers
+  - `xdg-shell` — core window management (toplevel, popup, popup grabs)
+  - `wl_seat` — keyboard, pointer input
+  - `wl_data_device` — clipboard / drag-and-drop (cross-app)
+  - `wl_output` + `xdg-output` — monitor info
+  - `wp_cursor_shape` — client cursor shape negotiation
+  - `wp_linux_dmabuf` v3 — GPU buffer sharing (GTK4, Qt6, browsers)
+  - `wp_viewporter` — surface cropping/scaling
+  - `wp_fractional_scale` — HiDPI fractional scaling
+  - `xdg-activation` — cross-app focus requests
+  - `wp_primary_selection` — middle-click paste
+  - `wlr-data-control` — wl-copy/wl-paste clipboard access
+  - `wp_pointer_constraints` — pointer lock/confine
+  - `wp_relative_pointer` — relative motion events
+  - `keyboard-shortcuts-inhibit` — let apps grab shortcuts
+  - `idle-inhibit` — prevent screen dimming
+  - `wp_presentation_time` — frame timing feedback
+
+  Not yet implemented:
+  - `wlr-screencopy` — screenshot support (grim)
+  - `xdg-decoration` — negotiate SSD vs CSD (milestone 6)
+  - `wlr-layer-shell` — bars, launchers, notifications (milestone 7)
+  - XWayland — run X11 apps (milestone 12)
 
 ## Core concept: infinite canvas
 

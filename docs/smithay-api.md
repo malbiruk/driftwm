@@ -165,6 +165,66 @@ pub fn render_output<R, C, E, S>(
 ) -> Result<RenderOutputResult, OutputDamageTrackerError<R::Error>>
 ```
 
+## Popup System
+
+### PopupSurface
+Source: `src/wayland/shell/xdg/mod.rs`
+```rust
+impl PopupSurface {
+    pub fn send_configure(&self) -> Result<Serial, PopupConfigureError>;
+    pub fn send_repositioned(&self, token: u32);
+    pub fn with_pending_state<F, T>(&self, f: F) -> T
+    where F: FnOnce(&mut PopupState) -> T;
+}
+```
+**Must call `send_configure()` in `new_popup`** — client won't commit until it receives this.
+Set geometry first: `surface.with_pending_state(|s| s.geometry = positioner.get_geometry())`.
+
+### PopupManager
+Source: `src/desktop/wayland/popup/manager.rs`
+```rust
+impl PopupManager {
+    pub fn track_popup(&mut self, kind: PopupKind) -> Result<(), ...>;
+    pub fn commit(surface: &WlSurface);       // call in CompositorHandler::commit()
+    pub fn cleanup(&mut self);                 // call each frame
+    // Static — used internally by Window::render_elements()
+    pub fn popups_for_surface(surface: &WlSurface)
+        -> impl Iterator<Item = (PopupKind, Point<i32, Logical>)>;
+}
+```
+
+### Popup Rendering Flow
+`render_output()` → `Window::render_elements()` → `PopupManager::popups_for_surface()` →
+`render_elements_from_surface_tree()` per popup. Fully automatic — no compositor render code needed.
+
+## Selection / Clipboard
+
+### Cross-app clipboard
+Source: `src/wayland/selection/data_device/mod.rs`
+```rust
+pub fn set_data_device_focus<D>(dh: &DisplayHandle, seat: &Seat<D>, client: Option<Client>)
+where D: SeatHandler + DataDeviceHandler + 'static;
+```
+Sends `wl_data_device.selection` to newly focused client. Call in `SeatHandler::focus_changed()`.
+
+### Primary selection (middle-click paste)
+Source: `src/wayland/selection/primary_selection/mod.rs`
+```rust
+pub fn set_primary_focus<D>(dh: &DisplayHandle, seat: &Seat<D>, client: Option<Client>)
+where D: SeatHandler + PrimarySelectionHandler + 'static;
+```
+Same pattern — call alongside `set_data_device_focus`.
+
+### Usage in focus_changed
+```rust
+fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {
+    let dh = &self.display_handle;
+    let client = focused.and_then(|f| dh.get_client(f.0.id()).ok());
+    set_data_device_focus(dh, seat, client.clone());
+    set_primary_focus(dh, seat, client);
+}
+```
+
 ## xcursor Crate (0.3)
 
 ```rust

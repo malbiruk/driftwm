@@ -23,11 +23,26 @@ use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use smithay::backend::allocator::Fourcc;
+use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::fractional_scale::FractionalScaleManagerState;
+use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
+use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState;
+use smithay::wayland::pointer_constraints::PointerConstraintsState;
+use smithay::wayland::presentation::PresentationState;
+use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::selection::primary_selection::PrimarySelectionState;
+use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
+use smithay::backend::renderer::gles::GlesRenderer;
+use smithay::backend::winit::WinitGraphicsBackend;
 use smithay::utils::Transform;
 
 use driftwm::canvas::MomentumState;
 use driftwm::config::Config;
+
+pub use crate::focus::FocusTarget;
 
 /// Log an error result with context, discarding the Ok value.
 #[inline]
@@ -83,8 +98,23 @@ pub struct DriftWm {
     pub grab_cursor: bool,
     pub cursor_buffers: HashMap<String, (MemoryRenderBuffer, Point<i32, Logical>)>,
 
+    // Backend (moved here so protocol handlers can access the renderer)
+    pub backend: Option<WinitGraphicsBackend<GlesRenderer>>,
+
     // Protocols
+    pub dmabuf_state: DmabufState,
+    pub dmabuf_global: Option<DmabufGlobal>,
     pub cursor_shape_state: CursorShapeManagerState,
+    pub viewporter_state: ViewporterState,
+    pub fractional_scale_state: FractionalScaleManagerState,
+    pub xdg_activation_state: XdgActivationState,
+    pub primary_selection_state: PrimarySelectionState,
+    pub data_control_state: DataControlState,
+    pub pointer_constraints_state: PointerConstraintsState,
+    pub relative_pointer_state: RelativePointerManagerState,
+    pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
+    pub idle_inhibit_state: IdleInhibitManagerState,
+    pub presentation_state: PresentationState,
 
     // Keybindings and settings
     pub config: Config,
@@ -118,6 +148,17 @@ impl DriftWm {
         let data_device_state = DataDeviceState::new::<Self>(&dh);
 
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(&dh);
+        let viewporter_state = ViewporterState::new::<Self>(&dh);
+        let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
+        let xdg_activation_state = XdgActivationState::new::<Self>(&dh);
+        let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
+        let data_control_state =
+            DataControlState::new::<Self, _>(&dh, Some(&primary_selection_state), |_| true);
+        let pointer_constraints_state = PointerConstraintsState::new::<Self>(&dh);
+        let relative_pointer_state = RelativePointerManagerState::new::<Self>(&dh);
+        let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&dh);
+        let presentation_state = PresentationState::new::<Self>(&dh, 1); // CLOCK_MONOTONIC
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat-0");
         seat.add_keyboard(XkbConfig::default(), 200, 25)
@@ -146,7 +187,20 @@ impl DriftWm {
             cursor_status: CursorImageStatus::default_named(),
             grab_cursor: false,
             cursor_buffers: HashMap::new(),
+            backend: None,
+            dmabuf_state: DmabufState::new(),
+            dmabuf_global: None,
             cursor_shape_state,
+            viewporter_state,
+            fractional_scale_state,
+            xdg_activation_state,
+            primary_selection_state,
+            data_control_state,
+            pointer_constraints_state,
+            relative_pointer_state,
+            keyboard_shortcuts_inhibit_state,
+            idle_inhibit_state,
+            presentation_state,
             config,
             pending_center: HashSet::new(),
         }

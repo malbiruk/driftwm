@@ -9,10 +9,7 @@ use smithay::{
         keyboard::FilterResult,
         pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent},
     },
-    reexports::{
-        wayland_protocols::xdg::shell::server::xdg_toplevel,
-        wayland_server::protocol::wl_surface::WlSurface,
-    },
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Point, SERIAL_COUNTER},
     wayland::compositor::with_states,
 };
@@ -20,7 +17,7 @@ use smithay::{
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
 use driftwm::config::{Action, Direction};
 use crate::grabs::{MoveSurfaceGrab, PanGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::{DriftWm, log_err};
+use crate::state::{DriftWm, FocusTarget, log_err};
 
 const BTN_LEFT: u32 = 0x110;
 const BTN_RIGHT: u32 = 0x111;
@@ -82,7 +79,7 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus)
+                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
                         .cloned();
                     if let Some(window) = window {
                         window.toplevel().unwrap().send_close();
@@ -95,7 +92,7 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus)
+                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
                         .cloned();
                     if let Some(window) = window
                         && let Some(loc) = self.space.element_location(&window)
@@ -236,12 +233,12 @@ impl DriftWm {
                 self.space.raise_element(&window, true);
                 keyboard.set_focus(
                     self,
-                    Some(window.toplevel().unwrap().wl_surface().clone()),
+                    Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
                     serial,
                 );
             } else {
                 // 3. Left-click on empty canvas → pan
-                keyboard.set_focus(self, None::<WlSurface>, serial);
+                keyboard.set_focus(self, None::<FocusTarget>, serial);
 
                 if button == BTN_LEFT {
                         let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera).0;
@@ -416,7 +413,7 @@ impl DriftWm {
     pub fn surface_under(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
-    ) -> Option<(WlSurface, Point<f64, smithay::utils::Logical>)> {
+    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         self.space
             .element_under(pos)
             .and_then(|(window, window_loc)| {
@@ -425,7 +422,9 @@ impl DriftWm {
                         pos - window_loc.to_f64(),
                         smithay::desktop::WindowSurfaceType::ALL,
                     )
-                    .map(|(surface, surface_loc)| (surface, (surface_loc + window_loc).to_f64()))
+                    .map(|(surface, surface_loc)| {
+                        (FocusTarget(surface), (surface_loc + window_loc).to_f64())
+                    })
             })
     }
 }
