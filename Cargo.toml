@@ -11,6 +11,7 @@ smithay = { version = "0.7.0", default-features = false, features = [
     "wayland_frontend",
     "desktop",
 ] }
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 xcursor = "0.3"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

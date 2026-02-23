@@ -71,7 +71,13 @@ impl DriftWm {
         match action {
             Action::SpawnCommand(cmd) => {
                 tracing::info!("Spawning: {cmd}");
-                log_err("spawn command", std::process::Command::new(cmd).spawn());
+                let mut parts = cmd.split_whitespace();
+                if let Some(program) = parts.next() {
+                    log_err(
+                        "spawn command",
+                        std::process::Command::new(program).args(parts).spawn(),
+                    );
+                }
             }
             Action::CloseWindow => {
                 let keyboard = self.seat.get_keyboard().unwrap();
@@ -388,20 +394,18 @@ impl DriftWm {
         }
 
         // Over a window without Mod: forward scroll to the client
-        let mut frame = AxisFrame::new(Event::time_msec(&event));
+        let mut frame = AxisFrame::new(Event::time_msec(&event))
+            .source(event.source());
 
-        if let Some(h) = event.amount(Axis::Horizontal) {
-            frame = frame.value(Axis::Horizontal, h);
-        }
-        if let Some(v) = event.amount(Axis::Vertical) {
-            frame = frame.value(Axis::Vertical, v);
-        }
-
-        if let Some(h) = event.amount_v120(Axis::Horizontal) {
-            frame = frame.v120(Axis::Horizontal, h as i32);
-        }
-        if let Some(v) = event.amount_v120(Axis::Vertical) {
-            frame = frame.v120(Axis::Vertical, v as i32);
+        for axis in [Axis::Horizontal, Axis::Vertical] {
+            if let Some(amount) = event.amount(axis) {
+                frame = frame
+                    .value(axis, amount)
+                    .relative_direction(axis, event.relative_direction(axis));
+            }
+            if let Some(v120) = event.amount_v120(axis) {
+                frame = frame.v120(axis, v120 as i32);
+            }
         }
 
         pointer.axis(self, frame);

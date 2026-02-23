@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use smithay::input::keyboard::{ModifiersState, Keysym, keysyms};
+use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
 
 #[derive(Clone, Debug)]
 pub enum Direction {
@@ -38,8 +38,14 @@ impl ModKey {
     /// Base modifier pattern with only the WM mod key set.
     fn base(self) -> Modifiers {
         match self {
-            ModKey::Alt => Modifiers { alt: true, ..Modifiers::EMPTY },
-            ModKey::Super => Modifiers { logo: true, ..Modifiers::EMPTY },
+            ModKey::Alt => Modifiers {
+                alt: true,
+                ..Modifiers::EMPTY
+            },
+            ModKey::Super => Modifiers {
+                logo: true,
+                ..Modifiers::EMPTY
+            },
         }
     }
 
@@ -53,7 +59,12 @@ impl ModKey {
 }
 
 impl Modifiers {
-    const EMPTY: Self = Self { ctrl: false, alt: false, shift: false, logo: false };
+    const EMPTY: Self = Self {
+        ctrl: false,
+        alt: false,
+        shift: false,
+        logo: false,
+    };
 
     fn from_state(state: &ModifiersState) -> Self {
         Self {
@@ -71,12 +82,33 @@ pub struct KeyCombo {
     pub sym: Keysym,
 }
 
+#[derive(Clone, Debug)]
+pub struct BackgroundConfig {
+    /// Clear color / solid fallback (normalized RGBA). Shows through when no shader or tile.
+    pub bg_color: [f32; 4],
+    /// Path to a GLSL fragment shader. If set, shader is compiled and rendered fullscreen.
+    pub shader_path: Option<String>,
+    /// Path to a tile image (PNG/JPG). If set, image is tiled across the canvas.
+    pub tile_path: Option<String>,
+}
+
+impl Default for BackgroundConfig {
+    fn default() -> Self {
+        Self {
+            bg_color: [0.0, 0.0, 0.0, 1.0],
+            shader_path: Some("assets/shaders/pink_cloud.glsl".to_string()),
+            tile_path: None,
+        }
+    }
+}
+
 pub struct Config {
     pub mod_key: ModKey,
     /// Multiplier for scroll deltas. Higher = faster initial scroll. 1.0 = raw trackpad.
     pub scroll_speed: f64,
     /// Scroll momentum decay factor per frame. 0.92 = snappy, 0.96 = floaty.
     pub friction: f64,
+    pub background: BackgroundConfig,
     bindings: HashMap<KeyCombo, Action>,
 }
 
@@ -97,55 +129,97 @@ impl Default for Config {
         tracing::info!("Terminal command: {terminal}");
 
         let m = mod_key.base();
-        let m_shift = Modifiers { shift: true, ..m.clone() };
-        let m_ctrl = Modifiers { ctrl: true, ..m.clone() };
+        let m_shift = Modifiers {
+            shift: true,
+            ..m.clone()
+        };
+        let m_ctrl = Modifiers {
+            ctrl: true,
+            ..m.clone()
+        };
 
         let bindings = HashMap::from([
             (
-                KeyCombo { modifiers: m.clone(), sym: Keysym::from(keysyms::KEY_Return) },
+                KeyCombo {
+                    modifiers: m.clone(),
+                    sym: Keysym::from(keysyms::KEY_Return),
+                },
                 Action::SpawnCommand(terminal),
             ),
             (
-                KeyCombo { modifiers: m, sym: Keysym::from(keysyms::KEY_q) },
+                KeyCombo {
+                    modifiers: m,
+                    sym: Keysym::from(keysyms::KEY_q),
+                },
                 Action::CloseWindow,
             ),
             // Window nudge: Mod+Shift+Arrow
             (
-                KeyCombo { modifiers: m_shift.clone(), sym: Keysym::from(keysyms::KEY_Up) },
+                KeyCombo {
+                    modifiers: m_shift.clone(),
+                    sym: Keysym::from(keysyms::KEY_Up),
+                },
                 Action::NudgeWindow(Direction::Up),
             ),
             (
-                KeyCombo { modifiers: m_shift.clone(), sym: Keysym::from(keysyms::KEY_Down) },
+                KeyCombo {
+                    modifiers: m_shift.clone(),
+                    sym: Keysym::from(keysyms::KEY_Down),
+                },
                 Action::NudgeWindow(Direction::Down),
             ),
             (
-                KeyCombo { modifiers: m_shift.clone(), sym: Keysym::from(keysyms::KEY_Left) },
+                KeyCombo {
+                    modifiers: m_shift.clone(),
+                    sym: Keysym::from(keysyms::KEY_Left),
+                },
                 Action::NudgeWindow(Direction::Left),
             ),
             (
-                KeyCombo { modifiers: m_shift, sym: Keysym::from(keysyms::KEY_Right) },
+                KeyCombo {
+                    modifiers: m_shift,
+                    sym: Keysym::from(keysyms::KEY_Right),
+                },
                 Action::NudgeWindow(Direction::Right),
             ),
             // Viewport panning: Mod+Ctrl+Arrow
             (
-                KeyCombo { modifiers: m_ctrl.clone(), sym: Keysym::from(keysyms::KEY_Up) },
+                KeyCombo {
+                    modifiers: m_ctrl.clone(),
+                    sym: Keysym::from(keysyms::KEY_Up),
+                },
                 Action::PanViewport(Direction::Up),
             ),
             (
-                KeyCombo { modifiers: m_ctrl.clone(), sym: Keysym::from(keysyms::KEY_Down) },
+                KeyCombo {
+                    modifiers: m_ctrl.clone(),
+                    sym: Keysym::from(keysyms::KEY_Down),
+                },
                 Action::PanViewport(Direction::Down),
             ),
             (
-                KeyCombo { modifiers: m_ctrl.clone(), sym: Keysym::from(keysyms::KEY_Left) },
+                KeyCombo {
+                    modifiers: m_ctrl.clone(),
+                    sym: Keysym::from(keysyms::KEY_Left),
+                },
                 Action::PanViewport(Direction::Left),
             ),
             (
-                KeyCombo { modifiers: m_ctrl, sym: Keysym::from(keysyms::KEY_Right) },
+                KeyCombo {
+                    modifiers: m_ctrl,
+                    sym: Keysym::from(keysyms::KEY_Right),
+                },
                 Action::PanViewport(Direction::Right),
             ),
         ]);
 
-        Self { mod_key, scroll_speed: 1.5, friction: 0.96, bindings }
+        Self {
+            mod_key,
+            scroll_speed: 1.5,
+            friction: 0.96,
+            background: BackgroundConfig::default(),
+            bindings,
+        }
     }
 }
 
