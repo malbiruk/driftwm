@@ -21,7 +21,7 @@ coordinates on this plane. You move around with trackpad gestures:
 - **`Mod` + 3-finger drag** on a window — resize that window
 - **2-finger pinch** on empty desktop — zoom
 - **3-finger pinch** anywhere — zoom (ignores windows)
-- **4-finger scroll** — jump to the nearest window in that direction
+- **4-finger swipe** — jump to the nearest window in that direction
 - **4/5-finger pinch** — toggle home position
 
 Mouse: scroll wheel zooms, click-drag pans. `Mod` + click/drag works anywhere.
