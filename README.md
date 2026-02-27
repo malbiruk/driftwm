@@ -22,9 +22,11 @@ coordinates on this plane. You move around with trackpad gestures:
 - **2-finger pinch** on empty desktop — zoom
 - **3-finger pinch** anywhere — zoom (ignores windows)
 - **4-finger swipe** — jump to the nearest window in that direction
-- **4/5-finger pinch** — toggle home position
+- **4-finger pinch in** — toggle overview (zoom-to-fit)
+- **4-finger pinch out** — toggle home position
 
 Mouse: scroll wheel zooms, click-drag pans. `Mod` + click/drag works anywhere.
+`Mod+Ctrl` + drag navigates to nearest window. `Mod` + trackpad scroll pans anywhere.
 
 A static wallpaper gives no feedback when panning an infinite canvas, so
 the background scrolls with the viewport. Any GLSL fragment shader works as
@@ -41,8 +43,9 @@ Early development — usable as a daily driver on single-monitor setups.
 - Window navigation: directional jump (cone search), MRU cycling, home toggle
 - Layer shell support (waybar, fuzzel, mako) + foreign toplevel management
 - GLSL shader backgrounds or tiled images, scrolling with the viewport
+- Trackpad gestures: 3-finger pan/move/resize, pinch zoom, 4-finger navigate/home/overview
 - Runs nested (winit) or on real hardware (udev/DRM with libseat)
-- TOML config — all keybindings, mouse bindings, and settings are configurable
+- TOML config — all keybindings, mouse bindings, and input device settings are configurable
 - 20+ Wayland protocols: DMA-BUF, popups, clipboard, layer shell, and more
 
 ## Build & run
@@ -117,7 +120,7 @@ only specify what you want to change. Use `"none"` to unbind a default binding.
 7. **Layer shell** — waybar, fuzzel, foreign toplevel management _(done)_
 8. **Config file** — TOML parsing, user keybindings/mouse bindings/settings _(done)_
 9. **udev backend** — DRM/KMS, libinput, libseat session management _(done)_
-10. Trackpad gestures — 3-finger pan/double-tap-drag, gesture state machine
+10. **Trackpad gestures** — gesture state machine, libinput device config _(done)_
 11. Multi-monitor — multiple viewports on same canvas
 12. Decorations — SSD fallback, resize grab zones
 13. XWayland — X11 app support

@@ -126,7 +126,7 @@ pub fn init_winit(
 
             // --- Delta time ---
             let now = std::time::Instant::now();
-            let dt = now - data.state.last_frame_instant;
+            let dt = (now - data.state.last_frame_instant).min(std::time::Duration::from_millis(33));
             data.state.last_frame_instant = now;
 
             // --- Key repeat for compositor bindings ---

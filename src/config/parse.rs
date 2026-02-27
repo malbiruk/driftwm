@@ -118,6 +118,7 @@ pub fn parse_mouse_action(s: &str) -> Result<MouseAction, String> {
         "resize-window" => Ok(MouseAction::ResizeWindow),
         "pan-viewport" => Ok(MouseAction::PanViewport),
         "zoom" => Ok(MouseAction::Zoom),
+        "navigate" => Ok(MouseAction::Navigate),
         other => Err(format!("unknown mouse action: {other}")),
     }
 }

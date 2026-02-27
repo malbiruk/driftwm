@@ -212,7 +212,11 @@ pub fn init_udev(
         .map_err(|_| "Failed to assign libinput seat")?;
     let libinput_backend = LibinputInputBackend::new(libinput.clone());
 
-    event_loop.handle().insert_source(libinput_backend, |event, _, data| {
+    event_loop.handle().insert_source(libinput_backend, |mut event, _, data| {
+        use smithay::backend::input::InputEvent;
+        if let InputEvent::DeviceAdded { device } = &mut event {
+            data.state.configure_libinput_device(device);
+        }
         data.state.process_input_event(event);
     })?;
 
@@ -620,7 +624,7 @@ fn render_frame(
     data.state.redraw_needed = false;
 
     let now = std::time::Instant::now();
-    let dt = now - data.state.last_frame_instant;
+    let dt = (now - data.state.last_frame_instant).min(std::time::Duration::from_millis(33));
     data.state.last_frame_instant = now;
     data.state.frame_counter = data.state.frame_counter.wrapping_add(1);
 

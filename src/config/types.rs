@@ -192,6 +192,26 @@ pub enum MouseAction {
     ResizeWindow,
     PanViewport,
     Zoom,
+    Navigate,
+}
+
+#[derive(Clone, Debug)]
+pub struct TrackpadSettings {
+    pub tap_to_click: bool,
+    pub natural_scroll: bool,
+    pub tap_and_drag: bool,
+    pub accel_speed: f64,
+}
+
+impl Default for TrackpadSettings {
+    fn default() -> Self {
+        Self {
+            tap_to_click: true,
+            natural_scroll: true,
+            tap_and_drag: true,
+            accel_speed: 0.0,
+        }
+    }
 }
 
 /// Built-in dot grid shader — used when no shader_path or tile_path is configured.

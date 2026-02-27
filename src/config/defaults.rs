@@ -213,6 +213,11 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> HashMap<MouseBinding, M
         ..m.clone()
     };
 
+    let m_ctrl = Modifiers {
+        ctrl: true,
+        ..m.clone()
+    };
+
     HashMap::from([
         (
             MouseBinding {
@@ -234,6 +239,13 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> HashMap<MouseBinding, M
                 trigger: MouseTrigger::Button(BTN_LEFT),
             },
             MouseAction::PanViewport,
+        ),
+        (
+            MouseBinding {
+                modifiers: m_ctrl,
+                trigger: MouseTrigger::Button(BTN_LEFT),
+            },
+            MouseAction::Navigate,
         ),
         (
             MouseBinding {

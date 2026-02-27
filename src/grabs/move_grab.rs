@@ -22,7 +22,7 @@ pub struct MoveSurfaceGrab {
 impl MoveSurfaceGrab {
     /// Compute edge-pan velocity based on how deep the cursor is into the edge zone.
     /// Deeper = faster (like a joystick). Returns None when cursor is outside the zone.
-    fn edge_pan_velocity(
+    pub(crate) fn edge_pan_velocity(
         screen_pos: Point<f64, Logical>,
         output_w: f64,
         output_h: f64,

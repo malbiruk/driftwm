@@ -46,9 +46,21 @@ use smithay::utils::Transform;
 
 use smithay::backend::session::libseat::LibSeatSession;
 
+use smithay::reexports::calloop::RegistrationToken;
+
 use crate::backend::Backend;
+use crate::input::gestures::GestureState;
 use driftwm::canvas::MomentumState;
 use driftwm::config::Config;
+
+/// Buffered middle-click from a 3-finger tap. Held for DOUBLE_TAP_WINDOW_MS
+/// to see if a 3-finger swipe follows (→ move window). If the timer fires
+/// without a swipe, the click is forwarded to the client (paste).
+pub struct PendingMiddleClick {
+    pub press_time: u32,
+    pub release_time: Option<u32>,
+    pub timer_token: RegistrationToken,
+}
 
 pub use crate::focus::FocusTarget;
 
@@ -188,6 +200,12 @@ pub struct DriftWm {
     /// Active fullscreen window state. When Some, viewport is locked.
     pub fullscreen: Option<FullscreenState>,
 
+    /// Active gesture state. Set at Begin, cleared at End/Cancel.
+    pub gesture_state: Option<GestureState>,
+
+    /// Buffered middle-click waiting for a possible 3-finger swipe.
+    pub pending_middle_click: Option<PendingMiddleClick>,
+
     /// Libseat session for VT switching (udev backend only).
     pub session: Option<LibSeatSession>,
 
@@ -301,6 +319,8 @@ impl DriftWm {
             cycle_state: None,
             home_return: None,
             held_action: None,
+            gesture_state: None,
+            pending_middle_click: None,
             fullscreen: None,
             session: None,
             redraw_needed: true,
@@ -314,6 +334,43 @@ impl DriftWm {
             || self.edge_pan_velocity.is_some()
             || self.held_action.is_some()
             || (self.momentum.velocity.x != 0.0 || self.momentum.velocity.y != 0.0)
+    }
+
+    /// Forward a buffered middle-click press+release to the client.
+    pub fn flush_middle_click(&mut self, press_time: u32, release_time: Option<u32>) {
+        let pointer = self.seat.get_pointer().unwrap();
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        pointer.button(
+            self,
+            &smithay::input::pointer::ButtonEvent {
+                button: driftwm::config::BTN_MIDDLE,
+                state: smithay::backend::input::ButtonState::Pressed,
+                serial,
+                time: press_time,
+            },
+        );
+        pointer.frame(self);
+        if let Some(rt) = release_time {
+            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+            pointer.button(
+                self,
+                &smithay::input::pointer::ButtonEvent {
+                    button: driftwm::config::BTN_MIDDLE,
+                    state: smithay::backend::input::ButtonState::Released,
+                    serial,
+                    time: rt,
+                },
+            );
+            pointer.frame(self);
+        }
+    }
+
+    /// Flush the pending middle-click (called by calloop timer when no swipe followed).
+    pub fn flush_pending_middle_click(&mut self) {
+        let Some(pending) = self.pending_middle_click.take() else {
+            return;
+        };
+        self.flush_middle_click(pending.press_time, pending.release_time);
     }
 
     /// Sync each output's position to the current camera, so render_output

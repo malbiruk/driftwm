@@ -93,24 +93,26 @@ Requires libinput (udev backend). Finger count + context determines the action.
 Once a gesture starts, the target is **locked for the gesture's duration** (even
 if the surface under the cursor changes mid-gesture).
 
-| Fingers | Type      | Context   | Action                         |
-| ------- | --------- | --------- | ------------------------------ |
-| 2       | scroll    | on window | Pass through to app            |
-| 2       | scroll    | desktop   | Pan viewport                   |
-| 2       | pinch     | on window | Pass through to app            |
-| 2       | pinch     | desktop   | Zoom in/out                    |
-| 3       | scroll    | anywhere  | Pan viewport (ignores windows) |
-| 3       | dbl-tap+drag | on window | Move window (see below)     |
-| 3+Super | drag      | on window | Resize window                  |
-| 3       | pinch     | anywhere  | Zoom in/out (ignores windows)  |
-| 4       | scroll    | desktop   | Center nearest window in direction |
-| 4/5     | pinch     | anywhere  | Toggle home (0,0) ↔ previous   |
+| Fingers | Type         | Context   | Action                             |
+| ------- | ------------ | --------- | ---------------------------------- |
+| 2       | scroll       | on window | Pass through to app                |
+| 2       | scroll       | desktop   | Pan viewport                       |
+| 2       | pinch        | on window | Pass through to app                |
+| 2       | pinch        | desktop   | Zoom in/out                        |
+| 3       | scroll       | anywhere  | Pan viewport (ignores windows)     |
+| 3       | dbl-tap+drag | on window | Move window (see below)            |
+| 3+Super | drag         | on window | Resize window                      |
+| 3       | pinch        | anywhere  | Zoom in/out (ignores windows)      |
+| 4       | scroll       | anywhere  | Center nearest window in direction |
+| 4       | pinch in     | anywhere  | Zoom-to-fit (overview)             |
+| 4       | pinch out    | anywhere  | Toggle home (0,0) ↔ previous       |
 
-**3-finger double-tap-drag**: Double-tap with three fingers on a window, then
-drag on the second tap (like double-middle-click-drag with a mouse). Immediate
-3-finger scroll always pans the viewport — the double-tap disambiguates "pan
-viewport" from "move window." No visual feedback needed since intent is
-unambiguous from the double-tap.
+**3-finger double-tap-drag**: Tap with three fingers on a window (libinput
+generates BTN_MIDDLE via tap-to-click), then immediately start a 3-finger
+swipe. The compositor buffers the middle click for 300ms — if a 3-finger swipe
+follows, the click is suppressed and the swipe enters move-window mode. If no
+swipe follows, the click is flushed to the app as a normal middle-click (paste).
+Immediate 3-finger scroll (without a preceding tap) always pans the viewport.
 
 **3-finger+Super resize**: The only trackpad gesture that requires a keyboard
 modifier. Needed for trackpads without right-click drag support. Edges
@@ -120,21 +122,21 @@ inferred from pointer position in the window (same quadrant logic as mouse).
 nearest window (using a viewport-width search band). Centers it, focuses,
 raises, and warps cursor to its center. Repeat to hop window-to-window.
 
-**4/5-finger pinch toggle**: Pinch-in saves position and snaps to (0, 0).
-Pinch-out (or second pinch-in) restores. Peek at home widgets and jump back.
+**4-finger pinch**: Pinch-in triggers zoom-to-fit (overview of all windows).
+Pinch-out triggers home toggle (snap to origin or return to previous position).
+Thresholds: scale < 0.8 for pinch-in, scale > 1.2 for pinch-out.
 
 ### Mouse equivalents
 
-| Action         | Mouse input                        |
-| -------------- | ---------------------------------- |
-| Pan viewport   | Click-drag on empty canvas         |
-| Pan viewport   | `Super` + left-drag (anywhere)     |
-| Zoom           | Scroll wheel on empty canvas       |
-| Zoom           | `Super` + scroll wheel (anywhere)  |
-| Move window    | `Super+Shift` + left-drag          |
-| Resize window  | `Super+Shift` + right-drag         |
-| Center window  | `Super+Ctrl` + left-drag           |
-| Toggle home    | `Super` + middle-click             |
+| Action           | Mouse input                          |
+| ---------------- | ------------------------------------ |
+| Pan viewport     | Click-drag on empty canvas           |
+| Pan viewport     | `Super` + left-drag (anywhere)       |
+| Zoom             | Scroll wheel on empty canvas         |
+| Zoom             | `Super` + scroll wheel (anywhere)    |
+| Move window      | `Super+Shift` + left-drag            |
+| Resize window    | `Super+Shift` + right-drag           |
+| Navigate nearest | `Super+Ctrl` + left-drag (natural)   |
 
 **Trackpad vs mouse wheel**: both produce axis events but serve different
 purposes. The compositor uses `axis_source` to split them — trackpad scroll
@@ -201,10 +203,10 @@ Minimal set. Defaults below, all configurable via `[keybinds]` table (maps key c
 
 ### Session
 
-| Shortcut        | Action                              |
-| --------------- | ----------------------------------- |
-| `Super+L`       | Lock screen (swaylock)              |
-| `Super+Shift+E` | Exit compositor (with confirmation) |
+| Shortcut             | Action                 |
+| -------------------- | ---------------------- |
+| `Super+L`            | Lock screen (swaylock) |
+| `Super+Ctrl+Shift+Q` | Exit compositor        |
 
 ## Window decorations
 
@@ -340,9 +342,16 @@ settings are exposed in config:
 [input.trackpad]
 tap_to_click = true        # default: true
 tap_and_drag = true        # double-tap-hold = drag. default: true
-button_map = "lrm"         # 1=left, 2=right, 3=middle. default: "lrm"
 natural_scroll = true      # default: true
+accel_speed = 0.0          # pointer acceleration (-1.0 to 1.0). default: 0.0
 ```
+
+Trackpad gesture mappings are **not configurable**. The gesture state machine
+encodes context-dependent logic (finger count × gesture type × hit-testing ×
+thresholds) that doesn't reduce to a simple config table. The gestures are the
+product's opinionated core UX. Libinput device settings (tap-to-click, natural
+scroll, accel) remain configurable since they affect low-level input behavior,
+not gesture semantics.
 
 ### Keyboard
 
@@ -480,12 +489,12 @@ Ordered to maximize what can be developed in winit (nested) mode before
 requiring real hardware (udev/TTY). Milestones 1–8 work entirely in winit.
 
 1. **Window appears**: smithay winit backend, open a window, render a solid
-   background color. Accept xdg-shell clients. Display a terminal. *(done)*
+   background color. Accept xdg-shell clients. Display a terminal. _(done)_
 2. **Move and resize**: drag windows with mouse, resize from edges. Basic
-   stacking (click to raise). *(done)*
+   stacking (click to raise). _(done)_
 3. **Infinite canvas**: viewport panning (click-drag, scroll, keyboard),
    scroll momentum with friction decay, xcursor theme loading, compositor-
-   rendered cursor. *(done)*
+   rendered cursor. _(done)_
 4. **Canvas background**: shader and tiled image rendering with dot grid
    default. Essential spatial feedback for panning on an infinite canvas.
 5. **Window navigation**: `Super+C` center focused window, `Super+Arrow`
@@ -498,7 +507,7 @@ requiring real hardware (udev/TTY). Milestones 1–8 work entirely in winit.
 8. **Config file**: TOML parsing, user-defined keybindings, input settings.
    Required before daily-driving.
 9. **udev backend**: DRM/KMS setup, libinput integration, logind session
-    management. The "run on real hardware" milestone.
+   management. The "run on real hardware" milestone.
 10. **Trackpad gestures**: wire up libinput gesture events. 3-finger pan
     (viewport), 3-finger double-tap-drag (move window), pinch to zoom.
     Gesture state machine with conflict resolution. Requires udev backend.

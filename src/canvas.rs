@@ -52,6 +52,22 @@ pub fn camera_to_center_window(
     ))
 }
 
+/// Is any part of a rectangle visible in the current viewport?
+pub fn is_rect_visible(
+    rect_loc: Point<i32, Logical>,
+    rect_size: Size<i32, Logical>,
+    camera: Point<f64, Logical>,
+    viewport_size: Size<i32, Logical>,
+    zoom: f64,
+) -> bool {
+    let vw = viewport_size.w as f64 / zoom;
+    let vh = viewport_size.h as f64 / zoom;
+    (rect_loc.x as f64) < camera.x + vw
+        && (rect_loc.x + rect_size.w) as f64 > camera.x
+        && (rect_loc.y as f64) < camera.y + vh
+        && (rect_loc.y + rect_size.h) as f64 > camera.y
+}
+
 /// Check whether the canvas origin (0, 0) is visible in the current viewport.
 /// At zoom < 1.0, the visible area is larger: viewport_size / zoom.
 pub fn is_origin_visible(

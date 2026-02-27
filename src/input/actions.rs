@@ -103,7 +103,6 @@ impl DriftWm {
                 }
             }
             Action::CenterNearest(dir) => {
-                // Origin: focused window center, or viewport center if none
                 let keyboard = self.seat.get_keyboard().unwrap();
                 let focused = keyboard.current_focus().and_then(|focus| {
                     self.space
@@ -112,19 +111,29 @@ impl DriftWm {
                         .cloned()
                 });
 
-                let origin = if let Some(ref w) = focused {
+                let viewport_size = self.get_viewport_size();
+                let viewport_center = Point::from((
+                    self.camera.x + viewport_size.w as f64 / (2.0 * self.zoom),
+                    self.camera.y + viewport_size.h as f64 / (2.0 * self.zoom),
+                ));
+
+                // If focused window is visible, search from its center and skip it.
+                // If off-screen (or no focus), search from viewport center — the
+                // focused window becomes a valid target so you can navigate back to it.
+                let (origin, skip) = if let Some(ref w) = focused {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     let size = w.geometry().size;
-                    Point::from((
-                        loc.x as f64 + size.w as f64 / 2.0,
-                        loc.y as f64 + size.h as f64 / 2.0,
-                    ))
+                    if canvas::is_rect_visible(loc, size, self.camera, viewport_size, self.zoom) {
+                        let center = Point::from((
+                            loc.x as f64 + size.w as f64 / 2.0,
+                            loc.y as f64 + size.h as f64 / 2.0,
+                        ));
+                        (center, focused.clone())
+                    } else {
+                        (viewport_center, None)
+                    }
                 } else {
-                    let viewport_size = self.get_viewport_size();
-                    Point::from((
-                        self.camera.x + viewport_size.w as f64 / (2.0 * self.zoom),
-                        self.camera.y + viewport_size.h as f64 / (2.0 * self.zoom),
-                    ))
+                    (viewport_center, None)
                 };
 
                 let windows = self.space.elements().map(|w| {
@@ -141,7 +150,7 @@ impl DriftWm {
                     origin,
                     dir,
                     windows.into_iter(),
-                    focused.as_ref(),
+                    skip.as_ref(),
                 );
                 if let Some(window) = nearest {
                     self.navigate_to_window(&window);

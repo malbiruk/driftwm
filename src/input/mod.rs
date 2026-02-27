@@ -1,4 +1,5 @@
 mod actions;
+pub(crate) mod gestures;
 mod pointer;
 
 use smithay::{
@@ -31,6 +32,14 @@ impl DriftWm {
             }
             InputEvent::PointerButton { event } => self.on_pointer_button::<I>(event),
             InputEvent::PointerAxis { event } => self.on_pointer_axis::<I>(event),
+            InputEvent::GestureSwipeBegin { event } => self.on_gesture_swipe_begin::<I>(event),
+            InputEvent::GestureSwipeUpdate { event } => self.on_gesture_swipe_update::<I>(event),
+            InputEvent::GestureSwipeEnd { event } => self.on_gesture_swipe_end::<I>(event),
+            InputEvent::GesturePinchBegin { event } => self.on_gesture_pinch_begin::<I>(event),
+            InputEvent::GesturePinchUpdate { event } => self.on_gesture_pinch_update::<I>(event),
+            InputEvent::GesturePinchEnd { event } => self.on_gesture_pinch_end::<I>(event),
+            InputEvent::GestureHoldBegin { event } => self.on_gesture_hold_begin::<I>(event),
+            InputEvent::GestureHoldEnd { event } => self.on_gesture_hold_end::<I>(event),
             _ => {}
         }
     }

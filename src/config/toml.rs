@@ -22,6 +22,16 @@ pub(super) struct ConfigFile {
 pub(super) struct InputConfig {
     pub keyboard: KeyboardConfig,
     pub scroll: ScrollConfig,
+    pub trackpad: TrackpadConfig,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct TrackpadConfig {
+    pub tap_to_click: Option<bool>,
+    pub natural_scroll: Option<bool>,
+    pub tap_and_drag: Option<bool>,
+    pub accel_speed: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]

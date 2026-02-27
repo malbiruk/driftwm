@@ -42,6 +42,7 @@ pub struct Config {
     /// Output scale factor for the udev backend (1.0, 1.5, 2.0, etc).
     pub output_scale: f64,
     pub background: BackgroundConfig,
+    pub trackpad: TrackpadSettings,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse_bindings: HashMap<MouseBinding, MouseAction>,
 }
@@ -198,6 +199,16 @@ impl Config {
             tile_path: raw.background.tile_path.map(|p| expand_tilde(&p)),
         };
 
+        let trackpad = {
+            let t = &raw.input.trackpad;
+            TrackpadSettings {
+                tap_to_click: t.tap_to_click.unwrap_or(true),
+                natural_scroll: t.natural_scroll.unwrap_or(true),
+                tap_and_drag: t.tap_and_drag.unwrap_or(true),
+                accel_speed: t.accel_speed.unwrap_or(0.0).clamp(-1.0, 1.0),
+            }
+        };
+
         Self {
             mod_key,
             scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
@@ -215,6 +226,7 @@ impl Config {
             zoom_fit_padding: raw.zoom.fit_padding.unwrap_or(100.0),
             output_scale: raw.output.scale.unwrap_or(1.0),
             background,
+            trackpad,
             bindings,
             mouse_bindings,
         }
