@@ -1,9 +1,12 @@
 use std::cell::RefCell;
 
 use crate::grabs::{ResizeState, has_left, has_top};
+use crate::handlers::layer_shell::LayerDestroyedMarker;
 use crate::state::{ClientState, DriftWm, FocusTarget};
 use smithay::desktop::layer_map_for_output;
-use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, LayerSurfaceData};
+use smithay::wayland::shell::wlr_layer::{
+    Anchor, KeyboardInteractivity, LayerSurfaceData, LayerSurfaceCachedState,
+};
 use smithay::{
     delegate_compositor, delegate_shm,
     reexports::{
@@ -13,8 +16,9 @@ use smithay::{
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            add_blocker, get_parent, is_sync_subsurface, with_states, BufferAssignment,
-            CompositorClientState, CompositorHandler, CompositorState, SurfaceAttributes,
+            add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states,
+            BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
+            SurfaceAttributes,
         },
         dmabuf::get_dmabuf,
         shell::xdg::XdgToplevelSurfaceData,
@@ -29,6 +33,22 @@ impl CompositorHandler for DriftWm {
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
         &client.get_data::<ClientState>().unwrap().compositor_state
+    }
+
+    fn new_surface(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+        // Register an early pre-commit hook. Since this runs at surface creation
+        // (before get_layer_surface registers smithay's validation hook), it fires
+        // first on every commit. For destroyed layer surfaces, it sets full anchors
+        // so smithay's size validation passes on the orphaned final commit.
+        add_pre_commit_hook::<DriftWm, _>(surface, |_state, _dh, surface| {
+            with_states(surface, |states| {
+                if states.data_map.get::<LayerDestroyedMarker>().is_some_and(|m| m.0.load(std::sync::atomic::Ordering::Relaxed)) {
+                    let mut guard = states.cached_state.get::<LayerSurfaceCachedState>();
+                    guard.pending().anchor =
+                        Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT;
+                }
+            });
+        });
     }
 
     fn commit(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {

@@ -43,6 +43,8 @@ pub struct Config {
     pub output_scale: f64,
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
+    pub keyboard_layout: KeyboardLayout,
+    pub autostart: Vec<String>,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse_bindings: HashMap<MouseBinding, MouseAction>,
 }
@@ -209,6 +211,16 @@ impl Config {
             }
         };
 
+        let keyboard_layout = {
+            let k = &raw.input.keyboard;
+            KeyboardLayout {
+                layout: k.layout.clone().unwrap_or_else(|| "us".into()),
+                variant: k.variant.clone().unwrap_or_default(),
+                options: k.options.clone().unwrap_or_default(),
+                model: k.model.clone().unwrap_or_default(),
+            }
+        };
+
         Self {
             mod_key,
             scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
@@ -227,6 +239,8 @@ impl Config {
             output_scale: raw.output.scale.unwrap_or(1.0),
             background,
             trackpad,
+            keyboard_layout,
+            autostart: raw.autostart.unwrap_or_default(),
             bindings,
             mouse_bindings,
         }

@@ -209,6 +209,9 @@ pub struct DriftWm {
     /// Libseat session for VT switching (udev backend only).
     pub session: Option<LibSeatSession>,
 
+    /// Commands to spawn after WAYLAND_DISPLAY is set.
+    pub autostart: Vec<String>,
+
     /// Damage flag — set when something changed and a new frame is needed.
     /// Checked by the udev timer and VBlank handler to avoid no-op renders.
     pub redraw_needed: bool,
@@ -260,9 +263,18 @@ impl DriftWm {
         let config = Config::load();
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat-0");
-        seat.add_keyboard(XkbConfig::default(), config.repeat_delay, config.repeat_rate)
+        let kb = &config.keyboard_layout;
+        let xkb = XkbConfig {
+            layout: &kb.layout,
+            variant: &kb.variant,
+            options: if kb.options.is_empty() { None } else { Some(kb.options.clone()) },
+            model: &kb.model,
+            ..Default::default()
+        };
+        seat.add_keyboard(xkb, config.repeat_delay, config.repeat_rate)
             .expect("Failed to add keyboard");
         seat.add_pointer();
+        let autostart = config.autostart.clone();
         Self {
             start_time: Instant::now(),
             display_handle: dh,
@@ -323,6 +335,7 @@ impl DriftWm {
             pending_middle_click: None,
             fullscreen: None,
             session: None,
+            autostart,
             redraw_needed: true,
         }
     }

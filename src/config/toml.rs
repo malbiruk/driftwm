@@ -13,6 +13,7 @@ pub(super) struct ConfigFile {
     pub zoom: ZoomConfig,
     pub output: OutputConfig,
     pub background: BackgroundFileConfig,
+    pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: Option<HashMap<String, String>>,
 }
@@ -39,6 +40,10 @@ pub(super) struct TrackpadConfig {
 pub(super) struct KeyboardConfig {
     pub repeat_rate: Option<i32>,
     pub repeat_delay: Option<i32>,
+    pub layout: Option<String>,
+    pub variant: Option<String>,
+    pub options: Option<String>,
+    pub model: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

@@ -3,13 +3,23 @@ use smithay::{
     desktop::{self, PopupKind, layer_map_for_output},
     reexports::wayland_server::{Resource, protocol::wl_output::WlOutput},
     utils::SERIAL_COUNTER,
-    wayland::shell::{
-        wlr_layer::{
-            Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+    wayland::{
+        compositor::with_states,
+        shell::{
+            wlr_layer::{
+                Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
+            },
+            xdg::PopupSurface,
         },
-        xdg::PopupSurface,
     },
 };
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Toggled in the surface data_map when a layer role is destroyed/recreated.
+/// Our pre-commit hook (registered early in `new_surface`) checks this to
+/// set full anchors before smithay's validation hook runs on orphaned commits.
+pub(crate) struct LayerDestroyedMarker(pub AtomicBool);
 
 use crate::state::{DriftWm, FocusTarget};
 
@@ -26,6 +36,14 @@ impl WlrLayerShellHandler for DriftWm {
         namespace: String,
     ) {
         tracing::info!("New layer surface: {namespace}");
+
+        // Clear any stale destroyed marker — the wl_surface may be reused
+        // (e.g. swayosd destroys and recreates layer surfaces on the same wl_surface)
+        with_states(surface.wl_surface(), |states| {
+            if let Some(marker) = states.data_map.get::<LayerDestroyedMarker>() {
+                marker.0.store(false, Ordering::Relaxed);
+            }
+        });
 
         // Resolve output: use requested output or fall back to the first available
         let resolved_output = output
@@ -61,21 +79,23 @@ impl WlrLayerShellHandler for DriftWm {
         // Next motion event will re-evaluate, but this prevents stale state in between.
         self.pointer_over_layer = false;
 
-        // Find which output this surface was on and unmap it
-        let wl_surface = surface.wl_surface().clone();
-        for output in self.space.outputs().cloned().collect::<Vec<_>>() {
-            let mut map = layer_map_for_output(&output);
-            let found = map
-                .layers()
-                .find(|l| l.wl_surface() == &wl_surface)
-                .cloned();
-            if let Some(layer) = found {
-                map.unmap_layer(&layer);
-                break;
-            }
-        }
+        // Mark this surface so our early pre-commit hook can set full anchors
+        // before smithay's layer-shell validation runs. We can't set anchors here
+        // directly because smithay resets cached state to defaults AFTER this callback.
+        with_states(surface.wl_surface(), |states| {
+            states
+                .data_map
+                .insert_if_missing_threadsafe(|| LayerDestroyedMarker(AtomicBool::new(false)));
+            states
+                .data_map
+                .get::<LayerDestroyedMarker>()
+                .unwrap()
+                .0
+                .store(true, Ordering::Relaxed);
+        });
 
         // If this surface had exclusive keyboard focus, return focus to the top window
+        let wl_surface = surface.wl_surface().clone();
         let keyboard = self.seat.get_keyboard().unwrap();
         let current_focus = keyboard.current_focus();
         if current_focus.as_ref().is_some_and(|f| f.0 == wl_surface) {

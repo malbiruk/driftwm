@@ -214,6 +214,13 @@ impl Default for TrackpadSettings {
     }
 }
 
+pub struct KeyboardLayout {
+    pub layout: String,
+    pub variant: String,
+    pub options: String,
+    pub model: String,
+}
+
 /// Built-in dot grid shader — used when no shader_path or tile_path is configured.
 pub const DEFAULT_SHADER: &str = include_str!("../../assets/shaders/dot_grid.glsl");
 

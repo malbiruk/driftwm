@@ -18,13 +18,10 @@ impl DriftWm {
         match action {
             Action::Exec(cmd) => {
                 tracing::info!("Spawning: {cmd}");
-                let mut parts = cmd.split_whitespace();
-                if let Some(program) = parts.next() {
-                    log_err(
-                        "spawn command",
-                        std::process::Command::new(program).args(parts).spawn(),
-                    );
-                }
+                log_err(
+                    "spawn command",
+                    std::process::Command::new("sh").args(["-c", cmd]).spawn(),
+                );
             }
             Action::CloseWindow => {
                 let keyboard = self.seat.get_keyboard().unwrap();

@@ -203,6 +203,37 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
             },
             Action::Quit,
         ),
+        // Media keys
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioRaiseVolume) },
+            Action::Exec("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+".into()),
+        ),
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioLowerVolume) },
+            Action::Exec("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-".into()),
+        ),
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioMute) },
+            Action::Exec("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle".into()),
+        ),
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86MonBrightnessUp) },
+            Action::Exec("brightnessctl set +5%".into()),
+        ),
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86MonBrightnessDown) },
+            Action::Exec("brightnessctl set 5%-".into()),
+        ),
+        // Screenshot
+        (
+            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_Print) },
+            Action::Exec("grim".into()),
+        ),
+        // Lock screen
+        (
+            KeyCombo { modifiers: m.clone(), sym: Keysym::from(keysyms::KEY_l) },
+            Action::Exec("swaylock".into()),
+        ),
     ])
 }
 

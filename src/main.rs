@@ -95,6 +95,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         })?;
 
+    // Auto-reap child processes — prevents zombies from exec/autostart commands.
+    // Must be after backend init: libseat uses waitpid() during session setup.
+    unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
+
+    for cmd in &data.state.autostart {
+        tracing::info!("Autostart: {cmd}");
+        if let Err(e) = std::process::Command::new("sh").args(["-c", cmd.as_str()]).spawn() {
+            tracing::error!("Autostart failed for '{cmd}': {e}");
+        }
+    }
+
     // Run the event loop
     tracing::info!("Starting event loop — launch apps with: WAYLAND_DISPLAY={socket_name} <app>");
     event_loop.run(None, &mut data, |data| {

@@ -8,9 +8,20 @@
 # Modifier held during window cycling (Alt-Tab style).
 # cycle_modifier = "alt"
 
+# Commands to run at startup (after WAYLAND_DISPLAY is set).
+# Each entry is passed to sh -c, so full shell syntax works (pipes, &&, env vars).
+# autostart = [
+#     "waybar",
+#     "crystal-dock",
+# ]
+
 [input.keyboard]
-# repeat_rate = 25            # keys/sec
-# repeat_delay = 200          # ms before repeat starts
+# layout = "us"              # XKB layout (e.g., "us,ru" for multi-layout)
+# variant = ""               # XKB variant (e.g., "dvorak", or "," for two defaults)
+# options = ""               # XKB options (e.g., "grp:win_space_toggle" for Super+Space layout switch)
+# model = ""                 # XKB model (e.g., "pc105")
+# repeat_rate = 25           # keys/sec
+# repeat_delay = 200         # ms before repeat starts
 
 [input.scroll]
 # speed = 1.5                 # viewport pan multiplier
@@ -53,7 +64,7 @@
 # Keysyms are XKB names (case-insensitive): return, tab, up, a, equal, etc.
 #
 # Actions:
-#   exec <cmd>              — spawn a command (whitespace-split; use exec sh -c '...' for complex commands)
+#   exec <cmd>              — spawn a command via sh -c (shell syntax supported)
 #   close-window            — close the focused window
 #   nudge-window <dir>      — move focused window by nudge_step px
 #   pan-viewport <dir>      — pan camera by pan_step px
@@ -97,6 +108,22 @@
 # "mod+0" = "zoom-reset"
 # "mod+w" = "zoom-to-fit"
 # "mod+ctrl+shift+q" = "quit"
+#
+# Media keys (default: wpctl/brightnessctl, no modifier needed)
+# "XF86AudioRaiseVolume" = "exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
+# "XF86AudioLowerVolume" = "exec wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
+# "XF86AudioMute" = "exec wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle"
+# "XF86MonBrightnessUp" = "exec brightnessctl set +5%"
+# "XF86MonBrightnessDown" = "exec brightnessctl set 5%-"
+# "Print" = "exec grim"
+# "mod+l" = "exec swaylock"
+#
+# For visual OSD popups, install swayosd and replace wpctl/brightnessctl:
+# "XF86AudioRaiseVolume" = "exec swayosd-client --output-volume raise"
+# "XF86AudioLowerVolume" = "exec swayosd-client --output-volume lower"
+# "XF86AudioMute" = "exec swayosd-client --output-volume mute-toggle"
+# "XF86MonBrightnessUp" = "exec swayosd-client --brightness raise"
+# "XF86MonBrightnessDown" = "exec swayosd-client --brightness lower"
 
 # Mouse bindings: "Modifier+...+Trigger" = "action"
 # Only modifier-based bindings — canvas fundamentals are hardcoded:

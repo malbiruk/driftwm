@@ -251,49 +251,29 @@ hidden — they're just somewhere else on the canvas. Pan to find them.
 
 ## Widgets
 
-eww windows as regular `xdg-toplevel` surfaces placed at known canvas
-coordinates. They're normal windows — users can move them, they pan with the
-viewport. Matched by window rules to stay below normal windows and skip alt-tab.
+**Interim**: waybar via layer-shell for status bar, swayosd for volume/brightness
+OSD. Works today.
 
-```toml
-[[window_rules]]
-app_id = "eww-*"
-skip_taskbar = true
-always_below = true
-```
+**Planned**: `driftwm-shell` — a separate project providing a home screen and
+system shell using [Fabric](https://github.com/Fabric-Development/fabric)
+(Python GTK4 widget framework). Widgets are layer-shell surfaces placed at the
+home position near `(0, 0)`. Use home gesture to peek at them, repeat to go back.
 
-Convention: widgets live near `(0, 0)`. Use home gesture to peek at them,
-repeat to go back.
+### driftwm-shell roadmap
 
-### Default widget preset (ships with driftwm)
+1. **Basic home screen** — clock, date, coords/zoom, Fabric scaffold, GTK theming
+2. **Quick settings** — volume, brightness, wifi, bluetooth, keyboard layout
+3. **System tray** — StatusNotifierItem protocol support, tray icon display
+4. **Logout menu** — shutdown, reboot, logout, suspend, lock
+5. **Notifications** — freedesktop daemon, popup toasts, dismiss/actions
+6. **OSD, media controls, calendar, lock screen** (with shader support)
 
-driftwm ships an eww config as a starter kit so the desktop feels complete
-out of the box:
+### Customization surface
 
-```
-Canvas around (0, 0):
-
-         (-400, -200)                    (400, -200)
-              ┌──────────┐          ┌──────────┐
-              │  clock   │          │ battery  │
-              │ datetime │          │ wifi/bt  │
-              └──────────┘          └──────────┘
-
-                    (0, 0) ← home
-
-         (-400, 100)                     (400, 100)
-              ┌──────────┐          ┌──────────┐
-              │  cpu /   │          │ volume / │
-              │  memory  │          │ kbd lay  │
-              └──────────┘          └──────────┘
-```
-
-Users can rearrange, remove, or add their own eww widgets. They're just windows.
-
-### Later: waybar via layer-shell
-
-Once `wlr-layer-shell` is implemented (milestone 7), users can optionally run
-waybar as a traditional top bar. Not needed for v1.
+- **GTK theme + custom CSS** — colors, fonts, look and feel
+- **Widget toggles** — show/hide individual widgets
+- **Widget position/size** — where on the home screen each widget sits
+- **Per-widget settings** — clock format, what quick settings to show, etc.
 
 ## Canvas background
 
@@ -382,33 +362,29 @@ size = 24              # default: 24
 
 ## Launcher
 
-Not built into the compositor. `Super+D` runs whatever command is configured.
-Default: `bemenu-run` (works as a regular Wayland window, no layer-shell needed).
-Users can swap to fuzzel, wofi, tofi, etc. once layer-shell is implemented.
+Not built into the compositor. `Super+D` runs whatever command is configured
+(default: `fuzzel`). Users can swap to wofi, tofi, bemenu-run, etc.
 
 ```toml
-[commands]
-terminal = "foot"
-launcher = "bemenu-run"
+[keybindings]
+"mod+d" = "exec fuzzel"
 ```
 
 ## Ecosystem tools
 
-v1 (no layer-shell needed):
+All external — compositor delegates to standard Wayland tools.
 
-| Tool       | Purpose                          |
-| ---------- | -------------------------------- |
-| `eww`      | Canvas widgets (regular windows) |
-| `grim`     | Screenshot                       |
-| `swaylock` | Lock screen                      |
+| Tool           | Purpose                              |
+| -------------- | ------------------------------------ |
+| `waybar`       | Status bar (coords/zoom, clock, kbd) |
+| `swaync`       | Quick settings + notifications       |
+| `swayosd`      | Volume/brightness OSD                |
+| `fuzzel`       | App launcher                         |
+| `crystal-dock` | Dock / taskbar                       |
+| `swaylock`     | Lock screen                          |
 
-Post layer-shell (milestone 7):
-
-| Tool     | Purpose                    |
-| -------- | -------------------------- |
-| `fuzzel` | App launcher (alternative) |
-| `waybar` | Traditional status bar     |
-| `mako`   | Notifications              |
+Waybar modules: canvas x,y,z from driftwm, clock/date, keyboard layout,
+swaync integration, logout menu.
 
 ## Theming / integration
 
@@ -488,33 +464,22 @@ src/
 Ordered to maximize what can be developed in winit (nested) mode before
 requiring real hardware (udev/TTY). Milestones 1–8 work entirely in winit.
 
-1. **Window appears**: smithay winit backend, open a window, render a solid
-   background color. Accept xdg-shell clients. Display a terminal. _(done)_
-2. **Move and resize**: drag windows with mouse, resize from edges. Basic
-   stacking (click to raise). _(done)_
-3. **Infinite canvas**: viewport panning (click-drag, scroll, keyboard),
-   scroll momentum with friction decay, xcursor theme loading, compositor-
-   rendered cursor. _(done)_
-4. **Canvas background**: shader and tiled image rendering with dot grid
-   default. Essential spatial feedback for panning on an infinite canvas.
-5. **Window navigation**: `Super+C` center focused window, `Super+Arrow`
-   center nearest window in direction, `Alt-Tab` cycle windows (raise +
-   center). Pure camera math — makes the canvas usable for daily work.
-6. **Zoom**: GPU-scaled rendering at different zoom levels. Keyboard and
-   mouse-scroll zoom (pinch-to-zoom comes with trackpad gestures).
-7. **Layer shell**: support waybar, fuzzel, mako, notifications. Unlocks
-   proper app launcher and status bar.
-8. **Config file**: TOML parsing, user-defined keybindings, input settings.
-   Required before daily-driving.
-9. **udev backend**: DRM/KMS setup, libinput integration, logind session
-   management. The "run on real hardware" milestone.
-10. **Trackpad gestures**: wire up libinput gesture events. 3-finger pan
-    (viewport), 3-finger double-tap-drag (move window), pinch to zoom.
-    Gesture state machine with conflict resolution. Requires udev backend.
+1. **Window appears** _(done)_
+2. **Move and resize** _(done)_
+3. **Infinite canvas** _(done)_
+4. **Canvas background** _(done)_
+5. **Window navigation** _(done)_
+6. **Zoom** _(done)_
+7. **Layer shell** _(done)_
+8. **Config file** _(done)_
+9. **udev backend** _(done)_
+10. **Trackpad gestures** _(done)_
 11. **Multi-monitor**: multiple viewports on same canvas. Independent
-    camera/zoom per output. Requires udev backend.
+    camera/zoom per output.
 12. **Decorations**: SSD for apps that need it. Resize grab zones with
     cursor shape changes on hover. Mainly needed for XWayland/legacy Qt.
-13. **XWayland**: run X11 apps (Firefox, Steam, etc).
-14. **Widgets + polish**: ship eww preset, animations, shadows, damage
-    tracking optimization.
+13. **XWayland**: run X11 apps (Electron, Steam, etc).
+14. **Polish**: animations, shadows, damage tracking optimization.
+
+Separate project: **driftwm-shell** — GTK4 home screen + system widgets
+via Fabric (see Widgets section).
