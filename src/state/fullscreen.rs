@@ -48,6 +48,7 @@ impl DriftWm {
         // Place window at viewport origin and raise
         self.space.map_element(window.clone(), camera_i32, true);
         self.space.raise_element(window, true);
+        self.enforce_below_windows();
         self.update_output_from_camera();
 
         // Ensure keyboard focus is on the fullscreen window

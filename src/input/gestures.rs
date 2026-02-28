@@ -90,10 +90,12 @@ impl DriftWm {
                 let pointer = self.seat.get_pointer().unwrap();
                 let pos = pointer.current_location();
 
-                // Priority 1: Mod held + over window → resize
+                // Priority 1: Mod held + over window → resize (skip if pinned or no_focus)
                 if mod_held
                     && let Some((window, _)) =
                         self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                    && !driftwm::config::applied_rule(window.toplevel().unwrap().wl_surface())
+                        .is_some_and(|r| r.widget || r.no_focus)
                 {
                     return self.start_gesture_resize(window, pos);
                 }
@@ -103,6 +105,10 @@ impl DriftWm {
                     self.loop_handle.remove(pending.timer_token);
                     if let Some((window, _)) =
                         self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            .filter(|(w, _)| {
+                                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                                    .is_some_and(|r| r.no_focus)
+                            })
                     {
                         return self.start_gesture_move(window, pos);
                     }
@@ -313,9 +319,13 @@ impl DriftWm {
 
                 let pointer = self.seat.get_pointer().unwrap();
                 let pos = pointer.current_location();
+                let over_focusable = self.space.element_under(pos).is_some_and(|(w, _)| {
+                    !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                        .is_some_and(|r| r.no_focus)
+                });
                 if mod_held
                     || self.pointer_over_layer
-                    || self.space.element_under(pos).is_none()
+                    || !over_focusable
                 {
                     self.cancel_animations();
                     GestureState::Pinch2Desktop {
@@ -481,8 +491,16 @@ impl DriftWm {
     // ── Gesture setup helpers ─────────────────────────────────────────
 
     /// Enter Swipe3Move state: focus + raise the window, set initial tracking state.
+    /// If the window is pinned, falls through to Swipe3Pan instead.
     fn start_gesture_move(&mut self, window: Window, pos: Point<f64, Logical>) {
+        if driftwm::config::applied_rule(window.toplevel().unwrap().wl_surface())
+            .is_some_and(|r| r.widget)
+        {
+            self.gesture_state = Some(GestureState::Swipe3Pan);
+            return;
+        }
         self.space.raise_element(&window, true);
+        self.enforce_below_windows();
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         let surface = window.toplevel().unwrap().wl_surface().clone();

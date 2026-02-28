@@ -39,6 +39,9 @@ impl DriftWm {
             Action::NudgeWindow(dir) => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 if let Some(focus) = keyboard.current_focus() {
+                    if driftwm::config::applied_rule(&focus.0).is_some_and(|r| r.widget) {
+                        return;
+                    }
                     let window = self
                         .space
                         .elements()
@@ -133,7 +136,10 @@ impl DriftWm {
                     (viewport_center, None)
                 };
 
-                let windows = self.space.elements().map(|w| {
+                let windows = self.space.elements().filter(|w| {
+                    !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                        .is_some_and(|r| r.widget || r.no_focus)
+                }).map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     let size = w.geometry().size;
                     let center = Point::from((

@@ -187,6 +187,7 @@ pub fn init_winit(
             // --- Record camera+zoom for next-frame change detection ---
             data.state.last_rendered_camera = data.state.camera;
             data.state.last_rendered_zoom = data.state.zoom;
+            data.state.write_state_file_if_dirty();
 
             // --- Put backend back ---
             data.state.backend = Some(Backend::Winit(backend));

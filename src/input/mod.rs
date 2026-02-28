@@ -253,6 +253,10 @@ impl DriftWm {
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         self.space
             .element_under(pos)
+            .filter(|(window, _)| {
+                !driftwm::config::applied_rule(window.toplevel().unwrap().wl_surface())
+                    .is_some_and(|r| r.no_focus)
+            })
             .and_then(|(window, window_loc)| {
                 window
                     .surface_under(

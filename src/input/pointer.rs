@@ -115,33 +115,38 @@ impl DriftWm {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
                         {
-                            let initial_window_location =
-                                self.space.element_location(&window).unwrap();
-                            let start_data = GrabStartData {
-                                focus: None,
-                                button,
-                                location: pos,
-                            };
-                            let grab = MoveSurfaceGrab {
-                                start_data,
-                                window,
-                                initial_window_location,
-                            };
-                            pointer.set_grab(self, grab, serial, Focus::Clear);
-                            return;
+                            let surface = window.toplevel().unwrap().wl_surface();
+                            if !config::applied_rule(surface).is_some_and(|r| r.widget) {
+                                let initial_window_location =
+                                    self.space.element_location(&window).unwrap();
+                                let start_data = GrabStartData {
+                                    focus: None,
+                                    button,
+                                    location: pos,
+                                };
+                                let grab = MoveSurfaceGrab {
+                                    start_data,
+                                    window,
+                                    initial_window_location,
+                                };
+                                pointer.set_grab(self, grab, serial, Focus::Clear);
+                                return;
+                            }
                         }
-                        // No window under cursor — fall through to normal click
+                        // No window or pinned — fall through to normal click
                     }
                     MouseAction::ResizeWindow => {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            && !config::applied_rule(window.toplevel().unwrap().wl_surface())
+                                .is_some_and(|r| r.widget)
                         {
                             self.start_compositor_resize(
                                 &pointer, &window, pos, button, serial,
                             );
                             return;
                         }
-                        // No window under cursor — fall through
+                        // No window or pinned — fall through
                     }
                     MouseAction::PanViewport => {
                         self.panning = true;
@@ -168,11 +173,20 @@ impl DriftWm {
             let element_under = self
                 .space
                 .element_under(pos)
-                .map(|(w, _)| w.clone());
+                .map(|(w, _)| w.clone())
+                .filter(|w| {
+                    !config::applied_rule(w.toplevel().unwrap().wl_surface())
+                        .is_some_and(|r| r.no_focus)
+                });
 
             if let Some(window) = element_under {
                 // Normal click on window: focus + raise + forward
-                self.space.raise_element(&window, true);
+                let is_below = config::applied_rule(window.toplevel().unwrap().wl_surface())
+                    .is_some_and(|r| r.widget);
+                if !is_below {
+                    self.space.raise_element(&window, true);
+                    self.enforce_below_windows();
+                }
                 keyboard.set_focus(
                     self,
                     Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
@@ -385,7 +399,10 @@ impl DriftWm {
         // Empty canvas (or continuing a recent pan gesture):
         //   Trackpad (Finger) → pan viewport
         //   Mouse wheel (Wheel) → zoom, cursor-anchored
-        let over_window = self.space.element_under(pos).is_some();
+        let over_window = self.space.element_under(pos).is_some_and(|(w, _)| {
+            !config::applied_rule(w.toplevel().unwrap().wl_surface())
+                .is_some_and(|r| r.no_focus)
+        });
         let recent_pan = self
             .last_scroll_pan
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(150));

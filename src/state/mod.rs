@@ -39,6 +39,7 @@ use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::backend::renderer::gles::{GlesPixelProgram, element::PixelShaderElement};
@@ -167,6 +168,7 @@ pub struct DriftWm {
     pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     pub idle_inhibit_state: IdleInhibitManagerState,
     pub presentation_state: PresentationState,
+    pub decoration_state: XdgDecorationState,
     pub layer_shell_state: WlrLayerShellState,
     pub foreign_toplevel_state: driftwm::protocols::foreign_toplevel::ForeignToplevelManagerState,
 
@@ -208,6 +210,12 @@ pub struct DriftWm {
 
     /// Libseat session for VT switching (udev backend only).
     pub session: Option<LibSeatSession>,
+
+    /// Last camera/zoom written to the state file (for dirty detection).
+    pub state_file_camera: Point<f64, Logical>,
+    pub state_file_zoom: f64,
+    /// Throttle: last time the state file was actually written.
+    pub state_file_last_write: Instant,
 
     /// Commands to spawn after WAYLAND_DISPLAY is set.
     pub autostart: Vec<String>,
@@ -256,6 +264,7 @@ impl DriftWm {
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
         let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&dh);
         let presentation_state = PresentationState::new::<Self>(&dh, 1); // CLOCK_MONOTONIC
+        let decoration_state = XdgDecorationState::new::<Self>(&dh);
         let layer_shell_state = WlrLayerShellState::new::<Self>(&dh);
         let foreign_toplevel_state =
             driftwm::protocols::foreign_toplevel::ForeignToplevelManagerState::new::<Self, _>(&dh, |_| true);
@@ -320,6 +329,7 @@ impl DriftWm {
             keyboard_shortcuts_inhibit_state,
             idle_inhibit_state,
             presentation_state,
+            decoration_state,
             layer_shell_state,
             foreign_toplevel_state,
             pointer_over_layer: false,
@@ -335,8 +345,33 @@ impl DriftWm {
             pending_middle_click: None,
             fullscreen: None,
             session: None,
+            state_file_camera: Point::from((f64::NAN, f64::NAN)),
+            state_file_zoom: f64::NAN,
+            state_file_last_write: Instant::now(),
             autostart,
             redraw_needed: true,
+        }
+    }
+
+    /// Push any `below` windows to the bottom of the z-order.
+    /// Called after every `raise_element()` to maintain stacking.
+    pub fn enforce_below_windows(&mut self) {
+        // Space stores elements in a vec where last = topmost.
+        // raise_element pushes to the end (top). So we raise all
+        // non-below windows in reverse order to preserve their relative
+        // stacking while ensuring they sit above any below windows.
+        let non_below: Vec<_> = self
+            .space
+            .elements()
+            .filter(|w| {
+                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                    .is_some_and(|r| r.widget)
+            })
+            .cloned()
+            .collect();
+
+        for w in non_below.into_iter().rev() {
+            self.space.raise_element(&w, false);
         }
     }
 
@@ -405,6 +440,51 @@ impl DriftWm {
             .unwrap_or((1, 1).into())
     }
 
+    /// Write viewport center + zoom to `$XDG_RUNTIME_DIR/driftwm/state` if changed.
+    /// Atomic: writes to .tmp then renames.
+    pub fn write_state_file_if_dirty(&mut self) {
+        let cam = self.camera;
+        let z = self.zoom;
+        // Compare with epsilon to avoid writing on sub-pixel jitter
+        if (cam.x - self.state_file_camera.x).abs() < 0.5
+            && (cam.y - self.state_file_camera.y).abs() < 0.5
+            && (z - self.state_file_zoom).abs() < 0.001
+        {
+            return;
+        }
+        // Throttle writes to ~10/sec max (100ms between writes)
+        if self.state_file_last_write.elapsed() < std::time::Duration::from_millis(100) {
+            return;
+        }
+        self.state_file_camera = cam;
+        self.state_file_zoom = z;
+        self.state_file_last_write = Instant::now();
+
+        // Convert camera (top-left) to viewport center in canvas coords.
+        // Negate Y so positive = above origin (user-facing Y-up convention).
+        let vp = self.get_viewport_size();
+        let cx = cam.x + vp.w as f64 / (2.0 * z);
+        let cy = -(cam.y + vp.h as f64 / (2.0 * z));
+
+        let Some(dir) = state_file_dir() else { return };
+        if std::fs::create_dir_all(&dir).is_err() {
+            return;
+        }
+        let path = dir.join("state");
+        let tmp = dir.join("state.tmp");
+        let mut content = format!("x={cx:.0}\ny={cy:.0}\nzoom={z:.3}\n");
+
+        if let Some((saved_cam, saved_zoom)) = self.home_return {
+            let sx = saved_cam.x + vp.w as f64 / (2.0 * saved_zoom);
+            let sy = -(saved_cam.y + vp.h as f64 / (2.0 * saved_zoom));
+            content += &format!("saved_x={sx:.0}\nsaved_y={sy:.0}\nsaved_zoom={saved_zoom:.3}\n");
+        }
+
+        if std::fs::write(&tmp, content).is_ok() {
+            let _ = std::fs::rename(&tmp, &path);
+        }
+    }
+
     /// Load an xcursor image by name and cache the resulting MemoryRenderBuffer.
     /// Returns a reference to the cached (buffer, hotspot) pair.
     pub fn load_xcursor(
@@ -440,5 +520,19 @@ impl DriftWm {
                 .insert(name.to_string(), (buffer, hotspot));
         }
         self.cursor_buffers.get(name)
+    }
+}
+
+fn state_file_dir() -> Option<std::path::PathBuf> {
+    std::env::var("XDG_RUNTIME_DIR")
+        .ok()
+        .map(|d| std::path::PathBuf::from(d).join("driftwm"))
+}
+
+/// Remove the state file on compositor exit.
+pub fn remove_state_file() {
+    if let Some(dir) = state_file_dir() {
+        let _ = std::fs::remove_file(dir.join("state"));
+        let _ = std::fs::remove_file(dir.join("state.tmp"));
     }
 }

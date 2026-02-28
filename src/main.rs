@@ -115,5 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         log_err("flush_clients", data.display.flush_clients());
     })?;
 
+    state::remove_state_file();
+
     Ok(())
 }

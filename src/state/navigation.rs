@@ -10,6 +10,7 @@ impl DriftWm {
     /// If returning from overview (ZoomToFit), also restores the saved zoom level.
     pub fn navigate_to_window(&mut self, window: &Window) {
         self.space.raise_element(window, true);
+        self.enforce_below_windows();
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         let surface = window.toplevel().unwrap().wl_surface().clone();
@@ -51,7 +52,11 @@ impl DriftWm {
 
     /// Update focus history with the given surface (push to front / move to front).
     /// Should NOT be called during Alt-Tab cycling (history is frozen).
+    /// Skips windows with `skip_taskbar` rule.
     pub fn update_focus_history(&mut self, surface: &WlSurface) {
+        if driftwm::config::applied_rule(surface).is_some_and(|r| r.widget || r.no_focus) {
+            return;
+        }
         let window = self
             .space
             .elements()

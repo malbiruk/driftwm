@@ -147,6 +147,10 @@ impl XdgActivationHandler for DriftWm {
         surface: WlSurface,
     ) {
         // Simple focus-and-raise: find window by surface, raise it, set keyboard focus.
+        // Skip no_focus windows — they should never receive focus.
+        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.no_focus) {
+            return;
+        }
         let window = self
             .space
             .elements()
@@ -154,6 +158,7 @@ impl XdgActivationHandler for DriftWm {
             .cloned();
         if let Some(window) = window {
             self.space.raise_element(&window, true);
+            self.enforce_below_windows();
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
             let keyboard = self.seat.get_keyboard().unwrap();
             keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
@@ -220,6 +225,39 @@ delegate_idle_inhibit!(DriftWm);
 
 delegate_presentation!(DriftWm);
 
+use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
+use smithay::wayland::shell::xdg::ToplevelSurface;
+use smithay::delegate_xdg_decoration;
+
+impl XdgDecorationHandler for DriftWm {
+    fn new_decoration(&mut self, toplevel: ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        // CSD-first: tell client to draw its own decorations
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(Mode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+
+    fn request_mode(&mut self, toplevel: ToplevelSurface, mode: smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode) {
+        // Accept the client's preference — window rules override at first commit
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(mode);
+        });
+        toplevel.send_configure();
+    }
+
+    fn unset_mode(&mut self, toplevel: ToplevelSurface) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        toplevel.with_pending_state(|state| {
+            state.decoration_mode = Some(Mode::ClientSide);
+        });
+        toplevel.send_configure();
+    }
+}
+
+delegate_xdg_decoration!(DriftWm);
+
 use driftwm::protocols::foreign_toplevel::{ForeignToplevelHandler, ForeignToplevelManagerState};
 
 impl ForeignToplevelHandler for DriftWm {
@@ -228,6 +266,9 @@ impl ForeignToplevelHandler for DriftWm {
     }
 
     fn activate(&mut self, wl_surface: WlSurface) {
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.no_focus) {
+            return;
+        }
         let window = self
             .space
             .elements()

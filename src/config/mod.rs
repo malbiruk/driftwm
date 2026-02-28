@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use smithay::input::keyboard::{Keysym, ModifiersState};
 
 use defaults::{default_bindings, default_mouse_bindings};
-use toml::{ConfigFile, config_path, expand_tilde};
+use toml::{ConfigFile, WindowRuleFile, config_path, expand_tilde};
 
 pub struct Config {
     pub mod_key: ModKey,
@@ -45,6 +45,7 @@ pub struct Config {
     pub trackpad: TrackpadSettings,
     pub keyboard_layout: KeyboardLayout,
     pub autostart: Vec<String>,
+    pub window_rules: Vec<WindowRule>,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse_bindings: HashMap<MouseBinding, MouseAction>,
 }
@@ -221,6 +222,13 @@ impl Config {
             }
         };
 
+        let window_rules = raw
+            .window_rules
+            .unwrap_or_default()
+            .into_iter()
+            .map(parse_window_rule)
+            .collect();
+
         Self {
             mod_key,
             scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
@@ -241,9 +249,43 @@ impl Config {
             trackpad,
             keyboard_layout,
             autostart: raw.autostart.unwrap_or_default(),
+            window_rules,
             bindings,
             mouse_bindings,
         }
+    }
+
+    /// Find the first matching window rule for the given `app_id`.
+    /// Supports simple glob: `*` anywhere in the pattern.
+    pub fn match_window_rule(&self, app_id: &str) -> Option<&WindowRule> {
+        self.window_rules.iter().find(|rule| {
+            if let Some((prefix, suffix)) = rule.app_id.split_once('*') {
+                app_id.len() >= prefix.len() + suffix.len()
+                    && app_id.starts_with(prefix)
+                    && app_id[prefix.len()..].ends_with(suffix)
+            } else {
+                rule.app_id == app_id
+            }
+        })
+    }
+}
+
+fn parse_window_rule(r: WindowRuleFile) -> WindowRule {
+    let decoration = match r.decoration.as_deref() {
+        Some("none") => DecorationMode::None,
+        Some("server") => DecorationMode::Server,
+        Some("client") | None => DecorationMode::Client,
+        Some(other) => {
+            tracing::warn!("Unknown decoration mode '{other}', using client");
+            DecorationMode::Client
+        }
+    };
+    WindowRule {
+        app_id: r.app_id,
+        position: r.position.map(|[x, y]| (x, y)),
+        widget: r.widget,
+        no_focus: r.no_focus,
+        decoration,
     }
 }
 

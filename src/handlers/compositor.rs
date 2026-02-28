@@ -112,14 +112,84 @@ impl CompositorHandler for DriftWm {
                 if self.pending_center.remove(&root) {
                     let geo = window.geometry();
                     if geo.size.w > 0 && geo.size.h > 0 {
-                        let output_geo = {
-                            let output = self.space.outputs().next().cloned();
-                            output.and_then(|o| self.space.output_geometry(&o))
+                        // Read app_id and check window rules
+                        let app_id = with_states(&root, |states| {
+                            states
+                                .data_map
+                                .get::<XdgToplevelSurfaceData>()
+                                .and_then(|d| d.lock().ok())
+                                .and_then(|guard| guard.app_id.clone())
+                        });
+
+                        let rule = app_id
+                            .as_deref()
+                            .and_then(|id| self.config.match_window_rule(id))
+                            .cloned();
+
+                        if let Some(ref rule) = rule {
+                            // Store applied rule in surface data_map
+                            let applied = driftwm::config::AppliedWindowRule {
+                                widget: rule.widget,
+                                no_focus: rule.no_focus,
+                                decoration: rule.decoration.clone(),
+                            };
+                            with_states(&root, |states| {
+                                states.data_map.insert_if_missing_threadsafe(|| {
+                                    std::sync::Mutex::new(applied.clone())
+                                });
+                                *states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                                    .unwrap().lock().unwrap() = applied;
+                            });
+                        }
+
+                        // Position: rule coords are window-center with Y-up convention
+                        // (positive = above origin). Negate Y for internal canvas coords.
+                        let pos = if let Some(ref rule) = rule
+                            && let Some((x, y)) = rule.position
+                        {
+                            (x - geo.size.w / 2, -y - geo.size.h / 2)
+                        } else {
+                            let output_geo = {
+                                let output = self.space.outputs().next().cloned();
+                                output.and_then(|o| self.space.output_geometry(&o))
+                            };
+                            if let Some(output_geo) = output_geo {
+                                let cx = (self.camera.x + output_geo.size.w as f64 / (2.0 * self.zoom)) as i32 - geo.size.w / 2;
+                                let cy = (self.camera.y + output_geo.size.h as f64 / (2.0 * self.zoom)) as i32 - geo.size.h / 2;
+                                (cx, cy)
+                            } else {
+                                (0, 0)
+                            }
                         };
-                        if let Some(output_geo) = output_geo {
-                            let cx = (self.camera.x + output_geo.size.w as f64 / (2.0 * self.zoom)) as i32 - geo.size.w / 2;
-                            let cy = (self.camera.y + output_geo.size.h as f64 / (2.0 * self.zoom)) as i32 - geo.size.h / 2;
-                            self.space.map_element(window.clone(), (cx, cy), false);
+
+                        let activate = rule.as_ref().is_none_or(|r| !r.widget);
+                        self.space.map_element(window.clone(), pos, activate);
+
+                        if let Some(ref rule) = rule {
+                            // Decoration override: none/server → force SSD (compositor draws nothing = borderless)
+                            if rule.decoration != driftwm::config::DecorationMode::Client {
+                                use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                                let toplevel = window.toplevel().unwrap();
+                                toplevel.with_pending_state(|state| {
+                                    state.decoration_mode = Some(Mode::ServerSide);
+                                });
+                                toplevel.send_configure();
+                            }
+
+                            if rule.widget {
+                                self.enforce_below_windows();
+                            }
+
+                            if rule.widget || rule.no_focus {
+                                self.focus_history.retain(|w| w != &window);
+                                // Refocus previous window if this was focused
+                                if let Some(prev) = self.focus_history.first().cloned() {
+                                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                                    let keyboard = self.seat.get_keyboard().unwrap();
+                                    let surface = prev.toplevel().unwrap().wl_surface().clone();
+                                    keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+                                }
+                            }
                         }
                     } else {
                         // Not ready yet, retry next commit

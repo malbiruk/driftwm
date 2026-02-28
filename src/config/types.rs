@@ -221,6 +221,51 @@ pub struct KeyboardLayout {
     pub model: String,
 }
 
+/// Decoration mode applied by a window rule.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub enum DecorationMode {
+    /// Client-side decorations (default — compositor advertises CSD-first).
+    #[default]
+    Client,
+    /// Server-side decorations (compositor draws frame — currently renders nothing = borderless).
+    Server,
+    /// No decorations at all: force SSD mode but draw nothing.
+    None,
+}
+
+/// Parsed window rule from config.
+#[derive(Clone, Debug)]
+pub struct WindowRule {
+    pub app_id: String,
+    pub position: Option<(i32, i32)>,
+    /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
+    /// and always stacked below normal windows.
+    pub widget: bool,
+    pub no_focus: bool,
+    pub decoration: DecorationMode,
+}
+
+/// Runtime rule state stored in a surface's data_map after matching.
+#[derive(Clone, Debug)]
+pub struct AppliedWindowRule {
+    pub widget: bool,
+    pub no_focus: bool,
+    pub decoration: DecorationMode,
+}
+
+/// Read the applied window rule from a surface's data_map (if any).
+pub fn applied_rule(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> Option<AppliedWindowRule> {
+    smithay::wayland::compositor::with_states(surface, |states| {
+        states
+            .data_map
+            .get::<std::sync::Mutex<AppliedWindowRule>>()
+            .and_then(|m| m.lock().ok())
+            .map(|guard| guard.clone())
+    })
+}
+
 /// Built-in dot grid shader — used when no shader_path or tile_path is configured.
 pub const DEFAULT_SHADER: &str = include_str!("../../assets/shaders/dot_grid.glsl");
 

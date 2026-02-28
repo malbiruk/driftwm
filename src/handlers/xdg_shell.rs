@@ -51,6 +51,7 @@ impl XdgShellHandler for DriftWm {
 
         self.space.map_element(window.clone(), pos, true);
         self.space.raise_element(&window, true);
+        self.enforce_below_windows();
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
@@ -177,6 +178,9 @@ impl XdgShellHandler for DriftWm {
         serial: Serial,
     ) {
         let wl_surface = surface.wl_surface().clone();
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
+            return;
+        }
         let Some(window) = self
             .space
             .elements()
@@ -208,6 +212,9 @@ impl XdgShellHandler for DriftWm {
         edges: xdg_toplevel::ResizeEdge,
     ) {
         let wl_surface = surface.wl_surface().clone();
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
+            return;
+        }
         let Some(window) = self
             .space
             .elements()

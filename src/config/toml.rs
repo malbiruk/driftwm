@@ -16,6 +16,7 @@ pub(super) struct ConfigFile {
     pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: Option<HashMap<String, String>>,
+    pub window_rules: Option<Vec<WindowRuleFile>>,
 }
 
 #[derive(Deserialize, Default)]
@@ -95,6 +96,18 @@ pub(super) struct OutputConfig {
 pub(super) struct BackgroundFileConfig {
     pub shader_path: Option<String>,
     pub tile_path: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct WindowRuleFile {
+    pub app_id: String,
+    pub position: Option<[i32; 2]>,
+    #[serde(default)]
+    pub widget: bool,
+    #[serde(default)]
+    pub no_focus: bool,
+    pub decoration: Option<String>,
 }
 
 pub(super) fn config_path() -> std::path::PathBuf {

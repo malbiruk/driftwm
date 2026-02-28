@@ -680,6 +680,7 @@ fn render_frame(
     // Record camera+zoom for next-frame change detection
     data.state.last_rendered_camera = data.state.camera;
     data.state.last_rendered_zoom = data.state.zoom;
+    data.state.write_state_file_if_dirty();
 
     // Post-render
     crate::render::post_render(&mut data.state, output);
