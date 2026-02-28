@@ -225,11 +225,23 @@ pub fn update_background_element(
 /// Assemble all render elements for a frame.
 /// Caller provides cursor elements (built before taking the renderer).
 pub fn compose_frame(
-    state: &crate::state::DriftWm,
+    state: &mut crate::state::DriftWm,
     renderer: &mut GlesRenderer,
     output: &Output,
     cursor_elements: Vec<MemoryRenderBufferRenderElement<GlesRenderer>>,
 ) -> Vec<OutputRenderElements> {
+    // Lazy re-init background after config reload cleared the cached state
+    if state.background_shader.is_none()
+        && state.cached_bg_element.is_none()
+        && state.background_tile.is_none()
+    {
+        let output_size = output
+            .current_mode()
+            .map(|m| m.size.to_logical(output.current_scale().integer_scale()))
+            .unwrap_or((1, 1).into());
+        init_background(state, renderer, output_size);
+    }
+
     let viewport_size = state.get_viewport_size();
     let visible_rect = canvas::visible_canvas_rect(
         state.camera.to_i32_round(),
@@ -301,80 +313,92 @@ pub fn compose_frame(
 }
 
 /// Compile background shader and/or load tile image.
-/// Called once at startup by both winit and udev backends.
-/// `initial_size` sets the cached element's initial area (resized each frame).
-pub fn init_background(state: &mut crate::state::DriftWm, initial_size: Size<i32, smithay::utils::Logical>) {
-    let shader_source = if let Some(path) = state.config.background.shader_path.as_deref() {
-        std::fs::read_to_string(path)
-            .unwrap_or_else(|e| panic!("Failed to read shader {path}: {e}"))
-    } else if state.config.background.tile_path.is_none() {
-        driftwm::config::DEFAULT_SHADER.to_string()
-    } else {
-        String::new()
-    };
-    if !shader_source.is_empty() {
-        let shader = state
-            .backend
-            .as_mut()
-            .unwrap()
-            .renderer()
-            .compile_custom_pixel_shader(&shader_source, BG_UNIFORMS)
-            .expect("Failed to compile background shader");
-        state.background_shader = Some(shader.clone());
-
-        let area = Rectangle::from_size(initial_size);
-        state.cached_bg_element = Some(PixelShaderElement::new(
-            shader,
-            area,
-            Some(vec![area]),
-            1.0,
-            vec![Uniform::new("u_camera", (0.0f32, 0.0f32))],
-            Kind::Unspecified,
-        ));
-    }
-
-    if state.background_shader.is_none()
+/// Called at startup and on config reload (lazy re-init).
+/// On failure, falls back to `DEFAULT_SHADER` — never leaves background uninitialized.
+pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRenderer, initial_size: Size<i32, smithay::utils::Logical>) {
+    // Try loading tile image first (if configured and no shader_path)
+    if state.config.background.shader_path.is_none()
         && let Some(path) = state.config.background.tile_path.as_deref()
     {
-        let img = image::open(path)
-            .unwrap_or_else(|e| panic!("Failed to load tile image {path}: {e}"))
-            .into_rgba8();
-        let (w, h) = img.dimensions();
-        let raw = img.into_raw();
+        match image::open(path) {
+            Ok(img) => {
+                let img = img.into_rgba8();
+                let (w, h) = img.dimensions();
+                let raw = img.into_raw();
 
-        // Build (w+2)×(h+2) buffer: duplicate last 2 cols/rows so adjacent
-        // tiles overlap by 2 opaque pixels, covering sub-pixel rounding gaps.
-        let pad = 2usize;
-        let ew = w as usize + pad;
-        let eh = h as usize + pad;
-        let mut expanded = vec![0u8; ew * eh * 4];
-        for y in 0..h as usize {
-            let src_row = y * w as usize * 4;
-            let dst_row = y * ew * 4;
-            expanded[dst_row..dst_row + w as usize * 4]
-                .copy_from_slice(&raw[src_row..src_row + w as usize * 4]);
-            let last_px = &raw[src_row + (w as usize - 1) * 4..src_row + w as usize * 4];
-            for p in 0..pad {
-                let dst = dst_row + (w as usize + p) * 4;
-                expanded[dst..dst + 4].copy_from_slice(last_px);
+                // Build (w+2)×(h+2) buffer: duplicate last 2 cols/rows so adjacent
+                // tiles overlap by 2 opaque pixels, covering sub-pixel rounding gaps.
+                let pad = 2usize;
+                let ew = w as usize + pad;
+                let eh = h as usize + pad;
+                let mut expanded = vec![0u8; ew * eh * 4];
+                for y in 0..h as usize {
+                    let src_row = y * w as usize * 4;
+                    let dst_row = y * ew * 4;
+                    expanded[dst_row..dst_row + w as usize * 4]
+                        .copy_from_slice(&raw[src_row..src_row + w as usize * 4]);
+                    let last_px = &raw[src_row + (w as usize - 1) * 4..src_row + w as usize * 4];
+                    for p in 0..pad {
+                        let dst = dst_row + (w as usize + p) * 4;
+                        expanded[dst..dst + 4].copy_from_slice(last_px);
+                    }
+                }
+                let last_row: Vec<u8> = expanded[(h as usize - 1) * ew * 4..h as usize * ew * 4].to_vec();
+                for p in 0..pad {
+                    let dst = (h as usize + p) * ew * 4;
+                    expanded[dst..dst + ew * 4].copy_from_slice(&last_row);
+                }
+
+                let buffer = MemoryRenderBuffer::from_slice(
+                    &expanded,
+                    Fourcc::Abgr8888,
+                    (ew as i32, eh as i32),
+                    1,
+                    Transform::Normal,
+                    None,
+                );
+                state.background_tile = Some((buffer, w as i32, h as i32));
+                return;
+            }
+            Err(e) => {
+                tracing::error!("Failed to load tile image {path}: {e}, using default shader");
             }
         }
-        let last_row: Vec<u8> = expanded[(h as usize - 1) * ew * 4..h as usize * ew * 4].to_vec();
-        for p in 0..pad {
-            let dst = (h as usize + p) * ew * 4;
-            expanded[dst..dst + ew * 4].copy_from_slice(&last_row);
-        }
-
-        let buffer = MemoryRenderBuffer::from_slice(
-            &expanded,
-            Fourcc::Abgr8888,
-            (ew as i32, eh as i32),
-            1,
-            Transform::Normal,
-            None,
-        );
-        state.background_tile = Some((buffer, w as i32, h as i32));
     }
+
+    // Shader path: custom or default
+    let shader_source = if let Some(path) = state.config.background.shader_path.as_deref() {
+        match std::fs::read_to_string(path) {
+            Ok(src) => src,
+            Err(e) => {
+                tracing::error!("Failed to read shader {path}: {e}, using default");
+                driftwm::config::DEFAULT_SHADER.to_string()
+            }
+        }
+    } else {
+        driftwm::config::DEFAULT_SHADER.to_string()
+    };
+
+    let shader = match renderer.compile_custom_pixel_shader(&shader_source, BG_UNIFORMS) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::error!("Failed to compile shader: {e}, using default");
+            renderer
+                .compile_custom_pixel_shader(driftwm::config::DEFAULT_SHADER, BG_UNIFORMS)
+                .expect("Default shader must compile")
+        }
+    };
+    state.background_shader = Some(shader.clone());
+
+    let area = Rectangle::from_size(initial_size);
+    state.cached_bg_element = Some(PixelShaderElement::new(
+        shader,
+        area,
+        Some(vec![area]),
+        1.0,
+        vec![Uniform::new("u_camera", (0.0f32, 0.0f32))],
+        Kind::Unspecified,
+    ));
 }
 
 /// Post-render: frame callbacks, foreign toplevel refresh, space cleanup.

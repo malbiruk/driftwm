@@ -106,6 +106,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "zoom-reset" => Ok(Action::ZoomReset),
         "zoom-to-fit" => Ok(Action::ZoomToFit),
         "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
+        "reload-config" => Ok(Action::ReloadConfig),
         "quit" => Ok(Action::Quit),
         other => Err(format!("unknown action: {other}")),
     }

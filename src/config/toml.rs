@@ -110,7 +110,7 @@ pub(super) struct WindowRuleFile {
     pub decoration: Option<String>,
 }
 
-pub(super) fn config_path() -> std::path::PathBuf {
+pub fn config_path() -> std::path::PathBuf {
     let config_dir = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());
         format!("{home}/.config")

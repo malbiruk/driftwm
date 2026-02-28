@@ -4,6 +4,7 @@ mod toml;
 mod types;
 
 pub use parse::{parse_action, parse_direction, parse_key_combo, parse_mouse_action, parse_mouse_binding};
+pub use toml::config_path;
 pub use types::*;
 
 use std::collections::HashMap;
@@ -11,7 +12,7 @@ use std::collections::HashMap;
 use smithay::input::keyboard::{Keysym, ModifiersState};
 
 use defaults::{default_bindings, default_mouse_bindings};
-use toml::{ConfigFile, WindowRuleFile, config_path, expand_tilde};
+use toml::{ConfigFile, WindowRuleFile, expand_tilde};
 
 pub struct Config {
     pub mod_key: ModKey,
@@ -45,6 +46,8 @@ pub struct Config {
     pub trackpad: TrackpadSettings,
     pub keyboard_layout: KeyboardLayout,
     pub autostart: Vec<String>,
+    pub cursor_theme: Option<String>,
+    pub cursor_size: Option<u32>,
     pub window_rules: Vec<WindowRule>,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse_bindings: HashMap<MouseBinding, MouseAction>,
@@ -248,6 +251,8 @@ impl Config {
             background,
             trackpad,
             keyboard_layout,
+            cursor_theme: raw.cursor.theme,
+            cursor_size: raw.cursor.size,
             autostart: raw.autostart.unwrap_or_default(),
             window_rules,
             bindings,

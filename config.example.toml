@@ -77,6 +77,7 @@
 #   zoom-reset              — zoom to 1.0
 #   zoom-to-fit             — fit all windows in viewport
 #   toggle-fullscreen       — toggle focused window fullscreen
+#   reload-config           — hot-reload config file
 #   quit                    — exit the compositor
 #   none                    — unbind this key combo
 #

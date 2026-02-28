@@ -95,6 +95,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         })?;
 
+    // Config file watcher: poll mtime every 500ms
+    {
+        let config_path = driftwm::config::config_path();
+        data.state.config_file_mtime = std::fs::metadata(&config_path)
+            .and_then(|m| m.modified())
+            .ok();
+
+        let timer = smithay::reexports::calloop::timer::Timer::from_duration(
+            std::time::Duration::from_millis(500),
+        );
+        event_loop.handle().insert_source(timer, move |_, _, data: &mut CalloopData| {
+            let current_mtime = std::fs::metadata(&config_path)
+                .and_then(|m| m.modified())
+                .ok();
+            if current_mtime != data.state.config_file_mtime && current_mtime.is_some() {
+                // Debounce: skip if mtime is <100ms old (editor may still be writing)
+                let dominated_by_recent_write = current_mtime.is_some_and(|mt| {
+                    mt.elapsed().is_ok_and(|age| age.as_millis() < 100)
+                });
+                if !dominated_by_recent_write {
+                    data.state.config_file_mtime = current_mtime;
+                    data.state.reload_config();
+                }
+            }
+            smithay::reexports::calloop::timer::TimeoutAction::ToDuration(
+                std::time::Duration::from_millis(500),
+            )
+        })?;
+    }
+
     // Auto-reap child processes — prevents zombies from exec/autostart commands.
     // Must be after backend init: libseat uses waitpid() during session setup.
     unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };

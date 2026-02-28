@@ -64,7 +64,11 @@ pub fn init_winit(
         .create_global::<crate::state::DriftWm>(&data.display.handle(), formats);
     data.state.dmabuf_global = Some(dmabuf_global);
 
-    crate::render::init_background(&mut data.state, size.to_logical(1));
+    {
+        let mut backend = data.state.backend.take().unwrap();
+        crate::render::init_background(&mut data.state, backend.renderer(), size.to_logical(1));
+        data.state.backend = Some(backend);
+    }
 
     // Centre the viewport so canvas origin (0, 0) is in the middle of the screen
     let logical_size = size.to_logical(1);
@@ -162,7 +166,7 @@ pub fn init_winit(
             let render_ok = match backend.bind() {
                 Ok((renderer, mut framebuffer)) => {
                     let all_elements =
-                        crate::render::compose_frame(&data.state, renderer, &output, cursor_elements);
+                        crate::render::compose_frame(&mut data.state, renderer, &output, cursor_elements);
                     let result = damage_tracker.render_output(
                         renderer,
                         &mut framebuffer,

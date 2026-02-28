@@ -280,7 +280,11 @@ pub fn init_udev(
         .and_then(|s| s.output.current_mode())
         .map(|m| m.size.to_logical(1))
         .unwrap_or((1920, 1080).into());
-    crate::render::init_background(&mut data.state, initial_size);
+    {
+        let mut backend = data.state.backend.take().unwrap();
+        crate::render::init_background(&mut data.state, backend.renderer(), initial_size);
+        data.state.backend = Some(backend);
+    }
 
     // 8. Build shared device state (Rc<RefCell<>> for safe sharing across calloop closures)
     let device = Rc::new(RefCell::new(DeviceData {
@@ -654,7 +658,7 @@ fn render_frame(
     // Build cursor + compose frame
     let cursor_elements = crate::render::build_cursor_elements(&mut data.state, renderer);
     let renderer = backend.renderer();
-    let elements = crate::render::compose_frame(&data.state, renderer, output, cursor_elements);
+    let elements = crate::render::compose_frame(&mut data.state, renderer, output, cursor_elements);
 
     // Render via DRM compositor
     let renderer = backend.renderer();

@@ -271,6 +271,9 @@ impl DriftWm {
                     }
                 }
             }
+            Action::ReloadConfig => {
+                self.reload_config();
+            }
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");
                 self.loop_signal.stop();

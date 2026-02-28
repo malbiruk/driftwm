@@ -49,6 +49,7 @@ pub enum Action {
     ZoomReset,
     ZoomToFit,
     ToggleFullscreen,
+    ReloadConfig,
     Quit,
 }
 
@@ -195,7 +196,7 @@ pub enum MouseAction {
     Navigate,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TrackpadSettings {
     pub tap_to_click: bool,
     pub natural_scroll: bool,
@@ -214,6 +215,7 @@ impl Default for TrackpadSettings {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
 pub struct KeyboardLayout {
     pub layout: String,
     pub variant: String,
@@ -269,7 +271,7 @@ pub fn applied_rule(
 /// Built-in dot grid shader — used when no shader_path or tile_path is configured.
 pub const DEFAULT_SHADER: &str = include_str!("../../assets/shaders/dot_grid.glsl");
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct BackgroundConfig {
     /// Path to a GLSL fragment shader. If set, shader is compiled and rendered fullscreen.
     pub shader_path: Option<String>,
