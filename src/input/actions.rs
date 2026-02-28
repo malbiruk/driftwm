@@ -123,7 +123,9 @@ impl DriftWm {
                 let (origin, skip) = if let Some(ref w) = focused {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     let size = w.geometry().size;
-                    if canvas::is_rect_visible(loc, size, self.camera, viewport_size, self.zoom) {
+                    if canvas::visible_fraction(loc, size, self.camera, viewport_size, self.zoom)
+                        >= 0.5
+                    {
                         let center = Point::from((
                             loc.x as f64 + size.w as f64 / 2.0,
                             loc.y as f64 + size.h as f64 / 2.0,

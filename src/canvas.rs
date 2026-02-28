@@ -68,6 +68,34 @@ pub fn is_rect_visible(
         && (rect_loc.y + rect_size.h) as f64 > camera.y
 }
 
+/// Fraction of a rectangle's area visible in the current viewport (0.0–1.0).
+/// Returns 0.0 for zero-area rectangles.
+pub fn visible_fraction(
+    rect_loc: Point<i32, Logical>,
+    rect_size: Size<i32, Logical>,
+    camera: Point<f64, Logical>,
+    viewport_size: Size<i32, Logical>,
+    zoom: f64,
+) -> f64 {
+    let area = rect_size.w as f64 * rect_size.h as f64;
+    if area <= 0.0 {
+        return 0.0;
+    }
+
+    let vw = viewport_size.w as f64 / zoom;
+    let vh = viewport_size.h as f64 / zoom;
+
+    let ix_min = (rect_loc.x as f64).max(camera.x);
+    let ix_max = ((rect_loc.x + rect_size.w) as f64).min(camera.x + vw);
+    let iy_min = (rect_loc.y as f64).max(camera.y);
+    let iy_max = ((rect_loc.y + rect_size.h) as f64).min(camera.y + vh);
+
+    let iw = (ix_max - ix_min).max(0.0);
+    let ih = (iy_max - iy_min).max(0.0);
+
+    (iw * ih) / area
+}
+
 /// Check whether the canvas origin (0, 0) is visible in the current viewport.
 /// At zoom < 1.0, the visible area is larger: viewport_size / zoom.
 pub fn is_origin_visible(
@@ -266,5 +294,56 @@ impl MomentumState {
 
     pub fn stop(&mut self) {
         self.velocity = Point::from((0.0, 0.0));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cam(x: f64, y: f64) -> Point<f64, Logical> {
+        Point::from((x, y))
+    }
+    fn vp(w: i32, h: i32) -> Size<i32, Logical> {
+        Size::from((w, h))
+    }
+
+    #[test]
+    fn fully_visible() {
+        // 100x100 window at (200, 200), camera at (0,0), viewport 1000x1000, zoom 1.0
+        let f = visible_fraction((200, 200).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        assert!((f - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn fully_off_screen() {
+        // Window completely to the right of viewport
+        let f = visible_fraction((2000, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        assert!((f - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn half_off_right_edge() {
+        // 100x100 window, right half off-screen
+        let f = visible_fraction((950, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        assert!((f - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zero_area_window() {
+        let f = visible_fraction((0, 0).into(), (0, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        assert!((f - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn zoom_affects_viewport() {
+        // At zoom 0.5, viewport covers 2000x2000 canvas units.
+        // 100x100 window at (1500, 0) is fully visible.
+        let f = visible_fraction((1500, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 0.5);
+        assert!((f - 1.0).abs() < 1e-9);
+
+        // Same window at zoom 1.0 is fully off-screen.
+        let f = visible_fraction((1500, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        assert!((f - 0.0).abs() < 1e-9);
     }
 }
