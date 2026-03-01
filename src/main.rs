@@ -129,11 +129,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Must be after backend init: libseat uses waitpid() during session setup.
     unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };
 
-    for cmd in &data.state.autostart {
-        tracing::info!("Autostart: {cmd}");
-        if let Err(e) = std::process::Command::new("sh").args(["-c", cmd.as_str()]).spawn() {
-            tracing::error!("Autostart failed for '{cmd}': {e}");
-        }
+    // Defer autostart until the event loop is running — GTK apps (swaync) need
+    // the compositor processing Wayland events before they connect.
+    let autostart = data.state.autostart.clone();
+    if !autostart.is_empty() {
+        event_loop.handle().insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(
+                std::time::Duration::from_millis(100),
+            ),
+            move |_, _, _data| {
+                for cmd in &autostart {
+                    tracing::info!("Autostart: {cmd}");
+                    state::spawn_command(cmd);
+                }
+                smithay::reexports::calloop::timer::TimeoutAction::Drop
+            },
+        )?;
     }
 
     // Run the event loop

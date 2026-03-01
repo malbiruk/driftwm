@@ -96,17 +96,17 @@ ICON = {
 # ── Weather icons (Unicode, no Nerd Font needed) ────────────
 
 WEATHER_ICON = {
-    "clear": "☀",
-    "sunny": "☀",
-    "partly": "⛅",
-    "cloudy": "☁",
-    "overcast": "☁",
-    "rain": "☔",
-    "drizzle": "🌧",
-    "thunder": "⛈",
-    "snow": "❄",
-    "mist": "🌫",
-    "fog": "🌫",
+    "clear": chr(0xF0599),  # 󰖙
+    "sunny": chr(0xF0599),  # 󰖙
+    "partly": chr(0xF0595),  # 󰖕
+    "cloudy": chr(0xF0590),  # 󰖐
+    "overcast": chr(0xF0590),  # 󰖐
+    "rain": chr(0xF0597),  # 󰖗
+    "drizzle": chr(0xF0597),  # 󰖗
+    "thunder": chr(0xF0593),  # 󰖓
+    "snow": chr(0xF0598),  # 󰖘
+    "mist": chr(0xF0591),  # 󰖑
+    "fog": chr(0xF0591),  # 󰖑
 }
 
 
@@ -115,7 +115,7 @@ def weather_icon(desc: str) -> str:
     for key, icon in WEATHER_ICON.items():
         if key in desc_lower:
             return icon
-    return "🌤"
+    return chr(0xF0595)  # 󰖕 partly cloudy as default
 
 
 # ── Data readers ─────────────────────────────────────────────
@@ -220,7 +220,7 @@ def get_battery() -> tuple[int, str, str] | None:
 
 
 def battery_icon(pct: int, status: str) -> str:
-    if "charging" in status:
+    if status == "charging":
         return ICON["bat_charging"]
     if pct > 75:
         return ICON["bat_high"]
@@ -290,17 +290,16 @@ def wifi_icon(signal: int) -> str:
 
 
 def get_notifications() -> int:
-    """Get notification count from makoctl."""
+    """Get unread notification count from swaync."""
     try:
         result = subprocess.run(
-            ["makoctl", "list"],
+            ["swaync-client", "-c"],
             capture_output=True,
             text=True,
             timeout=2,
             check=False,
         )
-        data = json.loads(result.stdout)
-        return len(data.get("data", []))
+        return int(result.stdout.strip())
     except Exception:
         return 0
 
@@ -317,7 +316,10 @@ def get_weather() -> dict | None:
         cur = data["current_condition"][0]
         today = data["weather"][0]
         tomorrow = data["weather"][1] if len(data["weather"]) > 1 else None
+        area = data.get("nearest_area", [{}])[0]
+        location = area.get("areaName", [{}])[0].get("value", "")
         return {
+            "location": location,
             "temp": cur["temp_C"],
             "feels": cur["FeelsLikeC"],
             "desc": cur["weatherDesc"][0]["value"],

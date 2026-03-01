@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
-"""Main dashboard pane — clock, stats, connections."""
+"""System stats + connections widget."""
 
 import os
 import time
 from collections import deque
-from datetime import datetime
-
-from rich.console import Console
-from rich.live import Live
-from rich.text import Text
 
 from common import (
     ICON,
@@ -22,26 +17,22 @@ from common import (
     get_volume,
     get_wifi,
     progress_bar,
-    render_big_time,
     sparkline,
     volume_icon,
     wifi_icon,
 )
+from rich.console import Console
+from rich.live import Live
+from rich.text import Text
 
 WIDTH = 36
-PAD = 15  # pad label+value so bars align (widest: "ram  10.5/16G" = 13)
+PAD = 15
 console = Console(width=WIDTH, highlight=False)
 cpu_history: deque[float] = deque(maxlen=10)
 ram_history: deque[float] = deque(maxlen=10)
 
 
-def center(line: str) -> str:
-    pad = max((WIDTH - len(line)) // 2, 0)
-    return " " * pad + line
-
-
 def load_color(pct: float) -> str:
-    """Green < 50%, yellow < 80%, red >= 80%."""
     if pct < 50:
         return "green"
     if pct < 80:
@@ -55,42 +46,6 @@ def bat_color(pct: int) -> str:
     if pct > 20:
         return "yellow"
     return "red"
-
-
-def render_clock(text: Text, now: datetime) -> None:
-    r1, r2 = render_big_time(
-        now.strftime("%H:%M"),
-        colon_on=now.second % 2 == 0,
-    )
-    text.append(center(r1) + "\n", style="bold")
-    text.append(center(r2) + "\n", style="bold")
-    text.append("\n")
-    date_line = now.strftime("%A · %B %d").lower()
-    text.append(center(date_line) + "\n", style="dim")
-
-
-def render_stats(text: Text) -> None:
-    cpu = get_cpu_percent()
-    cpu_history.append(cpu)
-    ram_used, ram_total = get_ram()
-    ram_pct = ram_used / ram_total * 100 if ram_total > 0 else 0
-    ram_history.append(ram_pct)
-
-    # CPU — orange icon, load-colored sparkline
-    text.append(f"   {ICON['cpu']}  ", style="cyan")
-    info = f"cpu  {cpu:3.0f}%"
-    text.append(f"{info:<{PAD}}")
-    text.append(f"{sparkline(cpu_history)}\n", style=load_color(cpu))
-
-    # RAM — magenta icon, load-colored sparkline
-    text.append(f"   {ICON['ram']}  ", style="magenta")
-    info = f"ram  {ram_used:.1f}/{ram_total:.0f}G"
-    text.append(f"{info:<{PAD}}")
-    text.append(f"{sparkline(ram_history)}\n", style=load_color(ram_pct))
-
-    _render_battery(text)
-    _render_volume(text)
-    _render_brightness(text)
 
 
 def _render_battery(text: Text) -> None:
@@ -110,10 +65,10 @@ def _render_volume(text: Text) -> None:
     vol, muted = get_volume()
     vicon = volume_icon(vol, muted=muted)
     if muted:
-        text.append(f"   {vicon}  ", style="dim")
+        text.append(f"   {vicon}  ")
         info = "vol  muted"
         text.append(f"{info:<{PAD}}")
-        text.append(f"{progress_bar(vol)}\n", style="dim")
+        text.append(f"{progress_bar(vol)}\n")
     else:
         text.append(f"   {vicon}  ", style="blue")
         info = f"vol  {vol:3d}%"
@@ -132,7 +87,7 @@ def _render_brightness(text: Text) -> None:
     text.append(f"{progress_bar(bri)}\n", style="yellow")
 
 
-def render_connections(text: Text) -> None:
+def _render_connections(text: Text) -> None:
     wifi = get_wifi()
     if wifi:
         ssid, signal = wifi
@@ -141,19 +96,12 @@ def render_connections(text: Text) -> None:
         text.append(f"   {wicon}  ", style="cyan")
         text.append(f"{display_ssid} ({signal}%)\n")
     else:
-        text.append(f"   {ICON['wifi_off']}  ", style="dim")
-        text.append("offline\n", style="dim")
+        text.append(f"   {ICON['wifi_off']}  ")
+        text.append("offline\n")
 
     bt = get_bluetooth()
     if bt:
         text.append(f"   {bt}\n", style="blue")
-
-
-def content_lines() -> int:
-    """Count how many lines the content occupies (for vertical centering)."""
-    # clock: 2 + 1 blank + 1 date = 4, stats: up to 5, connections: up to 2
-    # separators: 2 + 2 = 4 blank lines between sections
-    return 15
 
 
 def render() -> Text:
@@ -161,14 +109,32 @@ def render() -> Text:
     try:
         term_h = os.get_terminal_size().lines
     except OSError:
-        term_h = 23
-    top_pad = max((term_h - content_lines()) // 2, 0)
+        term_h = 10
+    top_pad = max((term_h - 8) // 2, 0)
     text.append("\n" * top_pad)
-    render_clock(text, datetime.now())  # noqa: DTZ005
-    text.append("\n\n")
-    render_stats(text)
-    text.append("\n\n")
-    render_connections(text)
+
+    cpu = get_cpu_percent()
+    cpu_history.append(cpu)
+    text.append(f"   {ICON['cpu']}  ", style="cyan")
+    info = f"cpu  {cpu:3.0f}%"
+    text.append(f"{info:<{PAD}}")
+    text.append(f"{sparkline(cpu_history)}\n", style=load_color(cpu))
+
+    ram_used, ram_total = get_ram()
+    ram_pct = ram_used / ram_total * 100 if ram_total > 0 else 0
+    ram_history.append(ram_pct)
+    text.append(f"   {ICON['ram']}  ", style="magenta")
+    info = f"ram  {ram_used:.1f}/{ram_total:.0f}G"
+    text.append(f"{info:<{PAD}}")
+    text.append(f"{sparkline(ram_history)}\n", style=load_color(ram_pct))
+
+    text.append("\n")
+    _render_battery(text)
+    _render_volume(text)
+    _render_brightness(text)
+    text.append("\n")
+    _render_connections(text)
+
     return text
 
 

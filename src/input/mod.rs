@@ -99,6 +99,16 @@ impl DriftWm {
             },
         );
 
+        // Update active layout name (may have changed via XKB group switch)
+        let layout_name = keyboard.with_xkb_state(self, |ctx| {
+            let xkb = ctx.xkb().lock().unwrap();
+            let layout = xkb.active_layout();
+            xkb.layout_name(layout).to_owned()
+        });
+        if self.active_layout != layout_name {
+            self.active_layout = layout_name;
+        }
+
         if let Some(ref action) = action.flatten() {
             // Set up key repeat for repeatable actions
             if action.is_repeatable() {

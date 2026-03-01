@@ -74,6 +74,23 @@ pub fn log_err(context: &str, result: Result<impl Sized, impl std::fmt::Display>
     }
 }
 
+/// Spawn a shell command with SIGCHLD reset to default.
+/// The compositor sets SIG_IGN on SIGCHLD for zombie reaping, but children
+/// inherit this — breaking GLib's waitpid()-based subprocess management
+/// (swaync-client hangs because GSpawnSync gets ECHILD).
+pub fn spawn_command(cmd: &str) {
+    use std::os::unix::process::CommandExt;
+    let mut child = std::process::Command::new("sh");
+    child.args(["-c", cmd]);
+    unsafe {
+        child.pre_exec(|| {
+            libc::signal(libc::SIGCHLD, libc::SIG_DFL);
+            Ok(())
+        });
+    }
+    log_err("spawn command", child.spawn());
+}
+
 /// Wrapper held by the calloop event loop — gives callbacks access
 /// to both compositor state and the Wayland display.
 pub struct CalloopData {
@@ -218,6 +235,11 @@ pub struct DriftWm {
     /// Throttle: last time the state file was actually written.
     pub state_file_last_write: Instant,
 
+    /// Active XKB layout name (e.g. "English (US)"), updated on key events.
+    pub active_layout: String,
+    /// Last layout written to the state file (for dirty detection).
+    pub state_file_layout: String,
+
     /// Commands to spawn after WAYLAND_DISPLAY is set.
     pub autostart: Vec<String>,
 
@@ -355,6 +377,8 @@ impl DriftWm {
             state_file_camera: Point::from((f64::NAN, f64::NAN)),
             state_file_zoom: f64::NAN,
             state_file_last_write: Instant::now(),
+            active_layout: String::new(),
+            state_file_layout: String::new(),
             autostart,
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
@@ -465,7 +489,9 @@ impl DriftWm {
         let cam = self.camera;
         let z = self.zoom;
         // Compare with epsilon to avoid writing on sub-pixel jitter
-        if (cam.x - self.state_file_camera.x).abs() < 0.5
+        let layout_dirty = self.state_file_layout != self.active_layout;
+        if !layout_dirty
+            && (cam.x - self.state_file_camera.x).abs() < 0.5
             && (cam.y - self.state_file_camera.y).abs() < 0.5
             && (z - self.state_file_zoom).abs() < 0.001
         {
@@ -477,6 +503,7 @@ impl DriftWm {
         }
         self.state_file_camera = cam;
         self.state_file_zoom = z;
+        self.state_file_layout = self.active_layout.clone();
         self.state_file_last_write = Instant::now();
 
         // Convert camera (top-left) to viewport center in canvas coords.
@@ -491,7 +518,7 @@ impl DriftWm {
         }
         let path = dir.join("state");
         let tmp = dir.join("state.tmp");
-        let mut content = format!("x={cx:.0}\ny={cy:.0}\nzoom={z:.3}\n");
+        let mut content = format!("x={cx:.0}\ny={cy:.0}\nzoom={z:.3}\nlayout={}\n", self.active_layout);
 
         if let Some((saved_cam, saved_zoom)) = self.home_return {
             let sx = saved_cam.x + vp.w as f64 / (2.0 * saved_zoom);

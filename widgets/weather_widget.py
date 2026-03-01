@@ -34,16 +34,17 @@ def render() -> Text:
     text.append("\n")
 
     if w is None:
-        text.append("  offline\n\n\n", style="dim")
+        text.append("  offline\n\n\n")
         return text
 
-    icon = weather_icon(w["desc"])
-    text.append(f" {icon}  {w['temp']}\u00b0C", style="bold")
-    text.append(f"  {w['desc'].lower()}\n")
-    text.append(f"    H:{w['high']}\u00b0  L:{w['low']}\u00b0\n", style="dim")
+    location = w.get("location", "")
+    if location:
+        text.append(f"   {location.lower()}\n")
+    text.append(f"   {w['temp']}\u00b0C", style="bold")
+    text.append(f" {w['desc'].lower()}\n")
+    text.append(f"   H:{w['high']}\u00b0  L:{w['low']}\u00b0\n")
     text.append(
-        f"    tmrw {w['tomorrow_temp']}\u00b0C\n",
-        style="dim",
+        f"   tmrw: {w['tomorrow_temp']}\u00b0C\n",
     )
 
     return text

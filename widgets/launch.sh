@@ -15,6 +15,12 @@ launch() {
         -e uv run --project "$DIR" python "$DIR/${script}" &
 }
 
-launch main      35 19  main_pane.py
+launch clock       34 6  clock_widget.py
+launch stats       34 11 stats_widget.py
+launch canvas      26 4  canvas_widget.py
+launch layout      6 4  layout_widget.py
+launch calendar    22 11  calendar_widget.py
+launch weather     22 6  weather_widget.py
+launch notif       21 4  notif_widget.py
 
 wait

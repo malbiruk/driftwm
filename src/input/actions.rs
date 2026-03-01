@@ -5,7 +5,7 @@ use smithay::{
 
 use driftwm::canvas::{self};
 use driftwm::config::Action;
-use crate::state::{DriftWm, log_err};
+use crate::state::DriftWm;
 
 impl DriftWm {
     pub fn execute_action(&mut self, action: &Action) {
@@ -18,10 +18,7 @@ impl DriftWm {
         match action {
             Action::Exec(cmd) => {
                 tracing::info!("Spawning: {cmd}");
-                log_err(
-                    "spawn command",
-                    std::process::Command::new("sh").args(["-c", cmd]).spawn(),
-                );
+                crate::state::spawn_command(cmd);
             }
             Action::CloseWindow => {
                 let keyboard = self.seat.get_keyboard().unwrap();
