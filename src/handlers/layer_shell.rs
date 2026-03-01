@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// set full anchors before smithay's validation hook runs on orphaned commits.
 pub(crate) struct LayerDestroyedMarker(pub AtomicBool);
 
-use crate::state::{DriftWm, FocusTarget};
+use crate::state::{CanvasLayer, DriftWm, FocusTarget};
 
 impl WlrLayerShellHandler for DriftWm {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
@@ -63,7 +63,40 @@ impl WlrLayerShellHandler for DriftWm {
             return;
         };
 
-        // Wrap protocol-level LayerSurface in the desktop-level type for layer map
+        // Check if a window rule with position matches this namespace
+        let rule = self.config.match_window_rule(&namespace).cloned();
+        if let Some(ref rule) = rule
+            && let Some((rx, ry)) = rule.position
+        {
+            let desktop_surface = desktop::LayerSurface::new(surface, namespace.clone());
+
+            // Configure with output width; height left to client
+            let output_mode = resolved_output.current_mode().unwrap();
+            let output_w = output_mode.size.to_logical(1).w;
+            desktop_surface.layer_surface().with_pending_state(|state| {
+                state.size = Some((output_w, 0).into());
+            });
+            desktop_surface.layer_surface().send_configure();
+
+            // Send wl_surface.enter so client knows output scale/transform
+            if let Some(client) = desktop_surface.wl_surface().client() {
+                for co in resolved_output.client_outputs(&client) {
+                    desktop_surface.wl_surface().enter(&co);
+                }
+            }
+
+            self.canvas_layers.push(CanvasLayer {
+                surface: desktop_surface,
+                rule_position: (rx, ry),
+                position: None,
+                namespace,
+                widget: rule.widget,
+                no_focus: rule.no_focus,
+            });
+            return;
+        }
+
+        // Normal layer surface — map into LayerMap as before
         let desktop_surface = desktop::LayerSurface::new(surface, namespace);
 
         let mut map = layer_map_for_output(&resolved_output);
@@ -74,6 +107,10 @@ impl WlrLayerShellHandler for DriftWm {
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
         tracing::info!("Layer surface destroyed");
+
+        // Remove from canvas layers if it was one
+        self.canvas_layers
+            .retain(|cl| cl.surface.wl_surface() != surface.wl_surface());
 
         // Reset pointer_over_layer — the surface may have been under the pointer.
         // Next motion event will re-evaluate, but this prevents stale state in between.

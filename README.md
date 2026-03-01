@@ -84,14 +84,14 @@ The socket name is printed at startup — use that if it differs from `wayland-1
 
 `mod` is Super by default (configurable). Essential keybindings:
 
-| Shortcut              | Action                        |
-| --------------------- | ----------------------------- |
-| `mod+return`          | Open terminal                 |
-| `mod+d`               | Open launcher                 |
-| `mod+q`               | Close window                  |
-| `mod+ctrl+shift+q`    | Quit compositor               |
-| `mod+scroll`          | Zoom at cursor                |
-| `alt+tab`             | Cycle windows                 |
+| Shortcut           | Action          |
+| ------------------ | --------------- |
+| `mod+return`       | Open terminal   |
+| `mod+d`            | Open launcher   |
+| `mod+q`            | Close window    |
+| `mod+ctrl+shift+q` | Quit compositor |
+| `mod+scroll`       | Zoom at cursor  |
+| `alt+tab`          | Cycle windows   |
 
 All keybindings are configurable. See [`config.example.toml`](config.example.toml)
 for the full list of defaults, mouse bindings, and settings.
@@ -100,7 +100,17 @@ for the full list of defaults, mouse bindings, and settings.
 
 Config file: `~/.config/driftwm/config.toml` (respects `XDG_CONFIG_HOME`).
 
-Copy the example, uncomment what you want to change:
+Copy the example, uncomment what you want to changeIn compose_frame(), change the render order so canvas layer elements go between
+  zoomed windows and widget windows (the widget = true xdg windows that
+  enforce_below_windows pushes down), instead of below all windows:
+
+  cursor > overlay > top > normal_windows > canvas_layers > widget_windows > bottom >
+   bg
+
+  This means splitting zoomed_windows into normal vs widget windows, or inserting
+  canvas layer elements at the right point. The result: waybar + tooltips render
+  above the no_focus terminal widgets, below regular app windows. No popup extraction
+   needed.:
 
 ```bash
 mkdir -p ~/.config/driftwm
@@ -125,7 +135,7 @@ only specify what you want to change. Use `"none"` to unbind a default binding.
 11. Multi-monitor — multiple viewports on same canvas
 12. Decorations — SSD fallback, resize grab zones
 13. XWayland — X11 app support
-14. Widgets + polish — eww preset, animations, shadows, damage optimization
+14. Widgets + polish
 
 ## License
 

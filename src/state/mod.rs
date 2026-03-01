@@ -55,6 +55,19 @@ use crate::input::gestures::GestureState;
 use driftwm::canvas::MomentumState;
 use driftwm::config::Config;
 
+/// A layer surface placed at a fixed canvas position (instead of screen-anchored via LayerMap).
+/// Created when a layer surface's namespace matches a window rule with `position`.
+pub struct CanvasLayer {
+    pub surface: smithay::desktop::LayerSurface,
+    /// Rule position (Y-up, window-centered) — converted to canvas coords after first commit.
+    pub rule_position: (i32, i32),
+    /// Internal canvas position (Y-down, top-left). None until first commit reveals size.
+    pub position: Option<Point<i32, Logical>>,
+    pub namespace: String,
+    pub widget: bool,
+    pub no_focus: bool,
+}
+
 /// Buffered middle-click from a 3-finger tap. Held for DOUBLE_TAP_WINDOW_MS
 /// to see if a 3-finger swipe follows (→ move window). If the timer fires
 /// without a swipe, the click is forwarded to the client (paste).
@@ -193,6 +206,9 @@ pub struct DriftWm {
     /// True when pointer focus is a layer surface (screen-fixed, not canvas-relative).
     /// Guards synthetic pointer adjustments in camera/zoom animations.
     pub pointer_over_layer: bool,
+
+    /// Layer surfaces placed at canvas coordinates (matched by window rules with position).
+    pub canvas_layers: Vec<CanvasLayer>,
 
     // Keybindings and settings
     pub config: Config,
@@ -362,6 +378,7 @@ impl DriftWm {
             layer_shell_state,
             foreign_toplevel_state,
             pointer_over_layer: false,
+            canvas_layers: Vec::new(),
             config,
             pending_center: HashSet::new(),
             camera_target: None,

@@ -202,6 +202,11 @@ impl CompositorHandler for DriftWm {
             }
         }
 
+        // Check if this is a canvas-positioned layer surface
+        if self.handle_canvas_layer_commit(surface) {
+            return;
+        }
+
         // Check if this is a layer surface commit (or subsurface of one)
         if self.handle_layer_commit(surface) {
             self.popups.commit(surface);
@@ -247,6 +252,72 @@ fn ensure_initial_configure(
 }
 
 impl DriftWm {
+    /// Handle a commit for a canvas-positioned layer surface (or subsurface of one).
+    /// Returns true if the surface belonged to a canvas layer.
+    fn handle_canvas_layer_commit(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> bool {
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+
+        let idx = self
+            .canvas_layers
+            .iter()
+            .position(|cl| cl.surface.wl_surface() == &root);
+        let Some(idx) = idx else { return false; };
+
+        // Resolve position on first commit (once surface size is known)
+        if self.canvas_layers[idx].position.is_none() {
+            let geo = self.canvas_layers[idx].surface.bbox();
+            if geo.size.w > 0 && geo.size.h > 0 {
+                let (rx, ry) = self.canvas_layers[idx].rule_position;
+                self.canvas_layers[idx].position = Some(smithay::utils::Point::from((
+                    rx - geo.size.w / 2,
+                    -ry - geo.size.h / 2,
+                )));
+            }
+        }
+
+        // Keyboard interactivity (same logic as handle_layer_commit)
+        let interactivity = self.canvas_layers[idx]
+            .surface
+            .cached_state()
+            .keyboard_interactivity;
+
+        let initial_configure_sent = with_states(&root, |states| {
+            states
+                .data_map
+                .get::<LayerSurfaceData>()
+                .map(|data| data.lock().unwrap().initial_configure_sent)
+                .unwrap_or(true)
+        });
+
+        if !initial_configure_sent {
+            self.canvas_layers[idx]
+                .surface
+                .layer_surface()
+                .send_configure();
+        }
+
+        if interactivity == KeyboardInteractivity::Exclusive {
+            let keyboard = self.seat.get_keyboard().unwrap();
+            let already_focused = keyboard
+                .current_focus()
+                .as_ref()
+                .is_some_and(|f| f.0 == root);
+            if !already_focused {
+                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                keyboard.set_focus(self, Some(crate::state::FocusTarget(root)), serial);
+            }
+        }
+
+        self.popups.commit(surface);
+        true
+    }
+
     /// Handle a commit for a layer surface (or subsurface of one).
     /// Returns true if the surface belonged to a layer, false otherwise.
     fn handle_layer_commit(

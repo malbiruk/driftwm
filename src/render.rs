@@ -12,7 +12,7 @@ use smithay::{
     },
     input::pointer::CursorImageStatus,
     output::Output,
-    utils::{Physical, Point, Rectangle},
+    utils::{Logical, Physical, Point, Rectangle, Scale},
 };
 
 use smithay::backend::renderer::element::AsRenderElements;
@@ -111,6 +111,43 @@ pub fn build_tile_background_elements(
         }
         ty += th as i64;
     }
+    elements
+}
+
+/// Build render elements for canvas-positioned layer surfaces (zoomed like windows).
+/// Mirrors the window pipeline: position relative to camera, then RescaleRenderElement for zoom.
+pub fn build_canvas_layer_elements(
+    state: &crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+) -> Vec<OutputRenderElements> {
+    let output_scale = output.current_scale().fractional_scale();
+    let camera = state.camera.to_i32_round();
+    let mut elements = Vec::new();
+
+    for cl in &state.canvas_layers {
+        let Some(pos) = cl.position else { continue; };
+        // Camera-relative position (same as render_elements_for_region does for windows)
+        let rel = pos - camera;
+        let physical_loc = rel.to_physical_precise_round(output_scale);
+
+        let surface_elements = cl
+            .surface
+            .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+                renderer,
+                physical_loc,
+                smithay::utils::Scale::from(output_scale),
+                1.0,
+            );
+        elements.extend(surface_elements.into_iter().map(|elem| {
+            OutputRenderElements::Window(RescaleRenderElement::from_element(
+                elem,
+                Point::<i32, Physical>::from((0, 0)),
+                state.zoom,
+            ))
+        }));
+    }
+
     elements
 }
 
@@ -249,20 +286,43 @@ pub fn compose_frame(
         state.zoom,
     );
     let output_scale = output.current_scale().fractional_scale();
-    let window_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>> = state
-        .space
-        .render_elements_for_region(renderer, &visible_rect, output_scale, 1.0);
+    let scale = Scale::from(output_scale);
 
-    let zoomed_windows: Vec<OutputRenderElements> = window_elements
-        .into_iter()
-        .map(|elem| {
+    // Split windows into normal and widget layers so canvas layers render between them.
+    // Replicates render_elements_for_region internals: bbox overlap, camera offset, zoom.
+    let mut zoomed_normal: Vec<OutputRenderElements> = Vec::new();
+    let mut zoomed_widgets: Vec<OutputRenderElements> = Vec::new();
+
+    for window in state.space.elements().rev() {
+        let Some(loc) = state.space.element_location(window) else { continue };
+        let geom_loc = window.geometry().loc;
+        let mut bbox = window.bbox();
+        bbox.loc += loc - geom_loc;
+        if !visible_rect.overlaps(bbox) { continue }
+
+        let render_loc: Point<i32, Logical> = loc - geom_loc - visible_rect.loc;
+        let elems = window.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
+            renderer,
+            render_loc.to_physical_precise_round(scale),
+            scale,
+            1.0,
+        );
+
+        let is_widget = window
+            .toplevel()
+            .is_some_and(|tl| driftwm::config::applied_rule(tl.wl_surface()).is_some_and(|r| r.widget));
+
+        let target = if is_widget { &mut zoomed_widgets } else { &mut zoomed_normal };
+        target.extend(elems.into_iter().map(|elem| {
             OutputRenderElements::Window(RescaleRenderElement::from_element(
                 elem,
                 Point::<i32, Physical>::from((0, 0)),
                 state.zoom,
             ))
-        })
-        .collect();
+        }));
+    }
+
+    let canvas_layer_elements = build_canvas_layer_elements(state, renderer, output);
 
     let bg_elements: Vec<OutputRenderElements> =
         if let Some(ref elem) = state.cached_bg_element {
@@ -297,7 +357,9 @@ pub fn compose_frame(
         cursor_elements.len()
             + overlay_elements.len()
             + top_elements.len()
-            + zoomed_windows.len()
+            + zoomed_normal.len()
+            + canvas_layer_elements.len()
+            + zoomed_widgets.len()
             + bottom_elements.len()
             + bg_elements.len()
             + background_layer_elements.len(),
@@ -305,7 +367,9 @@ pub fn compose_frame(
     all_elements.extend(cursor_elements.into_iter().map(OutputRenderElements::Cursor));
     all_elements.extend(overlay_elements);
     all_elements.extend(top_elements);
-    all_elements.extend(zoomed_windows);
+    all_elements.extend(zoomed_normal);
+    all_elements.extend(canvas_layer_elements);
+    all_elements.extend(zoomed_widgets);
     all_elements.extend(bottom_elements);
     all_elements.extend(bg_elements);
     all_elements.extend(background_layer_elements);
@@ -431,6 +495,13 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
                 Some(output.clone())
             });
         }
+    }
+
+    // Canvas-positioned layer surface frame callbacks
+    for cl in &state.canvas_layers {
+        cl.surface.send_frame(output, time, Some(Duration::ZERO), |_, _| {
+            Some(output.clone())
+        });
     }
 
     // Cleanup

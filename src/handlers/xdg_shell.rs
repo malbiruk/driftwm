@@ -318,6 +318,30 @@ impl DriftWm {
             // Account for nested popups
             target.loc -= get_popup_toplevel_coords(popup);
             target
+        } else if let Some(cl) = self
+            .canvas_layers
+            .iter()
+            .find(|cl| cl.surface.wl_surface() == &root)
+            && let Some(pos) = cl.position
+        {
+            // Parent is a canvas-positioned layer surface
+            let output_geo = self
+                .space
+                .outputs()
+                .next()
+                .and_then(|o| self.space.output_geometry(o))
+                .unwrap_or_default();
+            // Constrain to the visible canvas area (accounts for zoom)
+            let viewport_size = output_geo.size;
+            let mut target = driftwm::canvas::visible_canvas_rect(
+                self.camera.to_i32_round(),
+                viewport_size,
+                self.zoom,
+            );
+            // Translate to layer-surface-relative coordinates
+            target.loc -= pos;
+            target.loc -= get_popup_toplevel_coords(popup);
+            target
         } else {
             // Parent is a layer surface — find it in the layer map
             let output = self.space.outputs().next().cloned();

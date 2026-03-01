@@ -192,6 +192,9 @@ impl DriftWm {
                     Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
                     serial,
                 );
+            } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
+                // Canvas-positioned layer surface: set keyboard focus
+                keyboard.set_focus(self, Some(focus), serial);
             } else if button == config::BTN_LEFT {
                 // Left-click on empty canvas → pan
                 self.panning = true;
@@ -403,10 +406,11 @@ impl DriftWm {
             !config::applied_rule(w.toplevel().unwrap().wl_surface())
                 .is_some_and(|r| r.no_focus)
         });
+        let over_canvas_layer = self.canvas_layer_under(pos).is_some();
         let recent_pan = self
             .last_scroll_pan
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(150));
-        if !over_window || recent_pan {
+        if !over_window && !over_canvas_layer || recent_pan {
             let is_trackpad = event.source() == AxisSource::Finger;
 
             if is_trackpad {

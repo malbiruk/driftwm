@@ -151,6 +151,14 @@ impl DriftWm {
             return;
         }
 
+        // Check canvas-positioned layer surfaces at canvas coords
+        if let Some(hit) = self.canvas_layer_under(canvas_pos) {
+            self.pointer_over_layer = false;
+            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.frame(self);
+            return;
+        }
+
         // Check canvas windows at canvas coords
         let under = self.surface_under(canvas_pos);
         if under.is_some() {
@@ -235,6 +243,13 @@ impl DriftWm {
             return;
         }
 
+        if let Some(hit) = self.canvas_layer_under(canvas_pos) {
+            self.pointer_over_layer = false;
+            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.frame(self);
+            return;
+        }
+
         let under = self.surface_under(canvas_pos);
         if under.is_some() {
             self.pointer_over_layer = false;
@@ -277,6 +292,28 @@ impl DriftWm {
                         (FocusTarget(surface), (surface_loc + window_loc).to_f64())
                     })
             })
+    }
+
+    /// Find a canvas-positioned layer surface under the given canvas position.
+    /// These live in canvas coords (like xdg windows), so no coordinate tricks needed.
+    pub(crate) fn canvas_layer_under(
+        &self,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
+        for cl in &self.canvas_layers {
+            if cl.no_focus {
+                continue;
+            }
+            let Some(pos) = cl.position else { continue; };
+            let surface_local = canvas_pos - pos.to_f64();
+            if let Some((wl_surface, sub_loc)) =
+                cl.surface.surface_under(surface_local, WindowSurfaceType::ALL)
+            {
+                let loc = (sub_loc + pos).to_f64();
+                return Some((FocusTarget(wl_surface), loc));
+            }
+        }
+        None
     }
 
     /// Find a layer surface under the given screen-space position.
