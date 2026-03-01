@@ -11,8 +11,10 @@
 # Commands to run at startup (after WAYLAND_DISPLAY is set).
 # Each entry is passed to sh -c, so full shell syntax works (pipes, &&, env vars).
 # autostart = [
-#     "waybar",
-#     "crystal-dock",
+#     "swayosd-server --top-margin 0.95",
+#     "blueman-applet",
+#     "swaync",
+#     "~/path/to/driftwm/widgets/launch.sh",
 # ]
 
 [input.keyboard]
@@ -86,6 +88,7 @@
 [keybindings]
 # "mod+return" = "exec foot"
 # "mod+d" = "exec fuzzel"
+# "mod+n" = "exec swaync-client -t"
 # "mod+q" = "close-window"
 # "mod+f" = "toggle-fullscreen"
 # "mod+c" = "center-window"
@@ -126,30 +129,6 @@
 # "XF86MonBrightnessUp" = "exec swayosd-client --brightness raise"
 # "XF86MonBrightnessDown" = "exec swayosd-client --brightness lower"
 
-# Window rules: match windows by app_id and apply behavioral overrides.
-# Supports simple glob: "eww-*" matches any app_id starting with "eww-".
-#
-# Fields (all optional except app_id):
-#   app_id     — app_id to match (required, supports * glob)
-#   position   — [x, y] canvas coordinates to place the window
-#   widget     — true: pinned (immovable), below normal windows, excluded from navigation (default: false)
-#   no_focus   — true: completely inert to input — clicks/scrolls pass through (default: false)
-#   decoration — "client" (default), "server", or "none" (borderless)
-#
-# Example: dashboard widget pinned at origin, fully inert
-# [[window_rules]]
-# app_id = "driftwm-dashboard"
-# position = [0, 0]
-# widget = true
-# no_focus = true
-# decoration = "none"
-#
-# Example: eww widgets as borderless background widgets
-# [[window_rules]]
-# app_id = "eww-*"
-# widget = true
-# decoration = "none"
-
 # Mouse bindings: "Modifier+...+Trigger" = "action"
 # Only modifier-based bindings — canvas fundamentals are hardcoded:
 #   scroll on empty canvas → pan, drag on empty → pan,
@@ -165,3 +144,66 @@
 # "mod+left" = "pan-viewport"
 # "mod+ctrl+left" = "navigate"
 # "mod+scroll" = "zoom"
+
+# Window rules: match windows by app_id and apply behavioral overrides.
+# Supports simple glob: "drift-*" matches any app_id starting with "drift-".
+#
+# Fields (all optional except app_id):
+#   app_id     — app_id to match (required, supports * glob)
+#   position   — [x, y] canvas coordinates to place the window
+#   widget     — true: pinned (immovable), below normal windows, excluded from navigation (default: false)
+#   no_focus   — true: completely inert to input — clicks/scrolls pass through (default: false)
+#   decoration — "client" (default), "server", or "none" (borderless)
+
+# Dashboard widgets — Alacritty terminals launched by widgets/launch.sh.
+# Each widget gets a unique app_id for positioning. Positions are canvas
+# coordinates centered around origin (visible at home view on 1920x1080).
+
+# [[window_rules]]
+# app_id = "drift-clock"
+# position = [-120, 185]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-stats"
+# position = [-120, -20]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-canvas"
+# position = [-155, -205]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-layout"
+# position = [16, -205]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-calendar"
+# position = [160, -20]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-weather"
+# position = [160, 185]
+# widget = true
+# no_focus = true
+# decoration = "none"
+#
+# [[window_rules]]
+# app_id = "drift-notif"
+# position = [164, -205]
+# widget = true
+# no_focus = true
+# decoration = "none"
