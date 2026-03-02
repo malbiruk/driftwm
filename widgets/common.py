@@ -1,7 +1,11 @@
 """Shared helpers for driftwm dashboard widgets."""
 
 import json
+import os
+import select
 import subprocess
+import sys
+import termios
 import urllib.request
 from collections import deque
 from pathlib import Path
@@ -352,7 +356,6 @@ def read_state_file() -> dict[str, str]:
 
 def environ_get(key: str, default: str) -> str:
     """Wrapper around os.environ.get for testability."""
-    import os
 
     return os.environ.get(key, default)
 
@@ -447,6 +450,46 @@ def get_wttr() -> str | None:
             return resp.read().decode("utf-8")
     except Exception:
         return None
+
+
+# ── Mouse click handling ────────────────────────────────────
+
+_orig_termios: list | None = None
+
+
+def enable_mouse() -> None:
+    global _orig_termios  # noqa: PLW0603
+    fd = sys.stdin.fileno()
+    _orig_termios = termios.tcgetattr(fd)
+    new = termios.tcgetattr(fd)
+    new[3] &= ~(termios.ICANON | termios.ECHO)
+    termios.tcsetattr(fd, termios.TCSANOW, new)
+    sys.stdout.write("\033[?1000h")
+    sys.stdout.flush()
+
+
+def disable_mouse() -> None:
+    sys.stdout.write("\033[?1000l")
+    sys.stdout.flush()
+    if _orig_termios is not None:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSANOW, _orig_termios)
+
+
+def poll_click(timeout: float) -> tuple[int, int] | None:
+    """Wait up to timeout seconds for a mouse press. Returns (x, y) 1-based or None."""
+    ready, _, _ = select.select([sys.stdin], [], [], timeout)
+    if not ready:
+        return None
+    data = os.read(sys.stdin.fileno(), 64)
+    idx = data.find(b"\033[M")
+    if idx < 0 or idx + 5 >= len(data):
+        return None
+    btn = data[idx + 3] - 32
+    if btn & 3 == 3:  # release, not press
+        return None
+    x = data[idx + 4] - 32
+    y = data[idx + 5] - 32
+    return x, y
 
 
 def read_keyboard_layout() -> str:

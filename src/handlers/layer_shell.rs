@@ -63,8 +63,18 @@ impl WlrLayerShellHandler for DriftWm {
             return;
         };
 
-        // Check if a window rule with position matches this namespace
-        let rule = self.config.match_window_rule(&namespace).cloned();
+        // Check if a window rule with position matches this namespace.
+        // Count existing canvas layers with the same namespace so the Nth
+        // surface matches the Nth rule (supports duplicate app_id rules).
+        let existing_count = self
+            .canvas_layers
+            .iter()
+            .filter(|cl| cl.namespace == namespace)
+            .count();
+        let rule = self
+            .config
+            .match_window_rule_nth(&namespace, existing_count)
+            .cloned();
         if let Some(ref rule) = rule
             && let Some((rx, ry)) = rule.position
         {

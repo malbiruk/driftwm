@@ -1,14 +1,15 @@
 #!/usr/bin/env python3
-"""Notification bell widget — shows unread count from swaync."""
+"""Notification bell widget — shows unread count from swaync. Click to toggle."""
 
+import atexit
+import contextlib
 import os
-import time
+import subprocess
 
+from common import ICON, disable_mouse, enable_mouse, get_notifications, poll_click
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
-
-from common import ICON, get_notifications
 
 WIDTH = 19
 console = Console(width=WIDTH, highlight=False)
@@ -34,8 +35,19 @@ def render() -> Text:
     return text
 
 
+atexit.register(disable_mouse)
+enable_mouse()
 console.clear()
-with Live(render(), console=console, refresh_per_second=1) as live:
-    while True:
-        live.update(render())
-        time.sleep(1)
+try:
+    with Live(render(), console=console, refresh_per_second=1) as live:
+        while True:
+            live.update(render())
+            if poll_click(1.0) is not None:
+                with contextlib.suppress(OSError):
+                    subprocess.Popen(
+                        ["swaync-client", "-t"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+finally:
+    disable_mouse()

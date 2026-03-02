@@ -263,15 +263,29 @@ impl Config {
     /// Find the first matching window rule for the given `app_id`.
     /// Supports simple glob: `*` anywhere in the pattern.
     pub fn match_window_rule(&self, app_id: &str) -> Option<&WindowRule> {
-        self.window_rules.iter().find(|rule| {
-            if let Some((prefix, suffix)) = rule.app_id.split_once('*') {
-                app_id.len() >= prefix.len() + suffix.len()
-                    && app_id.starts_with(prefix)
-                    && app_id[prefix.len()..].ends_with(suffix)
-            } else {
-                rule.app_id == app_id
-            }
-        })
+        self.window_rules
+            .iter()
+            .find(|rule| Self::rule_matches(rule, app_id))
+    }
+
+    /// Find the Nth matching window rule (with position) for the given `app_id`.
+    /// Used by layer shell to assign different rules to successive surfaces with
+    /// the same namespace (e.g. two waybar instances at different positions).
+    pub fn match_window_rule_nth(&self, app_id: &str, n: usize) -> Option<&WindowRule> {
+        self.window_rules
+            .iter()
+            .filter(|rule| rule.position.is_some() && Self::rule_matches(rule, app_id))
+            .nth(n)
+    }
+
+    fn rule_matches(rule: &WindowRule, app_id: &str) -> bool {
+        if let Some((prefix, suffix)) = rule.app_id.split_once('*') {
+            app_id.len() >= prefix.len() + suffix.len()
+                && app_id.starts_with(prefix)
+                && app_id[prefix.len()..].ends_with(suffix)
+        } else {
+            rule.app_id == app_id
+        }
     }
 }
 
