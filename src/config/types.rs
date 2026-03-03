@@ -65,6 +65,7 @@ impl Action {
                 | Action::NudgeWindow(_)
                 | Action::PanViewport(_)
                 | Action::CycleWindows { .. }
+                | Action::Spawn(_)
         )
     }
 }
