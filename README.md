@@ -26,7 +26,7 @@ coordinates on this plane. You move around with trackpad gestures:
 - **4-finger pinch out** — toggle home position
 - **4-finger hold (tap)** — center focused window + reset zoom
 
-**Small trackpad alternative**: hold `Mod` to use fewer fingers — `Mod`+2/3-finger replaces 3/4-finger gestures. Resize uses `Alt`+3-finger.
+**Small trackpad alternative**: hold `Mod` to use fewer fingers — `Mod`+2/3-finger replaces 3/4-finger gestures. Move and resize window gestures stay the same.
 
 Mouse: scroll wheel zooms, click-drag pans. `Mod` + drag/zoom works anywhere. `Mod+Ctrl` + drag navigates to nearest window.
 

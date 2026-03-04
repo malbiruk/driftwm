@@ -49,7 +49,13 @@ impl DriftWm {
             // A 3-finger tap (LRM button map) generates BTN_MIDDLE.
             // Buffer it — if a 3-finger swipe follows within 300ms, suppress
             // the click and enter window-move mode. Otherwise flush to client (paste).
-            if button == config::BTN_MIDDLE {
+            // Skip buffering when a modifier binding matches (e.g. alt+middle → fullscreen).
+            if button == config::BTN_MIDDLE
+                && {
+                    let kb = self.seat.get_keyboard().unwrap();
+                    self.config.mouse_button_lookup(&kb.modifier_state(), button).is_none()
+                }
+            {
                 // Cancel any existing pending click first
                 if let Some(old) = self.pending_middle_click.take() {
                     self.loop_handle.remove(old.timer_token);
@@ -76,8 +82,12 @@ impl DriftWm {
 
             // During fullscreen: bound clicks exit fullscreen first and
             // proceed to compositor grabs; plain clicks forward to the app.
+            // ToggleFullscreen is special — exiting IS the action, so return immediately.
             if self.fullscreen.is_some() {
-                if self.config.mouse_button_lookup(&mods, button).is_some() {
+                if matches!(self.config.mouse_button_lookup(&mods, button), Some(MouseAction::ToggleFullscreen)) {
+                    self.exit_fullscreen_remap_pointer(pos);
+                    return;
+                } else if self.config.mouse_button_lookup(&mods, button).is_some() {
                     pos = self.exit_fullscreen_remap_pointer(pos);
                 } else {
                     pointer.button(
@@ -235,6 +245,20 @@ impl DriftWm {
                         let grab = NavigateGrab::new(start_data, screen_pos);
                         pointer.set_grab(self, grab, serial, Focus::Clear);
                         return;
+                    }
+                    MouseAction::ToggleFullscreen => {
+                        if let Some((window, _)) =
+                            self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            && !config::applied_rule(window.toplevel().unwrap().wl_surface())
+                                .is_some_and(|r| r.no_focus)
+                        {
+                            self.space.raise_element(&window, true);
+                            self.enforce_below_windows();
+                            let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            self.execute_action(&config::Action::ToggleFullscreen);
+                            return;
+                        }
                     }
                     MouseAction::Zoom => {} // n/a for button clicks
                 }

@@ -143,11 +143,12 @@
 # Triggers: left, right, middle (buttons), scroll (axis)
 # Merges with defaults. Use "none" to unbind.
 #
-# Mouse actions: move-window, resize-window, pan-viewport, zoom, navigate, none
+# Mouse actions: move-window, resize-window, pan-viewport, zoom, navigate, toggle-fullscreen, none
 
 [mouse]
 # "alt+left" = "move-window"
 # "alt+right" = "resize-window"
+# "alt+middle" = "toggle-fullscreen"
 # "mod+left" = "pan-viewport"
 # "mod+ctrl+left" = "navigate"
 # "mod+scroll" = "zoom"

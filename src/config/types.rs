@@ -197,6 +197,7 @@ pub enum MouseAction {
     PanViewport,
     Zoom,
     Navigate,
+    ToggleFullscreen,
 }
 
 #[derive(Clone, Debug, PartialEq)]

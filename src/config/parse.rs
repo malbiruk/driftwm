@@ -134,6 +134,7 @@ pub fn parse_mouse_action(s: &str) -> Result<MouseAction, String> {
         "pan-viewport" => Ok(MouseAction::PanViewport),
         "zoom" => Ok(MouseAction::Zoom),
         "navigate" => Ok(MouseAction::Navigate),
+        "toggle-fullscreen" => Ok(MouseAction::ToggleFullscreen),
         other => Err(format!("unknown mouse action: {other}")),
     }
 }

@@ -294,7 +294,7 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> HashMap<MouseBinding, M
         ),
         (
             MouseBinding {
-                modifiers: alt_only,
+                modifiers: alt_only.clone(),
                 trigger: MouseTrigger::Button(BTN_RIGHT),
             },
             MouseAction::ResizeWindow,
@@ -319,6 +319,13 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> HashMap<MouseBinding, M
                 trigger: MouseTrigger::Scroll,
             },
             MouseAction::Zoom,
+        ),
+        (
+            MouseBinding {
+                modifiers: alt_only.clone(),
+                trigger: MouseTrigger::Button(BTN_MIDDLE),
+            },
+            MouseAction::ToggleFullscreen,
         ),
     ])
 }
