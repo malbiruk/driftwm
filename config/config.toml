@@ -1,14 +1,13 @@
 # driftwm — personal config (symlink to ~/.config/driftwm/config.toml)
 
 autostart = [
-    "gnome-keyring-daemon --start --components=secrets,pkcs11,ssh",
-    "systemctl --user start xdg-desktop-portal-gtk.service xdg-desktop-portal.service",
+"systemctl --user start xdg-desktop-portal-gtk.service xdg-desktop-portal.service",
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "swayosd-server --top-margin 0.95",
     "blueman-applet",
     "swaync",
-    "waybar",
-    "sleep 1 && waybar -c ~/.config/waybar/tray-config.jsonc -s ~/.config/waybar/tray-style.css",
+    "waybar -c ~/.config/waybar/taskbar.jsonc -s ~/.config/waybar/taskbar.css",
+    "sleep 1 && waybar -c ~/.config/waybar/tray.jsonc -s ~/.config/waybar/tray.css",
     "vorta -d",
     "~/Documents/work/scripts/driftwm/widgets/launch.sh",
     "~/Documents/work/scripts/driftwm/widgets/battery_notify.sh",
