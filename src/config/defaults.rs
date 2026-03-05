@@ -113,28 +113,28 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_1),
             },
-            Action::GoToPosition(-1500.0, -1500.0),
+            Action::GoToPosition(-1750.0, -1750.0),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_2),
             },
-            Action::GoToPosition(-1500.0, 1500.0),
+            Action::GoToPosition(-1750.0, 1750.0),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_3),
             },
-            Action::GoToPosition(1500.0, 1500.0),
+            Action::GoToPosition(1750.0, 1750.0),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_4),
             },
-            Action::GoToPosition(1500.0, -1500.0),
+            Action::GoToPosition(1750.0, -1750.0),
         ),
         (
             KeyCombo {

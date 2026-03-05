@@ -208,7 +208,8 @@ pub fn closest_point_on_rect(
 ///
 /// Uses dot/cross product against the direction unit vector: a candidate is
 /// in the cone when `dot > 0 && |cross| <= dot` (i.e. within ±45° of the
-/// direction). Among candidates, picks the nearest by Euclidean distance.
+/// direction). Scores by `distance / cos(angle)` — targets aligned with the
+/// exact direction are preferred even if further away.
 ///
 /// Generic over the item type so it works with `Window` in production and
 /// simple types (e.g. `&str`) in tests.
@@ -230,9 +231,11 @@ pub fn find_nearest<W: PartialEq>(
         let dot = dx * ux + dy * uy;
         let cross = (dx * uy - dy * ux).abs();
         if dot > 0.0 && cross <= dot {
+            // score = dist² / dot ∝ dist / cos(angle), avoids sqrt
             let dist_sq = dx * dx + dy * dy;
-            if best.as_ref().is_none_or(|(_, d)| dist_sq < *d) {
-                best = Some((item, dist_sq));
+            let score = dist_sq / dot;
+            if best.as_ref().is_none_or(|(_, d)| score < *d) {
+                best = Some((item, score));
             }
         }
     }

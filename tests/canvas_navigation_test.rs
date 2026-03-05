@@ -294,3 +294,12 @@ fn find_nearest_nonzero_origin() {
     let result = find_nearest(origin(500.0, 400.0), &Direction::Right, w.into_iter(), None);
     assert_eq!(result, Some("a"));
 }
+
+#[test]
+fn find_nearest_prefers_aligned() {
+    // "right_45" at 45° is closer by distance, but "far_right" at 0° wins
+    // because it's perfectly aligned with the direction axis.
+    let w = items(&[("right_45", 100.0, 100.0), ("far_right", 180.0, 0.0)]);
+    let result = find_nearest(origin(0.0, 0.0), &Direction::Right, w.into_iter(), None);
+    assert_eq!(result, Some("far_right"));
+}

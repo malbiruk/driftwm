@@ -179,18 +179,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let new_output = data.focused_output.clone().unwrap();
 
             // event.location is already in the new output's canvas space.
-            let old_zoom = output_state(&self.output).zoom;
-            let new_zoom = output_state(&new_output).zoom;
-
-            // Preserve screen-space offset between cursor and window.
+            // Canvas-space offset between cursor and window corner is
+            // zoom-independent — canvas coords are the source of truth.
             let canvas_offset: Point<f64, Logical> = Point::from((
                 self.initial_window_location.x as f64 - self.start_data.location.x,
                 self.initial_window_location.y as f64 - self.start_data.location.y,
-            ));
-            let zoom_ratio = old_zoom / new_zoom;
-            let new_canvas_offset: Point<f64, Logical> = Point::from((
-                canvas_offset.x * zoom_ratio,
-                canvas_offset.y * zoom_ratio,
             ));
 
             let entry_edge = Self::entry_edge(&self.output, &new_output);
@@ -200,8 +193,8 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
 
             self.start_data.location = event.location;
             self.initial_window_location = Point::from((
-                (event.location.x + new_canvas_offset.x) as i32,
-                (event.location.y + new_canvas_offset.y) as i32,
+                (event.location.x + canvas_offset.x) as i32,
+                (event.location.y + canvas_offset.y) as i32,
             ));
             self.output = new_output;
             self.snap = SnapState::default();
