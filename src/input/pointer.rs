@@ -385,6 +385,7 @@ impl DriftWm {
             initial_window_size,
             last_window_size: initial_window_size,
             output,
+            last_clamped_location: pos,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

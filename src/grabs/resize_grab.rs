@@ -46,6 +46,7 @@ pub struct ResizeSurfaceGrab {
     pub initial_window_size: Size<i32, Logical>,
     pub last_window_size: Size<i32, Logical>,
     pub output: Output,
+    pub last_clamped_location: Point<f64, Logical>,
 }
 
 /// Check if `edges` includes a horizontal/vertical component via raw bit values.
@@ -71,9 +72,17 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         _focus: Option<(<DriftWm as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
-        // Force pointer back if Phase 3 input routing crossed to another output
+        // Force pointer back if Phase 3 input routing crossed to another output.
+        // event.location is in the wrong canvas space — use last valid position.
         if data.focused_output.as_ref().is_some_and(|fo| *fo != self.output) {
             data.focused_output = Some(self.output.clone());
+            let clamped_event = MotionEvent {
+                location: self.last_clamped_location,
+                serial: event.serial,
+                time: event.time,
+            };
+            handle.motion(data, None, &clamped_event);
+            return;
         }
 
         // Clamp pointer to the grab's output bounds
@@ -93,6 +102,7 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         let clamped = canvas::screen_to_canvas(
             canvas::ScreenPos(clamped_screen), camera, zoom,
         ).0;
+        self.last_clamped_location = clamped;
 
         let delta = clamped - self.start_data.location;
 

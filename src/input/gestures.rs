@@ -360,10 +360,15 @@ impl DriftWm {
                     ).into();
                     let clamped_dx = new_screen.x - cur_screen.x;
                     let clamped_dy = new_screen.y - cur_screen.y;
-                    Point::from((clamped_dx / zoom, clamped_dy / zoom))
+                    Point::from((clamped_dx / zm, clamped_dy / zm))
                 } else {
                     Point::from((delta.x / zoom, delta.y / zoom))
                 };
+                // Compute cursor warp target (applied after match to avoid borrow conflict)
+                let pointer = self.seat.get_pointer().unwrap();
+                let warp_target = pointer.current_location() + clamped_delta;
+                drop(pointer);
+
                 *cumulative += clamped_delta;
 
                 let mut new_w = initial_size.w;
@@ -391,6 +396,8 @@ impl DriftWm {
                     });
                     toplevel.send_pending_configure();
                 }
+
+                self.warp_pointer(warp_target);
             }
             GestureState::SwipeThreshold { cumulative, fired, up, down, left, right, directional } => {
                 if *fired {

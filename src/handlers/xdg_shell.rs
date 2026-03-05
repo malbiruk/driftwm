@@ -267,6 +267,7 @@ impl XdgShellHandler for DriftWm {
         self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
 
         let output = self.active_output().unwrap();
+        let last_clamped_location = start_data.location;
         let grab = ResizeSurfaceGrab {
             start_data,
             window,
@@ -275,6 +276,7 @@ impl XdgShellHandler for DriftWm {
             initial_window_size,
             last_window_size: initial_window_size,
             output,
+            last_clamped_location,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
