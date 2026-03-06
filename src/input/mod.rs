@@ -245,7 +245,17 @@ impl DriftWm {
             return;
         }
 
-        // Check canvas-positioned layer surfaces at canvas coords
+        // Non-widget canvas windows (visually above canvas layers)
+        let under = self.surface_under(canvas_pos, Some(false));
+        if under.is_some() {
+            self.pointer_over_layer = false;
+            pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
+            pointer.frame(self);
+            self.update_decoration_cursor(canvas_pos);
+            return;
+        }
+
+        // Canvas-positioned layer surfaces
         if let Some(hit) = self.canvas_layer_under(canvas_pos) {
             self.pointer_over_layer = false;
             pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
@@ -253,8 +263,8 @@ impl DriftWm {
             return;
         }
 
-        // Check canvas windows at canvas coords
-        let under = self.surface_under(canvas_pos);
+        // Widget canvas windows (visually below canvas layers)
+        let under = self.surface_under(canvas_pos, Some(true));
         if under.is_some() {
             self.pointer_over_layer = false;
             pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
@@ -378,7 +388,7 @@ impl DriftWm {
         // Emit relative motion event for clients that use zwp_relative_pointer
         pointer.relative_motion(
             self,
-            self.surface_under(canvas_pos),
+            self.surface_under(canvas_pos, None),
             &RelativeMotionEvent {
                 delta,
                 delta_unaccel: event.delta_unaccel(),
@@ -394,6 +404,17 @@ impl DriftWm {
             return;
         }
 
+        // Non-widget canvas windows (visually above canvas layers)
+        let under = self.surface_under(canvas_pos, Some(false));
+        if under.is_some() {
+            self.pointer_over_layer = false;
+            pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
+            pointer.frame(self);
+            self.update_decoration_cursor(canvas_pos);
+            return;
+        }
+
+        // Canvas-positioned layer surfaces
         if let Some(hit) = self.canvas_layer_under(canvas_pos) {
             self.pointer_over_layer = false;
             pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
@@ -401,7 +422,8 @@ impl DriftWm {
             return;
         }
 
-        let under = self.surface_under(canvas_pos);
+        // Widget canvas windows (visually below canvas layers)
+        let under = self.surface_under(canvas_pos, Some(true));
         if under.is_some() {
             self.pointer_over_layer = false;
             pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
@@ -431,14 +453,20 @@ impl DriftWm {
     pub fn surface_under(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
+        widget_filter: Option<bool>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         let bar_height = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
         for window in self.space.elements().rev() {
             let wl_surface = window.toplevel().unwrap().wl_surface();
-            if driftwm::config::applied_rule(wl_surface).is_some_and(|r| r.no_focus) {
+            let rule = driftwm::config::applied_rule(wl_surface);
+            if rule.as_ref().is_some_and(|r| r.no_focus) {
                 continue;
+            }
+            if let Some(want_widget) = widget_filter {
+                let is_widget = rule.as_ref().is_some_and(|r| r.widget);
+                if is_widget != want_widget { continue; }
             }
 
             let Some(loc) = self.space.element_location(window) else { continue };

@@ -292,21 +292,30 @@ impl DriftWm {
                         .is_some_and(|r| r.no_focus)
                 });
 
-            if let Some(window) = element_under {
-                // Normal click on window: focus + raise + forward
-                let is_below = config::applied_rule(window.toplevel().unwrap().wl_surface())
+            if let Some(ref window) = element_under {
+                let is_widget = config::applied_rule(window.toplevel().unwrap().wl_surface())
                     .is_some_and(|r| r.widget);
-                if !is_below {
-                    self.space.raise_element(&window, true);
+                if !is_widget {
+                    // Normal window: raise + focus
+                    self.space.raise_element(window, true);
                     self.enforce_below_windows();
+                    keyboard.set_focus(
+                        self,
+                        Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
+                        serial,
+                    );
+                } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
+                    // Widget window but canvas layer is above it: focus the layer
+                    keyboard.set_focus(self, Some(focus), serial);
+                } else {
+                    // Widget window with no canvas layer above: focus the widget
+                    keyboard.set_focus(
+                        self,
+                        Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
+                        serial,
+                    );
                 }
-                keyboard.set_focus(
-                    self,
-                    Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
-                    serial,
-                );
             } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
-                // Canvas-positioned layer surface: set keyboard focus
                 keyboard.set_focus(self, Some(focus), serial);
             }
         }
@@ -448,7 +457,7 @@ impl DriftWm {
                         self.drift_pan(canvas_delta);
                         let new_pos = pos + canvas_delta;
                         let serial = SERIAL_COUNTER.next_serial();
-                        let under = self.surface_under(new_pos);
+                        let under = self.surface_under(new_pos, None);
                         pointer.motion(
                             self,
                             under,
@@ -486,7 +495,7 @@ impl DriftWm {
                             });
                             self.update_output_from_camera();
 
-                            let under = self.surface_under(pos);
+                            let under = self.surface_under(pos, None);
                             let serial = SERIAL_COUNTER.next_serial();
                             pointer.motion(
                                 self,

@@ -89,7 +89,7 @@ impl DriftWm {
                 let pointer = self.seat.get_pointer().unwrap();
                 let pos = pointer.current_location();
                 let new_pos = pos + delta;
-                let under = self.surface_under(new_pos);
+                let under = self.surface_under(new_pos, None);
                 let serial = SERIAL_COUNTER.next_serial();
                 pointer.motion(
                     self,
