@@ -397,6 +397,24 @@ impl DecorationConfig {
     pub const CORNER_RADIUS: i32 = 8;
 }
 
+/// Settings for drawing outlines of other monitors' viewports.
+#[derive(Clone, Debug)]
+pub struct OutputOutlineSettings {
+    pub color: [u8; 4],
+    pub thickness: i32,
+    pub opacity: f64,
+}
+
+impl Default for OutputOutlineSettings {
+    fn default() -> Self {
+        Self {
+            color: [0xFF, 0xFF, 0xFF, 0xFF],
+            thickness: 1,
+            opacity: 0.5,
+        }
+    }
+}
+
 /// Per-output configuration from `[[outputs]]` config sections.
 #[derive(Clone, Debug)]
 pub struct OutputConfig {

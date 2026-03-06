@@ -105,6 +105,15 @@ pub(super) struct SnapConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct OutputConfig {
     pub scale: Option<f64>,
+    pub outline: Option<OutputOutlineConfig>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct OutputOutlineConfig {
+    pub color: Option<String>,
+    pub thickness: Option<i32>,
+    pub opacity: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]

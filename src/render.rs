@@ -566,6 +566,10 @@ pub fn compose_frame(
 
     let canvas_layer_elements = build_canvas_layer_elements(state, renderer, output, camera, zoom);
 
+    let outline_elements = build_output_outline_elements(
+        state, renderer, output, camera, zoom, viewport_size,
+    );
+
     let bg_elements: Vec<OutputRenderElements> =
         if let Some(elem) = state.cached_bg_elements.get(&output.name()) {
             vec![OutputRenderElements::Background(
@@ -603,6 +607,7 @@ pub fn compose_frame(
             + canvas_layer_elements.len()
             + zoomed_widgets.len()
             + bottom_elements.len()
+            + outline_elements.len()
             + bg_elements.len()
             + background_layer_elements.len(),
     );
@@ -613,9 +618,102 @@ pub fn compose_frame(
     all_elements.extend(canvas_layer_elements);
     all_elements.extend(zoomed_widgets);
     all_elements.extend(bottom_elements);
+    all_elements.extend(outline_elements);
     all_elements.extend(bg_elements);
     all_elements.extend(background_layer_elements);
     all_elements
+}
+
+/// Draw thin outlines showing where other monitors' viewports sit on the canvas.
+fn build_output_outline_elements(
+    state: &crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    camera: Point<f64, Logical>,
+    zoom: f64,
+    viewport_size: Size<i32, Logical>,
+) -> Vec<OutputRenderElements> {
+    let thickness = state.config.output_outline.thickness;
+    if thickness <= 0 { return vec![]; }
+
+    let opacity = state.config.output_outline.opacity as f32;
+    if opacity <= 0.0 { return vec![]; }
+    let color = state.config.output_outline.color;
+    let scale = output.current_scale().fractional_scale();
+
+    let mut elements = Vec::new();
+
+    for other in state.space.outputs() {
+        if *other == *output { continue }
+
+        let (other_camera, other_zoom) = {
+            let os = crate::state::output_state(other);
+            (os.camera, os.zoom)
+        };
+        let other_size = crate::state::output_logical_size(other);
+
+        // Other output's visible canvas rect
+        let other_canvas = canvas::visible_canvas_rect(
+            other_camera.to_i32_round(),
+            other_size,
+            other_zoom,
+        );
+
+        // Transform to screen coords on *this* output
+        let screen_x = ((other_canvas.loc.x as f64 - camera.x) * zoom) as i32;
+        let screen_y = ((other_canvas.loc.y as f64 - camera.y) * zoom) as i32;
+        let screen_w = (other_canvas.size.w as f64 * zoom) as i32;
+        let screen_h = (other_canvas.size.h as f64 * zoom) as i32;
+
+        // Clip to viewport
+        let vp = Rectangle::from_size(viewport_size);
+        let outline_rect = Rectangle::new((screen_x, screen_y).into(), (screen_w, screen_h).into());
+        if !vp.overlaps(outline_rect) { continue }
+
+        // Draw 4 edges as thin filled buffers
+        let edges: [(i32, i32, i32, i32); 4] = [
+            (screen_x, screen_y, screen_w, thickness),                         // top
+            (screen_x, screen_y + screen_h - thickness, screen_w, thickness),  // bottom
+            (screen_x, screen_y, thickness, screen_h),                         // left
+            (screen_x + screen_w - thickness, screen_y, thickness, screen_h),  // right
+        ];
+
+        for (ex, ey, ew, eh) in edges {
+            // Clip edge to viewport
+            let x0 = ex.max(0);
+            let y0 = ey.max(0);
+            let x1 = (ex + ew).min(viewport_size.w);
+            let y1 = (ey + eh).min(viewport_size.h);
+            if x1 <= x0 || y1 <= y0 { continue }
+
+            let w = x1 - x0;
+            let h = y1 - y0;
+
+            let pixels: Vec<u8> = vec![color[0], color[1], color[2], color[3]]
+                .into_iter()
+                .cycle()
+                .take((w * h) as usize * 4)
+                .collect();
+
+            let buf = MemoryRenderBuffer::from_slice(
+                &pixels,
+                Fourcc::Abgr8888,
+                (w, h),
+                1,
+                Transform::Normal,
+                None,
+            );
+
+            let loc: Point<f64, Physical> = Point::from((x0, y0)).to_f64().to_physical(scale);
+            if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer, loc, &buf, Some(opacity), None, None, Kind::Unspecified,
+            ) {
+                elements.push(OutputRenderElements::Cursor(elem));
+            }
+        }
+    }
+
+    elements
 }
 
 /// Compile background shader and/or load tile image.

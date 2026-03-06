@@ -68,6 +68,11 @@
 [output]
 # scale = 1.0                 # display scale factor (1.0, 1.5, 2.0)
 
+[output.outline]
+# color = "#ffffff"            # outline color for other monitors' viewports
+# thickness = 1               # pixels (0 to disable)
+# opacity = 0.5               # 0.0–1.0
+
 [background]
 # shader_path = "~/.config/driftwm/bg.glsl"   # custom GLSL fragment shader
 # tile_path = "~/.config/driftwm/tile.png"     # tiled image (mutually exclusive with shader)

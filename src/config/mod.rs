@@ -61,6 +61,7 @@ pub struct Config {
     /// Cursor opacity on non-active outputs (0.0 = hidden, 1.0 = full).
     pub inactive_cursor_opacity: f64,
     pub decorations: DecorationConfig,
+    pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
     pub window_rules: Vec<WindowRule>,
     pub output_configs: Vec<OutputConfig>,
@@ -368,6 +369,7 @@ impl Config {
             inactive_cursor_opacity: raw.cursor.inactive_opacity
                 .unwrap_or(0.5)
                 .clamp(0.0, 1.0),
+            output_outline: parse_output_outline(raw.output.outline.unwrap_or_default()),
             nav_anchors: raw.navigation.anchors
                 .unwrap_or_else(|| vec![[0.0, 0.0]])
                 .into_iter()
@@ -428,6 +430,22 @@ fn parse_color(s: &str) -> Option<[u8; 4]> {
             Some([r, g, b, a])
         }
         _ => None,
+    }
+}
+
+fn parse_output_outline(raw: toml::OutputOutlineConfig) -> OutputOutlineSettings {
+    let defaults = OutputOutlineSettings::default();
+    let color = match raw.color {
+        Some(s) => parse_color(&s).unwrap_or_else(|| {
+            tracing::warn!("Invalid output outline color '{s}', using default");
+            defaults.color
+        }),
+        None => defaults.color,
+    };
+    OutputOutlineSettings {
+        color,
+        thickness: raw.thickness.unwrap_or(defaults.thickness).max(0),
+        opacity: raw.opacity.unwrap_or(defaults.opacity).clamp(0.0, 1.0),
     }
 }
 

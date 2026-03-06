@@ -27,6 +27,9 @@ fg_color = "#5C6A72"
 [background]
 shader_path = "~/.config/driftwm/pink_cloud.glsl"
 
+[output.outline]
+color="#FDF6E3"
+
 [keybindings]
 "mod+return" = "exec ptyxis -s"
 "mod+d" = "exec fuzzel"
