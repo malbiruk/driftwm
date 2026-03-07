@@ -1,8 +1,6 @@
 # driftwm — personal config (symlink to ~/.config/driftwm/config.toml)
 
 autostart = [
-    "eval $(/usr/bin/gnome-keyring-daemon --start --components=pkcs11,secrets,ssh)",
-"systemctl --user start xdg-desktop-portal-gtk.service xdg-desktop-portal.service",
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "swayosd-server --top-margin 0.95",
     "blueman-applet",

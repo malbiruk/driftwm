@@ -16,8 +16,11 @@ use smithay::{
     wayland::compositor::with_states,
 };
 
+use smithay::wayland::seat::WaylandFocus;
+
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{self, BindingContext, MouseAction};
+use driftwm::window_ext::WindowExt;
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveSurfaceGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab};
 use crate::state::{DriftWm, FocusTarget, PendingMiddleClick};
@@ -26,7 +29,8 @@ impl DriftWm {
     /// Determine the binding context for the current pointer position.
     pub(super) fn pointer_context(&self, pos: Point<f64, smithay::utils::Logical>) -> BindingContext {
         let over_window = self.space.element_under(pos).is_some_and(|(w, _)| {
-            !config::applied_rule(w.toplevel().unwrap().wl_surface())
+            !w.wl_surface()
+                .and_then(|s| config::applied_rule(&s))
                 .is_some_and(|r| r.no_focus)
         });
         if over_window || self.canvas_layer_under(pos).is_some() {
@@ -137,13 +141,13 @@ impl DriftWm {
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
             if let Some((window, hit)) = self.decoration_under(pos) {
-                let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+                let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
                 let is_widget = config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
 
                 if button == config::BTN_LEFT {
                     match hit {
                         DecorationHit::CloseButton => {
-                            window.toplevel().unwrap().send_close();
+                            window.send_close();
                             return;
                         }
                         DecorationHit::TitleBar if !is_widget => {
@@ -203,42 +207,43 @@ impl DriftWm {
                     MouseAction::MoveWindow => {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            && let Some(surface) = window.wl_surface()
+                            && !config::applied_rule(&surface).is_some_and(|r| r.widget)
                         {
-                            let surface = window.toplevel().unwrap().wl_surface();
-                            if !config::applied_rule(surface).is_some_and(|r| r.widget) {
-                                self.space.raise_element(&window, true);
-                                self.enforce_below_windows();
-                                let wl_surface = window.toplevel().unwrap().wl_surface().clone();
-                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
-                                let initial_window_location =
-                                    self.space.element_location(&window).unwrap();
-                                let start_data = GrabStartData {
-                                    focus: None,
-                                    button,
-                                    location: pos,
-                                };
-                                let grab = MoveSurfaceGrab::new(
-                                    start_data,
-                                    window,
-                                    initial_window_location,
-                                    self.active_output().unwrap(),
-                                );
-                                pointer.set_grab(self, grab, serial, Focus::Clear);
-                                return;
-                            }
+                            self.space.raise_element(&window, true);
+                            self.enforce_below_windows();
+                            let wl_surface = surface.into_owned();
+                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            let initial_window_location =
+                                self.space.element_location(&window).unwrap();
+                            let start_data = GrabStartData {
+                                focus: None,
+                                button,
+                                location: pos,
+                            };
+                            let grab = MoveSurfaceGrab::new(
+                                start_data,
+                                window,
+                                initial_window_location,
+                                self.active_output().unwrap(),
+                            );
+                            pointer.set_grab(self, grab, serial, Focus::Clear);
+                            return;
                         }
                         // No window or pinned — fall through to normal click
                     }
                     MouseAction::ResizeWindow => {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
-                            && !config::applied_rule(window.toplevel().unwrap().wl_surface())
+                            && !window.wl_surface()
+                                .and_then(|s| config::applied_rule(&s))
                                 .is_some_and(|r| r.widget)
                         {
                             self.space.raise_element(&window, true);
                             self.enforce_below_windows();
-                            let wl_surface = window.toplevel().unwrap().wl_surface().clone();
-                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            if let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) {
+                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            }
                             self.start_compositor_resize(
                                 &pointer, &window, pos, button, serial,
                             );
@@ -267,13 +272,15 @@ impl DriftWm {
                     MouseAction::ToggleFullscreen => {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
-                            && !config::applied_rule(window.toplevel().unwrap().wl_surface())
+                            && !window.wl_surface()
+                                .and_then(|s| config::applied_rule(&s))
                                 .is_some_and(|r| r.no_focus)
                         {
                             self.space.raise_element(&window, true);
                             self.enforce_below_windows();
-                            let wl_surface = window.toplevel().unwrap().wl_surface().clone();
-                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            if let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) {
+                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            }
                             self.execute_action(&config::Action::ToggleFullscreen);
                             return;
                         }
@@ -288,12 +295,14 @@ impl DriftWm {
                 .element_under(pos)
                 .map(|(w, _)| w.clone())
                 .filter(|w| {
-                    !config::applied_rule(w.toplevel().unwrap().wl_surface())
+                    !w.wl_surface()
+                        .and_then(|s| config::applied_rule(&s))
                         .is_some_and(|r| r.no_focus)
                 });
 
             if let Some(ref window) = element_under {
-                let is_widget = config::applied_rule(window.toplevel().unwrap().wl_surface())
+                let is_widget = window.wl_surface()
+                    .and_then(|s| config::applied_rule(&s))
                     .is_some_and(|r| r.widget);
                 if !is_widget {
                     // Normal window: raise + focus
@@ -301,7 +310,7 @@ impl DriftWm {
                     self.enforce_below_windows();
                     keyboard.set_focus(
                         self,
-                        Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
+                        window.wl_surface().map(|s| FocusTarget(s.into_owned())),
                         serial,
                     );
                 } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
@@ -311,7 +320,7 @@ impl DriftWm {
                     // Widget window with no canvas layer above: focus the widget
                     keyboard.set_focus(
                         self,
-                        Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
+                        window.wl_surface().map(|s| FocusTarget(s.into_owned())),
                         serial,
                     );
                 }
@@ -361,7 +370,7 @@ impl DriftWm {
             .unwrap_or_else(|| edges_from_position(pos, initial_window_location, initial_window_size));
 
         // Store resize state for commit() repositioning
-        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
         with_states(&wl_surface, |states| {
             states
                 .data_map
@@ -373,9 +382,11 @@ impl DriftWm {
                 });
         });
 
-        window.toplevel().unwrap().with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Resizing);
-        });
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Resizing);
+            });
+        }
 
         self.grab_cursor = true;
         self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));

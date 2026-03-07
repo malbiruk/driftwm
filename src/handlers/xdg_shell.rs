@@ -46,7 +46,9 @@ impl XdgShellHandler for DriftWm {
             .unwrap_or((0, 0));
 
         // Send initial configure — the client won't render until it gets this
-        window.toplevel().unwrap().send_configure();
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.send_configure();
+        }
 
         self.space.map_element(window.clone(), pos, true);
         self.space.raise_element(&window, true);
@@ -123,7 +125,7 @@ impl XdgShellHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
             self.enter_fullscreen(&window);
@@ -145,7 +147,7 @@ impl XdgShellHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(ref window) = window {
             // Clear keyboard focus if this was the focused window
@@ -198,7 +200,7 @@ impl XdgShellHandler for DriftWm {
         let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned()
         else {
             return;
@@ -233,7 +235,7 @@ impl XdgShellHandler for DriftWm {
         let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned()
         else {
             return;
@@ -321,7 +323,7 @@ impl DriftWm {
         let target = if let Some(window) = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &root)
+            .find(|w| w.wl_surface().as_deref() == Some(&root))
         {
             // Parent is an xdg window — target is the output rect in window-relative coords
             let window_loc = self.space.element_location(window).unwrap_or_default();

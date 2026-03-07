@@ -19,6 +19,7 @@ pub(super) struct ConfigFile {
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: MouseFileConfig,
     pub gestures: GestureFileConfig,
+    pub xwayland: XWaylandConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
 }
@@ -170,6 +171,18 @@ pub(super) struct OutputRuleFile {
     pub transform: Option<String>,
     pub position: Option<::toml::Value>,
     pub mode: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct XWaylandConfig {
+    pub enabled: bool,
+}
+
+impl Default for XWaylandConfig {
+    fn default() -> Self {
+        Self { enabled: true }
+    }
 }
 
 pub fn config_path() -> std::path::PathBuf {

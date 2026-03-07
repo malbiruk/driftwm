@@ -157,6 +157,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     }
 
+    // Spawn XWayland (after WAYLAND_DISPLAY is set so it can connect as a client)
+    if data.state.config.xwayland_enabled {
+        backend::spawn_xwayland(&data.display.handle(), &event_loop.handle());
+    }
+
     // Auto-reap child processes — prevents zombies from exec/autostart commands.
     // Must be after backend init: libseat uses waitpid() during session setup.
     unsafe { libc::signal(libc::SIGCHLD, libc::SIG_IGN) };

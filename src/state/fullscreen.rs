@@ -1,9 +1,10 @@
 use smithay::{
     desktop::Window,
-    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point},
+    wayland::seat::WaylandFocus,
 };
 
+use driftwm::window_ext::WindowExt;
 use super::{DriftWm, FocusTarget, FullscreenState};
 
 impl DriftWm {
@@ -26,12 +27,7 @@ impl DriftWm {
             saved_zoom: self.zoom(),
         });
 
-        // Tell the client to go fullscreen at output size
-        window.toplevel().unwrap().with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Fullscreen);
-            state.size = Some(viewport_size);
-        });
-        window.toplevel().unwrap().send_configure();
+        window.enter_fullscreen_configure(viewport_size);
 
         // Lock viewport: stop all animations and momentum
         self.with_output_state(|os| {
@@ -58,8 +54,8 @@ impl DriftWm {
         // Ensure keyboard focus is on the fullscreen window
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
-        let surface = window.toplevel().unwrap().wl_surface().clone();
-        keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+        let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
+        keyboard.set_focus(self, focus, serial);
     }
 
     /// Exit fullscreen on the active output: restore window position, camera, and zoom.
@@ -74,12 +70,7 @@ impl DriftWm {
             return;
         };
 
-        // Tell client to leave fullscreen
-        fs.window.toplevel().unwrap().with_pending_state(|state| {
-            state.states.unset(xdg_toplevel::State::Fullscreen);
-            state.size = None;
-        });
-        fs.window.toplevel().unwrap().send_configure();
+        fs.window.exit_fullscreen_configure();
 
         // Restore window position, camera, zoom on the specific output
         self.space.map_element(fs.window, fs.saved_location, false);
@@ -97,7 +88,7 @@ impl DriftWm {
         wl_surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> Option<smithay::output::Output> {
         self.fullscreen.iter()
-            .find(|(_, fs)| fs.window.toplevel().unwrap().wl_surface() == wl_surface)
+            .find(|(_, fs)| fs.window.wl_surface().as_deref() == Some(wl_surface))
             .map(|(o, _)| o.clone())
     }
 

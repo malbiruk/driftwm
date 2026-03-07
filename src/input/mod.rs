@@ -19,6 +19,7 @@ use smithay::{
 
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
+use smithay::wayland::seat::WaylandFocus;
 
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use crate::decorations::DecorationHit;
@@ -459,8 +460,8 @@ impl DriftWm {
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
         for window in self.space.elements().rev() {
-            let wl_surface = window.toplevel().unwrap().wl_surface();
-            let rule = driftwm::config::applied_rule(wl_surface);
+            let Some(wl_surface) = window.wl_surface() else { continue; };
+            let rule = driftwm::config::applied_rule(&wl_surface);
             if rule.as_ref().is_some_and(|r| r.no_focus) {
                 continue;
             }
@@ -492,7 +493,7 @@ impl DriftWm {
                     || crate::decorations::title_bar_contains(pos, loc, size.w, bar_height)
                     || crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width).is_some()
                 {
-                    return Some((FocusTarget(wl_surface.clone()), loc.to_f64()));
+                    return Some((FocusTarget((*wl_surface).clone()), loc.to_f64()));
                 }
             }
         }
@@ -541,7 +542,7 @@ impl DriftWm {
 
     /// Set the close button hover state for a specific window's decoration.
     fn set_close_hovered(&mut self, window: &Window, hovered: bool) {
-        let wl_surface = window.toplevel().unwrap().wl_surface();
+        let Some(wl_surface) = window.wl_surface() else { return; };
         if let Some(deco) = self.decorations.get_mut(&wl_surface.id())
             && deco.close_hovered != hovered
         {
@@ -575,7 +576,7 @@ impl DriftWm {
 
         // Iterate in z-order (topmost first, matching space.elements().rev())
         for window in self.space.elements().rev() {
-            let wl_surface = window.toplevel().unwrap().wl_surface();
+            let Some(wl_surface) = window.wl_surface() else { continue; };
             if !self.decorations.contains_key(&wl_surface.id()) {
                 continue;
             }

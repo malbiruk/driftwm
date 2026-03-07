@@ -3,6 +3,7 @@ use std::cell::RefCell;
 use crate::grabs::{ResizeState, has_left, has_top};
 use crate::handlers::layer_shell::LayerDestroyedMarker;
 use crate::state::{ClientState, DriftWm, FocusTarget};
+use smithay::xwayland::XWaylandClientData;
 use smithay::desktop::layer_map_for_output;
 use smithay::wayland::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, LayerSurfaceData, LayerSurfaceCachedState,
@@ -21,6 +22,7 @@ use smithay::{
             SurfaceAttributes,
         },
         dmabuf::get_dmabuf,
+        seat::WaylandFocus,
         shell::xdg::XdgToplevelSurfaceData,
         shm::{ShmHandler, ShmState},
     },
@@ -32,7 +34,13 @@ impl CompositorHandler for DriftWm {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        &client.get_data::<ClientState>().unwrap().compositor_state
+        if let Some(state) = client.get_data::<ClientState>() {
+            &state.compositor_state
+        } else if let Some(state) = client.get_data::<XWaylandClientData>() {
+            &state.compositor_state
+        } else {
+            panic!("Unknown client type: no ClientState or XWaylandClientData");
+        }
     }
 
     fn new_surface(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
@@ -124,7 +132,7 @@ impl CompositorHandler for DriftWm {
             let window = self
                 .space
                 .elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == &root)
+                .find(|w| w.wl_surface().as_deref() == Some(&root))
                 .cloned();
             if let Some(window) = window {
                 window.on_commit();
@@ -191,11 +199,12 @@ impl CompositorHandler for DriftWm {
                             // Decoration override: none/server → force SSD on the protocol level
                             if rule.decoration != driftwm::config::DecorationMode::Client {
                                 use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                                let toplevel = window.toplevel().unwrap();
-                                toplevel.with_pending_state(|state| {
-                                    state.decoration_mode = Some(Mode::ServerSide);
-                                });
-                                toplevel.send_configure();
+                                if let Some(toplevel) = window.toplevel() {
+                                    toplevel.with_pending_state(|state| {
+                                        state.decoration_mode = Some(Mode::ServerSide);
+                                    });
+                                    toplevel.send_configure();
+                                }
                                 // Track in pending_ssd so the decoration creation check below sees it
                                 self.pending_ssd.insert(root.id());
                             }
@@ -210,8 +219,8 @@ impl CompositorHandler for DriftWm {
                                 if let Some(prev) = self.focus_history.first().cloned() {
                                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                     let keyboard = self.seat.get_keyboard().unwrap();
-                                    let surface = prev.toplevel().unwrap().wl_surface().clone();
-                                    keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+                                    let focus = prev.wl_surface().map(|s| FocusTarget(s.into_owned()));
+                                    keyboard.set_focus(self, focus, serial);
                                 }
                             }
                         }
@@ -284,9 +293,11 @@ fn ensure_initial_configure(
     if let Some(window) = state
         .space
         .elements()
-        .find(|w| w.toplevel().unwrap().wl_surface() == surface)
+        .find(|w| w.wl_surface().as_deref() == Some(surface))
     {
-        let toplevel = window.toplevel().unwrap();
+        let Some(toplevel) = window.toplevel() else {
+            return; // X11 windows don't have xdg toplevels
+        };
         let initial_configure_sent = smithay::wayland::compositor::with_states(
             toplevel.wl_surface(),
             |states| {

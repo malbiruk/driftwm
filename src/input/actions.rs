@@ -1,10 +1,12 @@
 use smithay::{
     input::pointer::MotionEvent,
     utils::{Point, Size, SERIAL_COUNTER},
+    wayland::seat::WaylandFocus,
 };
 
 use driftwm::canvas::{self};
 use driftwm::config::Action;
+use driftwm::window_ext::WindowExt;
 use crate::state::{DriftWm, FocusTarget, HomeReturn};
 
 impl DriftWm {
@@ -38,10 +40,10 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                         .cloned();
                     if let Some(window) = window {
-                        window.toplevel().unwrap().send_close();
+                        window.send_close();
                     }
                 }
             }
@@ -54,7 +56,7 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                         .cloned();
                     if let Some(window) = window
                         && let Some(loc) = self.space.element_location(&window)
@@ -108,7 +110,7 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                         .cloned();
                     if let Some(window) = window {
                         self.navigate_to_window(&window, true);
@@ -124,7 +126,7 @@ impl DriftWm {
                         .space
                         .elements()
                         .filter(|w| {
-                            !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                            !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                                 .is_some_and(|r| r.widget || r.no_focus)
                         })
                         .min_by(|a, b| {
@@ -154,7 +156,7 @@ impl DriftWm {
                 let focused = keyboard.current_focus().and_then(|focus| {
                     self.space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                         .cloned()
                 });
 
@@ -185,7 +187,7 @@ impl DriftWm {
                 };
 
                 let windows = self.space.elements().filter(|w| {
-                    !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                    !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                         .is_some_and(|r| r.widget || r.no_focus)
                 }).map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
@@ -337,7 +339,7 @@ impl DriftWm {
                     // Compute bounding box of all windows
                     let viewport = self.get_viewport_size();
                     let windows = self.space.elements().filter(|w| {
-                        !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                        !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                             .is_some_and(|r| r.widget || r.no_focus)
                     }).map(|w| {
                         let loc = self.space.element_location(w).unwrap_or_default();
@@ -375,7 +377,7 @@ impl DriftWm {
                         let window = self
                             .space
                             .elements()
-                            .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                            .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                             .cloned();
                         if let Some(window) = window {
                             self.enter_fullscreen(&window);
@@ -392,7 +394,7 @@ impl DriftWm {
                     let window = self
                         .space
                         .elements()
-                        .find(|w| w.toplevel().unwrap().wl_surface() == &focus.0)
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
                         .cloned();
                     if let Some(window) = window
                         && let Some(from_output) = self.output_for_window(&window)
@@ -418,7 +420,7 @@ impl DriftWm {
                         let keyboard = self.seat.get_keyboard().unwrap();
                         keyboard.set_focus(
                             self,
-                            Some(FocusTarget(window.toplevel().unwrap().wl_surface().clone())),
+                            window.wl_surface().map(|s| FocusTarget(s.into_owned())),
                             serial,
                         );
                     }

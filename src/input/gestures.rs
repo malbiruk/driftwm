@@ -8,6 +8,7 @@ use smithay::{
     },
     desktop::Window,
     input::pointer::{
+
         CursorImageStatus, Focus, GestureHoldBeginEvent as WlHoldBegin,
         GestureHoldEndEvent as WlHoldEnd, GesturePinchBeginEvent as WlPinchBegin,
         GesturePinchEndEvent as WlPinchEnd, GesturePinchUpdateEvent as WlPinchUpdate,
@@ -16,7 +17,7 @@ use smithay::{
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Size, SERIAL_COUNTER},
-    wayland::compositor::with_states,
+    wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, has_bottom, has_left, has_right, has_top};
@@ -119,7 +120,7 @@ impl DriftWm {
                     GestureConfigEntry::Continuous(ContinuousAction::ResizeWindow) => {
                         if let Some((window, _)) = self.focusable_window_under(pos)
                             .filter(|(w, _)| {
-                                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                                !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                                     .is_some_and(|r| r.widget)
                             })
                         {
@@ -160,7 +161,7 @@ impl DriftWm {
                     ContinuousAction::ResizeWindow => {
                         if let Some((window, _)) = self.focusable_window_under(pos)
                             .filter(|(w, _)| {
-                                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                                !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                                     .is_some_and(|r| r.widget)
                             })
                         {
@@ -383,12 +384,13 @@ impl DriftWm {
                 let new_size = Size::from((new_w, new_h));
                 if new_size != *last_size {
                     *last_size = new_size;
-                    let toplevel = window.toplevel().unwrap();
-                    toplevel.with_pending_state(|state| {
-                        state.size = Some(new_size);
-                        state.states.set(xdg_toplevel::State::Resizing);
-                    });
-                    toplevel.send_pending_configure();
+                    if let Some(toplevel) = window.toplevel() {
+                        toplevel.with_pending_state(|state| {
+                            state.size = Some(new_size);
+                            state.states.set(xdg_toplevel::State::Resizing);
+                        });
+                        toplevel.send_pending_configure();
+                    }
                 }
 
                 self.warp_pointer(warp_target);
@@ -448,23 +450,25 @@ impl DriftWm {
                 initial_size,
                 ..
             } => {
-                let toplevel = window.toplevel().unwrap();
-                toplevel.with_pending_state(|state| {
-                    state.states.unset(xdg_toplevel::State::Resizing);
-                });
-                toplevel.send_pending_configure();
+                if let Some(toplevel) = window.toplevel() {
+                    toplevel.with_pending_state(|state| {
+                        state.states.unset(xdg_toplevel::State::Resizing);
+                    });
+                    toplevel.send_pending_configure();
+                }
 
-                let surface = toplevel.wl_surface().clone();
-                with_states(&surface, |states| {
-                    states
-                        .data_map
-                        .get_or_insert(|| RefCell::new(ResizeState::Idle))
-                        .replace(ResizeState::WaitingForLastCommit {
-                            edges,
-                            initial_window_location: initial_location,
-                            initial_window_size: initial_size,
-                        });
-                });
+                if let Some(surface) = window.wl_surface().map(|s| s.into_owned()) {
+                    with_states(&surface, |states| {
+                        states
+                            .data_map
+                            .get_or_insert(|| RefCell::new(ResizeState::Idle))
+                            .replace(ResizeState::WaitingForLastCommit {
+                                edges,
+                                initial_window_location: initial_location,
+                                initial_window_size: initial_size,
+                            });
+                    });
+                }
 
                 self.grab_cursor = false;
                 self.cursor_status = CursorImageStatus::default_named();
@@ -728,7 +732,7 @@ impl DriftWm {
     /// handles window positioning (identical to Alt+click drag).
     /// If the window is pinned, falls through to Swipe3Pan instead.
     fn start_gesture_move(&mut self, window: Window, pos: Point<f64, Logical>) {
-        if driftwm::config::applied_rule(window.toplevel().unwrap().wl_surface())
+        if window.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
             .is_some_and(|r| r.widget)
         {
             self.gesture_state = Some(GestureState::SwipePan);
@@ -738,7 +742,7 @@ impl DriftWm {
         self.enforce_below_windows();
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
-        let surface = window.toplevel().unwrap().wl_surface().clone();
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
         keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
 
         let initial_window_location = self.space.element_location(&window).unwrap_or_default();
@@ -764,15 +768,14 @@ impl DriftWm {
         self.enforce_below_windows();
         let serial = SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
-        let surface = window.toplevel().unwrap().wl_surface().clone();
-        keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
 
         let initial_location = self.space.element_location(&window).unwrap();
         let initial_size = window.geometry().size;
         let edges = edges_from_position(pos, initial_location, initial_size);
 
         // Store resize state on surface data map for commit() repositioning
-        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
         with_states(&wl_surface, |states| {
             states
                 .data_map
@@ -784,9 +787,11 @@ impl DriftWm {
                 });
         });
 
-        window.toplevel().unwrap().with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Resizing);
-        });
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Resizing);
+            });
+        }
 
         self.grab_cursor = true;
         self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
@@ -823,7 +828,7 @@ impl DriftWm {
             .element_under(pos)
             .map(|(w, l)| (w.clone(), l))
             .filter(|(w, _)| {
-                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
                     .is_some_and(|r| r.no_focus)
             })
     }

@@ -1,8 +1,11 @@
 pub mod compositor;
 pub mod layer_shell;
 pub mod xdg_shell;
+pub mod xwayland;
 
 use crate::state::{DriftWm, FocusTarget};
+use driftwm::window_ext::WindowExt;
+use smithay::wayland::seat::WaylandFocus;
 use smithay::{
     backend::renderer::ImportDma,
     delegate_cursor_shape, delegate_data_control, delegate_data_device, delegate_dmabuf,
@@ -168,7 +171,7 @@ impl XdgActivationHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&surface))
             .cloned();
         if let Some(window) = window {
             let mostly_visible = self.space.element_location(&window).is_some_and(|loc| {
@@ -283,7 +286,7 @@ impl XdgDecorationHandler for DriftWm {
             // If the window is already mapped (request_mode came after first commit),
             // create the SSD decoration immediately.
             let window = self.space.elements()
-                .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+                .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
                 .cloned();
             if let Some(window) = window {
                 let geo = window.geometry();
@@ -329,7 +332,7 @@ impl ForeignToplevelHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
             self.navigate_to_window(&window, true);
@@ -340,10 +343,10 @@ impl ForeignToplevelHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            window.toplevel().unwrap().send_close();
+            window.send_close();
         }
     }
 
@@ -351,7 +354,7 @@ impl ForeignToplevelHandler for DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == &wl_surface)
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
             self.enter_fullscreen(&window);
@@ -492,8 +495,8 @@ impl SessionLockHandler for DriftWm {
         if let Some(window) = self.focus_history.first().cloned() {
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
             let keyboard = self.seat.get_keyboard().unwrap();
-            let surface = window.toplevel().unwrap().wl_surface().clone();
-            keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+            let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
+            keyboard.set_focus(self, focus, serial);
         }
         self.mark_all_dirty();
     }

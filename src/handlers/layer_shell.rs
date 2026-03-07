@@ -6,6 +6,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
     wayland::{
         compositor::with_states,
+        seat::WaylandFocus,
         shell::{
             wlr_layer::{
                 Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
@@ -156,7 +157,7 @@ impl WlrLayerShellHandler for DriftWm {
             let new_focus = self
                 .focus_history
                 .first()
-                .map(|w| FocusTarget(w.toplevel().unwrap().wl_surface().clone()));
+                .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
             keyboard.set_focus(self, new_focus, serial);
         }
     }

@@ -9,6 +9,7 @@ use smithay::{
     output::Output,
     reexports::wayland_server::Resource,
     utils::{Logical, Point},
+    wayland::seat::WaylandFocus,
 };
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
@@ -218,7 +219,9 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let gap = data.config.snap_gap;
 
             // Collect other windows' snap rects (exclude self and widgets)
-            let self_surface = self.window.toplevel().unwrap().wl_surface().clone();
+            let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned()) else {
+                return;
+            };
             let window_size = self.window.geometry().size;
             let self_bar = if data.decorations.contains_key(&self_surface.id()) {
                 config::DecorationConfig::TITLE_BAR_HEIGHT
@@ -230,11 +233,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
 
             let mut others: Vec<SnapRect> = Vec::new();
             for w in data.space.elements() {
-                let surface = w.toplevel().unwrap().wl_surface();
+                let Some(surface) = w.wl_surface() else { continue; };
                 if *surface == self_surface {
                     continue;
                 }
-                if config::applied_rule(surface).is_some_and(|r| r.widget) {
+                if config::applied_rule(&surface).is_some_and(|r| r.widget) {
                     continue;
                 }
                 let Some(loc) = data.space.element_location(w) else { continue };

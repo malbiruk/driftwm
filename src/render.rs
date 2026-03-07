@@ -25,6 +25,7 @@ use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::utils::{Size, Transform};
 
 use smithay::reexports::wayland_server::Resource;
+use smithay::wayland::seat::WaylandFocus;
 
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 
@@ -416,7 +417,7 @@ pub fn compose_frame(
         let Some(loc) = state.space.element_location(window) else { continue };
         let geom_loc = window.geometry().loc;
         let geom_size = window.geometry().size;
-        let wl_surface = window.toplevel().unwrap().wl_surface();
+        let Some(wl_surface) = window.wl_surface() else { continue; };
         let is_fullscreen = state.fullscreen.values().any(|fs| &fs.window == window);
         let has_ssd = !is_fullscreen && state.decorations.contains_key(&wl_surface.id());
 
@@ -440,15 +441,14 @@ pub fn compose_frame(
             1.0,
         );
 
-        let is_widget = window
-            .toplevel()
-            .is_some_and(|tl| driftwm::config::applied_rule(tl.wl_surface()).is_some_and(|r| r.widget));
+        let is_widget = driftwm::config::applied_rule(&wl_surface)
+            .is_some_and(|r| r.widget);
 
         let target = if is_widget { &mut zoomed_widgets } else { &mut zoomed_normal };
 
         if has_ssd {
             let bar_height = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
-            let is_focused = focused_surface.as_ref().is_some_and(|f| f == wl_surface);
+            let is_focused = focused_surface.as_ref().is_some_and(|f| *f == *wl_surface);
 
             // Update decoration state (re-render title bar if needed)
             if let Some(deco) = state.decorations.get_mut(&wl_surface.id()) {

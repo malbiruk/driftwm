@@ -11,7 +11,7 @@ use smithay::{
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Size},
-    wayland::compositor::with_states,
+    wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
 use smithay::input::pointer::CursorImageStatus;
@@ -127,12 +127,13 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         if new_size != self.last_window_size {
             self.last_window_size = new_size;
 
-            let toplevel = self.window.toplevel().unwrap();
-            toplevel.with_pending_state(|state| {
-                state.size = Some(new_size);
-                state.states.set(xdg_toplevel::State::Resizing);
-            });
-            toplevel.send_pending_configure();
+            if let Some(toplevel) = self.window.toplevel() {
+                toplevel.with_pending_state(|state| {
+                    state.size = Some(new_size);
+                    state.states.set(xdg_toplevel::State::Resizing);
+                });
+                toplevel.send_pending_configure();
+            }
         }
 
         // Warp pointer to clamped position so it visually stops at output edge
@@ -153,14 +154,17 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
             // Grab released — transition to WaitingForLastCommit
-            let toplevel = self.window.toplevel().unwrap();
-            toplevel.with_pending_state(|state| {
-                state.states.unset(xdg_toplevel::State::Resizing);
-            });
-            toplevel.send_pending_configure();
+            if let Some(toplevel) = self.window.toplevel() {
+                toplevel.with_pending_state(|state| {
+                    state.states.unset(xdg_toplevel::State::Resizing);
+                });
+                toplevel.send_pending_configure();
+            }
 
-            // Store WaitingForLastCommit so commit() can do final repositioning
-            let surface = toplevel.wl_surface().clone();
+            let Some(surface) = self.window.wl_surface().map(|s| s.into_owned()) else {
+                handle.unset_grab(self, data, event.serial, event.time, true);
+                return;
+            };
             let edges = self.edges;
             let initial_window_location = self.initial_window_location;
             let initial_window_size = self.initial_window_size;

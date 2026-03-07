@@ -50,6 +50,10 @@ use smithay::backend::renderer::gles::{GlesPixelProgram, element::PixelShaderEle
 use smithay::utils::Transform;
 
 use smithay::backend::session::libseat::LibSeatSession;
+use smithay::wayland::seat::WaylandFocus;
+use smithay::wayland::xwayland_shell::XWaylandShellState;
+use smithay::xwayland::xwm::X11Wm;
+use smithay::xwayland::X11Surface;
 
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::drm::control::crtc;
@@ -370,6 +374,15 @@ pub struct DriftWm {
     /// Set when output config was applied via wlr-output-management; render loop
     /// should re-collect output state and notify clients.
     pub output_config_dirty: bool,
+
+    // -- global: XWayland --
+    pub xwayland_shell_state: XWaylandShellState,
+    pub x11_wm: Option<X11Wm>,
+    /// Override-redirect X11 windows (menus, tooltips) — rendered manually, not in Space.
+    pub x11_override_redirect: Vec<X11Surface>,
+    pub x11_display: Option<u32>,
+    /// XWayland client handle, stored for reconnect/cleanup.
+    pub xwayland_client: Option<smithay::reexports::wayland_server::Client>,
 }
 
 /// Per-client state stored by wayland-server for each connected client.
@@ -425,6 +438,7 @@ impl DriftWm {
         let output_management_state =
             driftwm::protocols::output_management::OutputManagementState::new::<Self, _>(&dh, |_| true);
         let session_lock_manager_state = SessionLockManagerState::new::<Self, _>(&dh, |_| true);
+        let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
 
         let config = Config::load();
 
@@ -518,6 +532,11 @@ impl DriftWm {
             gesture_output: None,
             disconnected_outputs: HashSet::new(),
             output_config_dirty: false,
+            xwayland_shell_state,
+            x11_wm: None,
+            x11_override_redirect: Vec::new(),
+            x11_display: None,
+            xwayland_client: None,
         }
     }
 
@@ -532,7 +551,7 @@ impl DriftWm {
             .space
             .elements()
             .filter(|w| {
-                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                !w.wl_surface().and_then(|s| driftwm::config::applied_rule(&s))
                     .is_some_and(|r| r.widget)
             })
             .cloned()
@@ -545,6 +564,11 @@ impl DriftWm {
         for fs in self.fullscreen.values() {
             self.space.raise_element(&fs.window, false);
         }
+    }
+
+    /// Find a mapped window wrapping the given X11 surface.
+    pub fn find_x11_window(&self, x11: &X11Surface) -> Option<Window> {
+        self.space.elements().find(|w| w.x11_surface() == Some(x11)).cloned()
     }
 
     /// Mark all active outputs as needing a redraw.
@@ -914,8 +938,8 @@ impl DriftWm {
         let focused_surface = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
         let mut app_ids: Vec<String> = Vec::new();
         for window in self.space.elements() {
-            let surface = window.toplevel().unwrap().wl_surface();
-            let app_id = smithay::wayland::compositor::with_states(surface, |states| {
+            let Some(surface) = window.wl_surface() else { continue; };
+            let app_id = smithay::wayland::compositor::with_states(&surface, |states| {
                 states
                     .data_map
                     .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
@@ -923,7 +947,7 @@ impl DriftWm {
                     .and_then(|guard| guard.app_id.clone())
             }).unwrap_or_default();
             if !app_id.is_empty() {
-                let is_focused = focused_surface.as_ref().is_some_and(|f| &f.0 == surface);
+                let is_focused = focused_surface.as_ref().is_some_and(|f| f.0 == *surface);
                 if is_focused {
                     app_ids.insert(0, app_id);
                 } else {

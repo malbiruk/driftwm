@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use smithay::desktop::{Space, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::wayland::seat::WaylandFocus;
 use smithay::reexports::wayland_protocols_wlr;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
@@ -90,9 +91,8 @@ pub fn refresh<D>(
     // 1. Remove closed or widget windows
     ft_state.toplevels.retain(|surface, data| {
         let alive = space.elements().any(|w| {
-            let s = w.toplevel().unwrap().wl_surface();
-            s == surface
-                && !crate::config::applied_rule(s).is_some_and(|r| r.widget)
+            w.wl_surface().as_deref() == Some(surface)
+                && !crate::config::applied_rule(surface).is_some_and(|r| r.widget)
         });
         if !alive {
             for instance in data.instances.keys() {
@@ -105,11 +105,11 @@ pub fn refresh<D>(
     // 2. Refresh non-focused windows first (deactivate-before-activate ordering)
     let mut focused_entry = None;
     for window in space.elements() {
-        let wl_surface = window.toplevel().unwrap().wl_surface();
-        if crate::config::applied_rule(wl_surface).is_some_and(|r| r.widget) {
+        let Some(wl_surface) = window.wl_surface() else { continue; };
+        if crate::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             continue;
         }
-        let wl_surface = wl_surface.clone();
+        let wl_surface = wl_surface.into_owned();
         let is_focused = focused_surface.is_some_and(|fs| fs == &wl_surface);
         if is_focused {
             focused_entry = Some(window.clone());
@@ -120,7 +120,7 @@ pub fn refresh<D>(
 
     // 3. Refresh focused window last (with Activated state)
     if let Some(window) = focused_entry {
-        let wl_surface = window.toplevel().unwrap().wl_surface().clone();
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
         refresh_toplevel::<D>(ft_state, &wl_surface, outputs, true);
     }
 }

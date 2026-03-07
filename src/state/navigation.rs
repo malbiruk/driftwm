@@ -2,6 +2,7 @@ use smithay::{
     desktop::Window,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::Point,
+    wayland::seat::WaylandFocus,
 };
 
 use super::{DriftWm, FocusTarget};
@@ -15,8 +16,8 @@ impl DriftWm {
         self.enforce_below_windows();
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
-        let surface = window.toplevel().unwrap().wl_surface().clone();
-        keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
+        let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
+        keyboard.set_focus(self, focus, serial);
 
         let target_zoom = if reset_zoom {
             self.set_overview_return(None);
@@ -56,7 +57,7 @@ impl DriftWm {
         let viewport = self.get_viewport_size();
         driftwm::canvas::dynamic_min_zoom(
             self.space.elements().filter(|w| {
-                !driftwm::config::applied_rule(w.toplevel().unwrap().wl_surface())
+                !w.wl_surface().and_then(|s| driftwm::config::applied_rule(&s))
                     .is_some_and(|r| r.widget || r.no_focus)
             }).map(|w| {
                 let loc = self.space.element_location(w).unwrap_or_default();
@@ -78,7 +79,7 @@ impl DriftWm {
         let window = self
             .space
             .elements()
-            .find(|w| w.toplevel().unwrap().wl_surface() == surface)
+            .find(|w| w.wl_surface().as_deref() == Some(surface))
             .cloned();
         if let Some(window) = window {
             self.focus_history.retain(|w| w != &window);
