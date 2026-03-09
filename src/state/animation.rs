@@ -74,14 +74,13 @@ impl DriftWm {
         pointer.frame(self);
     }
 
-    /// Apply scroll momentum each frame. Skips frames where a scroll event
-    /// already moved the camera (via frame counter). Suppressed during active
+    /// Apply scroll momentum each frame. Suppressed during active
     /// PanGrab to avoid interfering with grab tracking.
-    pub fn apply_scroll_momentum(&mut self) {
+    pub fn apply_scroll_momentum(&mut self, dt: Duration) {
         if self.panning() {
             return;
         }
-        let delta = self.with_output_state(|os| os.momentum.tick(os.frame_counter));
+        let delta = self.with_output_state(|os| os.momentum.tick(dt));
         let Some(delta) = delta else {
             return;
         };
@@ -113,32 +112,70 @@ impl DriftWm {
     /// Call this from any input path that should drift (scroll, click-drag, future gestures).
     /// Targets the active output (where the pointer is).
     pub fn drift_pan(&mut self, delta: Point<f64, Logical>) {
+        let now = Instant::now();
         self.with_output_state(|os| {
             os.camera_target = None;
             os.zoom_target = None;
             os.zoom_animation_center = None;
             os.overview_return = None;
-            os.momentum.accumulate(delta, os.frame_counter);
+            os.momentum.accumulate(delta, now);
             os.camera.x += delta.x;
             os.camera.y += delta.y;
         });
         self.update_output_from_camera();
+        self.schedule_momentum_timer();
     }
 
     /// Apply a viewport pan delta on a specific output (for grabs pinned to an output).
     pub fn drift_pan_on(&mut self, delta: Point<f64, Logical>, output: &smithay::output::Output) {
+        let now = Instant::now();
         {
             let mut os = super::output_state(output);
             os.camera_target = None;
             os.zoom_target = None;
             os.zoom_animation_center = None;
             os.overview_return = None;
-            let fc = os.frame_counter;
-            os.momentum.accumulate(delta, fc);
+            os.momentum.accumulate(delta, now);
             os.camera.x += delta.x;
             os.camera.y += delta.y;
         }
         self.update_output_from_camera();
+        self.schedule_momentum_timer();
+    }
+
+    /// Schedule a 50ms one-shot timer that auto-launches momentum.
+    /// Covers touchpads that don't send AxisStop on finger lift.
+    /// Each call resets the timer — only the last one fires.
+    fn schedule_momentum_timer(&mut self) {
+        if let Some(token) = self.momentum_timer.take() {
+            self.loop_handle.remove(token);
+        }
+        let token = self.loop_handle.insert_source(
+            smithay::reexports::calloop::timer::Timer::from_duration(Duration::from_millis(50)),
+            |_, _, data: &mut DriftWm| {
+                data.launch_momentum();
+                smithay::reexports::calloop::timer::TimeoutAction::Drop
+            },
+        ).ok();
+        self.momentum_timer = token;
+    }
+
+    fn cancel_momentum_timer(&mut self) {
+        if let Some(token) = self.momentum_timer.take() {
+            self.loop_handle.remove(token);
+        }
+    }
+
+    /// Launch momentum on the active output — called when input ends (finger lift, gesture end).
+    pub fn launch_momentum(&mut self) {
+        self.cancel_momentum_timer();
+        self.with_output_state(|os| os.momentum.launch());
+    }
+
+    /// Launch momentum on a specific output.
+    pub fn launch_momentum_on(&mut self, output: &smithay::output::Output) {
+        self.cancel_momentum_timer();
+        super::output_state(output).momentum.launch();
     }
 
     /// Advance the camera animation toward `camera_target` using frame-rate independent lerp.
@@ -295,11 +332,10 @@ impl DriftWm {
 
             {
                 let mut os = output_state(output);
-                os.frame_counter = os.frame_counter.wrapping_add(1);
                 os.last_frame_instant = now;
             }
 
-            self.tick_scroll_momentum_on(output, is_active);
+            self.tick_scroll_momentum_on(output, is_active, dt);
             self.tick_edge_pan_on(output, is_active);
             self.tick_zoom_animation_on(output, is_active, dt);
             self.tick_camera_animation_on(output, is_active, dt);
@@ -309,7 +345,7 @@ impl DriftWm {
         self.update_output_from_camera();
     }
 
-    fn tick_scroll_momentum_on(&mut self, output: &Output, is_active: bool) {
+    fn tick_scroll_momentum_on(&mut self, output: &Output, is_active: bool, dt: Duration) {
         {
             let os = output_state(output);
             if os.panning {
@@ -319,8 +355,7 @@ impl DriftWm {
 
         let delta = {
             let mut os = output_state(output);
-            let fc = os.frame_counter;
-            os.momentum.tick(fc)
+            os.momentum.tick(dt)
         };
         let Some(delta) = delta else { return };
 

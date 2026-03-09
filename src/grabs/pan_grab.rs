@@ -53,7 +53,8 @@ impl PointerGrab<DriftWm> for PanGrab {
         let screen_delta = current_screen_pos - self.last_screen_pos;
 
         // Dragging right → camera decreases → negate; convert screen→canvas delta
-        let camera_delta = Point::from((-screen_delta.x / zoom, -screen_delta.y / zoom));
+        let s = data.config.scroll_speed;
+        let camera_delta = Point::from((-screen_delta.x * s / zoom, -screen_delta.y * s / zoom));
         data.drift_pan_on(camera_delta, &self.output);
         self.last_screen_pos = current_screen_pos;
 
@@ -91,9 +92,9 @@ impl PointerGrab<DriftWm> for PanGrab {
                 let keyboard = data.seat.get_keyboard().unwrap();
                 keyboard.set_focus(data, None::<FocusTarget>, serial);
             }
-            // Release panning lock so momentum can coast freely
+            // Release panning lock and launch momentum so the viewport coasts
             data.set_panning(false);
-            // Momentum is already primed from accumulated deltas — friction handles the coast
+            data.launch_momentum_on(&self.output);
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }

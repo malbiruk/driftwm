@@ -342,7 +342,7 @@ impl Config {
 
         Self {
             mod_key,
-            scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
+            scroll_speed: raw.input.scroll.speed.unwrap_or(1.0),
             friction: raw.input.scroll.friction.unwrap_or(0.96),
             nudge_step: raw.navigation.nudge_step.unwrap_or(20),
             pan_step: raw.navigation.pan_step.unwrap_or(100.0),

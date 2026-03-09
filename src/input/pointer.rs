@@ -455,30 +455,37 @@ impl DriftWm {
         if let Some(action) = self.config.mouse_scroll_lookup_ctx(&mods, source, context).cloned() {
             match action {
                 MouseAction::PanViewport => {
-                    if source == AxisSource::Finger {
-                        self.set_last_scroll_pan(Some(std::time::Instant::now()));
-                    }
-                    let h = event.amount(Axis::Horizontal).unwrap_or(0.0);
-                    let v = event.amount(Axis::Vertical).unwrap_or(0.0);
-                    if h != 0.0 || v != 0.0 {
-                        let s = self.config.scroll_speed;
-                        let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
-                            h * s / self.zoom(),
-                            v * s / self.zoom(),
-                        ));
-                        self.drift_pan(canvas_delta);
-                        let new_pos = pos + canvas_delta;
-                        let serial = SERIAL_COUNTER.next_serial();
-                        let under = self.surface_under(new_pos, None);
-                        pointer.motion(
-                            self,
-                            under,
-                            &MotionEvent {
-                                location: new_pos,
-                                serial,
-                                time: Event::time_msec(&event),
-                            },
-                        );
+                    let h = event.amount(Axis::Horizontal);
+                    let v = event.amount(Axis::Vertical);
+                    if h.is_some() || v.is_some() {
+                        if source == AxisSource::Finger {
+                            self.set_last_scroll_pan(Some(std::time::Instant::now()));
+                        }
+                        let h = h.unwrap_or(0.0);
+                        let v = v.unwrap_or(0.0);
+                        if h != 0.0 || v != 0.0 {
+                            let s = self.config.scroll_speed;
+                            let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
+                                h * s / self.zoom(),
+                                v * s / self.zoom(),
+                            ));
+                            self.drift_pan(canvas_delta);
+                            let new_pos = pos + canvas_delta;
+                            let serial = SERIAL_COUNTER.next_serial();
+                            let under = self.surface_under(new_pos, None);
+                            pointer.motion(
+                                self,
+                                under,
+                                &MotionEvent {
+                                    location: new_pos,
+                                    serial,
+                                    time: Event::time_msec(&event),
+                                },
+                            );
+                        }
+                    } else if source == AxisSource::Finger {
+                        // Both axes are None → finger lifted (AxisStop), launch momentum
+                        self.launch_momentum();
                     }
                 }
                 MouseAction::Zoom => {

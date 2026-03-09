@@ -251,8 +251,9 @@ impl DriftWm {
 
         match state {
             GestureState::SwipePan => {
+                let s = self.config.scroll_speed;
                 let canvas_delta: Point<f64, Logical> =
-                    (-delta.x / zoom, -delta.y / zoom).into();
+                    (-delta.x * s / zoom, -delta.y * s / zoom).into();
                 if let Some(output) = self.gesture_output.clone() {
                     self.drift_pan_on(canvas_delta, &output);
                 } else {
@@ -448,7 +449,11 @@ impl DriftWm {
 
         match state {
             GestureState::SwipePan => {
-                // Momentum from drift_pan() carries the camera
+                if let Some(output) = self.gesture_output.clone() {
+                    self.launch_momentum_on(&output);
+                } else {
+                    self.launch_momentum();
+                }
             }
             GestureState::SwipeMove => {
                 let serial = SERIAL_COUNTER.next_serial();

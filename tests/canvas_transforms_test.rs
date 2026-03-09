@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use driftwm::canvas::{
     CanvasPos, MomentumState, ScreenPos,
     canvas_to_screen, screen_to_canvas,
@@ -109,93 +111,83 @@ fn screen_to_canvas_zoom_one_equals_no_zoom() {
 
 // --- MomentumState tests ---
 
+const DT_16MS: Duration = Duration::from_millis(16);
+
 #[test]
-fn momentum_tick_decays_by_friction() {
+fn momentum_tick_produces_delta_when_coasting() {
     let mut m = MomentumState::new(0.96);
-    m.velocity = Point::from((10.0, 0.0));
-    m.last_scroll_frame = 0;
-    let delta = m.tick(2).expect("expected Some delta");
-    assert!((delta.x - 10.0).abs() < 1e-10, "tick returns pre-decay velocity");
-    assert!((m.velocity.x - 10.0 * 0.96).abs() < 1e-10, "velocity decays by friction");
+    m.velocity = Point::from((600.0, 0.0)); // 600 px/sec
+    m.coasting = true;
+    let delta = m.tick(DT_16MS).expect("expected Some delta");
+    // delta ≈ velocity * dt = 600 * 0.016 = 9.6
+    assert!((delta.x - 600.0 * 0.016).abs() < 0.5, "delta ≈ v*dt");
+    // velocity should have decayed
+    assert!(m.velocity.x < 600.0, "velocity should decay after tick");
 }
 
 #[test]
 fn momentum_tick_stops_below_threshold() {
     let mut m = MomentumState::new(0.96);
-    // speed = sqrt(0.1^2 + 0.1^2) ≈ 0.141, speed_sq = 0.02 < threshold_sq 0.25
-    m.velocity = Point::from((0.1, 0.1));
-    m.last_scroll_frame = 0;
-    let result = m.tick(2);
+    // 10 px/sec is below the 15 px/sec stop threshold
+    m.velocity = Point::from((7.0, 7.0));
+    m.coasting = true;
+    let result = m.tick(DT_16MS);
     assert!(result.is_none(), "tick should return None below threshold");
     assert_eq!(m.velocity.x, 0.0);
     assert_eq!(m.velocity.y, 0.0);
+    assert!(!m.coasting);
 }
 
 #[test]
-fn momentum_tick_returns_none_when_velocity_zeroed() {
+fn momentum_tick_returns_none_when_not_coasting() {
     let mut m = MomentumState::new(0.96);
-    m.velocity = Point::from((0.0, 0.0));
-    m.last_scroll_frame = 0;
-    let result = m.tick(1);
+    m.velocity = Point::from((1000.0, 0.0));
+    // coasting is false by default
+    let result = m.tick(DT_16MS);
     assert!(result.is_none());
 }
 
 #[test]
-fn momentum_tick_skips_same_frame_as_last_scroll() {
+fn momentum_accumulate_prevents_tick() {
     let mut m = MomentumState::new(0.96);
-    m.accumulate(Point::from((5.0, 5.0)), 5);
-    let result = m.tick(5);
-    assert!(result.is_none(), "tick on same frame as scroll should return None");
+    let now = Instant::now();
+    m.accumulate(Point::from((5.0, 5.0)), now);
+    // accumulate sets coasting=false, so tick returns None
+    let result = m.tick(DT_16MS);
+    assert!(result.is_none(), "tick during accumulation should return None");
 }
 
 #[test]
-fn momentum_tick_returns_some_two_frames_after_scroll() {
+fn momentum_launch_enables_coasting() {
     let mut m = MomentumState::new(0.96);
-    m.accumulate(Point::from((5.0, 5.0)), 5);
-    assert!(m.tick(5).is_none(), "same frame as scroll");
-    assert!(m.tick(6).is_none(), "1-frame grace window (udev input/render split)");
-    assert!(m.tick(7).is_some(), "tick fires after grace window");
-}
-
-#[test]
-fn momentum_friction_zero_stops_after_first_tick() {
-    let mut m = MomentumState::new(0.0);
-    m.velocity = Point::from((10.0, 0.0));
-    m.last_scroll_frame = 0;
-    let first = m.tick(2);
-    assert!(first.is_some(), "first tick should return the velocity");
-    // After friction=0.0 is applied, velocity becomes 0.0 * 0.0 = 0.0
-    let second = m.tick(3);
-    assert!(second.is_none(), "second tick with friction=0 should return None");
-}
-
-#[test]
-fn momentum_friction_one_never_stops() {
-    let mut m = MomentumState::new(1.0);
-    m.velocity = Point::from((1.0, 0.0));
-    m.last_scroll_frame = 0;
-    for frame in 2..=50 {
-        let result = m.tick(frame);
-        assert!(result.is_some(), "friction=1.0 should never stop, failed at frame {frame}");
-        // velocity must stay at exactly 1.0
-        assert!((m.velocity.x - 1.0).abs() < 1e-10);
+    let now = Instant::now();
+    // Simulate several scroll events over 40ms
+    for i in 0..4 {
+        let t = now + Duration::from_millis(i * 10);
+        m.accumulate(Point::from((5.0, 0.0)), t);
     }
+    m.launch();
+    assert!(m.coasting);
+    // Velocity should be non-zero (displacement/time)
+    assert!(m.velocity.x > 0.0, "launch should produce positive velocity from accumulated deltas");
+    let delta = m.tick(DT_16MS);
+    assert!(delta.is_some(), "tick after launch should produce delta");
 }
 
 #[test]
-fn momentum_friction_096_decays_monotonically_and_stops() {
+fn momentum_decays_monotonically_and_stops() {
     let mut m = MomentumState::new(0.96);
-    m.velocity = Point::from((20.0, 0.0));
-    m.last_scroll_frame = 0;
-    let mut prev_speed_sq = m.velocity.x.powi(2) + m.velocity.y.powi(2);
+    m.velocity = Point::from((1200.0, 0.0)); // 1200 px/sec
+    m.coasting = true;
+    let mut prev_speed = 1200.0_f64;
     let mut ticked = false;
-    for frame in 2..=200 {
-        match m.tick(frame) {
+    for _ in 0..500 {
+        match m.tick(DT_16MS) {
             Some(_) => {
                 ticked = true;
-                let speed_sq = m.velocity.x.powi(2) + m.velocity.y.powi(2);
-                assert!(speed_sq < prev_speed_sq, "speed should decrease monotonically at frame {frame}");
-                prev_speed_sq = speed_sq;
+                let speed = (m.velocity.x.powi(2) + m.velocity.y.powi(2)).sqrt();
+                assert!(speed <= prev_speed + 1e-10, "speed should decrease monotonically");
+                prev_speed = speed;
             }
             None => {
                 assert!(ticked, "momentum must tick at least once before stopping");
@@ -206,48 +198,78 @@ fn momentum_friction_096_decays_monotonically_and_stops() {
 }
 
 #[test]
-fn momentum_accumulate_ema_weighting() {
+fn momentum_velocity_tracker_launch() {
     let mut m = MomentumState::new(0.96);
-    // Start with zero velocity, apply a delta: result = 0.0 * 0.3 + delta * 0.7
-    let delta = Point::from((10.0, 20.0));
-    m.accumulate(delta, 1);
-    assert!((m.velocity.x - 7.0).abs() < 1e-10, "first accumulate: 0*0.3 + 10*0.7 = 7.0");
-    assert!((m.velocity.y - 14.0).abs() < 1e-10, "first accumulate: 0*0.3 + 20*0.7 = 14.0");
-}
-
-#[test]
-fn momentum_accumulate_second_ema_step() {
-    let mut m = MomentumState::new(0.96);
-    let delta = Point::from((10.0, 0.0));
-    m.accumulate(delta, 1);
-    // velocity after first = 7.0
-    m.accumulate(delta, 2);
-    // velocity = 7.0 * 0.3 + 10.0 * 0.7 = 2.1 + 7.0 = 9.1
-    assert!((m.velocity.x - 9.1).abs() < 1e-10, "second accumulate EMA step");
-}
-
-#[test]
-fn momentum_accumulate_records_frame() {
-    let mut m = MomentumState::new(0.96);
-    m.accumulate(Point::from((1.0, 0.0)), 42);
-    assert_eq!(m.last_scroll_frame, 42);
+    let now = Instant::now();
+    // Push 5 samples at 10ms intervals, each with 10px displacement
+    for i in 0..5 {
+        let t = now + Duration::from_millis(i * 10);
+        m.accumulate(Point::from((10.0, 0.0)), t);
+    }
+    m.launch();
+    // 5 samples over 40ms, total displacement = 50px → velocity ≈ 1250 px/sec
+    assert!((m.velocity.x - 1250.0).abs() < 50.0,
+        "expected ~1250 px/sec, got {}", m.velocity.x);
 }
 
 #[test]
 fn momentum_stop_zeroes_velocity() {
     let mut m = MomentumState::new(0.96);
-    m.velocity = Point::from((10.0, 10.0));
+    m.velocity = Point::from((500.0, 500.0));
+    m.coasting = true;
     m.stop();
     assert_eq!(m.velocity.x, 0.0);
     assert_eq!(m.velocity.y, 0.0);
+    assert!(!m.coasting);
 }
 
 #[test]
 fn momentum_stop_causes_tick_to_return_none() {
     let mut m = MomentumState::new(0.96);
-    m.velocity = Point::from((10.0, 10.0));
-    m.last_scroll_frame = 0;
+    m.velocity = Point::from((500.0, 500.0));
+    m.coasting = true;
     m.stop();
-    let result = m.tick(1);
+    let result = m.tick(DT_16MS);
     assert!(result.is_none());
+}
+
+#[test]
+fn momentum_frame_rate_independence() {
+    // Same velocity should produce similar total displacement regardless of tick rate
+    let make = || {
+        let mut m = MomentumState::new(0.96);
+        m.velocity = Point::from((1000.0, 0.0));
+        m.coasting = true;
+        m
+    };
+
+    // 60 Hz: 500 ticks at ~16.67ms
+    let mut m60 = make();
+    let mut total_60 = 0.0;
+    let dt_60 = Duration::from_micros(16667);
+    for _ in 0..500 {
+        if let Some(d) = m60.tick(dt_60) {
+            total_60 += d.x;
+        } else {
+            break;
+        }
+    }
+
+    // 144 Hz: 1200 ticks at ~6.94ms
+    let mut m144 = make();
+    let mut total_144 = 0.0;
+    let dt_144 = Duration::from_micros(6944);
+    for _ in 0..1200 {
+        if let Some(d) = m144.tick(dt_144) {
+            total_144 += d.x;
+        } else {
+            break;
+        }
+    }
+
+    let ratio = total_60 / total_144;
+    assert!(
+        (ratio - 1.0).abs() < 0.05,
+        "60Hz total ({total_60:.1}) vs 144Hz total ({total_144:.1}) should be within 5%, ratio={ratio:.3}"
+    );
 }

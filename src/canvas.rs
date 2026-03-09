@@ -1,3 +1,6 @@
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
 use crate::config::Direction;
@@ -243,59 +246,130 @@ pub fn find_nearest<W: PartialEq>(
     best.map(|(w, _)| w)
 }
 
-/// Scroll momentum physics: velocity decays by friction each frame.
-/// Uses EMA (exponential moving average) for accumulation to smooth
-/// out jittery trackpad deltas.
-#[derive(Copy, Clone)]
+/// Sliding-window velocity tracker for scroll/gesture input.
+/// Computes launch velocity from recent displacement over a fixed time window,
+/// avoiding the EMA bias where the last 1-2 events dominate.
+#[derive(Clone, Default)]
+pub struct VelocityTracker {
+    samples: VecDeque<(Instant, Point<f64, Logical>)>,
+}
+
+const VELOCITY_WINDOW: Duration = Duration::from_millis(80);
+
+impl VelocityTracker {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn push(&mut self, now: Instant, delta: Point<f64, Logical>) {
+        self.samples.push_back((now, delta));
+        let cutoff = now - VELOCITY_WINDOW;
+        while self.samples.front().is_some_and(|(t, _)| *t < cutoff) {
+            self.samples.pop_front();
+        }
+    }
+
+    /// Total displacement / elapsed time = px/sec. Zero if < 2 samples.
+    pub fn launch_velocity(&self) -> Point<f64, Logical> {
+        if self.samples.len() < 2 {
+            return Point::from((0.0, 0.0));
+        }
+        let first_time = self.samples.front().unwrap().0;
+        let last_time = self.samples.back().unwrap().0;
+        let elapsed = (last_time - first_time).as_secs_f64();
+        if elapsed < 1e-6 {
+            return Point::from((0.0, 0.0));
+        }
+        let total: Point<f64, Logical> = self.samples.iter().fold(
+            Point::from((0.0, 0.0)),
+            |acc, (_, d)| Point::from((acc.x + d.x, acc.y + d.y)),
+        );
+        Point::from((total.x / elapsed, total.y / elapsed))
+    }
+
+    pub fn last_sample_time(&self) -> Option<Instant> {
+        self.samples.back().map(|(t, _)| *t)
+    }
+
+    pub fn clear(&mut self) {
+        self.samples.clear();
+    }
+}
+
+/// Stop threshold in px/sec (15 px/sec ≈ 0.25 px/frame at 60Hz)
+const MOMENTUM_STOP_THRESHOLD: f64 = 15.0;
+
+/// Scroll momentum physics with time-based friction.
+/// Velocity is in px/sec; friction is applied via `powf(dt * 60)` for
+/// frame-rate independence.
+#[derive(Clone)]
 pub struct MomentumState {
     pub velocity: Point<f64, Logical>,
+    pub tracker: VelocityTracker,
     pub friction: f64,
-    /// Stop when |velocity|^2 < threshold_sq (default 0.25 = 0.5 px/frame)
-    pub threshold_sq: f64,
-    /// Frame number of the last scroll event. Prevents double-counting
-    /// camera movement on frames where a scroll event fired.
-    pub last_scroll_frame: u64,
+    pub coasting: bool,
 }
 
 impl MomentumState {
     pub fn new(friction: f64) -> Self {
         Self {
             velocity: Point::from((0.0, 0.0)),
+            tracker: VelocityTracker::new(),
             friction,
-            threshold_sq: 0.25,
-            last_scroll_frame: 0,
+            coasting: false,
         }
     }
 
-    /// EMA accumulate: velocity = velocity * 0.3 + delta * 0.7
-    pub fn accumulate(&mut self, delta: Point<f64, Logical>, frame: u64) {
-        self.velocity = Point::from((
-            self.velocity.x * 0.3 + delta.x * 0.7,
-            self.velocity.y * 0.3 + delta.y * 0.7,
-        ));
-        self.last_scroll_frame = frame;
+    /// Record an input delta. Resets coasting — we're receiving live input.
+    pub fn accumulate(&mut self, delta: Point<f64, Logical>, now: Instant) {
+        self.tracker.push(now, delta);
+        self.coasting = false;
     }
 
-    /// Returns Some(delta) to apply, or None if skipped/finished.
-    pub fn tick(&mut self, current_frame: u64) -> Option<Point<f64, Logical>> {
-        // Skip when a scroll/drag event recently moved the camera.
-        // 1-frame grace window: on udev, input fires between renders with the
-        // old frame_counter, so an exact match misses by one frame.
-        if current_frame.saturating_sub(self.last_scroll_frame) <= 1 {
+    /// Snapshot launch velocity from the tracker and begin coasting.
+    pub fn launch(&mut self) {
+        self.velocity = self.tracker.launch_velocity();
+        self.coasting = true;
+        self.tracker.clear();
+    }
+
+    /// Advance momentum by `dt`. Returns Some(canvas delta) to apply, or None.
+    pub fn tick(&mut self, dt: Duration) -> Option<Point<f64, Logical>> {
+        if !self.coasting {
             return None;
         }
-        if self.velocity.x.powi(2) + self.velocity.y.powi(2) < self.threshold_sq {
+        let speed = (self.velocity.x.powi(2) + self.velocity.y.powi(2)).sqrt();
+        if speed < MOMENTUM_STOP_THRESHOLD {
             self.velocity = Point::from((0.0, 0.0));
+            self.coasting = false;
             return None;
         }
-        let delta = self.velocity;
-        self.velocity = Point::from((delta.x * self.friction, delta.y * self.friction));
+
+        let dt_secs = dt.as_secs_f64();
+
+        // Speed-dependent friction: gentle scrolls stop quickly, fast flings coast longer
+        let effective_friction = speed_dependent_friction(self.friction, speed);
+        let decay = effective_friction.powf(dt_secs * 60.0);
+        let delta = Point::from((self.velocity.x * dt_secs, self.velocity.y * dt_secs));
+        self.velocity = Point::from((self.velocity.x * decay, self.velocity.y * decay));
         Some(delta)
     }
 
     pub fn stop(&mut self) {
         self.velocity = Point::from((0.0, 0.0));
+        self.tracker.clear();
+        self.coasting = false;
     }
+}
+
+/// Derive effective per-frame friction from the config value and current speed.
+/// Low speeds get more friction (quick stop), high speeds get less (long coast).
+fn speed_dependent_friction(friction: f64, speed: f64) -> f64 {
+    let low_friction = (friction - 0.06).clamp(0.80, 0.95);
+    let high_friction = (friction + 0.025).clamp(0.95, 0.995);
+    let reference_speed = 2500.0; // px/sec
+    let t = (speed / reference_speed).min(1.0);
+    low_friction + t * (high_friction - low_friction)
 }
 
 #[cfg(test)]

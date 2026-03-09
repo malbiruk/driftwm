@@ -123,9 +123,6 @@ pub fn init_winit(
     event_loop
         .handle()
         .insert_source(timer, move |_, _, data| {
-            // --- Advance frame counter ---
-            data.set_frame_counter(data.frame_counter().wrapping_add(1));
-
             // --- Dispatch winit events ---
             let mut stop = false;
             winit_evt.dispatch_new_events(|event| match event {
@@ -167,7 +164,7 @@ pub fn init_winit(
             data.apply_key_repeat();
 
             // --- Scroll momentum ---
-            data.apply_scroll_momentum();
+            data.apply_scroll_momentum(dt);
 
             // --- Edge auto-pan (window drag near viewport edges) ---
             data.apply_edge_pan();

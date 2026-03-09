@@ -165,7 +165,6 @@ pub struct OutputState {
     pub camera_target: Option<Point<f64, Logical>>,
     pub last_scroll_pan: Option<Instant>,
     pub momentum: MomentumState,
-    pub frame_counter: u64,
     pub panning: bool,
     pub edge_pan_velocity: Option<Point<f64, Logical>>,
     pub last_rendered_camera: Point<f64, Logical>,
@@ -196,7 +195,6 @@ pub fn init_output_state(output: &Output, camera: Point<f64, Logical>, friction:
                 camera_target: None,
                 last_scroll_pan: None,
                 momentum: MomentumState::new(friction),
-                frame_counter: 0,
                 panning: false,
                 edge_pan_velocity: None,
                 last_rendered_camera: Point::from((f64::NAN, f64::NAN)),
@@ -335,6 +333,9 @@ pub struct DriftWm {
     // -- global: gesture state --
     pub gesture_state: Option<GestureState>,
     pub pending_middle_click: Option<PendingMiddleClick>,
+
+    // -- global: momentum launch timer --
+    pub momentum_timer: Option<RegistrationToken>,
 
     // -- global: session --
     pub session: Option<LibSeatSession>,
@@ -531,6 +532,7 @@ impl DriftWm {
             held_action: None,
             gesture_state: None,
             pending_middle_click: None,
+            momentum_timer: None,
             fullscreen: HashMap::new(),
             session: None,
             state_file_cameras: HashMap::new(),
@@ -939,12 +941,6 @@ impl DriftWm {
     pub fn set_last_scroll_pan(&mut self, val: Option<Instant>) {
         output_state(&self.active_output().unwrap()).last_scroll_pan = val;
     }
-    pub fn frame_counter(&self) -> u64 {
-        output_state(&self.active_output().unwrap()).frame_counter
-    }
-    pub fn set_frame_counter(&mut self, val: u64) {
-        output_state(&self.active_output().unwrap()).frame_counter = val;
-    }
     pub fn panning(&self) -> bool {
         output_state(&self.active_output().unwrap()).panning
     }
@@ -1325,7 +1321,6 @@ mod tests {
             camera_target: None,
             last_scroll_pan: None,
             momentum: MomentumState::new(0.96),
-            frame_counter: 0,
             panning: false,
             edge_pan_velocity: None,
             last_rendered_camera: Point::from(camera),
