@@ -992,16 +992,22 @@ impl DriftWm {
         if let Some(rule) = driftwm::config::applied_rule(surface) {
             return rule.sharp_scale;
         }
-        // Pre-commit: look up by app_id from xdg toplevel state
-        let app_id = smithay::wayland::compositor::with_states(surface, |states| {
+        // Pre-commit: look up by app_id + title from xdg toplevel state
+        let (app_id, title) = smithay::wayland::compositor::with_states(surface, |states| {
             states
                 .data_map
                 .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
                 .and_then(|d| d.lock().ok())
-                .and_then(|guard| guard.app_id.clone())
+                .map(|guard| {
+                    (
+                        guard.app_id.clone().unwrap_or_default(),
+                        guard.title.clone().unwrap_or_default(),
+                    )
+                })
+                .unwrap_or_default()
         });
-        if let Some(app_id) = app_id
-            && let Some(rule) = self.config.match_window_rule(&app_id, "")
+        if (!app_id.is_empty() || !title.is_empty())
+            && let Some(rule) = self.config.match_window_rule(&app_id, &title)
         {
             return rule.sharp_scale;
         }
