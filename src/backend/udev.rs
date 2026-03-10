@@ -892,7 +892,14 @@ fn render_frame(
     };
 
     // Update background element
-    crate::render::update_background_element(data, output, cur_camera, cur_zoom, last_cam, last_zoom);
+    let (camera_moved, zoom_changed) =
+        crate::render::update_background_element(data, output, cur_camera, cur_zoom, last_cam, last_zoom);
+
+    // Force full redraw when viewport shifts — DrmCompositor's damage tracker
+    // doesn't know all elements moved, so without this we get partial-update artifacts.
+    if camera_moved || zoom_changed {
+        compositor.reset_buffer_ages();
+    }
 
     // Take renderer out to split borrow from state
     let mut backend = data.backend.take().unwrap();

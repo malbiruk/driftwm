@@ -183,7 +183,10 @@ fn build_override_redirect_elements(
         let or_rect = Rectangle::new(canvas_pos, or_size);
         if !visible_rect.overlaps(or_rect) { continue }
 
-        let render_loc: Point<i32, Logical> = canvas_pos - visible_rect.loc;
+        let render_loc: Point<f64, Logical> = Point::from((
+            canvas_pos.x as f64 - camera.x,
+            canvas_pos.y as f64 - camera.y,
+        ));
         let physical_loc: Point<f64, Physical> = render_loc.to_physical_precise_round(scale);
         let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
             smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
@@ -215,13 +218,15 @@ pub fn build_canvas_layer_elements(
     zoom: f64,
 ) -> Vec<OutputRenderElements> {
     let output_scale = output.current_scale().fractional_scale();
-    let camera_i32 = camera.to_i32_round();
     let mut elements = Vec::new();
 
     for cl in &state.canvas_layers {
         let Some(pos) = cl.position else { continue; };
         // Camera-relative position (same as render_elements_for_region does for windows)
-        let rel = pos - camera_i32;
+        let rel: Point<f64, Logical> = Point::from((
+            pos.x as f64 - camera.x,
+            pos.y as f64 - camera.y,
+        ));
         let physical_loc = rel.to_physical_precise_round(output_scale);
 
         let surface_elements = cl
@@ -512,7 +517,10 @@ pub fn compose_frame(
         }
         if !visible_rect.overlaps(bbox) { continue }
 
-        let render_loc: Point<i32, Logical> = loc - geom_loc - visible_rect.loc;
+        let render_loc: Point<f64, Logical> = Point::from((
+            loc.x as f64 - geom_loc.x as f64 - camera.x,
+            loc.y as f64 - geom_loc.y as f64 - camera.y,
+        ));
         let elems = window.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
             renderer,
             render_loc.to_physical_precise_round(scale),
@@ -536,7 +544,10 @@ pub fn compose_frame(
 
             // Title bar element: positioned above the window
             if let Some(deco) = state.decorations.get(&wl_surface.id()) {
-                let bar_loc = render_loc + Point::from((0, -bar_height));
+                let bar_loc: Point<f64, Logical> = Point::from((
+                    render_loc.x,
+                    render_loc.y - bar_height as f64,
+                ));
                 let bar_physical: Point<f64, Physical> = bar_loc.to_physical_precise_round(scale);
                 if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
@@ -574,7 +585,10 @@ pub fn compose_frame(
                 let r = radius.ceil() as i32;
                 let shadow_w = geom_size.w + 2 * r;
                 let shadow_h = geom_size.h + bar_height + 2 * r;
-                let shadow_loc = render_loc + Point::from((-r, -bar_height - r));
+                let shadow_loc: Point<i32, Logical> = Point::from((
+                    render_loc.x.round() as i32 - r,
+                    render_loc.y.round() as i32 - bar_height - r,
+                ));
                 let shadow_area = Rectangle::new(shadow_loc, (shadow_w, shadow_h).into());
 
                 if let Some(deco) = state.decorations.get_mut(&wl_surface.id()) {
