@@ -352,6 +352,7 @@ pub struct WindowRule {
     pub no_focus: bool,
     pub decoration: DecorationMode,
     pub sharp_scale: bool,
+    pub blur: bool,
 }
 
 /// Runtime rule state stored in a surface's data_map after matching.
@@ -361,6 +362,7 @@ pub struct AppliedWindowRule {
     pub no_focus: bool,
     pub decoration: DecorationMode,
     pub sharp_scale: bool,
+    pub blur: bool,
 }
 
 impl From<&WindowRule> for AppliedWindowRule {
@@ -370,6 +372,22 @@ impl From<&WindowRule> for AppliedWindowRule {
             no_focus: rule.no_focus,
             decoration: rule.decoration.clone(),
             sharp_scale: rule.sharp_scale,
+            blur: rule.blur,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EffectsConfig {
+    pub blur_radius: u32,
+    pub blur_strength: f64,
+}
+
+impl Default for EffectsConfig {
+    fn default() -> Self {
+        Self {
+            blur_radius: 3,
+            blur_strength: 1.1,
         }
     }
 }

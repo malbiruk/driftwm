@@ -15,6 +15,7 @@ pub(super) struct ConfigFile {
     pub output: OutputConfig,
     pub background: BackgroundFileConfig,
     pub decorations: DecorationFileConfig,
+    pub effects: EffectsFileConfig,
     pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: MouseFileConfig,
@@ -23,6 +24,13 @@ pub(super) struct ConfigFile {
     pub xwayland: XWaylandConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct EffectsFileConfig {
+    pub blur_radius: Option<u32>,
+    pub blur_strength: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
@@ -145,6 +153,7 @@ pub(super) struct WindowRuleFile {
     pub no_focus: bool,
     pub decoration: Option<String>,
     pub sharp_scale: Option<bool>,
+    pub blur: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

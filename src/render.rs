@@ -6,9 +6,10 @@ use smithay::{
             Kind,
             memory::MemoryRenderBufferRenderElement,
             render_elements,
+            texture::TextureRenderElement,
             utils::RescaleRenderElement,
         },
-        gles::{GlesRenderer, Uniform, UniformName, UniformType, element::PixelShaderElement},
+        gles::{GlesError, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType, element::PixelShaderElement},
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
@@ -39,6 +40,7 @@ render_elements! {
     Layer=WaylandSurfaceRenderElement<GlesRenderer>,
     Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
     CursorSurface=smithay::backend::renderer::element::Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,
+    Blur=TextureRenderElement<GlesTexture>,
 }
 
 // Shadow and Decoration share inner types with Background and Tile respectively.
@@ -85,6 +87,154 @@ pub fn compile_shadow_shader(renderer: &mut GlesRenderer) -> Option<smithay::bac
             None
         }
     }
+}
+
+// ── Blur infrastructure ─────────────────────────────────────────────
+
+static BLUR_DOWN_SRC: &str = include_str!("shaders/blur_down.glsl");
+static BLUR_UP_SRC: &str = include_str!("shaders/blur_up.glsl");
+
+/// Per-window cached textures for Kawase blur ping-pong passes.
+pub struct BlurCache {
+    pub texture: GlesTexture,
+    pub scratch: GlesTexture,
+    pub mask: GlesTexture,
+    pub size: Size<i32, Physical>,
+}
+
+impl BlurCache {
+    pub fn new(renderer: &mut GlesRenderer, size: Size<i32, Physical>) -> Option<Self> {
+        use smithay::backend::renderer::Offscreen;
+        let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+        let t1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let t2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let t3 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        Some(Self { texture: t1, scratch: t2, mask: t3, size })
+    }
+
+    pub fn resize(&mut self, renderer: &mut GlesRenderer, size: Size<i32, Physical>) {
+        use smithay::backend::renderer::Offscreen;
+        let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+        if let Ok(t1) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+            && let Ok(t2) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+            && let Ok(t3) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+        {
+            self.texture = t1;
+            self.scratch = t2;
+            self.mask = t3;
+            self.size = size;
+        }
+    }
+}
+
+static BLUR_MASK_SRC: &str = include_str!("shaders/blur_mask.glsl");
+
+pub fn compile_blur_shaders(renderer: &mut GlesRenderer) -> (Option<GlesTexProgram>, Option<GlesTexProgram>, Option<GlesTexProgram>) {
+    let uniforms = &[
+        UniformName::new("u_halfpixel", UniformType::_2f),
+        UniformName::new("u_offset", UniformType::_1f),
+    ];
+    match (
+        renderer.compile_custom_texture_shader(BLUR_DOWN_SRC, uniforms),
+        renderer.compile_custom_texture_shader(BLUR_UP_SRC, uniforms),
+        renderer.compile_custom_texture_shader(BLUR_MASK_SRC, &[]),
+    ) {
+        (Ok(d), Ok(u), Ok(m)) => (Some(d), Some(u), Some(m)),
+        (Err(e), _, _) | (_, Err(e), _) | (_, _, Err(e)) => {
+            tracing::error!("Failed to compile blur shaders: {e:?}");
+            (None, None, None)
+        }
+    }
+}
+
+/// Run dual Kawase blur passes (downscale then upscale) between two textures.
+/// After completion, `tex_a` contains the blurred result.
+fn render_blur(
+    renderer: &mut GlesRenderer,
+    down_shader: &GlesTexProgram,
+    up_shader: &GlesTexProgram,
+    tex_a: &mut GlesTexture,
+    tex_b: &mut GlesTexture,
+    offset: f32,
+    passes: usize,
+) -> Result<(), GlesError> {
+    use smithay::backend::renderer::Texture;
+
+    let tex_size = tex_a.size();
+
+    for i in 0..passes {
+        blur_pass(renderer, down_shader, tex_a, tex_b, tex_size, offset, i, passes, true)?;
+        std::mem::swap(tex_a, tex_b);
+    }
+
+    for i in 0..passes {
+        blur_pass(renderer, up_shader, tex_a, tex_b, tex_size, offset, i, passes, false)?;
+        std::mem::swap(tex_a, tex_b);
+    }
+
+    // 2*passes swaps (even) → tex_a has the result
+    Ok(())
+}
+
+/// Single blur pass: render src (tex_a) into target (tex_b) with the given shader.
+#[allow(clippy::too_many_arguments)]
+fn blur_pass(
+    renderer: &mut GlesRenderer,
+    shader: &GlesTexProgram,
+    tex_a: &GlesTexture,
+    tex_b: &mut GlesTexture,
+    tex_size: Size<i32, smithay::utils::Buffer>,
+    offset: f32,
+    i: usize,
+    passes: usize,
+    downscale: bool,
+) -> Result<(), GlesError> {
+    use smithay::backend::renderer::{Bind, Color32F, Frame, Renderer};
+
+    let (src_shift, dst_shift) = if downscale {
+        (i, i + 1)
+    } else {
+        (passes - i, passes - i - 1)
+    };
+
+    let src_w = (tex_size.w >> src_shift).max(1);
+    let src_h = (tex_size.h >> src_shift).max(1);
+    let dst_w = (tex_size.w >> dst_shift).max(1);
+    let dst_h = (tex_size.h >> dst_shift).max(1);
+
+    let half_pixel = [1.0 / src_w as f32, 1.0 / src_h as f32];
+    let pass_offset = offset / (1 << src_shift) as f32;
+
+    let full_phys: Size<i32, Physical> = (tex_size.w, tex_size.h).into();
+    let dst_phys: Size<i32, Physical> = (dst_w, dst_h).into();
+    let src_buf: Rectangle<f64, smithay::utils::Buffer> =
+        Rectangle::from_size((src_w as f64, src_h as f64).into());
+
+    let src = tex_a.clone();
+    {
+        let mut target = renderer.bind(tex_b)?;
+        let mut frame = renderer.render(&mut target, full_phys, Transform::Normal)?;
+        frame.clear(
+            Color32F::TRANSPARENT,
+            &[Rectangle::from_size(full_phys)],
+        )?;
+        frame.render_texture_from_to(
+            &src,
+            src_buf,
+            Rectangle::from_size(dst_phys),
+            &[Rectangle::from_size(dst_phys)],
+            &[],
+            Transform::Normal,
+            1.0,
+            Some(shader),
+            &[
+                Uniform::new("u_halfpixel", half_pixel),
+                Uniform::new("u_offset", pass_offset),
+            ],
+        )?;
+        let _ = frame.finish()?;
+    }
+    Ok(())
 }
 
 /// Build tiled background elements for the current frame.
@@ -251,18 +401,25 @@ pub fn build_canvas_layer_elements(
 
 /// Build render elements for all layer surfaces on the given layer.
 /// Layer surfaces are screen-fixed (not zoomed), so they use raw WaylandSurfaceRenderElement.
-pub fn build_layer_elements(
+///
+/// When `blur_config` is `Some`, layer surfaces whose `namespace()` matches a window rule
+/// with `blur = true` will produce `BlurRequestData` entries alongside their render elements.
+fn build_layer_elements(
     output: &Output,
     renderer: &mut GlesRenderer,
     layer: WlrLayer,
-) -> Vec<OutputRenderElements> {
+    blur_config: Option<(&driftwm::config::Config, bool, BlurLayer)>,
+) -> (Vec<OutputRenderElements>, Vec<BlurRequestData>) {
     let map = layer_map_for_output(output);
     let output_scale = output.current_scale().fractional_scale();
     let mut elements = Vec::new();
+    let mut blur_requests = Vec::new();
 
     for surface in map.layers_on(layer).rev() {
         let geo = map.layer_geometry(surface).unwrap_or_default();
         let loc = geo.loc.to_physical_precise_round(output_scale);
+
+        let elem_start = elements.len();
         elements.extend(
             surface
                 .render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
@@ -274,9 +431,24 @@ pub fn build_layer_elements(
                 .into_iter()
                 .map(OutputRenderElements::Layer),
         );
+
+        if let Some((config, blur_enabled, layer_tag)) = blur_config
+            && blur_enabled
+            && config.match_window_rule(surface.namespace(), "").is_some_and(|r| r.blur)
+        {
+            let elem_count = elements.len() - elem_start;
+            let screen_rect = geo.to_physical_precise_round(output_scale);
+            blur_requests.push(BlurRequestData {
+                surface_id: surface.wl_surface().id(),
+                screen_rect,
+                elem_start,
+                elem_count,
+                layer: layer_tag,
+            });
+        }
     }
 
-    elements
+    (elements, blur_requests)
 }
 
 /// Resolve which xcursor name to load for the current cursor status.
@@ -490,6 +662,9 @@ pub fn compose_frame(
     let mut zoomed_normal: Vec<OutputRenderElements> = Vec::new();
     let mut zoomed_widgets: Vec<OutputRenderElements> = Vec::new();
 
+    let blur_enabled = state.blur_down_shader.is_some() && state.blur_up_shader.is_some() && state.blur_mask_shader.is_some();
+    let mut blur_requests: Vec<BlurRequestData> = Vec::new();
+
     // Focused surface for decoration focus state
     let focused_surface = state
         .seat
@@ -528,10 +703,12 @@ pub fn compose_frame(
             1.0,
         );
 
-        let is_widget = driftwm::config::applied_rule(&wl_surface)
-            .is_some_and(|r| r.widget);
+        let applied = driftwm::config::applied_rule(&wl_surface);
+        let is_widget = applied.as_ref().is_some_and(|r| r.widget);
+        let wants_blur = blur_enabled && applied.as_ref().is_some_and(|r| r.blur);
 
         let target = if is_widget { &mut zoomed_widgets } else { &mut zoomed_normal };
+        let elem_start = target.len();
 
         if has_ssd {
             let bar_height = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
@@ -655,6 +832,44 @@ pub fn compose_frame(
                 ))
             }));
         }
+
+        if wants_blur {
+            let elem_count = target.len() - elem_start;
+            let screen_loc = Point::from((
+                (render_loc.x * zoom) as i32,
+                (render_loc.y * zoom) as i32,
+            ));
+            let screen_size: Size<i32, Logical> = if has_ssd {
+                let bar = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
+                (
+                    (geom_size.w as f64 * zoom).ceil() as i32,
+                    ((geom_size.h + bar) as f64 * zoom).ceil() as i32,
+                ).into()
+            } else {
+                (
+                    (geom_size.w as f64 * zoom).ceil() as i32,
+                    (geom_size.h as f64 * zoom).ceil() as i32,
+                ).into()
+            };
+            let screen_rect = Rectangle::new(
+                if has_ssd {
+                    Point::from((
+                        screen_loc.x,
+                        screen_loc.y - (driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 * zoom) as i32,
+                    ))
+                } else {
+                    screen_loc
+                },
+                screen_size,
+            ).to_physical_precise_round(output_scale);
+            blur_requests.push(BlurRequestData {
+                surface_id: wl_surface.id(),
+                screen_rect,
+                elem_start,
+                elem_count,
+                layer: if is_widget { BlurLayer::Widget } else { BlurLayer::Normal },
+            });
+        }
     }
 
     let canvas_layer_elements = build_canvas_layer_elements(state, renderer, output, camera, zoom);
@@ -681,18 +896,38 @@ pub fn compose_frame(
         };
 
     let is_fullscreen = state.is_output_fullscreen(output);
-    let overlay_elements = build_layer_elements(output, renderer, WlrLayer::Overlay);
-    let top_elements = if !is_fullscreen {
-        build_layer_elements(output, renderer, WlrLayer::Top)
+    let (overlay_elements, overlay_blur) = build_layer_elements(
+        output, renderer, WlrLayer::Overlay,
+        Some((&state.config, blur_enabled, BlurLayer::Overlay)),
+    );
+    let (top_elements, top_blur) = if !is_fullscreen {
+        build_layer_elements(
+            output, renderer, WlrLayer::Top,
+            Some((&state.config, blur_enabled, BlurLayer::Top)),
+        )
     } else {
-        vec![]
+        (vec![], vec![])
     };
-    let bottom_elements = if !is_fullscreen {
-        build_layer_elements(output, renderer, WlrLayer::Bottom)
+    let (bottom_elements, _) = if !is_fullscreen {
+        build_layer_elements(output, renderer, WlrLayer::Bottom, None)
     } else {
-        vec![]
+        (vec![], vec![])
     };
-    let background_layer_elements = build_layer_elements(output, renderer, WlrLayer::Background);
+    let (background_layer_elements, _) = build_layer_elements(output, renderer, WlrLayer::Background, None);
+
+    // Compute prefix offsets so we know where each group lands in all_elements
+    let overlay_prefix = cursor_elements.len() + or_elements.len();
+    let top_prefix = overlay_prefix + overlay_elements.len();
+    let normal_prefix = top_prefix + top_elements.len();
+    let widget_prefix = normal_prefix
+        + zoomed_normal.len()
+        + canvas_layer_elements.len();
+
+    // Merge blur requests: layer surfaces first (front-to-back), then windows
+    let mut all_blur_requests: Vec<BlurRequestData> = Vec::new();
+    all_blur_requests.extend(overlay_blur);
+    all_blur_requests.extend(top_blur);
+    all_blur_requests.extend(blur_requests);
 
     let mut all_elements: Vec<OutputRenderElements> = Vec::with_capacity(
         cursor_elements.len()
@@ -718,7 +953,270 @@ pub fn compose_frame(
     all_elements.extend(outline_elements);
     all_elements.extend(bg_elements);
     all_elements.extend(background_layer_elements);
+
+    // Process blur requests: render behind-content, blur, insert
+    if !all_blur_requests.is_empty() {
+        process_blur_requests(
+            state, renderer, output, output_scale,
+            &mut all_elements, &all_blur_requests,
+            overlay_prefix, top_prefix, normal_prefix, widget_prefix,
+        );
+    }
+
+    // Prune stale blur cache entries
+    if blur_enabled {
+        let active_ids: std::collections::HashSet<_> =
+            all_blur_requests.iter().map(|r| r.surface_id.clone()).collect();
+        state.blur_cache.retain(|id, _| active_ids.contains(id));
+    }
+
     all_elements
+}
+
+/// Process blur requests: for each blurred window, render behind-content to FBO,
+/// crop the window region, run Kawase blur passes, and insert the result.
+#[allow(clippy::too_many_arguments)]
+fn process_blur_requests(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    output: &Output,
+    output_scale: f64,
+    all_elements: &mut Vec<OutputRenderElements>,
+    blur_requests: &[BlurRequestData],
+    overlay_prefix: usize,
+    top_prefix: usize,
+    normal_prefix: usize,
+    widget_prefix: usize,
+) {
+    use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
+    use smithay::backend::renderer::Color32F;
+    use smithay::backend::renderer::damage::OutputDamageTracker;
+    use smithay::backend::renderer::element::Id;
+
+    let output_size = output
+        .current_mode()
+        .map(|m| {
+            let logical = output.current_transform().transform_size(
+                m.size.to_logical(output.current_scale().integer_scale()),
+            );
+            logical.to_physical_precise_round(output_scale)
+        })
+        .unwrap_or(Size::from((1, 1)));
+
+    let out_buf_size = output_size.to_logical(1).to_buffer(1, Transform::Normal);
+
+    // Shared full-output FBO for behind-content rendering
+    let Ok(mut bg_tex) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size)
+    else {
+        return;
+    };
+
+    let down_shader = state.blur_down_shader.clone().unwrap();
+    let up_shader = state.blur_up_shader.clone().unwrap();
+    let blur_passes = state.config.effects.blur_radius as usize;
+    let blur_strength = state.config.effects.blur_strength as f32;
+    let context_id = renderer.context_id();
+
+    let mut index_shift = 0usize;
+
+    for req in blur_requests.iter() {
+        let win_size = req.screen_rect.size;
+        if win_size.w <= 0 || win_size.h <= 0 {
+            continue;
+        }
+
+        let prefix = match req.layer {
+            BlurLayer::Overlay => overlay_prefix,
+            BlurLayer::Top => top_prefix,
+            BlurLayer::Normal => normal_prefix,
+            BlurLayer::Widget => widget_prefix,
+        };
+        let behind_start = prefix + req.elem_start + req.elem_count + index_shift;
+        let behind_start = behind_start.min(all_elements.len());
+
+        // 1. Get or create cached blur textures
+        if !state.blur_cache.contains_key(&req.surface_id) {
+            if let Some(c) = BlurCache::new(renderer, win_size) {
+                state.blur_cache.insert(req.surface_id.clone(), c);
+            } else {
+                continue;
+            }
+        }
+        let cache = state.blur_cache.get_mut(&req.surface_id).unwrap();
+        if cache.size != win_size {
+            cache.resize(renderer, win_size);
+        }
+
+        // 2. Render behind-elements to the shared full-output FBO
+        {
+            let Ok(mut target) = renderer.bind(&mut bg_tex) else { continue };
+            let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
+            let _ = dt.render_output(
+                renderer,
+                &mut target,
+                0,
+                &all_elements[behind_start..],
+                [0.0f32, 0.0, 0.0, 1.0],
+            );
+        }
+
+        // 3. Crop window region from bg_tex into cache.texture
+        {
+            let bg_src = bg_tex.clone();
+            let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
+            let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
+                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (win_size.w as f64, win_size.h as f64).into(),
+            );
+            let _ = frame.render_texture_from_to(
+                &bg_src,
+                src_rect,
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
+                &[],
+                Transform::Normal,
+                1.0,
+                None,
+                &[],
+            );
+            let _ = frame.finish();
+        }
+
+        // 4. Run Kawase blur passes
+        let offset = blur_strength * output_scale as f32;
+        if render_blur(
+            renderer,
+            &down_shader,
+            &up_shader,
+            &mut cache.texture,
+            &mut cache.scratch,
+            offset,
+            blur_passes,
+        ).is_err() {
+            continue;
+        }
+
+        // 4a. Render surface elements to FBO to capture alpha channel
+        let surf_start = prefix + req.elem_start + index_shift;
+        let surf_end = (surf_start + req.elem_count).min(all_elements.len());
+        {
+            let Ok(mut target) = renderer.bind(&mut bg_tex) else { continue };
+            // Explicitly clear to transparent first — render_output may skip clearing
+            // when elements fully cover the output.
+            {
+                let Ok(mut frame) = renderer.render(&mut target, output_size, Transform::Normal) else { continue };
+                let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(output_size)]);
+                let _ = frame.finish();
+            }
+            let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
+            let _ = dt.render_output(
+                renderer,
+                &mut target,
+                0,
+                &all_elements[surf_start..surf_end],
+                [0.0f32, 0.0, 0.0, 0.0],
+            );
+        }
+
+        // 4b. Crop surface region into cache.mask
+        {
+            let bg_src = bg_tex.clone();
+            let Ok(mut target) = renderer.bind(&mut cache.mask) else { continue };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
+            let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
+                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (win_size.w as f64, win_size.h as f64).into(),
+            );
+            let _ = frame.render_texture_from_to(
+                &bg_src,
+                src_rect,
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
+                &[],
+                Transform::Normal,
+                1.0,
+                None,
+                &[],
+            );
+            let _ = frame.finish();
+        }
+
+        // 4c. Masking pass — threshold surface alpha, then multiply blur by it.
+        // The threshold shader outputs alpha=1 where surface has any content (step),
+        // alpha=0 where fully transparent. BlendFuncSeparate(ZERO, SRC_ALPHA, ...)
+        // then multiplies the blur in-place by this binary mask.
+        let mask_shader = match state.blur_mask_shader.clone() {
+            Some(s) => s,
+            None => continue,
+        };
+        {
+            use smithay::backend::renderer::gles::ffi;
+            let mask_src = cache.mask.clone();
+            let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let _ = frame.with_context(|gl| unsafe {
+                gl.Enable(ffi::BLEND);
+                gl.BlendFuncSeparate(
+                    ffi::ZERO, ffi::SRC_ALPHA,
+                    ffi::ZERO, ffi::SRC_ALPHA,
+                );
+            });
+            let _ = frame.render_texture_from_to(
+                &mask_src,
+                Rectangle::from_size((win_size.w as f64, win_size.h as f64).into()),
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
+                &[],
+                Transform::Normal,
+                1.0,
+                Some(&mask_shader),
+                &[],
+            );
+            // Restore standard blend mode
+            let _ = frame.with_context(|gl| unsafe {
+                gl.BlendFunc(ffi::ONE, ffi::ONE_MINUS_SRC_ALPHA);
+            });
+            let _ = frame.finish();
+        }
+
+        // 5. Insert blur element BEHIND surface elements
+        let insert_idx = prefix + req.elem_start + req.elem_count + index_shift;
+        let insert_idx = insert_idx.min(all_elements.len());
+        let blur_elem = TextureRenderElement::from_static_texture(
+            Id::new(),
+            context_id.clone(),
+            req.screen_rect.loc.to_f64(),
+            cache.texture.clone(),
+            1,
+            Transform::Normal,
+            None,
+            None,
+            Some(Size::from((
+                (win_size.w as f64 / output_scale) as i32,
+                (win_size.h as f64 / output_scale) as i32,
+            ))),
+            None,
+            Kind::Unspecified,
+        );
+        all_elements.insert(insert_idx, OutputRenderElements::Blur(blur_elem));
+        index_shift += 1;
+    }
+}
+
+/// Which element group a blur request belongs to — determines its prefix offset.
+#[derive(Clone, Copy)]
+enum BlurLayer { Overlay, Top, Normal, Widget }
+
+/// Data extracted from a blur request.
+struct BlurRequestData {
+    surface_id: smithay::reexports::wayland_server::backend::ObjectId,
+    screen_rect: Rectangle<i32, Physical>,
+    elem_start: usize,
+    elem_count: usize,
+    layer: BlurLayer,
 }
 
 /// Draw thin outlines showing where other monitors' viewports sit on the canvas.

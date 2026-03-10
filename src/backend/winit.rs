@@ -66,6 +66,10 @@ pub fn init_winit(
         let mut backend = data.backend.take().unwrap();
         crate::render::init_background(data, backend.renderer(), size.to_logical(1), "winit");
         data.shadow_shader = crate::render::compile_shadow_shader(backend.renderer());
+        let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(backend.renderer());
+        data.blur_down_shader = blur_down;
+        data.blur_up_shader = blur_up;
+        data.blur_mask_shader = blur_mask;
         data.backend = Some(backend);
     }
 

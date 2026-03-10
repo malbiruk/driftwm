@@ -50,7 +50,7 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::wayland::xdg_foreign::XdgForeignState;
 use smithay::wayland::content_type::ContentTypeState;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::gles::{GlesPixelProgram, element::PixelShaderElement};
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, element::PixelShaderElement};
 use smithay::utils::Transform;
 
 use smithay::backend::session::libseat::LibSeatSession;
@@ -268,6 +268,11 @@ pub struct DriftWm {
     // -- global: shaders (compiled once, shared across outputs) --
     pub shadow_shader: Option<GlesPixelProgram>,
     pub background_shader: Option<GlesPixelProgram>,
+    // -- global: blur shaders + per-window texture cache --
+    pub blur_down_shader: Option<GlesTexProgram>,
+    pub blur_up_shader: Option<GlesTexProgram>,
+    pub blur_mask_shader: Option<GlesTexProgram>,
+    pub blur_cache: HashMap<smithay::reexports::wayland_server::backend::ObjectId, crate::render::BlurCache>,
     // -- per-output: cached render elements (!Send, stays on DriftWm) --
     pub cached_bg_elements: HashMap<String, PixelShaderElement>,
     // -- global: background tile (loaded once, shared) --
@@ -350,6 +355,8 @@ pub struct DriftWm {
     /// Active XKB layout name (e.g. "English (US)"), updated on key events.
     pub active_layout: String,
     pub state_file_layout: String,
+    pub state_file_window_count: usize,
+    pub state_file_layer_count: usize,
 
     // -- global: autostart --
     pub autostart: Vec<String>,
@@ -497,6 +504,10 @@ impl DriftWm {
             pending_ssd: HashSet::new(),
             shadow_shader: None,
             background_shader: None,
+            blur_down_shader: None,
+            blur_up_shader: None,
+            blur_mask_shader: None,
+            blur_cache: HashMap::new(),
             cached_bg_elements: HashMap::new(),
             background_tile: None,
             dmabuf_state: DmabufState::new(),
@@ -543,6 +554,8 @@ impl DriftWm {
             state_file_last_write: Instant::now(),
             active_layout: String::new(),
             state_file_layout: String::new(),
+            state_file_window_count: 0,
+            state_file_layer_count: 0,
             autostart,
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
@@ -1038,14 +1051,23 @@ impl DriftWm {
                 break;
             }
         }
-        if !layout_dirty && !any_output_dirty {
+        let window_count = self.space.elements().count();
+        let layer_count: usize = self.space.outputs()
+            .map(|o| smithay::desktop::layer_map_for_output(o).layers().count())
+            .sum();
+        let windows_dirty = window_count != self.state_file_window_count
+            || layer_count != self.state_file_layer_count;
+
+        if !layout_dirty && !any_output_dirty && !windows_dirty {
             return;
         }
         // Throttle writes to ~10/sec max (100ms between writes)
         if self.state_file_last_write.elapsed() < std::time::Duration::from_millis(100) {
             return;
         }
-        // Update cached state for all outputs
+        // Update cached state
+        self.state_file_window_count = window_count;
+        self.state_file_layer_count = layer_count;
         for output in self.space.outputs() {
             let os = output_state(output);
             self.state_file_cameras.insert(output.name(), (os.camera, os.zoom));
@@ -1092,10 +1114,10 @@ impl DriftWm {
                     .and_then(|d| d.lock().ok())
                     .and_then(|guard| guard.app_id.clone())
             }).unwrap_or_default();
-            if app_id.is_empty() {
-                if let Some(x11) = window.x11_surface() {
-                    app_id = x11.class();
-                }
+            if app_id.is_empty()
+                && let Some(x11) = window.x11_surface()
+            {
+                app_id = x11.class();
             }
             if !app_id.is_empty() {
                 let is_focused = focused_surface.as_ref().is_some_and(|f| f.0 == *surface);

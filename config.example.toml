@@ -6,9 +6,6 @@
 # Window manager modifier key: "super" (default) or "alt"
 # mod_key = "super"
 
-# Modifier held during window cycling (Alt-Tab style).
-# cycle_modifier = "alt"
-
 # Commands to run at startup (after WAYLAND_DISPLAY is set).
 # Each entry is passed to sh -c, so full shell syntax works (pipes, &&, env vars).
 # autostart = []
@@ -72,6 +69,10 @@
 [decorations]
 # bg_color = "#303030"           # title bar background (default: dark gray)
 # fg_color = "#FFFFFF"           # close button × color (default: white)
+
+[effects]
+# blur_radius = 3               # number of Kawase down+up passes (default: 3)
+# blur_strength = 1.1            # per-pass texel spread (default: 1.1)
 
 [output]
 # scale = 1.0                 # display scale factor (1.0, 1.5, 2.0)
@@ -251,6 +252,7 @@
 #   no_focus    — true: completely inert to input — clicks/scrolls pass through (default: false)
 #   decoration  — "client" (default), "server", or "none" (borderless)
 #   sharp_scale — false: keep rendering at native scale when zoomed out (default: true)
+#   blur        — true: blur background behind this window (default: false)
 #
 # [[window_rules]]
 # app_id = "my-widget"
@@ -263,6 +265,11 @@
 # [[window_rules]]
 # app_id = "calendar-term"
 # sharp_scale = false
+#
+# # Blurred background behind notification widget
+# [[window_rules]]
+# app_id = "drift-notif"
+# blur = true
 #
 # # Hide iced/libcosmic utility windows (same app_id as main window)
 # [[window_rules]]

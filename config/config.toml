@@ -140,6 +140,12 @@ no_focus = true
 app_id = "com.system76.CosmicSettings"
 size=[500, 725]
 
+# Server side decoration
 [[window_rules]]
 app_id = "org.telegram.desktop"
 decoration = "server"
+
+# Blur notifications
+[[window_rules]]
+app_id = "swaync-control-center"
+blur = true

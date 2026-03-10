@@ -17,7 +17,7 @@ use smithay::input::keyboard::{Keysym, ModifiersState};
 use smithay::utils::{Logical, Point, Transform};
 
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
-use toml::{ConfigFile, DecorationFileConfig, OutputRuleFile, WindowRuleFile, expand_tilde};
+use toml::{ConfigFile, DecorationFileConfig, EffectsFileConfig, OutputRuleFile, WindowRuleFile, expand_tilde};
 
 /// Env vars the compositor sets as toolkit fallbacks.
 /// `[env]` config entries take precedence over these.
@@ -73,6 +73,7 @@ pub struct Config {
     pub decorations: DecorationConfig,
     pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
+    pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
     pub xwayland_enabled: bool,
     pub env: HashMap<String, String>,
@@ -361,6 +362,8 @@ impl Config {
             configs
         };
 
+        let effects = parse_effects_config(raw.effects);
+
         Self {
             mod_key,
             scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
@@ -383,6 +386,7 @@ impl Config {
             snap_break_force: raw.snap.break_force.unwrap_or(32.0),
             background,
             decorations,
+            effects,
             trackpad,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),
             keyboard_layout,
@@ -527,7 +531,15 @@ fn parse_window_rule(r: WindowRuleFile) -> Option<WindowRule> {
         no_focus: r.no_focus,
         decoration,
         sharp_scale: r.sharp_scale.unwrap_or(true),
+        blur: r.blur.unwrap_or(false),
     })
+}
+
+fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
+    EffectsConfig {
+        blur_radius: raw.blur_radius.unwrap_or(3),
+        blur_strength: raw.blur_strength.unwrap_or(1.1),
+    }
 }
 
 fn parse_transform(s: &str) -> Result<Transform, String> {
