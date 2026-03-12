@@ -233,7 +233,17 @@ def get_wifi() -> tuple[str, int] | None:
     """Returns (ssid, signal_percent) or None."""
     try:
         result = subprocess.run(
-            ["nmcli", "-t", "-f", "ACTIVE,SSID,SIGNAL", "dev", "wifi"],
+            [
+                "nmcli",
+                "-t",
+                "-f",
+                "ACTIVE,SSID,SIGNAL",
+                "dev",
+                "wifi",
+                "list",
+                "--rescan",
+                "no",
+            ],
             capture_output=True,
             text=True,
             timeout=3,
