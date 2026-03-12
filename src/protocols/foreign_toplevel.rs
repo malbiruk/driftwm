@@ -17,6 +17,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
+use crate::window_ext::WindowExt;
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use wayland_protocols_wlr::foreign_toplevel::v1::server::{
@@ -115,13 +116,13 @@ pub fn refresh<D>(
             focused_entry = Some(window.clone());
             continue;
         }
-        refresh_toplevel::<D>(ft_state, &wl_surface, outputs, false);
+        refresh_toplevel::<D>(ft_state, window, &wl_surface, outputs, false);
     }
 
     // 3. Refresh focused window last (with Activated state)
     if let Some(window) = focused_entry {
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
-        refresh_toplevel::<D>(ft_state, &wl_surface, outputs, true);
+        refresh_toplevel::<D>(ft_state, &window, &wl_surface, outputs, true);
     }
 }
 
@@ -172,22 +173,22 @@ pub fn send_output_leave_all(
 
 fn refresh_toplevel<D>(
     protocol_state: &mut ForeignToplevelManagerState,
+    window: &Window,
     wl_surface: &WlSurface,
     outputs: &[Output],
     has_focus: bool,
 ) where
     D: Dispatch<ZwlrForeignToplevelHandleV1, ()> + 'static,
 {
-    // Read title/app_id from xdg surface role data
-    let (title, app_id, xdg_states) = with_states(wl_surface, |states| {
-        let data = states.data_map.get::<XdgToplevelSurfaceData>();
-        match data {
-            Some(d) => {
-                let guard = d.lock().unwrap();
-                (guard.title.clone(), guard.app_id.clone(), guard.current.states.clone())
-            }
-            None => (None, None, Default::default()),
-        }
+    // Read title/app_id via WindowExt (works for both Wayland and X11)
+    let title = window.window_title();
+    let app_id = window.app_id_or_class();
+    let xdg_states = with_states(wl_surface, |states| {
+        states
+            .data_map
+            .get::<XdgToplevelSurfaceData>()
+            .map(|d| d.lock().unwrap().current.states.clone())
+            .unwrap_or_default()
     });
 
     let states = to_state_vec(&xdg_states, has_focus);
