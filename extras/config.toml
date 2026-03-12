@@ -150,3 +150,8 @@ blur = true
 [[window_rules]]
 app_id = "swaync-notification-window"
 blur = true
+
+[[window_rules]]
+app_id = "Alacritty"
+opacity = 0.8
+blur = true

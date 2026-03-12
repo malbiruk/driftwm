@@ -1320,51 +1320,47 @@ fn process_blur_requests(
         needs_recompute.push(cache.dirty);
     }
 
-    let any_recompute = needs_recompute.iter().any(|&r| r);
-
-    // ── Shared bg render ONCE — only if any window needs recompute ──
-    if any_recompute {
-        // Shallowest behind_start = smallest index = longest slice (most elements behind).
-        // Ensures the bg_tex captures everything any blurred window needs.
-        let shallowest = blur_requests.iter().enumerate()
-            .filter(|(i, _)| needs_recompute[*i])
-            .map(|(_, req)| {
-                let prefix = match req.layer {
-                    BlurLayer::Overlay => overlay_prefix,
-                    BlurLayer::Top => top_prefix,
-                    BlurLayer::Normal => normal_prefix,
-                    BlurLayer::Widget => widget_prefix,
-                };
-                let behind = prefix + req.elem_start + req.elem_count;
-                behind.min(all_elements.len())
-            })
-            .min()
-            .unwrap_or(all_elements.len());
-
-        let Ok(mut target) = renderer.bind(&mut bg_tex) else {
-            state.blur_bg_fbo = Some((bg_tex, output_size));
-            return;
+    // Precompute per-request behind depth (index into all_elements where "below this window" begins)
+    let behind_starts: Vec<usize> = blur_requests.iter().map(|req| {
+        let prefix = match req.layer {
+            BlurLayer::Overlay => overlay_prefix,
+            BlurLayer::Top => top_prefix,
+            BlurLayer::Normal => normal_prefix,
+            BlurLayer::Widget => widget_prefix,
         };
-        let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
-        let _ = dt.render_output(
-            renderer,
-            &mut target,
-            0,
-            &all_elements[shallowest..],
-            [0.0f32, 0.0, 0.0, 1.0],
-        );
-    }
+        (prefix + req.elem_start + req.elem_count).min(all_elements.len())
+    }).collect();
 
     let mask_shader = state.blur_mask_shader.clone();
 
-    // ── Loop 1: crop + blur all dirty windows (bg_tex still intact) ──
+    // ── Loop 1: re-render bg_tex per depth, crop + blur dirty windows ──
+    // Requests are front-to-back so behind_start increases (each successive
+    // bg render is a shorter suffix — cheaper). Re-render only when depth changes.
+    let mut last_bg_depth: Option<usize> = None;
     for (i, req) in blur_requests.iter().enumerate() {
         if !needs_recompute[i] { continue; }
         let win_size = req.screen_rect.size;
         if win_size.w <= 0 || win_size.h <= 0 { continue; }
         let Some(cache) = state.blur_cache.get_mut(&req.surface_id) else { continue };
 
-        // Crop from shared bg_tex into cache.texture
+        let behind = behind_starts[i];
+        if last_bg_depth != Some(behind) {
+            let Ok(mut target) = renderer.bind(&mut bg_tex) else {
+                state.blur_bg_fbo = Some((bg_tex, output_size));
+                return;
+            };
+            let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
+            let _ = dt.render_output(
+                renderer,
+                &mut target,
+                0,
+                &all_elements[behind..],
+                [0.0f32, 0.0, 0.0, 1.0],
+            );
+            last_bg_depth = Some(behind);
+        }
+
+        // Crop from bg_tex into cache.texture
         {
             let bg_src = bg_tex.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
