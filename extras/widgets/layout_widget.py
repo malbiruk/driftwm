@@ -4,11 +4,10 @@
 import os
 import time
 
+from common import ICON, read_state_file
 from rich.console import Console
 from rich.live import Live
 from rich.text import Text
-
-from common import ICON, read_state_file
 
 LAYOUT_SHORT = {
     "English": "EN",
@@ -50,7 +49,7 @@ def render() -> Text:
 
 
 console.clear()
-with Live(render(), console=console, refresh_per_second=2) as live:
+with Live(render(), console=console, refresh_per_second=1) as live:
     while True:
         live.update(render())
-        time.sleep(0.5)
+        time.sleep(1)

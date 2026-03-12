@@ -40,7 +40,7 @@ def render() -> Text:
 
 
 console.clear()
-with Live(render(), console=console, refresh_per_second=2) as live:
+with Live(render(), console=console, refresh_per_second=1) as live:
     while True:
         live.update(render())
-        time.sleep(0.5)
+        time.sleep(1)

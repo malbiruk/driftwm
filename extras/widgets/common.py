@@ -165,61 +165,26 @@ def get_ram() -> tuple[float, float]:
     return (total - avail) / 1048576, total / 1048576
 
 
-def _parse_upower(output: str) -> tuple[int, str, str] | None:
-    """Extract battery info from upower -i output."""
-    pct = None
-    status = ""
-    time_rem = ""
-    for line in output.splitlines():
-        if "percentage" in line:
-            pct = int("".join(c for c in line.split()[-1] if c.isdigit()))
-        elif "state:" in line:
-            status = line.split()[-1]
-        elif "time to empty" in line or "time to full" in line:
-            time_rem = line.split(":", 1)[-1].strip()
-    if pct is not None:
-        return pct, status, time_rem
-    return None
-
-
 def get_battery() -> tuple[int, str, str] | None:
-    """Returns (percent, status, time_remaining) or None."""
-    # Try upower first (shows time remaining)
-    try:
-        result = subprocess.run(
-            ["upower", "-e"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-        bat_dev = next(
-            (line for line in result.stdout.splitlines() if "BAT" in line),
-            None,
-        )
-        if bat_dev:
-            upower_out = subprocess.run(
-                ["upower", "-i", bat_dev],
-                capture_output=True,
-                text=True,
-                timeout=2,
-                check=False,
-            ).stdout
-            parsed = _parse_upower(upower_out)
-            if parsed is not None:
-                return parsed
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        pass
-
-    # Fallback to sysfs
+    """Returns (percent, status, time_remaining) or None. Uses sysfs (no subprocess)."""
     for bat in sorted(Path("/sys/class/power_supply").glob("BAT*")):
         try:
             pct = int((bat / "capacity").read_text().strip())
             status = (bat / "status").read_text().strip().lower()
         except (OSError, ValueError):
             continue
-        else:
-            return pct, status, ""
+        # Try to read time remaining from energy_now/power_now
+        time_rem = ""
+        try:
+            energy = int((bat / "energy_now").read_text().strip())
+            power = int((bat / "power_now").read_text().strip())
+            if power > 0:
+                hours = energy / power
+                h, m = int(hours), int((hours % 1) * 60)
+                time_rem = f"{h}h {m}m"
+        except (OSError, ValueError):
+            pass
+        return pct, status, time_rem
     return None
 
 
@@ -459,30 +424,7 @@ def cycle_tuned_profile() -> None:
 
 
 def get_brightness() -> int | None:
-    """Returns screen brightness percent or None if unavailable."""
-    try:
-        result = subprocess.run(
-            ["brightnessctl", "get"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-        current = int(result.stdout.strip())
-        max_result = subprocess.run(
-            ["brightnessctl", "max"],
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=False,
-        )
-        maximum = int(max_result.stdout.strip())
-        if maximum > 0:
-            return current * 100 // maximum
-    except (FileNotFoundError, subprocess.TimeoutExpired, ValueError):
-        pass
-
-    # Fallback to sysfs
+    """Returns screen brightness percent or None. Uses sysfs (no subprocess)."""
     for device in sorted(Path("/sys/class/backlight").glob("*")):
         try:
             current = int((device / "brightness").read_text().strip())

@@ -39,6 +39,25 @@ console = Console(width=WIDTH, highlight=False)
 cpu_history: deque[float] = deque(maxlen=10)
 ram_history: deque[float] = deque(maxlen=10)
 
+# Slow-poll cache for subprocess-dependent data (volume, SSID, bluetooth, tuned profile)
+SLOW_POLL_INTERVAL = 10  # seconds
+_slow_state: dict = {"cache": {}, "counter": 0}
+
+
+def _get_slow_data() -> dict:
+    """Return cached slow-poll data, refreshing every SLOW_POLL_INTERVAL seconds."""
+    _slow_state["counter"] += 1
+    if _slow_state["counter"] >= SLOW_POLL_INTERVAL or not _slow_state["cache"]:
+        _slow_state["counter"] = 0
+        _slow_state["cache"] = {
+            "volume": get_volume(),
+            "wifi": get_wifi(),
+            "bluetooth": get_bluetooth(),
+            "profile": get_tuned_profile(),
+        }
+    return _slow_state["cache"]
+
+
 # Maps terminal row (1-based) → action. Built each render().
 # Actions: list[str] = spawn command, str = special action, tuple = bar handler
 click_map: dict[int, list[str] | str | tuple] = {}
@@ -122,14 +141,14 @@ def _render_cpu_ram(text: Text, line: int) -> int:
 ACTION_BAT_CYCLE = "tuned-cycle"
 
 
-def _render_battery(text: Text, line: int) -> int:
+def _render_battery(text: Text, line: int, slow: dict) -> int:
     bat = get_battery()
     if not bat:
         return line
     pct, status, _time_rem = bat
     icon = battery_icon(pct, status)
     color = bat_color(pct)
-    profile = get_tuned_profile()
+    profile = slow["profile"]
     tag = TUNED_ICON.get(profile, "?")
     text.append(f"   {icon}  ", style=color)
     text.append(f"bat  {pct:3d}%")
@@ -143,8 +162,8 @@ def _render_battery(text: Text, line: int) -> int:
     return line + 1
 
 
-def _render_volume(text: Text, line: int) -> int:
-    vol, muted = get_volume()
+def _render_volume(text: Text, line: int, slow: dict) -> int:
+    vol, muted = slow["volume"]
     vicon = volume_icon(vol, muted=muted)
     if muted:
         text.append(f"   {vicon}  ")
@@ -173,8 +192,8 @@ def _render_brightness(text: Text, line: int) -> int:
     return line + 1
 
 
-def _render_connections(text: Text, line: int) -> int:
-    wifi = get_wifi()
+def _render_connections(text: Text, line: int, slow: dict) -> int:
+    wifi = slow["wifi"]
     if wifi:
         ssid, signal = wifi
         wicon = wifi_icon(signal)
@@ -187,7 +206,7 @@ def _render_connections(text: Text, line: int) -> int:
     click_map[line] = ACTION_WIFI
     line += 1
 
-    bt = get_bluetooth()
+    bt = slow["bluetooth"]
     if bt:
         text.append(f"   {bt}\n", style="blue")
         click_map[line] = ACTION_BT
@@ -205,15 +224,16 @@ def render() -> Text:
     text.append("\n" * top_pad)
     line = 1 + top_pad
 
+    slow = _get_slow_data()
     line = _render_cpu_ram(text, line)
     text.append("\n")
     line += 1
-    line = _render_battery(text, line)
-    line = _render_volume(text, line)
+    line = _render_battery(text, line, slow)
+    line = _render_volume(text, line, slow)
     line = _render_brightness(text, line)
     text.append("\n")
     line += 1
-    _render_connections(text, line)
+    _render_connections(text, line, slow)
 
     return text
 
@@ -222,7 +242,7 @@ atexit.register(disable_mouse)
 enable_mouse()
 console.clear()
 try:
-    with Live(render(), console=console, refresh_per_second=2) as live:
+    with Live(render(), console=console, refresh_per_second=1) as live:
         while True:
             live.update(render())
             click = poll_click(1.0)
@@ -231,11 +251,15 @@ try:
                 action = click_map.get(y)
                 if action == ACTION_BAT_CYCLE:
                     cycle_tuned_profile()
+                    _slow_state["counter"] = (
+                        SLOW_POLL_INTERVAL  # force refresh next render
+                    )
                 elif isinstance(action, tuple):
                     kind, setter, fallback = action
                     pct = _bar_pct_from_x(x)
                     if pct is not None:
                         setter(pct)
+                        _slow_state["counter"] = SLOW_POLL_INTERVAL
                     elif kind == "vol_bar" and x <= 7:
                         subprocess.Popen(
                             ["swayosd-client", "--output-volume", "mute-toggle"],
@@ -256,5 +280,6 @@ try:
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
                         )
+                    _slow_state["counter"] = SLOW_POLL_INTERVAL
 finally:
     disable_mouse()
