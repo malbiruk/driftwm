@@ -439,36 +439,32 @@ impl DriftWm {
         if let Some(action) = self.config.mouse_scroll_lookup_ctx(&mods, source, context).cloned() {
             match action {
                 MouseAction::PanViewport => {
-                    let h = event.amount(Axis::Horizontal);
-                    let v = event.amount(Axis::Vertical);
-                    if h.is_some() || v.is_some() {
+                    let h = event.amount(Axis::Horizontal).unwrap_or(0.0);
+                    let v = event.amount(Axis::Vertical).unwrap_or(0.0);
+                    if h != 0.0 || v != 0.0 {
                         if source == AxisSource::Finger {
                             self.set_last_scroll_pan(Some(std::time::Instant::now()));
                         }
-                        let h = h.unwrap_or(0.0);
-                        let v = v.unwrap_or(0.0);
-                        if h != 0.0 || v != 0.0 {
-                            let s = self.config.scroll_speed;
-                            let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
-                                h * s / self.zoom(),
-                                v * s / self.zoom(),
-                            ));
-                            self.drift_pan(canvas_delta);
-                            let new_pos = pos + canvas_delta;
-                            let serial = SERIAL_COUNTER.next_serial();
-                            let under = self.surface_under(new_pos, None);
-                            pointer.motion(
-                                self,
-                                under,
-                                &MotionEvent {
-                                    location: new_pos,
-                                    serial,
-                                    time: Event::time_msec(&event),
-                                },
-                            );
-                        }
+                        let s = self.config.scroll_speed;
+                        let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
+                            h * s / self.zoom(),
+                            v * s / self.zoom(),
+                        ));
+                        self.drift_pan(canvas_delta);
+                        let new_pos = pos + canvas_delta;
+                        let serial = SERIAL_COUNTER.next_serial();
+                        let under = self.surface_under(new_pos, None);
+                        pointer.motion(
+                            self,
+                            under,
+                            &MotionEvent {
+                                location: new_pos,
+                                serial,
+                                time: Event::time_msec(&event),
+                            },
+                        );
                     } else if source == AxisSource::Finger {
-                        // Both axes are None → finger lifted (AxisStop), launch momentum
+                        // amount(axis) == Some(0.0) or None → finger lifted, launch momentum
                         self.launch_momentum();
                     }
                 }
@@ -579,14 +575,29 @@ pub(super) fn edges_from_position(
 
 /// Build an `AxisFrame` that faithfully forwards a scroll event to a client,
 /// including `axis_stop` when the user lifts fingers from the trackpad.
+///
+/// libinput finger-lift semantics: `amount(axis) == Some(0.0)` means the
+/// gesture ended for this axis (send `axis_stop`). `amount(axis) == None`
+/// means the axis wasn't part of this event at all (send nothing).
 fn build_client_axis_frame<I: InputBackend>(event: &I::PointerAxisEvent) -> AxisFrame {
     let mut frame = AxisFrame::new(Event::time_msec(event)).source(event.source());
+    let is_finger = event.source() == AxisSource::Finger;
+    // Finger-lift: no axis carries non-zero data. Covers both Some(0.0)
+    // (newer libinput) and None-for-all-axes (older libinput).
+    let is_stop = is_finger
+        && !event.amount(Axis::Horizontal).is_some_and(|a| a != 0.0)
+        && !event.amount(Axis::Vertical).is_some_and(|a| a != 0.0);
     for axis in [Axis::Horizontal, Axis::Vertical] {
         if let Some(amount) = event.amount(axis) {
-            frame = frame
-                .value(axis, amount)
-                .relative_direction(axis, event.relative_direction(axis));
-        } else if event.source() == AxisSource::Finger {
+            if amount != 0.0 {
+                frame = frame
+                    .value(axis, amount)
+                    .relative_direction(axis, event.relative_direction(axis));
+            } else if is_finger {
+                frame = frame.stop(axis);
+            }
+        } else if is_stop {
+            // Axis absent from a finger-lift event — still send stop
             frame = frame.stop(axis);
         }
         if let Some(v120) = event.amount_v120(axis) {
