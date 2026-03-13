@@ -76,6 +76,14 @@ pub(crate) struct UdevDevice(Rc<RefCell<DeviceData>>);
 
 /// Tick animations once for all outputs, mark dirty CRTCs, then render.
 pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
+    // Fast path: nothing needs attention — skip all work when idle
+    if data.redraws_needed.is_empty()
+        && !data.has_active_animations()
+        && !data.output_config_dirty
+    {
+        return;
+    }
+
     // 1. Tick animations once for all outputs (before device borrow)
     data.tick_all_animations();
 
