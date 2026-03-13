@@ -349,7 +349,6 @@ pub struct WindowRule {
     /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
     /// and always stacked below normal windows.
     pub widget: bool,
-    pub no_focus: bool,
     pub decoration: DecorationMode,
     pub blur: bool,
     pub opacity: Option<f64>,
@@ -359,7 +358,6 @@ pub struct WindowRule {
 #[derive(Clone, Debug)]
 pub struct AppliedWindowRule {
     pub widget: bool,
-    pub no_focus: bool,
     pub decoration: DecorationMode,
     pub blur: bool,
     pub opacity: Option<f64>,
@@ -369,7 +367,6 @@ impl From<&WindowRule> for AppliedWindowRule {
     fn from(rule: &WindowRule) -> Self {
         Self {
             widget: rule.widget,
-            no_focus: rule.no_focus,
             decoration: rule.decoration.clone(),
             blur: rule.blur,
             opacity: rule.opacity,

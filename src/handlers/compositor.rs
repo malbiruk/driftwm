@@ -308,7 +308,7 @@ impl CompositorHandler for DriftWm {
                             self.enforce_below_windows();
                         }
 
-                        if rule.widget || rule.no_focus {
+                        if rule.widget {
                             self.focus_history.retain(|w| w != &window);
                             // Refocus previous window if this was focused
                             if let Some(prev) = self.focus_history.first().cloned() {
@@ -321,7 +321,7 @@ impl CompositorHandler for DriftWm {
                     }
 
                     if has_size {
-                        if rule.as_ref().is_some_and(|r| r.position.is_some() && !r.widget && !r.no_focus) {
+                        if rule.as_ref().is_some_and(|r| r.position.is_some() && !r.widget) {
                             self.navigate_to_window(&window, true);
                         }
 
@@ -585,9 +585,6 @@ impl DriftWm {
         }
 
         self.space.map_element(window.clone(), new_loc, false);
-        if driftwm::config::applied_rule(surface).is_some_and(|r| r.no_focus) {
-            self.enforce_below_windows();
-        }
 
         // If we're waiting for the final commit, go idle
         if matches!(resize_state, ResizeState::WaitingForLastCommit { .. }) {

@@ -752,19 +752,18 @@ impl DriftWm {
     /// handles window positioning (identical to Alt+click drag).
     /// If the window is pinned, falls through to Swipe3Pan instead.
     fn start_gesture_move(&mut self, window: Window, pos: Point<f64, Logical>) {
-        let rule = window.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s));
-        if rule.as_ref().is_some_and(|r| r.widget) {
+        if window.wl_surface().as_ref()
+            .and_then(|s| driftwm::config::applied_rule(s))
+            .is_some_and(|r| r.widget)
+        {
             self.gesture_state = Some(GestureState::SwipePan);
             return;
         }
-        let no_focus = rule.as_ref().is_some_and(|r| r.no_focus);
         let serial = SERIAL_COUNTER.next_serial();
-        if !no_focus {
-            self.space.raise_element(&window, true);
-            let keyboard = self.seat.get_keyboard().unwrap();
-            let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
-            keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
-        }
+        self.space.raise_element(&window, true);
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
         self.enforce_below_windows();
 
         let initial_window_location = self.space.element_location(&window).unwrap_or_default();
@@ -786,16 +785,11 @@ impl DriftWm {
 
     /// Enter Swipe3Resize state: store initial geometry, set resize state + cursor.
     fn start_gesture_resize(&mut self, window: Window, pos: Point<f64, Logical>) {
-        let no_focus = window.wl_surface().as_ref()
-            .and_then(|s| driftwm::config::applied_rule(s))
-            .is_some_and(|r| r.no_focus);
         let serial = SERIAL_COUNTER.next_serial();
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
-        if !no_focus {
-            self.space.raise_element(&window, true);
-            let keyboard = self.seat.get_keyboard().unwrap();
-            keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
-        }
+        self.space.raise_element(&window, true);
+        let keyboard = self.seat.get_keyboard().unwrap();
+        keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
         self.enforce_below_windows();
 
         let initial_location = self.space.element_location(&window).unwrap();

@@ -484,9 +484,6 @@ impl DriftWm {
         for window in self.space.elements().rev() {
             let Some(wl_surface) = window.wl_surface() else { continue; };
             let rule = driftwm::config::applied_rule(&wl_surface);
-            if rule.as_ref().is_some_and(|r| r.no_focus) {
-                continue;
-            }
             if let Some(want_widget) = widget_filter {
                 let is_widget = rule.as_ref().is_some_and(|r| r.widget);
                 if is_widget != want_widget { continue; }
@@ -655,9 +652,6 @@ impl DriftWm {
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         for cl in &self.canvas_layers {
-            if driftwm::config::applied_rule(cl.surface.wl_surface()).is_some_and(|r| r.no_focus) {
-                continue;
-            }
             let Some(pos) = cl.position else { continue; };
             let surface_local = canvas_pos - pos.to_f64();
             if let Some((wl_surface, sub_loc)) =

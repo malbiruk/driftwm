@@ -606,7 +606,7 @@ impl DriftWm {
             .elements()
             .filter(|w| {
                 !w.wl_surface().and_then(|s| driftwm::config::applied_rule(&s))
-                    .is_some_and(|r| r.widget || r.no_focus)
+                    .is_some_and(|r| r.widget)
             })
             .cloned()
             .collect();

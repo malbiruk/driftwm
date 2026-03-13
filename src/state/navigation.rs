@@ -55,7 +55,7 @@ impl DriftWm {
         driftwm::canvas::dynamic_min_zoom(
             self.space.elements().filter(|w| {
                 !w.wl_surface().and_then(|s| driftwm::config::applied_rule(&s))
-                    .is_some_and(|r| r.widget || r.no_focus)
+                    .is_some_and(|r| r.widget)
             }).map(|w| {
                 let loc = self.space.element_location(w).unwrap_or_default();
                 let size = w.geometry().size;
@@ -70,7 +70,7 @@ impl DriftWm {
     /// Should NOT be called during Alt-Tab cycling (history is frozen).
     /// Skips windows with `skip_taskbar` rule.
     pub fn update_focus_history(&mut self, surface: &WlSurface) {
-        if driftwm::config::applied_rule(surface).is_some_and(|r| r.widget || r.no_focus) {
+        if driftwm::config::applied_rule(surface).is_some_and(|r| r.widget) {
             return;
         }
         let window = self

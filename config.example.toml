@@ -250,7 +250,6 @@
 #   position   — [x, y] canvas coordinates to place the window
 #   size       — [width, height] to force window dimensions
 #   widget      — true: pinned (immovable), below normal windows, excluded from navigation (default: false)
-#   no_focus    — true: completely inert to input — clicks/scrolls pass through (default: false)
 #   decoration  — "client" (default), "server", or "none" (borderless)
 #   blur        — true: blur background behind this window (default: false)
 #   opacity     — 0.0–1.0: window transparency (default: 1.0, fully opaque)
@@ -259,7 +258,6 @@
 # app_id = "my-widget"
 # position = [0, 0]
 # widget = true
-# no_focus = true
 # decoration = "none"
 #
 # # Blurred terminal
@@ -272,4 +270,3 @@
 # [[window_rules]]
 # title = "winit window"
 # widget = true
-# no_focus = true

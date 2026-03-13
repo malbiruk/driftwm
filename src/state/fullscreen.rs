@@ -12,7 +12,7 @@ impl DriftWm {
     pub fn enter_fullscreen(&mut self, window: &Window) {
         if window.wl_surface().as_ref()
             .and_then(|s| driftwm::config::applied_rule(s))
-            .is_some_and(|r| r.widget || r.no_focus)
+            .is_some_and(|r| r.widget)
         {
             return;
         }

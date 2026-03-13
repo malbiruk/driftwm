@@ -9,7 +9,7 @@ trackpad gestures. No workspaces, no tiling — just drift.
 
 - **Language**: Rust
 - **Compositor library**: [smithay](https://github.com/Smithay/smithay) — handles Wayland protocol, EGL/Vulkan rendering, input via libinput
-- **Rendering**: smithay's built-in OpenGL or Vulkan backend
+- **Rendering**: smithay's OpenGL ES (GlesRenderer) backend
 - **Input**: libinput (via smithay) — provides trackpad gesture events (swipe, pinch, hold)
 - **Event loop**: [calloop](https://github.com/Smithay/calloop) — smithay's event loop. All async sources (libinput, wayland clients, timers for animations/edge-pan) are wired through it
 - **Protocols**:
@@ -42,6 +42,8 @@ trackpad gestures. No workspaces, no tiling — just drift.
   - `ext-image-capture-source` + `ext-image-copy-capture` — screencasting (xdg-desktop-portal-wlr, OBS, Firefox)
   - `wp_pointer_gestures` — gesture forwarding to clients
   - `xwayland-shell` — X11 app support via Xwayland
+  - `ext-idle-notify` — idle detection (swayidle, hypridle)
+  - `wp_single_pixel_buffer` — 1x1 solid color buffers (GTK4 backgrounds/separators)
 
   See `docs/protocol-plan.md` for the missing protocol roadmap.
 
@@ -266,15 +268,33 @@ direction. Speed is depth-proportional — deeper into the zone means faster
 panning (quadratic ramp, like a joystick). All 8 directions (corners =
 diagonal blend). Stops when cursor leaves the zone or the drag ends.
 
+```toml
+[navigation.edge_pan]
+zone = 100.0               # activation zone width (px from viewport edge)
+speed_min = 4.0            # px/frame at zone boundary
+speed_max = 20.0           # px/frame at viewport edge
+```
+
 ### Window snapping
 
 When dragging a window near another window's edge, the dragged window snaps to
-align edges magnetically. Configurable via `[snap]` in the config file (enable/
-disable, threshold distance).
+align edges magnetically. Accounts for SSD title bar boundaries.
+
+```toml
+[snap]
+enabled = true             # magnetic edge snapping during window drag
+gap = 12.0                 # gap between snapped windows (canvas px)
+distance = 24.0            # activation threshold (screen px from edge)
+break_force = 32.0         # screen px past snap to break free
+```
 
 ## Keyboard shortcuts
 
-Minimal set. Defaults below, all configurable via `[keybinds]` table (maps key combo → built-in action or `exec` command). Implementation: data-driven binding lookup from day one, initially populated from defaults, later merged with user config.
+Minimal set. Defaults below, all configurable via `[keybindings]` table.
+Data-driven binding lookup, populated from defaults and merged with user config.
+
+Two command actions: `exec <cmd>` shows a loading cursor until the window
+appears (for apps), `spawn <cmd>` runs silently (for toggles, OSD, screenshots).
 
 ### Window management
 
@@ -310,7 +330,7 @@ Minimal set. Defaults below, all configurable via `[keybinds]` table (maps key c
 | Shortcut       | Action                     |
 | -------------- | -------------------------- |
 | `Super+Return` | Open terminal              |
-| `Super+D`      | Open launcher (bemenu-run) |
+| `Super+D`      | Open launcher (fuzzel)     |
 | `Super+Space`  | Switch keyboard layout     |
 
 ### Media / hardware keys
@@ -352,8 +372,8 @@ no minimize. GTK/Qt apps hide those buttons automatically.
   resize, hover × changes cursor to pointer.
 - **Window rules**: `decoration` field controls mode — `"client"` (default,
   CSD), `"server"` (force SSD), `"none"` (borderless).
-- **Configuration**: only `bg_color` and `fg_color` are configurable in
-  `[decorations]` — everything else (dimensions, corner radius, shadow) is
+- **Configuration**: `bg_color`, `fg_color`, and `corner_radius` are
+  configurable in `[decorations]`. Dimensions and shadow parameters are
   hardcoded.
 - **Snapping**: window snapping accounts for SSD title bar boundaries.
 
@@ -382,29 +402,29 @@ hidden — they're just somewhere else on the canvas. Pan to find them.
 
 ## Widgets
 
-**Interim**: waybar via layer-shell for status bar, swayosd for volume/brightness
-OSD. Works today.
+Widgets are regular windows (layer-shell or xdg-toplevel) managed via window
+rules. A `widget = true` rule makes the window pinned (immovable), excluded
+from navigation/alt-tab, and always stacked below normal windows.
 
-**Planned**: `driftwm-shell` — a separate project providing a home screen and
-system shell using [Fabric](https://github.com/Fabric-Development/fabric)
-(Python GTK4 widget framework). Widgets are layer-shell surfaces placed at the
-home position near `(0, 0)`. Use home gesture to peek at them, repeat to go back.
+```toml
+[[window_rules]]
+app_id = "waybar"
+widget = true
 
-### driftwm-shell roadmap
+[[window_rules]]
+app_id = "conky"
+widget = true
+position = [50, 50]
+decoration = "none"
+opacity = 0.8
+blur = true
+```
 
-1. **Basic home screen** — clock, date, coords/zoom, Fabric scaffold, GTK theming
-2. **Quick settings** — volume, brightness, wifi, bluetooth, keyboard layout
-3. **System tray** — StatusNotifierItem protocol support, tray icon display
-4. **Logout menu** — shutdown, reboot, logout, suspend, lock
-5. **Notifications** — freedesktop daemon, popup toasts, dismiss/actions
-6. **OSD, media controls, calendar, lock screen** (with shader support)
+Window rules match by `app_id` and/or `title` (glob patterns) and can set:
+`position`, `size`, `widget`, `decoration` (client/server/none),
+`blur`, `opacity`.
 
-### Customization surface
-
-- **GTK theme + custom CSS** — colors, fonts, look and feel
-- **Widget toggles** — show/hide individual widgets
-- **Widget position/size** — where on the home screen each widget sits
-- **Per-widget settings** — clock format, what quick settings to show, etc.
+Status bar: waybar via layer-shell. Volume/brightness OSD: swayosd.
 
 ## Canvas background
 
@@ -417,32 +437,54 @@ feel like a real surface.
 1. **Shader** (default): GLSL fragment shader. Compositor passes
    `(cx, cy, z, time, resolution)` as uniforms. Ships with a built-in dot grid
    shader as default. Users can swap to any custom shader — noise, gradients,
-   animated patterns, etc.
+   procedural patterns, etc. See `docs/shaders.md` for how to write them.
 2. **Tiled image**: user provides a seamless (loopable) texture. Repeats
    infinitely across the canvas. Scales with zoom.
 
 Both modes are infinite by nature.
 
-Static shaders (no `time` dependency) are cached and only re-rendered when the
-viewport changes (pan/zoom). Zero idle GPU cost. Animated shaders force a
-redraw every frame — opt-in via `animate = true`.
+Shaders are static (no time uniform) — cached and only re-rendered when the
+viewport changes (pan/zoom). Zero idle GPU cost.
 
 Config example:
 
 ```toml
 [background]
-mode = "shader"                                # or "tile"
 shader_path = "~/.config/driftwm/bg.frag"      # omit for built-in dot grid
-bg_color = "#1e1e2e"                           # passed as uniform
-animate = false                                # true: redraw every frame (for time-based shaders)
-
-# mode = "tile"
-# tile_path = "~/.config/driftwm/tile.png"
+# tile_path = "~/.config/driftwm/tile.png"     # alternative: tiled image
 ```
 
 ## Configuration
 
 Config file: `~/.config/driftwm/config.toml` (respects `XDG_CONFIG_HOME`).
+Validate without starting: `driftwm --check-config`.
+
+Missing fields use built-in defaults. Partial configs merge with defaults —
+only specify what you want to change. Use `"none"` to unbind a default binding.
+
+### Autostart
+
+```toml
+# Commands to run at startup (after WAYLAND_DISPLAY is set).
+# Each entry is passed to sh -c, so full shell syntax works.
+autostart = [
+    "waybar",
+    "swaync",
+    "swayosd-server",
+]
+```
+
+### Environment variables
+
+```toml
+# Set before any clients launch. Override toolkit defaults.
+[env]
+QT_WAYLAND_DISABLE_WINDOWDECORATION = "1"
+MOZ_ENABLE_WAYLAND = "1"
+```
+
+The compositor also sets `XDG_SESSION_TYPE=wayland`, `XDG_CURRENT_DESKTOP=driftwm`,
+`XCURSOR_THEME`, `XCURSOR_SIZE`, and Wayland toolkit hints automatically.
 
 ### Trackpad / libinput
 
@@ -465,16 +507,23 @@ the full default binding set and trigger/action vocabulary.
 
 ```toml
 [input.keyboard]
-repeat_rate = 25       # keys per second. default: 25
-repeat_delay = 300     # ms before repeat starts. default: 300
+layout = "us"              # XKB layout (e.g., "us,ru" for multi-layout)
+variant = ""               # XKB variant (e.g., "dvorak")
+options = ""               # XKB options (e.g., "grp:win_space_toggle")
+repeat_rate = 25           # keys/sec. default: 25
+repeat_delay = 200         # ms before repeat starts. default: 200
+layout_independent = true  # match bindings by physical key position across layouts
 ```
+
+`layout_independent` means keybindings work by physical position regardless of
+active keyboard layout — `Super+Q` stays the top-left key even on Cyrillic.
 
 ### Scroll / viewport panning
 
 ```toml
 [input.scroll]
-canvas_speed = 1.5     # multiplier for viewport pan deltas. default: 1.5
-friction = 0.96        # momentum decay per frame (0.90 = snappy, 0.98 = floaty). default: 0.96
+speed = 1.5                # viewport pan speed multiplier. default: 1.5
+friction = 0.94            # momentum decay per frame (0.90=snappy, 0.98=floaty). default: 0.94
 ```
 
 Only affects viewport panning. Scroll events forwarded to windows use raw deltas
@@ -484,9 +533,59 @@ Only affects viewport panning. Scroll events forwarded to windows use raw deltas
 
 ```toml
 [cursor]
-theme = "Adwaita"      # default: "default"
-size = 24              # default: 24
+theme = "Adwaita"          # default: "default"
+size = 24                  # default: 24
+inactive_opacity = 0.5     # cursor opacity on non-active outputs (0.0–1.0)
 ```
+
+### Navigation
+
+```toml
+[navigation]
+animation_speed = 0.3      # camera lerp factor (higher = faster)
+nudge_step = 20            # px per nudge-window action
+pan_step = 100.0           # px per pan-viewport action
+
+# Canvas anchors: named positions reachable via go-to (Mod+1-4).
+# Uses Y-up coordinate system. Default: [[0, 0]] (home only).
+anchors = [[0, 0], [-1750, 1750], [1750, 1750], [1750, -1750], [-1750, -1750]]
+```
+
+### Zoom
+
+```toml
+[zoom]
+step = 1.1                 # multiplier per keypress (1.1 = 10% per press)
+fit_padding = 100.0        # canvas px padding for zoom-to-fit
+```
+
+### Effects
+
+```toml
+[effects]
+blur_radius = 2            # number of Kawase down+up passes (default: 2)
+blur_strength = 1.1        # per-pass texel spread (default: 1.1)
+```
+
+Window blur is enabled per-window via window rules (`blur = true`). Combined
+with `opacity < 1.0`, this gives frosted-glass terminals and widgets. The blur
+uses a multi-pass Kawase algorithm with separate down/up sample shaders and a
+mask shader for the window shape.
+
+### Output
+
+```toml
+[output]
+scale = 1.0                # default scale for all outputs
+
+[output.outline]
+color = "#ffffff"           # outline color for other monitors' viewports on canvas
+thickness = 1              # pixels (0 to disable)
+opacity = 0.5              # 0.0–1.0
+```
+
+The output outline renders a rectangle on the canvas showing where other
+monitors' viewports are looking — spatial awareness for multi-monitor setups.
 
 ## Launcher
 
@@ -573,6 +672,15 @@ src/
 ├── focus.rs
 ├── decorations.rs
 ├── render.rs
+├── snap.rs
+├── window_ext.rs
+├── shaders/
+│   ├── blur_down.glsl
+│   ├── blur_mask.glsl
+│   ├── blur_up.glsl
+│   ├── corner_clip.glsl
+│   ├── dot_grid.glsl
+│   └── shadow.glsl
 ├── backend/
 │   ├── mod.rs
 │   ├── winit.rs
@@ -603,12 +711,15 @@ src/
 │   ├── mod.rs
 │   ├── compositor.rs
 │   ├── xdg_shell.rs
+│   ├── xwayland.rs
 │   └── layer_shell.rs
 └── protocols/
     ├── mod.rs
     ├── foreign_toplevel.rs
     ├── output_management.rs
-    └── screencopy.rs
+    ├── screencopy.rs
+    ├── image_capture_source.rs
+    └── image_copy_capture.rs
 ```
 
 ## Milestones
@@ -629,7 +740,5 @@ requiring real hardware (udev/TTY). Milestones 1–8 work entirely in winit.
 11. **Window rules** — app_id matching, widget mode, state file, xdg-decoration _(done)_
 12. **Decorations** — SSD fallback, title bar, shadows, resize grab zones _(done)_
 13. **Multi-monitor** — per-output viewports, input routing, hotplug, output config, wlr-output-management _(done)_
-14. XWayland — X11 app support
-
-Separate project: **driftwm-shell** — GTK4 home screen + system widgets
-via Fabric (see Widgets section).
+14. **XWayland** — X11 app support via Xwayland, WindowExt trait for polymorphism _(done)_
+15. **Blur** — multi-pass Kawase blur, per-window via window rules, opacity support _(done)_

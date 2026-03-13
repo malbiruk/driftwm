@@ -138,9 +138,8 @@ impl DriftWm {
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
             if let Some((window, hit)) = self.decoration_under(pos) {
                 let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
-                let rule = config::applied_rule(&wl_surface);
-                let is_widget = rule.as_ref().is_some_and(|r| r.widget);
-                let is_no_focus = rule.as_ref().is_some_and(|r| r.no_focus);
+                let is_widget = config::applied_rule(&wl_surface)
+                    .is_some_and(|r| r.widget);
 
                 if button == config::BTN_LEFT {
                     match hit {
@@ -150,9 +149,7 @@ impl DriftWm {
                         }
                         DecorationHit::TitleBar if !is_widget => {
                             // Focus + raise (with modal redirect) + start move grab
-                            if !is_no_focus {
-                                self.raise_and_focus(&window, serial);
-                            }
+                            self.raise_and_focus(&window, serial);
                             let initial_window_location =
                                 self.space.element_location(&window).unwrap();
                             let start_data = GrabStartData {
@@ -170,21 +167,19 @@ impl DriftWm {
                             return;
                         }
                         DecorationHit::ResizeBorder(edge) if !is_widget => {
-                            if !is_no_focus {
-                                self.space.raise_element(&window, true);
-                                keyboard.set_focus(
-                                    self,
-                                    Some(FocusTarget(wl_surface.clone())),
-                                    serial,
-                                );
-                            }
+                            self.space.raise_element(&window, true);
+                            keyboard.set_focus(
+                                self,
+                                Some(FocusTarget(wl_surface.clone())),
+                                serial,
+                            );
                             self.enforce_below_windows();
                             self.start_compositor_resize_with_edge(
                                 &pointer, &window, pos, button, serial, Some(edge),
                             );
                             return;
                         }
-                        _ if !is_no_focus => {
+                        _ => {
                             // Widget title bar or other — just focus
                             keyboard.set_focus(
                                 self,
@@ -192,7 +187,6 @@ impl DriftWm {
                                 serial,
                             );
                         }
-                        _ => {}
                     }
                 }
             }
@@ -207,12 +201,9 @@ impl DriftWm {
                             && let Some(surface) = window.wl_surface()
                             && !config::applied_rule(&surface).is_some_and(|r| r.widget)
                         {
-                            let no_focus = config::applied_rule(&surface).is_some_and(|r| r.no_focus);
-                            if !no_focus {
-                                self.space.raise_element(&window, true);
-                                let wl_surface = surface.into_owned();
-                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
-                            }
+                            self.space.raise_element(&window, true);
+                            let wl_surface = surface.into_owned();
+                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
                             self.enforce_below_windows();
                             let initial_window_location =
                                 self.space.element_location(&window).unwrap();
@@ -239,14 +230,9 @@ impl DriftWm {
                                 .and_then(|s| config::applied_rule(&s))
                                 .is_some_and(|r| r.widget)
                         {
-                            let no_focus = window.wl_surface()
-                                .and_then(|s| config::applied_rule(&s))
-                                .is_some_and(|r| r.no_focus);
-                            if !no_focus {
-                                self.space.raise_element(&window, true);
-                                if let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) {
-                                    keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
-                                }
+                            self.space.raise_element(&window, true);
+                            if let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) {
+                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
                             }
                             self.enforce_below_windows();
                             self.start_compositor_resize(
@@ -277,9 +263,6 @@ impl DriftWm {
                     MouseAction::ToggleFullscreen => {
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
-                            && !window.wl_surface()
-                                .and_then(|s| config::applied_rule(&s))
-                                .is_some_and(|r| r.no_focus)
                         {
                             self.raise_and_focus(&window, serial);
                             self.execute_action(&config::Action::ToggleFullscreen);
@@ -294,12 +277,7 @@ impl DriftWm {
             let element_under = self
                 .space
                 .element_under(pos)
-                .map(|(w, _)| w.clone())
-                .filter(|w| {
-                    !w.wl_surface()
-                        .and_then(|s| config::applied_rule(&s))
-                        .is_some_and(|r| r.no_focus)
-                });
+                .map(|(w, _)| w.clone());
 
             if let Some(ref window) = element_under {
                 let is_widget = window.wl_surface()

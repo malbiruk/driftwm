@@ -106,17 +106,19 @@ impl DriftWm {
             }
             Action::CenterWindow => {
                 let keyboard = self.seat.get_keyboard().unwrap();
-                if let Some(focus) = keyboard.current_focus() {
-                    let window = self
-                        .space
+                let focused_non_widget = keyboard.current_focus().and_then(|focus| {
+                    if driftwm::config::applied_rule(&focus.0).is_some_and(|r| r.widget) {
+                        return None;
+                    }
+                    self.space
                         .elements()
                         .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
-                        .cloned();
-                    if let Some(window) = window {
-                        self.navigate_to_window(&window, true);
-                    }
+                        .cloned()
+                });
+                if let Some(window) = focused_non_widget {
+                    self.navigate_to_window(&window, true);
                 } else {
-                    // No focused window — find and focus the closest to viewport center
+                    // No focused non-widget window — find and focus the closest to viewport center
                     let viewport = self.get_viewport_size();
                     let camera = self.camera();
                     let zoom = self.zoom();
@@ -127,7 +129,7 @@ impl DriftWm {
                         .elements()
                         .filter(|w| {
                             !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
-                                .is_some_and(|r| r.widget || r.no_focus)
+                                .is_some_and(|r| r.widget)
                         })
                         .min_by(|a, b| {
                             let dist = |w: &smithay::desktop::Window| {
@@ -188,7 +190,7 @@ impl DriftWm {
 
                 let windows = self.space.elements().filter(|w| {
                     !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
-                        .is_some_and(|r| r.widget || r.no_focus)
+                        .is_some_and(|r| r.widget)
                 }).map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     let size = w.geometry().size;
@@ -344,7 +346,7 @@ impl DriftWm {
                     let viewport = self.get_viewport_size();
                     let windows = self.space.elements().filter(|w| {
                         !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
-                            .is_some_and(|r| r.widget || r.no_focus)
+                            .is_some_and(|r| r.widget)
                     }).map(|w| {
                         let loc = self.space.element_location(w).unwrap_or_default();
                         let size = w.geometry().size;

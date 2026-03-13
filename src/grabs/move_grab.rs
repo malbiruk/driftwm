@@ -204,12 +204,6 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 self.initial_window_location,
                 false,
             );
-            if self.window.wl_surface().as_ref()
-                .and_then(|s| config::applied_rule(s))
-                .is_some_and(|r| r.no_focus)
-            {
-                data.enforce_below_windows();
-            }
             handle.motion(data, None, event);
             return;
         }
@@ -303,12 +297,6 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
 
         let new_loc = Point::from((final_x as i32, final_y as i32));
         data.space.map_element(self.window.clone(), new_loc, false);
-        if self.window.wl_surface().as_ref()
-            .and_then(|s| config::applied_rule(s))
-            .is_some_and(|r| r.no_focus)
-        {
-            data.enforce_below_windows();
-        }
         handle.motion(data, None, event);
 
         // Edge auto-pan detection using pinned output.

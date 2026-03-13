@@ -546,7 +546,6 @@ fn parse_window_rule(r: WindowRuleFile) -> Option<WindowRule> {
             }
         }),
         widget: r.widget,
-        no_focus: r.no_focus,
         decoration,
         blur: r.blur.unwrap_or(false),
         opacity: r.opacity.map(|v| {

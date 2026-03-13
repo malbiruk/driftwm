@@ -93,7 +93,7 @@ pub fn refresh<D>(
     ft_state.toplevels.retain(|surface, data| {
         let alive = space.elements().any(|w| {
             w.wl_surface().as_deref() == Some(surface)
-                && !crate::config::applied_rule(surface).is_some_and(|r| r.widget || r.no_focus)
+                && !crate::config::applied_rule(surface).is_some_and(|r| r.widget)
         });
         if !alive {
             for instance in data.instances.keys() {
@@ -107,7 +107,7 @@ pub fn refresh<D>(
     let mut focused_entry = None;
     for window in space.elements() {
         let Some(wl_surface) = window.wl_surface() else { continue; };
-        if crate::config::applied_rule(&wl_surface).is_some_and(|r| r.widget || r.no_focus) {
+        if crate::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             continue;
         }
         let wl_surface = wl_surface.into_owned();

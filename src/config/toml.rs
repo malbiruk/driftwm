@@ -150,8 +150,6 @@ pub(super) struct WindowRuleFile {
     pub size: Option<[i32; 2]>,
     #[serde(default)]
     pub widget: bool,
-    #[serde(default)]
-    pub no_focus: bool,
     pub decoration: Option<String>,
     pub blur: Option<bool>,
     pub opacity: Option<f64>,

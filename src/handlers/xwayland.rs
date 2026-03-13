@@ -372,14 +372,14 @@ impl XWaylandShellHandler for DriftWm {
             }
         }
 
-        // Focus — skip for widgets and no_focus windows
-        let should_focus = rule.as_ref().is_none_or(|r| !r.widget && !r.no_focus);
+        // Focus — skip for widgets
+        let should_focus = rule.as_ref().is_none_or(|r| !r.widget);
         if should_focus {
             let serial = SERIAL_COUNTER.next_serial();
             let keyboard = self.seat.get_keyboard().unwrap();
             keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
         } else {
-            // Widget/no_focus: refocus previous window if this stole focus
+            // Widget: refocus previous window if this stole focus
             self.focus_history.retain(|w| w != &smithay_window);
             if let Some(prev) = self.focus_history.first().cloned() {
                 let serial = SERIAL_COUNTER.next_serial();

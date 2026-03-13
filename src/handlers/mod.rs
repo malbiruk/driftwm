@@ -184,9 +184,6 @@ impl XdgActivationHandler for DriftWm {
         if token_data.serial.is_none() {
             return;
         }
-        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.no_focus) {
-            return;
-        }
         let window = self
             .space
             .elements()
@@ -393,9 +390,6 @@ impl ForeignToplevelHandler for DriftWm {
     }
 
     fn activate(&mut self, wl_surface: WlSurface) {
-        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.no_focus) {
-            return;
-        }
         let window = self
             .space
             .elements()

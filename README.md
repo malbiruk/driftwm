@@ -2,62 +2,90 @@
 
 A trackpad-first infinite canvas Wayland compositor.
 
-Traditional window managers arrange windows to fit your viewport. driftwm
-flips this: windows float on an infinite 2D canvas and you move the viewport
-around them. Designed with laptops in mind where trackpad support keeps
-getting better and display size is limited. You pan, zoom, and navigate with
-trackpad gestures. No workspaces, no tiling — just drift.
+<!-- TODO: hero GIF here — pan/zoom across a few windows -->
 
-Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm) and [niri](https://github.com/YaLTeR/niri). Built on [smithay](https://github.com/Smithay/smithay).
+Traditional window managers arrange windows to fit your screen. driftwm flips this: windows float on an infinite 2D canvas and you move the viewport around them. Pan, zoom, and navigate with trackpad gestures. No workspaces, no tiling — just drift.
+
+Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm) and [niri](https://github.com/YaLTeR/niri).
 
 ## How it works
 
 The screen is a viewport onto an infinite 2D plane. Each window has absolute
-coordinates on this plane. You move around with trackpad gestures:
+coordinates on this plane. You navigate with trackpad gestures:
 
-- **2-finger pinch** on empty canvas — zoom
-- **3-finger swipe** anywhere — pan viewport
-- **3-finger doubletap-swipe** on a window — move that window
-- **Alt + 3-finger swipe** on a window — resize that window
-- **3-finger pinch** anywhere — zoom
-- **4-finger swipe** — jump to the nearest window in that direction
-- **4-finger pinch in** — zoom-to-fit (overview)
-- **4-finger pinch out** — home toggle
-- **4-finger hold** — center focused window
+<!-- TODO: GIF — gesture pan across canvas -->
 
-**Small trackpad alternative**: hold `Mod` to use 3-finger instead of 4-finger for navigation gestures.
+| Gesture                              | Action                                   |
+| ------------------------------------ | ---------------------------------------- |
+| 3-finger swipe                       | Pan viewport                             |
+| 2-finger pinch (on canvas)           | Zoom                                     |
+| 3-finger pinch                       | Zoom                                     |
+| 4-finger swipe                       | Jump to nearest window in that direction |
+| 4-finger pinch in                    | Zoom-to-fit (overview of all windows)    |
+| 4-finger pinch out                   | Home toggle                              |
+| 4-finger hold                        | Center focused window                    |
+| 3-finger doubletap-swipe (on window) | Move window                              |
+| Alt + 3-finger swipe (on window)     | Resize window                            |
 
-Mouse: trackpad scroll pans, mouse wheel zooms on empty canvas. `Mod` + drag/scroll works anywhere. `Mod+Ctrl` + drag navigates to nearest window.
+**Small trackpad?** Hold `Mod` to use 3-finger instead of 4-finger for all
+navigation gestures.
 
-All gesture and mouse bindings are configurable with context-awareness
-(on-window, on-canvas, anywhere). Unbound gestures forward to apps.
-See [`config.example.toml`](config.example.toml) for the full default set.
+**Mouse:** trackpad scroll pans, mouse wheel zooms on empty canvas.
+`Mod` + drag/scroll works anywhere. `Mod+Ctrl` + drag navigates to nearest
+window. `Alt` + drag to move (LMB) / resize (RMB).
 
-A static wallpaper gives no feedback when panning an infinite canvas, so
-the background scrolls with the viewport. Any GLSL fragment shader works as
-an infinitely generated background, or you can tile an image of any size.
-
-See [docs/DESIGN.md](docs/DESIGN.md) for the full specification.
+All gesture and mouse bindings are context-aware (on-window, on-canvas,
+anywhere) and fully configurable. Unbound gestures forward to apps.
 
 ## Features
 
-Early development — usable as a daily driver.
+<!-- TODO: small GIFs inline for highlights -->
+
+**Canvas & navigation**
 
 - Infinite 2D canvas with viewport panning, zoom, and scroll momentum
-- GPU-scaled zoom with cursor-anchored zoom and dynamic min-zoom
-- Window navigation: directional jump (cone search), MRU cycling, home toggle
-- Layer shell support (waybar, fuzzel, mako) + foreign toplevel management
-- GLSL shader backgrounds or tiled images, scrolling with the viewport
-- Configurable trackpad gestures and mouse bindings with context-awareness (on-window/on-canvas/anywhere)
-- Multi-monitor with independent viewports, hotplug, and runtime output config (wlr-randr, wdisplays)
-- Runs nested (winit) or on real hardware (udev/DRM with libseat)
-- TOML config — all keybindings, mouse bindings, gesture bindings, and input settings are configurable
-- Server-side decorations with title bar, shadows, and resize borders for non-CSD apps
-- 22 Wayland protocols: DMA-BUF, popups, clipboard, layer shell, output management, and more
+- GPU-scaled zoom with cursor-anchored zoom (like Google Maps / Figma)
+- Window navigation: directional jump via cone search, MRU cycling (Alt-Tab), home toggle
+- Canvas anchors — save positions and jump between them (Mod+1-4)
+- Edge auto-pan when dragging windows near viewport edges
+- Magnetic window snapping during drag
 
-## Build & run
+<!-- TODO: GIF — zoom out to overview, then zoom back in -->
 
-Requires Rust (edition 2024) and these system libraries:
+**Input**
+
+- Configurable trackpad gestures with context-awareness (on-window/on-canvas/anywhere)
+- Configurable mouse bindings with same context system
+- All keybindings configurable via TOML
+- XKB keyboard layout support with layout-independent binding matching
+
+**Display**
+
+- Multi-monitor with independent viewports per output, hotplug, runtime output config (wlr-randr, wdisplays)
+- Viewport outlines showing where other monitors are looking on the canvas
+- GLSL shader backgrounds (or tiled images) that scroll with the viewport
+- Custom shaders for background — see [docs/shaders.md](docs/shaders.md)
+
+<!-- TODO: GIF — frosted glass terminal with blur -->
+
+**Window management**
+
+- Window blur and transparency via window rules (frosted-glass terminals)
+- Window rules: match by app_id/title glob, set position, size, widget mode, decoration, blur, opacity
+- Server-side decorations (title bar, shadows, resize borders) for non-CSD apps
+- XWayland support for X11 apps (Steam, Wine, JetBrains, etc.)
+- Click-to-focus model — no accidental focus changes while panning
+
+**Ecosystem**
+
+- Layer shell (waybar, fuzzel, mako) + foreign toplevel management
+- Session lock (swaylock), idle notify (swayidle), screencasting (OBS, Firefox)
+- 29 Wayland protocols
+- Runs nested (winit) for development or on real hardware (udev/DRM with libseat)
+
+## Install
+
+Requires Rust (edition 2024) and system libraries.
 
 **Fedora:**
 
@@ -72,41 +100,46 @@ sudo apt install libseat-dev libdisplay-info-dev libinput-dev libudev-dev
 ```
 
 ```bash
-cargo build
-cargo run                         # run nested in existing Wayland session
-cargo run -- --backend udev       # run on real hardware (from TTY)
-RUST_LOG=debug cargo run          # with debug logging
+git clone https://github.com/user/driftwm.git  # TODO: real URL
+cd driftwm
+cargo build --release
 ```
 
-In another terminal, launch apps inside driftwm:
+### Running
 
 ```bash
-WAYLAND_DISPLAY=wayland-1 foot       # or alacritty, ptyxis, etc.
-```
+# Nested in an existing Wayland session (for trying it out):
+cargo run
 
-The socket name is printed at startup — use that if it differs from `wayland-1`.
+# On real hardware (from a TTY):
+cargo run -- --backend udev
+```
 
 ## Quick start
 
-`mod` is Super by default (configurable). Essential keybindings:
+`mod` is Super by default (configurable via `mod_key`).
 
-| Shortcut           | Action          |
-| ------------------ | --------------- |
-| `mod+return`       | Open terminal   |
-| `mod+d`            | Open launcher   |
-| `mod+q`            | Close window    |
-| `mod+ctrl+shift+q` | Quit compositor |
-| `mod+scroll`       | Zoom at cursor  |
-| `alt+tab`          | Cycle windows   |
+| Shortcut           | Action                              |
+| ------------------ | ----------------------------------- |
+| `mod+return`       | Open terminal                       |
+| `mod+d`            | Open launcher                       |
+| `mod+q`            | Close window                        |
+| `mod+f`            | Toggle fullscreen                   |
+| `mod+c`            | Center focused window               |
+| `mod+arrow`        | Jump to nearest window in direction |
+| `mod+a`            | Home toggle (origin and back)       |
+| `mod+w`            | Zoom-to-fit (overview)              |
+| `mod+scroll`       | Zoom at cursor                      |
+| `alt+tab`          | Cycle windows                       |
+| `mod+l`            | Lock screen                         |
+| `mod+ctrl+shift+q` | Quit compositor                     |
 
-All keybindings are configurable. See [`config.example.toml`](config.example.toml)
-for the full list of defaults, mouse bindings, and settings.
+Terminal and launcher are auto-detected (foot/alacritty/kitty, fuzzel/wofi/bemenu).
+All keybindings are configurable — see [`config.example.toml`](config.example.toml).
 
 ## Configuration
 
 Config file: `~/.config/driftwm/config.toml` (respects `XDG_CONFIG_HOME`).
-
-Copy the example, uncomment what you want to change:
 
 ```bash
 mkdir -p ~/.config/driftwm
@@ -115,23 +148,67 @@ cp config.example.toml ~/.config/driftwm/config.toml
 
 Missing file uses built-in defaults. Partial configs merge with defaults —
 only specify what you want to change. Use `"none"` to unbind a default binding.
+Validate without starting: `driftwm --check-config`.
 
-## Milestones
+### Window rules
 
-1. **Window appears** — winit backend, xdg-shell, terminal renders _(done)_
-2. **Move and resize** — drag/resize windows, CSD support _(done)_
-3. **Infinite canvas** — viewport panning, scroll momentum, xcursor rendering _(done)_
-4. **Canvas background** — GLSL shaders, tiled images, edge auto-pan _(done)_
-5. **Window navigation** — center, directional jump, Alt-Tab cycle, home toggle _(done)_
-6. **Zoom** — GPU-scaled rendering, cursor-anchored zoom, dynamic min-zoom _(done)_
-7. **Layer shell** — waybar, fuzzel, foreign toplevel management _(done)_
-8. **Config file** — TOML parsing, user keybindings/mouse bindings/settings _(done)_
-9. **udev backend** — DRM/KMS, libinput, libseat session management _(done)_
-10. **Trackpad gestures** — gesture state machine, libinput device config _(done)_
-11. **Window rules** — app*id matching, widget mode, state file, xdg-decoration *(done)\_
-12. **Decorations** — SSD fallback, title bar, shadows, resize grab zones _(done)_
-13. **Multi-monitor** — per-output viewports, input routing, hotplug, output config _(done)_
-14. **XWayland** — X11 app support _(done)_
+Match windows by `app_id` and/or `title` (glob patterns) to control placement,
+decoration, blur, and more:
+
+```toml
+# Frosted-glass terminal
+[[window_rules]]
+app_id = "Alacritty"
+opacity = 0.85
+blur = true
+
+# Desktop widget — pinned, below normal windows, borderless
+[[window_rules]]
+app_id = "conky"
+position = [50, 50]
+widget = true
+decoration = "none"
+```
+
+### Autostart
+
+```toml
+autostart = [
+    "waybar",
+    "swaync",
+    "swayosd-server",
+]
+```
+
+See [`config.example.toml`](config.example.toml) for all options: input
+settings, scroll/momentum tuning, snap behavior, decorations, effects,
+per-output config, gesture bindings, and mouse bindings.
+
+See [docs/DESIGN.md](docs/DESIGN.md) for the full design specification.
+
+## Ecosystem
+
+All external — the compositor delegates to standard Wayland tools:
+
+| Tool                  | Purpose               |
+| --------------------- | --------------------- |
+| waybar                | Status bar            |
+| fuzzel / wofi         | App launcher          |
+| mako / swaync         | Notifications         |
+| swaylock              | Lock screen           |
+| swayosd               | Volume/brightness OSD |
+| grim + slurp          | Screenshots           |
+| wlr-randr / wdisplays | Output configuration  |
+
+## Example setup
+
+The [`extras/`](extras/) directory contains a complete rice — config files,
+GLSL shader wallpapers, Python widgets in alacritty windows with custom
+app IDs (clock, calendar, system stats, power menu), waybar taskbar/tray,
+fuzzel with a window-search script, and more. Window rules match the custom
+app IDs to pin the widgets in place and make them borderless.
+
+See [`extras/README.md`](extras/README.md) for the full breakdown.
 
 ## License
 
