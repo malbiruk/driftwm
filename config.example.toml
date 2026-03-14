@@ -108,6 +108,7 @@
 #   go-to <x> <y>           — jump camera to canvas position (Y-up)
 #   zoom-to-fit             — fit all windows in viewport
 #   toggle-fullscreen       — toggle focused window fullscreen
+#   fit-window              — toggle fit window to viewport (maximize/restore)
 #   reload-config           — hot-reload config file
 #   quit                    — exit the compositor
 #   send-to-output <dir>    — move focused window to adjacent output
@@ -120,6 +121,7 @@
 # "mod+d" = "exec <detected launcher>"
 # "mod+q" = "close-window"
 # "mod+f" = "toggle-fullscreen"
+# "mod+m" = "fit-window"
 # "mod+c" = "center-window"
 # "mod+a" = "home-toggle"
 # "mod+up" = "center-nearest up"
@@ -198,7 +200,7 @@
 #   N-finger-hold             — threshold only (fires on release)
 #
 # Continuous actions: pan-viewport, zoom, move-window, resize-window
-# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, exec <cmd>, etc.
+# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, fit-window, exec <cmd>, etc.
 
 [gestures.on-window]
 # "alt+3-finger-swipe" = "resize-window"

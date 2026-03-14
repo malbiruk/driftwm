@@ -427,6 +427,28 @@ impl ForeignToplevelHandler for DriftWm {
             self.exit_fullscreen_on(&output);
         }
     }
+
+    fn set_maximized(&mut self, wl_surface: WlSurface) {
+        let window = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
+            .cloned();
+        if let Some(window) = window {
+            self.toggle_fit_window(&window);
+        }
+    }
+
+    fn unset_maximized(&mut self, wl_surface: WlSurface) {
+        let window = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
+            .cloned();
+        if let Some(window) = window {
+            self.unfit_window(&window);
+        }
+    }
 }
 
 driftwm::delegate_foreign_toplevel!(DriftWm);

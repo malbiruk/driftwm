@@ -13,6 +13,8 @@ pub trait WindowExt {
     fn wants_ssd(&self) -> bool;
     fn enter_fullscreen_configure(&self, size: Size<i32, Logical>);
     fn exit_fullscreen_configure(&self, saved_size: Size<i32, Logical>);
+    fn enter_fit_configure(&self, size: Size<i32, Logical>);
+    fn exit_fit_configure(&self, saved_size: Size<i32, Logical>);
     /// The parent surface set via xdg_toplevel.set_parent (Wayland) or
     /// WM_TRANSIENT_FOR (X11). Returns None for X11 (follow-up).
     fn parent_surface(&self) -> Option<WlSurface>;
@@ -96,6 +98,28 @@ impl WindowExt for Window {
             toplevel.send_configure();
         } else if let Some(x11) = self.x11_surface() {
             x11.set_fullscreen(false).ok();
+            x11.configure(Rectangle::new(x11.geometry().loc, saved_size)).ok();
+        }
+    }
+
+    fn enter_fit_configure(&self, size: Size<i32, Logical>) {
+        if let Some(toplevel) = self.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.size = Some(size);
+            });
+            toplevel.send_configure();
+        } else if let Some(x11) = self.x11_surface() {
+            x11.configure(Rectangle::new(x11.geometry().loc, size)).ok();
+        }
+    }
+
+    fn exit_fit_configure(&self, saved_size: Size<i32, Logical>) {
+        if let Some(toplevel) = self.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.size = Some(saved_size);
+            });
+            toplevel.send_configure();
+        } else if let Some(x11) = self.x11_surface() {
             x11.configure(Rectangle::new(x11.geometry().loc, saved_size)).ok();
         }
     }

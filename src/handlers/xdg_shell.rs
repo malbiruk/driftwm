@@ -139,6 +139,30 @@ impl XdgShellHandler for DriftWm {
         }
     }
 
+    fn maximize_request(&mut self, surface: ToplevelSurface) {
+        let wl_surface = surface.wl_surface().clone();
+        let window = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
+            .cloned();
+        if let Some(window) = window {
+            self.toggle_fit_window(&window);
+        }
+    }
+
+    fn unmaximize_request(&mut self, surface: ToplevelSurface) {
+        let wl_surface = surface.wl_surface().clone();
+        let window = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
+            .cloned();
+        if let Some(window) = window {
+            self.unfit_window(&window);
+        }
+    }
+
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface().clone();
         self.decorations.remove(&wl_surface.id());
@@ -257,6 +281,9 @@ impl XdgShellHandler for DriftWm {
 
         let initial_window_location = self.space.element_location(&window).unwrap();
         let initial_window_size = window.geometry().size;
+
+        // Clear fit state — user took manual control
+        crate::state::fit::clear_fit_state(&wl_surface);
 
         // Store resize state in the surface data map for commit() repositioning
         with_states(&wl_surface, |states| {

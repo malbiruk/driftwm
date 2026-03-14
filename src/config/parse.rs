@@ -121,6 +121,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "zoom-reset" => Ok(Action::ZoomReset),
         "zoom-to-fit" => Ok(Action::ZoomToFit),
         "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
+        "fit-window" => Ok(Action::FitWindow),
         "send-to-output" => {
             let dir = parse_direction(arg.ok_or("send-to-output requires a direction")?)?;
             Ok(Action::SendToOutput(dir))
@@ -240,7 +241,7 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
     match s {
         "center-nearest" => Ok(Some(ThresholdAction::CenterNearest)),
         "center-window" | "home-toggle" | "zoom-to-fit" | "zoom-in" | "zoom-out"
-        | "zoom-reset" | "toggle-fullscreen" | "reload-config" | "quit" | "close-window" => {
+        | "zoom-reset" | "toggle-fullscreen" | "fit-window" | "reload-config" | "quit" | "close-window" => {
             let action = parse_action(s)?;
             Ok(Some(ThresholdAction::Fixed(action)))
         }

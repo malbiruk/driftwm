@@ -1,4 +1,5 @@
 mod animation;
+pub mod fit;
 mod fullscreen;
 mod navigation;
 
@@ -409,6 +410,9 @@ pub struct DriftWm {
     pub x11_display: Option<u32>,
     /// XWayland client handle, stored for reconnect/cleanup.
     pub xwayland_client: Option<smithay::reexports::wayland_server::Client>,
+
+    // -- global: SSD title bar double-click --
+    pub last_titlebar_click: Option<(Instant, smithay::reexports::wayland_server::backend::ObjectId)>,
 }
 
 /// Per-client state stored by wayland-server for each connected client.
@@ -431,7 +435,7 @@ impl DriftWm {
         let compositor_state = CompositorState::new::<Self>(&dh);
         let xdg_shell_state = XdgShellState::new_with_capabilities::<Self>(
             &dh,
-            [xdg_toplevel::WmCapabilities::Fullscreen],
+            [xdg_toplevel::WmCapabilities::Fullscreen, xdg_toplevel::WmCapabilities::Maximize],
         );
         let shm_state = ShmState::new::<Self>(&dh, vec![]);
         let output_manager_state = OutputManagerState::new_with_xdg_output::<Self>(&dh);
@@ -592,6 +596,7 @@ impl DriftWm {
             x11_override_redirect: Vec::new(),
             x11_display: None,
             xwayland_client: None,
+            last_titlebar_click: None,
         }
     }
 

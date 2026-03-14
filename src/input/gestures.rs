@@ -797,6 +797,9 @@ impl DriftWm {
         let initial_size = window.geometry().size;
         let edges = edges_from_position(pos, initial_location, initial_size);
 
+        // Clear fit state — user took manual control
+        crate::state::fit::clear_fit_state(&wl_surface);
+
         // Store resize state on surface data map for commit() repositioning
         with_states(&wl_surface, |states| {
             states

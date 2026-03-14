@@ -396,6 +396,19 @@ impl DriftWm {
                     }
                 }
             }
+            Action::FitWindow => {
+                let keyboard = self.seat.get_keyboard().unwrap();
+                if let Some(focus) = keyboard.current_focus() {
+                    let window = self
+                        .space
+                        .elements()
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
+                        .cloned();
+                    if let Some(window) = window {
+                        self.toggle_fit_window(&window);
+                    }
+                }
+            }
             Action::SendToOutput(dir) => {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 if let Some(focus) = keyboard.current_focus() {

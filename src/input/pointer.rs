@@ -18,6 +18,7 @@ use smithay::{
 
 use smithay::wayland::seat::WaylandFocus;
 
+use smithay::reexports::wayland_server::Resource;
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{self, BindingContext, MouseAction};
 use driftwm::window_ext::WindowExt;
@@ -148,6 +149,19 @@ impl DriftWm {
                             return;
                         }
                         DecorationHit::TitleBar if !is_widget => {
+                            // Double-click → toggle fit
+                            let now = std::time::Instant::now();
+                            let surface_id = wl_surface.id();
+                            if let Some((prev_time, prev_id)) = self.last_titlebar_click.take()
+                                && prev_id == surface_id
+                                && now.duration_since(prev_time) < Duration::from_millis(300)
+                            {
+                                self.raise_and_focus(&window, serial);
+                                self.toggle_fit_window(&window);
+                                return;
+                            }
+                            self.last_titlebar_click = Some((now, surface_id));
+
                             // Focus + raise (with modal redirect) + start move grab
                             self.raise_and_focus(&window, serial);
                             let initial_window_location =
@@ -344,6 +358,10 @@ impl DriftWm {
 
         // Store resize state for commit() repositioning
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+
+        // Clear fit state — user took manual control
+        crate::state::fit::clear_fit_state(&wl_surface);
+
         with_states(&wl_surface, |states| {
             states
                 .data_map
