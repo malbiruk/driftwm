@@ -15,6 +15,7 @@ autostart = [
 
 [env]
 QT_WAYLAND_DISABLE_WINDOWDECORATION = "1"
+QT_QPA_PLATFORMTHEME = "qt6ct"
 
 [input.keyboard]
 layout = "us,ru"
