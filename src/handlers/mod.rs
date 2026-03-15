@@ -15,9 +15,10 @@ use smithay::{
     delegate_seat, delegate_viewporter,
     delegate_single_pixel_buffer, delegate_xdg_activation,
     input::{
-        Seat, SeatHandler, SeatState,
+        keyboard, Seat, SeatHandler, SeatState,
         pointer::{CursorIcon, CursorImageStatus, PointerHandle},
     },
+    reexports::input::DeviceCapability as LibinputCapability,
     reexports::wayland_server::{
         Resource,
         protocol::{wl_output::WlOutput, wl_surface::WlSurface},
@@ -73,6 +74,16 @@ impl SeatHandler for DriftWm {
             return;
         }
         self.cursor_status = image;
+    }
+
+    fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
+        for device in self
+            .input_devices
+            .iter_mut()
+            .filter(|d| d.has_capability(LibinputCapability::Keyboard))
+        {
+            device.led_update(led_state.into());
+        }
     }
 
     fn focus_changed(&mut self, seat: &Seat<Self>, focused: Option<&Self::KeyboardFocus>) {

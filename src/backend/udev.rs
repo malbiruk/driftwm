@@ -285,8 +285,15 @@ pub fn init_udev(
 
     event_loop.handle().insert_source(libinput_backend, |mut event, _, data| {
         use smithay::backend::input::InputEvent;
-        if let InputEvent::DeviceAdded { device } = &mut event {
-            data.configure_libinput_device(device);
+        match &mut event {
+            InputEvent::DeviceAdded { device } => {
+                data.configure_libinput_device(device);
+                data.input_devices.push(device.clone());
+            }
+            InputEvent::DeviceRemoved { device } => {
+                data.input_devices.retain(|d| d != device);
+            }
+            _ => {}
         }
         data.process_input_event(event);
     })?;

@@ -376,6 +376,7 @@ pub struct DriftWm {
 
     // -- global: session --
     pub session: Option<LibSeatSession>,
+    pub input_devices: Vec<smithay::reexports::input::Device>,
 
     // -- global: state file persistence --
     pub state_file_cameras: HashMap<String, (Point<f64, Logical>, f64)>,
@@ -590,6 +591,7 @@ impl DriftWm {
             momentum_timer: None,
             fullscreen: HashMap::new(),
             session: None,
+            input_devices: Vec::new(),
             state_file_cameras: HashMap::new(),
             state_file_last_write: Instant::now(),
             active_layout: String::new(),
