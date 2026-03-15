@@ -1731,6 +1731,25 @@ pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRen
     ));
 }
 
+/// Get or create persistent capture state for an output+protocol pair.
+fn get_capture_state<'a>(
+    map: &'a mut std::collections::HashMap<String, crate::state::CaptureOutputState>,
+    key: &str,
+    size: Size<i32, Physical>,
+    scale: Scale<f64>,
+    transform: Transform,
+    paint_cursors: bool,
+) -> &'a mut crate::state::CaptureOutputState {
+    map.entry(key.to_owned()).or_insert_with(|| {
+        crate::state::CaptureOutputState {
+            damage_tracker: smithay::backend::renderer::damage::OutputDamageTracker::new(size, scale, transform),
+            offscreen_texture: None,
+            age: 0,
+            last_paint_cursors: paint_cursors,
+        }
+    })
+}
+
 /// Fulfill pending screencopy requests by rendering to offscreen textures.
 pub fn render_screencopy(
     state: &mut crate::state::DriftWm,
@@ -1761,11 +1780,14 @@ pub fn render_screencopy(
     let output_scale = output.current_scale().fractional_scale();
     let scale = Scale::from(output_scale);
     let transform = output.current_transform();
+    let output_mode_size = output.current_mode().unwrap().size;
     let timestamp = state.start_time.elapsed();
+    let capture_key = format!("sc:{}", output.name());
 
     for screencopy in pending {
         let size = screencopy.buffer_size();
-        let use_elements: Vec<&OutputRenderElements> = if screencopy.overlay_cursor() {
+        let paint_cursors = screencopy.overlay_cursor();
+        let use_elements: Vec<&OutputRenderElements> = if paint_cursors {
             elements.iter().collect()
         } else {
             elements
@@ -1774,10 +1796,27 @@ pub fn render_screencopy(
                 .collect()
         };
 
+        // Use persistent state for full-output captures (screen recording);
+        // one-shot for region captures (partial screenshots).
+        let use_persistent = size == output_mode_size;
+
+        if use_persistent
+            && let Some(cs) = state.capture_state.get_mut(&capture_key)
+            && cs.last_paint_cursors != paint_cursors
+        {
+            cs.age = 0;
+            cs.last_paint_cursors = paint_cursors;
+        }
+
         match screencopy.buffer() {
             ScreencopyBuffer::Dmabuf(dmabuf) => {
                 let mut dmabuf = dmabuf.clone();
-                match render_to_dmabuf(renderer, &mut dmabuf, size, scale, transform, &use_elements) {
+                let cs = if use_persistent {
+                    Some(get_capture_state(&mut state.capture_state, &capture_key, size, scale, transform, paint_cursors))
+                } else {
+                    None
+                };
+                match render_to_dmabuf(renderer, &mut dmabuf, size, scale, transform, &use_elements, cs) {
                     Ok(sync) => {
                         if let Err(e) = renderer.wait(&sync) {
                             tracing::warn!("screencopy: dmabuf sync wait failed: {e:?}");
@@ -1791,7 +1830,12 @@ pub fn render_screencopy(
                 }
             }
             ScreencopyBuffer::Shm(wl_buffer) => {
-                let result = render_to_offscreen(renderer, size, scale, transform, &use_elements);
+                let cs = if use_persistent {
+                    Some(get_capture_state(&mut state.capture_state, &capture_key, size, scale, transform, paint_cursors))
+                } else {
+                    None
+                };
+                let result = render_to_offscreen(renderer, size, scale, transform, &use_elements, cs);
                 match result {
                     Ok(mapping) => {
                         let copy_ok =
@@ -1829,12 +1873,15 @@ pub fn render_screencopy(
 }
 
 /// Render elements to an offscreen texture and download the pixels.
+/// When `capture_state` is provided, reuses the damage tracker and texture across frames
+/// for incremental rendering. Falls back to one-shot (age=0) when None.
 fn render_to_offscreen(
     renderer: &mut GlesRenderer,
     size: smithay::utils::Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     elements: &[&OutputRenderElements],
+    capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>> {
     use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
     use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -1842,25 +1889,51 @@ fn render_to_offscreen(
 
     let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
 
-    let mut texture: GlesTexture = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
+    if let Some(cs) = capture_state {
+        // Reuse or reallocate texture when size changes
+        let tex = match &mut cs.offscreen_texture {
+            Some((tex, cached_size)) if *cached_size == size => tex,
+            slot => {
+                let new_tex: GlesTexture = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
+                *slot = Some((new_tex, size));
+                cs.damage_tracker = OutputDamageTracker::new(size, scale, transform);
+                cs.age = 0;
+                &mut slot.as_mut().unwrap().0
+            }
+        };
 
-    {
-        let mut target = renderer.bind(&mut texture)?;
-        let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
-        let _ = damage_tracker.render_output(
-            renderer,
-            &mut target,
-            0,
-            elements,
-            [0.0f32, 0.0, 0.0, 1.0],
-        )?;
+        {
+            let mut target = renderer.bind(tex)?;
+            let _ = cs.damage_tracker.render_output(
+                renderer,
+                &mut target,
+                cs.age,
+                elements,
+                [0.0f32, 0.0, 0.0, 1.0],
+            )?;
+        }
+        cs.age += 1;
+
+        let target = renderer.bind(tex)?;
+        let mapping = renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Xrgb8888)?;
+        Ok(mapping)
+    } else {
+        let mut texture: GlesTexture = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
+        {
+            let mut target = renderer.bind(&mut texture)?;
+            let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
+            let _ = damage_tracker.render_output(
+                renderer,
+                &mut target,
+                0,
+                elements,
+                [0.0f32, 0.0, 0.0, 1.0],
+            )?;
+        }
+        let target = renderer.bind(&mut texture)?;
+        let mapping = renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Xrgb8888)?;
+        Ok(mapping)
     }
-
-    // Re-bind texture to copy pixels
-    let target = renderer.bind(&mut texture)?;
-    let mapping = renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Xrgb8888)?;
-
-    Ok(mapping)
 }
 
 /// Render elements directly into a client-provided DMA-BUF (zero CPU copies).
@@ -1868,6 +1941,8 @@ fn render_to_offscreen(
 /// The caller must choose the correct `transform` for the protocol:
 /// - wlr-screencopy: `output.current_transform()` (buffer is raw mode size)
 /// - ext-image-copy-capture: `Transform::Normal` (buffer is already transformed)
+///
+/// When `capture_state` is provided, reuses the damage tracker for incremental rendering.
 fn render_to_dmabuf(
     renderer: &mut GlesRenderer,
     dmabuf: &mut smithay::backend::allocator::dmabuf::Dmabuf,
@@ -1875,20 +1950,35 @@ fn render_to_dmabuf(
     scale: Scale<f64>,
     transform: Transform,
     elements: &[&OutputRenderElements],
+    capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::sync::SyncPoint, Box<dyn std::error::Error>> {
     use smithay::backend::renderer::Bind;
     use smithay::backend::renderer::damage::OutputDamageTracker;
 
-    let sync = {
-        let mut target = renderer.bind(dmabuf)?;
-        let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
-        damage_tracker.render_output(
-            renderer,
-            &mut target,
-            0,
-            elements,
-            [0.0f32, 0.0, 0.0, 1.0],
-        )?.sync
+    let sync = match capture_state {
+        Some(cs) => {
+            let mut target = renderer.bind(dmabuf)?;
+            let result = cs.damage_tracker.render_output(
+                renderer,
+                &mut target,
+                cs.age,
+                elements,
+                [0.0f32, 0.0, 0.0, 1.0],
+            )?.sync;
+            cs.age += 1;
+            result
+        }
+        None => {
+            let mut target = renderer.bind(dmabuf)?;
+            let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
+            damage_tracker.render_output(
+                renderer,
+                &mut target,
+                0,
+                elements,
+                [0.0f32, 0.0, 0.0, 1.0],
+            )?.sync
+        }
     };
 
     Ok(sync)
@@ -1927,12 +2017,16 @@ pub fn render_capture_frames(
 
     let output_scale = output.current_scale().fractional_scale();
     let scale = Scale::from(output_scale);
+    let output_transform = output.current_transform();
+    let output_mode_size = output_transform.transform_size(output.current_mode().unwrap().size);
     let timestamp = state.start_time.elapsed();
+    let capture_key = format!("cap:{}", output.name());
 
     let fail_reason = smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason::Unknown;
 
     for capture in pending {
-        let use_elements: Vec<&OutputRenderElements> = if capture.paint_cursors {
+        let paint_cursors = capture.paint_cursors;
+        let use_elements: Vec<&OutputRenderElements> = if paint_cursors {
             elements.iter().collect()
         } else {
             elements
@@ -1943,11 +2037,25 @@ pub fn render_capture_frames(
 
         // ext-image-copy-capture buffer_size is already in transformed/logical orientation,
         // matching the element coordinate space — render with Normal (no additional transform).
+        let use_persistent = capture.buffer_size == output_mode_size;
+
+        if use_persistent
+            && let Some(cs) = state.capture_state.get_mut(&capture_key)
+            && cs.last_paint_cursors != paint_cursors
+        {
+            cs.age = 0;
+            cs.last_paint_cursors = paint_cursors;
+        }
 
         // Try DMA-BUF first, fall back to SHM
         let ok = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
             let mut dmabuf = dmabuf.clone();
-            match render_to_dmabuf(renderer, &mut dmabuf, capture.buffer_size, scale, Transform::Normal, &use_elements) {
+            let cs = if use_persistent {
+                Some(get_capture_state(&mut state.capture_state, &capture_key, capture.buffer_size, scale, Transform::Normal, paint_cursors))
+            } else {
+                None
+            };
+            match render_to_dmabuf(renderer, &mut dmabuf, capture.buffer_size, scale, Transform::Normal, &use_elements, cs) {
                 Ok(sync) => {
                     if let Err(e) = renderer.wait(&sync) {
                         tracing::warn!("capture: dmabuf sync wait failed: {e:?}");
@@ -1962,7 +2070,12 @@ pub fn render_capture_frames(
                 }
             }
         } else {
-            let result = render_to_offscreen(renderer, capture.buffer_size, scale, Transform::Normal, &use_elements);
+            let cs = if use_persistent {
+                Some(get_capture_state(&mut state.capture_state, &capture_key, capture.buffer_size, scale, Transform::Normal, paint_cursors))
+            } else {
+                None
+            };
+            let result = render_to_offscreen(renderer, capture.buffer_size, scale, Transform::Normal, &use_elements, cs);
             match result {
                 Ok(mapping) => {
                     shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {

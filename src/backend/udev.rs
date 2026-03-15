@@ -463,6 +463,7 @@ pub fn init_udev(
                                     for old in &virtual_outputs {
                                         data.space.unmap_output(old);
                                         data.cached_bg_elements.remove(&old.name());
+                                        data.remove_capture_state(&old.name());
                                     }
                                     data.disconnected_outputs.clear();
                                     data.focused_output = None;
@@ -521,6 +522,7 @@ pub fn init_udev(
                                         data.disconnected_outputs.insert(surface.output.name());
                                         data.exit_fullscreen_on(&surface.output);
                                         data.cached_bg_elements.remove(&surface.output.name());
+                                        data.remove_capture_state(&surface.output.name());
                                         data.lock_surfaces.remove(&surface.output);
                                     } else {
                                         data.space.unmap_output(&surface.output);
@@ -557,6 +559,7 @@ pub fn init_udev(
 
                                         // Clean up per-output resources
                                         data.cached_bg_elements.remove(&surface.output.name());
+                                        data.remove_capture_state(&surface.output.name());
                                         data.fullscreen.remove(&surface.output);
                                         data.lock_surfaces.remove(&surface.output);
                                     }
@@ -929,15 +932,7 @@ fn render_frame(
     let renderer = backend.renderer();
     let elements = crate::render::compose_frame(data, renderer, output, cursor_elements);
 
-    // Fulfill pending screencopy requests
-    let renderer = backend.renderer();
-    crate::render::render_screencopy(data, renderer, output, &elements);
-
-    // Fulfill pending ext-image-copy-capture frames
-    let renderer = backend.renderer();
-    crate::render::render_capture_frames(data, renderer, output, &elements);
-
-    // Render via DRM compositor
+    // Render via DRM compositor (latency-sensitive — do first)
     let renderer = backend.renderer();
     match compositor.render_frame::<_, OutputRenderElements>(
         renderer,
@@ -956,6 +951,13 @@ fn render_frame(
             tracing::warn!("Render frame error: {e:?}");
         }
     }
+
+    // Fulfill capture requests after main render
+    let renderer = backend.renderer();
+    crate::render::render_screencopy(data, renderer, output, &elements);
+
+    let renderer = backend.renderer();
+    crate::render::render_capture_frames(data, renderer, output, &elements);
 
     // Put backend back
     data.backend = Some(backend);

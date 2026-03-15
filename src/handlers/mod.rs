@@ -516,6 +516,7 @@ impl OutputManagementHandler for DriftWm {
             output.change_current_state(current_mode, new_transform, new_scale, new_position);
 
             self.cached_bg_elements.remove(&cfg.output_name);
+            self.remove_capture_state(&cfg.output_name);
         }
         self.mark_all_dirty();
         self.output_config_dirty = true;

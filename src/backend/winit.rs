@@ -208,8 +208,6 @@ pub fn init_winit(
                 Ok((renderer, mut framebuffer)) => {
                     let all_elements =
                         crate::render::compose_frame(data, renderer, &output, cursor_elements);
-                    crate::render::render_screencopy(data, renderer, &output, &all_elements);
-                    crate::render::render_capture_frames(data, renderer, &output, &all_elements);
                     let result = damage_tracker.render_output(
                         renderer,
                         &mut framebuffer,
@@ -220,6 +218,8 @@ pub fn init_winit(
                     if let Err(err) = result {
                         tracing::warn!("Render error: {err:?}");
                     }
+                    crate::render::render_screencopy(data, renderer, &output, &all_elements);
+                    crate::render::render_capture_frames(data, renderer, &output, &all_elements);
                     true
                 }
                 Err(err) => {

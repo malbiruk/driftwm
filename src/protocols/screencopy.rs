@@ -369,9 +369,9 @@ where
             return;
         }
 
-        let (buffer, with_damage) = match request {
-            zwlr_screencopy_frame_v1::Request::Copy { buffer } => (buffer, false),
-            zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => (buffer, true),
+        let buffer = match request {
+            zwlr_screencopy_frame_v1::Request::Copy { buffer } => buffer,
+            zwlr_screencopy_frame_v1::Request::CopyWithDamage { buffer } => buffer,
             _ => unreachable!(),
         };
 
@@ -417,7 +417,6 @@ where
             buffer: sc_buffer,
             frame: frame.clone(),
             info: info.clone(),
-            _with_damage: with_damage,
             submitted: false,
         });
 
@@ -466,7 +465,6 @@ pub struct Screencopy {
     info: ScreencopyFrameInfo,
     frame: ZwlrScreencopyFrameV1,
     buffer: ScreencopyBuffer,
-    _with_damage: bool,
     submitted: bool,
 }
 
@@ -501,6 +499,9 @@ impl Screencopy {
         } else {
             Flags::empty()
         });
+
+        let size = self.info.buffer_size;
+        self.frame.damage(0, 0, size.w as u32, size.h as u32);
 
         let tv_sec_hi = (timestamp.as_secs() >> 32) as u32;
         let tv_sec_lo = (timestamp.as_secs() & 0xFFFFFFFF) as u32;

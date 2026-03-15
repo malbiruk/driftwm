@@ -52,8 +52,9 @@ use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::wayland::xdg_foreign::XdgForeignState;
 use smithay::wayland::content_type::ContentTypeState;
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, element::PixelShaderElement};
-use smithay::utils::Transform;
+use smithay::backend::renderer::damage::OutputDamageTracker;
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture, element::PixelShaderElement};
+use smithay::utils::{Physical, Transform};
 
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::wayland::seat::WaylandFocus;
@@ -87,6 +88,17 @@ pub struct CanvasLayer {
     /// Internal canvas position (Y-down, top-left). None until first commit reveals size.
     pub position: Option<Point<i32, Logical>>,
     pub namespace: String,
+}
+
+/// Persistent per-output state for screen recording capture, reused across frames
+/// so the damage tracker's age increments and smithay only re-renders damaged regions.
+pub struct CaptureOutputState {
+    pub damage_tracker: OutputDamageTracker,
+    /// Reused offscreen texture for SHM captures (avoids allocation per frame).
+    pub offscreen_texture: Option<(GlesTexture, Size<i32, Physical>)>,
+    pub age: usize,
+    /// Reset age when cursor inclusion changes between frames.
+    pub last_paint_cursors: bool,
 }
 
 /// Buffered middle-click from a 3-finger tap. Held for DOUBLE_TAP_WINDOW_MS
@@ -287,6 +299,10 @@ pub struct DriftWm {
     pub csd_shadows: HashMap<smithay::reexports::wayland_server::backend::ObjectId, (PixelShaderElement, (i32, i32))>,
     // -- per-output: cached render elements (!Send, stays on DriftWm) --
     pub cached_bg_elements: HashMap<String, PixelShaderElement>,
+    // -- per-output: persistent capture state for screen recording --
+    // Keys are prefixed by protocol: "sc:{output}" for wlr-screencopy,
+    // "cap:{output}" for ext-image-copy-capture (different transforms).
+    pub capture_state: HashMap<String, CaptureOutputState>,
     // -- global: background tile (loaded once, shared) --
     pub background_tile: Option<(MemoryRenderBuffer, i32, i32)>,
 
@@ -532,6 +548,7 @@ impl DriftWm {
             blur_camera_generation: 0,
             csd_shadows: HashMap::new(),
             cached_bg_elements: HashMap::new(),
+            capture_state: HashMap::new(),
             background_tile: None,
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
@@ -790,6 +807,12 @@ impl DriftWm {
     /// Mark all active outputs as needing a redraw.
     pub fn mark_all_dirty(&mut self) {
         self.redraws_needed.extend(self.active_crtcs.iter());
+    }
+
+    /// Remove all capture state entries for a given output name.
+    /// Keys are prefixed ("sc:{name}", "cap:{name}") so we retain non-matching.
+    pub fn remove_capture_state(&mut self, output_name: &str) {
+        self.capture_state.retain(|k, _| !k.ends_with(&format!(":{output_name}")));
     }
 
     /// True if the current cursor is an animated xcursor (multiple frames with delays).
