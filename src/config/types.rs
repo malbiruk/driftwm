@@ -308,6 +308,7 @@ pub struct TrackpadSettings {
     pub natural_scroll: bool,
     pub tap_and_drag: bool,
     pub accel_speed: f64,
+    pub click_method: Option<String>,
 }
 
 impl Default for TrackpadSettings {
@@ -317,6 +318,7 @@ impl Default for TrackpadSettings {
             natural_scroll: true,
             tap_and_drag: true,
             accel_speed: 0.0,
+            click_method: None,
         }
     }
 }

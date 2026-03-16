@@ -48,6 +48,7 @@ pub(super) struct TrackpadConfig {
     pub natural_scroll: Option<bool>,
     pub tap_and_drag: Option<bool>,
     pub accel_speed: Option<f64>,
+    pub click_method: Option<String>,
 }
 
 #[derive(Deserialize, Default)]

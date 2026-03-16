@@ -36,6 +36,7 @@
 # natural_scroll = true       # reverse scroll direction (content follows fingers)
 # tap_and_drag = true         # double-tap-hold to drag
 # accel_speed = 0.0           # pointer acceleration (-1.0 to 1.0)
+# click_method = "none"       # none = device default; clickfinger = finger count (1=left, 2=right, 3=middle); button_areas = position on trackpad
 
 [cursor]
 # theme = "Adwaita"           # sets XCURSOR_THEME

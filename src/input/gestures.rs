@@ -714,11 +714,12 @@ impl DriftWm {
 
         let cfg = &self.config.trackpad;
         tracing::info!(
-            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={})",
+            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, click_method={:?})",
             device.name(),
             cfg.tap_to_click,
             cfg.natural_scroll,
             cfg.accel_speed,
+            cfg.click_method,
         );
 
         if let Err(e) = device.config_tap_set_enabled(cfg.tap_to_click) {
@@ -740,6 +741,22 @@ impl DriftWm {
         }
         if let Err(e) = device.config_accel_set_speed(cfg.accel_speed) {
             tracing::warn!("Failed to set accel_speed: {e:?}");
+        }
+        if let Some(ref method) = cfg.click_method {
+            let click = match method.as_str() {
+                "none" => None,
+                "button_areas" => Some(smithay::reexports::input::ClickMethod::ButtonAreas),
+                "clickfinger" => Some(smithay::reexports::input::ClickMethod::Clickfinger),
+                other => {
+                    tracing::warn!("Unknown click_method '{other}', ignoring");
+                    None
+                }
+            };
+            if let Some(click) = click
+                && let Err(e) = device.config_click_set_method(click)
+            {
+                tracing::warn!("Failed to set click_method: {e:?}");
+            }
         }
     }
 

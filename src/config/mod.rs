@@ -327,6 +327,7 @@ impl Config {
                 natural_scroll: t.natural_scroll.unwrap_or(true),
                 tap_and_drag: t.tap_and_drag.unwrap_or(true),
                 accel_speed: t.accel_speed.unwrap_or(0.0).clamp(-1.0, 1.0),
+                click_method: t.click_method.clone(),
             }
         };
 
