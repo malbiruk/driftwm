@@ -1283,9 +1283,29 @@ impl DriftWm {
             }
         };
 
-        // Log non-reloadable changes
+        // Hot-reload keyboard layout
         if new_config.keyboard_layout != self.config.keyboard_layout {
-            tracing::info!("Config reload: keyboard layout changes require restart");
+            let kb = &new_config.keyboard_layout;
+            let xkb = XkbConfig {
+                layout: &kb.layout,
+                variant: &kb.variant,
+                options: if kb.options.is_empty() { None } else { Some(kb.options.clone()) },
+                model: &kb.model,
+                ..Default::default()
+            };
+            let keyboard = self.seat.get_keyboard().unwrap();
+            let num_lock = keyboard.modifier_state().num_lock;
+            if let Err(err) = keyboard.set_xkb_config(self, xkb) {
+                tracing::warn!("Config reload: error updating keyboard layout: {err:?}");
+                new_config.keyboard_layout = self.config.keyboard_layout.clone();
+            } else {
+                tracing::info!("Config reload: keyboard layout updated");
+                let mut mods = keyboard.modifier_state();
+                if mods.num_lock != num_lock {
+                    mods.num_lock = num_lock;
+                    keyboard.set_modifier_state(mods);
+                }
+            }
         }
         if new_config.output_scale != self.config.output_scale {
             tracing::info!("Config reload: output scale changes require restart");
