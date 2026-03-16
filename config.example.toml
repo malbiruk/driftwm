@@ -15,8 +15,9 @@
 # These override the compositor's built-in toolkit defaults
 # (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT).
 [env]
-# QT_WAYLAND_DISABLE_WINDOWDECORATION = "1"
-# MOZ_ENABLE_WAYLAND = "1"
+# Examples:
+# # QT_WAYLAND_DISABLE_WINDOWDECORATION = "1"
+# # MOZ_ENABLE_WAYLAND = "1"
 
 [input.keyboard]
 # layout = "us"              # XKB layout (e.g., "us,ru" for multi-layout)
@@ -49,8 +50,9 @@
 # pan_step = 100.0            # px per pan-viewport action
 # Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow)
 # even when no window is there. Uses Y-up coordinate system.
-# Default: [[0, 0]] (home only).
-# anchors = [[0, 0], [-1750, 1750], [1750, 1750], [1750, -1750], [-1750, -1750]]
+# anchors = [[0, 0]]
+# Example with 4 corners:
+# # anchors = [[0, 0], [-1750, 1750], [1750, 1750], [1750, -1750], [-1750, -1750]]
 
 [navigation.edge_pan]
 # zone = 100.0                # activation zone width (px from viewport edge)
@@ -73,7 +75,7 @@
 # corner_radius = 8              # clip window corners to this radius (no effect if client rounds more)
 
 [effects]
-# blur_radius = 2               # number of Kawase down+up passes (default: 2)
+# blur_radius = 2                # number of Kawase down+up passes (default: 2)
 # blur_strength = 1.1            # per-pass texel spread (default: 1.1)
 
 [output]
@@ -81,13 +83,14 @@
 # are configured in [[outputs]] sections below.
 
 [output.outline]
-# color = "#ffffff"            # outline color for other monitors' viewports
+# color = "#ffffff"           # outline color for other monitors' viewports
 # thickness = 1               # pixels (0 to disable)
 # opacity = 0.5               # 0.0–1.0
 
 [background]
-# shader_path = "~/.config/driftwm/bg.glsl"   # custom GLSL fragment shader
-# tile_path = "~/.config/driftwm/tile.png"     # tiled image (mutually exclusive with shader)
+# Examples:
+# # shader_path = "~/.config/driftwm/bg.glsl"   # custom GLSL fragment shader
+# # tile_path = "~/.config/driftwm/tile.png"     # tiled image (mutually exclusive with shader)
 
 # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
 # Merges with defaults. Use "none" to unbind a default binding.
@@ -243,17 +246,18 @@
 # Outputs without a matching entry default to scale 1.0.
 # Winit backend ignores [[outputs]] entries.
 #
-# [[outputs]]
-# name = "eDP-1"           # connector name (required)
-# scale = 1.5              # fractional scale (default: 1.0)
-# transform = "normal"     # normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270
-# position = "auto"        # "auto" (left-to-right) or [x, y] in layout coords
-# mode = "preferred"       # "preferred", "1920x1080", or "2560x1440@144"
-#
-# [[outputs]]
-# name = "HDMI-A-1"
-# scale = 1.0
-# mode = "1920x1080@60"
+# Examples:
+# # [[outputs]]
+# # name = "eDP-1"           # connector name (required)
+# # scale = 1.5              # fractional scale (default: 1.0)
+# # transform = "normal"     # normal, 90, 180, 270, flipped, flipped-90, flipped-180, flipped-270
+# # position = "auto"        # "auto" (left-to-right) or [x, y] in layout coords
+# # mode = "preferred"       # "preferred", "1920x1080", or "2560x1440@144"
+# #
+# # [[outputs]]
+# # name = "HDMI-A-1"
+# # scale = 1.0
+# # mode = "1920x1080@60"
 
 # Window rules: match windows by app_id and/or title and apply overrides.
 # At least one of app_id or title is required. Both support * glob.
@@ -269,19 +273,20 @@
 #   blur        — true: blur background behind this window (default: false)
 #   opacity     — 0.0–1.0: window transparency (default: 1.0, fully opaque)
 #
-# [[window_rules]]
-# app_id = "my-widget"
-# position = [0, 0]
-# widget = true
-# decoration = "none"
+# Examples:
+# # [[window_rules]]
+# # app_id = "my-widget"
+# # position = [0, 0]
+# # widget = true
+# # decoration = "none"
 #
 # # Blurred terminal
-# [[window_rules]]
-# app_id = "Alacritty"
-# opacity = 0.85
-# blur = true
+# # [[window_rules]]
+# # app_id = "Alacritty"
+# # opacity = 0.85
+# # blur = true
 #
 # # Hide iced/libcosmic utility windows (same app_id as main window)
-# [[window_rules]]
-# title = "winit window"
-# widget = true
+# # [[window_rules]]
+# # title = "winit window"
+# # widget = true

@@ -201,16 +201,19 @@ To uninstall: `curl -fsSL https://raw.githubusercontent.com/malbiruk/driftwm/mai
 Requires Rust 1.85+ (edition 2024).
 
 **Fedora:**
+
 ```bash
 sudo dnf install libseat-devel libdisplay-info-devel libinput-devel mesa-libgbm-devel libxkbcommon-devel
 ```
 
 **Ubuntu/Debian:**
+
 ```bash
 sudo apt install libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm-dev libxkbcommon-dev libwayland-dev
 ```
 
 **Arch Linux:**
+
 ```bash
 sudo pacman -S libdisplay-info libinput seatd mesa libxkbcommon
 ```
@@ -233,8 +236,8 @@ manager integration, select "driftwm" from the session menu.
 
 ## Quick start
 
-`mod` is Super by default (configurable via `mod_key`). Terminal and launcher
-are auto-detected (foot/alacritty/kitty, fuzzel/wofi/bemenu).
+`mod` is Super by default. Terminal and launcher are auto-detected
+(foot/alacritty/kitty, fuzzel/wofi/bemenu), can be overridden in config.
 
 | Shortcut           | Action                        |
 | ------------------ | ----------------------------- |
@@ -261,70 +264,46 @@ Config file: `~/.config/driftwm/config.toml` (respects `XDG_CONFIG_HOME`).
 
 ```bash
 mkdir -p ~/.config/driftwm
-cp config.example.toml ~/.config/driftwm/config.toml
+cp /etc/driftwm/config.toml ~/.config/driftwm/config.toml
 ```
 
 Missing file uses built-in defaults. Partial configs merge with defaults —
 only specify what you want to change. Use `"none"` to unbind a default binding.
 Validate without starting: `driftwm --check-config`.
 
-### Window rules
-
-Match windows by `app_id` and/or `title` (glob patterns) to control placement,
-decoration, blur, and more:
-
 ```toml
-# Frosted-glass terminal
-[[window_rules]]
-app_id = "Alacritty"
-opacity = 0.85
-blur = true
-
-# Desktop widget — pinned, below normal windows, borderless
-[[window_rules]]
-app_id = "conky"
-position = [50, 50]
-widget = true
-decoration = "none"
-```
-
-### Autostart
-
-```toml
-autostart = [
-    "waybar",
-    "swaync",
-    "swayosd-server",
-]
+# Launch programs at startup
+autostart = ["waybar", "swaync", "swayosd-server"]
 ```
 
 See [`config.example.toml`](config.example.toml) for all options: input
 settings, scroll/momentum tuning, snap behavior, decorations, effects,
-per-output config, gesture bindings, and mouse bindings.
+per-output config, gesture bindings, mouse bindings, and window rules.
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the full design specification.
-
-## Ecosystem
-
-All external — the compositor delegates to standard Wayland tools:
-
-| Tool                  | Purpose               |
-| --------------------- | --------------------- |
-| waybar                | Status bar            |
-| fuzzel / wofi         | App launcher          |
-| mako / swaync         | Notifications         |
-| swaylock              | Lock screen           |
-| swayosd               | Volume/brightness OSD |
-| grim + slurp          | Screenshots           |
-| wlr-randr / wdisplays | Output configuration  |
+See [docs/DESIGN.md](docs/DESIGN.md) for the full compositor design specification.
 
 ## Example setup
 
-The [`extras/`](extras/) directory contains a complete rice — config files,
-GLSL shader wallpapers, Python widgets in alacritty windows with custom
-app IDs (clock, calendar, system stats, power menu), waybar taskbar/tray,
-fuzzel with a window-search script, and more. Window rules match the custom
-app IDs to pin the widgets in place and make them borderless.
+driftwm is just a compositor — everything else is standard Wayland tooling.
+If you're new to standalone Wayland compositors, here's what you'll want:
+
+| Tool                  | Purpose                                                        |
+| --------------------- | -------------------------------------------------------------- |
+| waybar                | Status bar / taskbar                                           |
+| crystal-dock          | macOS-style dock                                               |
+| fuzzel / wofi         | App launcher                                                   |
+| mako / swaync         | Notifications                                                  |
+| swaylock              | Lock screen                                                    |
+| swayidle / hypridle   | Idle timeout (lock, suspend)                                   |
+| swayosd               | Volume/brightness OSD                                          |
+| grim + slurp          | Screenshots                                                    |
+| wlr-randr / wdisplays | Output configuration                                           |
+| COSMIC Settings       | Wi-Fi, Bluetooth, sound (or nm-applet + blueman + pavucontrol) |
+
+The [`extras/`](extras/) directory contains a complete setup — driftwm config,
+GLSL shader wallpapers, Python widgets (clock, calendar, system stats, power
+menu), waybar with taskbar/tray, fuzzel window-search script, and window rules
+tying it all together. Use it as a starting point or steal pieces.
 
 See [`extras/README.md`](extras/README.md) for the full breakdown.
 

@@ -2,7 +2,7 @@
 # ln -sf ~/Documents/work/scripts/driftwm/extras/config.toml ~/.config/driftwm/config.toml
 
 autostart = [
-    "sh -c 'eval $(gnome-keyring-daemon --start --components=secrets,ssh) && systemctl --user import-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL && dbus-update-activation-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL'",
+    "eval $(gnome-keyring-daemon --start --components=secrets,ssh) && systemctl --user import-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL && dbus-update-activation-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL",
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "swayosd-server --top-margin 0.95",
     "swaync",
