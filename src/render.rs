@@ -990,46 +990,50 @@ pub fn compose_frame(
             let geo = window.geometry();
             let radius = state.config.decorations.corner_radius as f32;
 
-            // Only apply corner clip to CSD windows that have a shadow/border frame
-            // around the geometry (geo.loc != origin or geo.size < buffer size).
-            // Windows with decoration rule != client have CSD stripped — skip them.
-            // Windows where geometry fills the buffer (GTK4-style) handle corners
-            // themselves — applying our shader would create double-clip artifacts.
             let rule_forced = applied.as_ref().is_some_and(|r| {
                 r.decoration != driftwm::config::DecorationMode::Client
             });
-            let has_frame = geo.loc.x > 0 || geo.loc.y > 0;
 
-            if !rule_forced && has_frame && radius > 0.0 {
-                let toplevel_id = smithay::backend::renderer::element::Id::from_wayland_resource(&*wl_surface);
-                for elem in elems {
-                    if *elem.id() == toplevel_id {
-                        let buf = elem.buffer_size();
-                        let uniforms = vec![
-                            Uniform::new("u_size", (buf.w as f32, buf.h as f32)),
-                            Uniform::new("u_geo", (
-                                geo.loc.x as f32, geo.loc.y as f32,
-                                geo.size.w as f32, geo.size.h as f32,
-                            )),
-                            Uniform::new("u_radius", radius),
-                            Uniform::new("u_clip_top", 1.0f32),
-                            Uniform::new("u_clip_shadow", 1.0f32),
-                        ];
-                        target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
-                            RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, true),
-                            Point::<i32, Physical>::from((0, 0)),
-                            zoom,
-                        )));
-                    } else {
-                        target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
+            if !rule_forced {
+                if radius > 0.0 {
+                    let toplevel_id = smithay::backend::renderer::element::Id::from_wayland_resource(&*wl_surface);
+                    for elem in elems {
+                        if *elem.id() == toplevel_id {
+                            let buf = elem.buffer_size();
+                            let uniforms = vec![
+                                Uniform::new("u_size", (buf.w as f32, buf.h as f32)),
+                                Uniform::new("u_geo", (
+                                    geo.loc.x as f32, geo.loc.y as f32,
+                                    geo.size.w as f32, geo.size.h as f32,
+                                )),
+                                Uniform::new("u_radius", radius),
+                                Uniform::new("u_clip_top", 1.0f32),
+                                Uniform::new("u_clip_shadow", 1.0f32),
+                            ];
+                            target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
+                                RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, true),
+                                Point::<i32, Physical>::from((0, 0)),
+                                zoom,
+                            )));
+                        } else {
+                            target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
+                                elem,
+                                Point::<i32, Physical>::from((0, 0)),
+                                zoom,
+                            )));
+                        }
+                    }
+                } else {
+                    target.extend(elems.into_iter().map(|elem| {
+                        OutputRenderElements::Window(RescaleRenderElement::from_element(
                             elem,
                             Point::<i32, Physical>::from((0, 0)),
                             zoom,
-                        )));
-                    }
+                        ))
+                    }));
                 }
 
-                // Compositor shadow behind corner-clipped CSD windows (replaces CSD shadow)
+                // Compositor shadow behind CSD windows
                 if let Some(ref shadow_shader) = state.shadow_shader {
                     use driftwm::config::DecorationConfig;
                     let shadow_radius = DecorationConfig::SHADOW_RADIUS;
