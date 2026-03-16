@@ -1371,11 +1371,14 @@ impl DriftWm {
             }
         }
 
-        // Trackpad settings — only apply to newly connected devices
+        // Trackpad settings — reconfigure all connected devices
         if new_config.trackpad != self.config.trackpad {
-            tracing::info!(
-                "Config reload: trackpad settings changed — will apply to newly connected devices"
-            );
+            self.config.trackpad = new_config.trackpad.clone();
+            let devices = self.input_devices.clone();
+            for mut device in devices {
+                self.configure_libinput_device(&mut device);
+            }
+            tracing::info!("Config reload: trackpad settings applied to all devices");
         }
 
         // Env vars — diff old vs new, apply changes
