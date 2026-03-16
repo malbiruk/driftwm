@@ -5,16 +5,15 @@ autostart = [
     "/usr/libexec/polkit-gnome-authentication-agent-1",
     "swayosd-server --top-margin 0.95",
     "swaync",
-    "waybar -c ~/.config/waybar/taskbar.jsonc -s ~/.config/waybar/taskbar.css",
-    "sleep 1 && waybar -c ~/.config/waybar/tray.jsonc -s ~/.config/waybar/tray.css",
-    "vorta -d",
-    "~/Documents/work/scripts/driftwm/extras/widgets/launch.sh",
-    "~/Documents/work/scripts/driftwm/extras/scripts/battery_notify.sh",
-    "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 330 '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh' timeout 600 'systemctl suspend' before-sleep '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh'",
+     "waybar -c ~/.config/waybar/taskbar.jsonc -s ~/.config/waybar/taskbar.css",
+     "sleep 1 && waybar -c ~/.config/waybar/tray.jsonc -s ~/.config/waybar/tray.css",
+     "vorta -d",
+     "~/Documents/work/scripts/driftwm/extras/widgets/launch.sh",
+     "~/Documents/work/scripts/driftwm/extras/scripts/battery_notify.sh",
+     "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 330 '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh' timeout 600 'systemctl suspend' before-sleep '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh'",
 ]
 
 [env]
-QT_WAYLAND_DISABLE_WINDOWDECORATION = "1"
 QT_QPA_PLATFORMTHEME = "qt6ct"
 
 [input.keyboard]

@@ -290,27 +290,26 @@ impl CompositorHandler for DriftWm {
                         self.space.map_element(window.clone(), pos, activate);
                     }
 
-                    if let Some(ref rule) = rule && !already_applied {
-                        // Decoration override: none/server → force SSD on the protocol level
-                        if rule.decoration != driftwm::config::DecorationMode::Client {
-                            use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                            if let Some(toplevel) = window.toplevel() {
-                                toplevel.with_pending_state(|state| {
-                                    state.decoration_mode = Some(Mode::ServerSide);
-                                });
-                                toplevel.send_configure();
-                            }
-                            // Track in pending_ssd so the decoration creation check below sees it
-                            self.pending_ssd.insert(root.id());
+                    // Decoration override: always re-apply (idempotent, needed on tray reopen)
+                    if let Some(ref rule) = rule && rule.decoration != driftwm::config::DecorationMode::Client {
+                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                        if let Some(toplevel) = window.toplevel() {
+                            toplevel.with_pending_state(|state| {
+                                state.decoration_mode = Some(Mode::ServerSide);
+                            });
+                            toplevel.send_configure();
                         }
+                        self.pending_ssd.insert(root.id());
+                    }
 
+                    // Widget side-effects: only on first apply
+                    if let Some(ref rule) = rule && !already_applied {
                         if rule.widget {
                             self.enforce_below_windows();
                         }
 
                         if rule.widget {
                             self.focus_history.retain(|w| w != &window);
-                            // Refocus previous window if this was focused
                             if let Some(prev) = self.focus_history.first().cloned() {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 let keyboard = self.seat.get_keyboard().unwrap();
