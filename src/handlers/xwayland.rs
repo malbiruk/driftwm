@@ -16,7 +16,7 @@ use smithay::{
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
-        xwm::{Reorder, ResizeEdge, X11Wm, XwmHandler, XwmId},
+        xwm::{Reorder, ResizeEdge, WmWindowType, X11Wm, XwmHandler, XwmId},
         X11Surface,
     },
 };
@@ -311,6 +311,16 @@ impl XwmHandler for DriftWm {
         }
     }
 
+    fn minimize_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        window.set_mapped(true).ok();
+    }
+
+    fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        if let Some(w) = self.find_x11_window(&window) {
+            self.toggle_fit_window(&w);
+        }
+    }
+
     fn unfullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(smithay_window) = self.find_x11_window(&window)
             && let Some(wl_surface) = smithay_window.wl_surface()
@@ -372,8 +382,10 @@ impl XWaylandShellHandler for DriftWm {
             }
         }
 
-        // Focus — skip for widgets
-        let should_focus = rule.as_ref().is_none_or(|r| !r.widget);
+        // Focus — skip for widgets and child/utility X11 windows
+        let is_child = surface.is_transient_for().is_some()
+            || !matches!(surface.window_type(), None | Some(WmWindowType::Normal));
+        let should_focus = !is_child && rule.as_ref().is_none_or(|r| !r.widget);
         if should_focus {
             let serial = SERIAL_COUNTER.next_serial();
             let keyboard = self.seat.get_keyboard().unwrap();
