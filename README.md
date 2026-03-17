@@ -9,7 +9,9 @@ https://github.com/user-attachments/assets/df24e442-6ad0-4520-9491-cb666da06d05
 
 Traditional window managers arrange windows to fit your screen. driftwm flips this: windows float on an infinite 2D canvas and you move the viewport around them. Designed with laptops in mind — trackpad support keeps getting better while display size stays limited, so treating your screen as a camera onto a larger canvas makes sense. Pan, zoom, and navigate with trackpad gestures. No workspaces, no tiling — just drift.
 
-Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm) and [niri](https://github.com/YaLTeR/niri).
+Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm), [hevel](https://git.sr.ht/~dlm/hevel), and [niri](https://github.com/YaLTeR/niri).
+
+**WARNING:** This is experimental software. Use at your own risk.
 
 ## Concept
 
