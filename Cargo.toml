@@ -1,6 +1,6 @@
 [package]
 name = "driftwm"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 license = "GPL-3.0-or-later"
 authors = ["Klim Kostiuk <2601074@gmail.com>"]
