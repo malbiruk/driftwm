@@ -180,7 +180,7 @@ window-search script that lets you search and jump to any open window.
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screencasting (OBS, Firefox via xdg-desktop-portal)
 - Screenshots (grim + slurp)
-- Click-to-focus — no accidental focus changes while panning
+- Click-to-focus (default) or focus-follows-mouse (sloppy focus)
 - All bindings (keyboard, mouse, gesture) fully configurable via TOML
 - 30 Wayland protocols
 

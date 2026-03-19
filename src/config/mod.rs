@@ -34,6 +34,7 @@ const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
 
 pub struct Config {
     pub mod_key: ModKey,
+    pub focus_follows_mouse: bool,
     /// Multiplier for trackpad scroll and gesture pan deltas. 1.0 = raw trackpad.
     pub trackpad_speed: f64,
     /// Multiplier for mouse drag pan (Mod+LMB or LMB on canvas). 1.0 = direct.
@@ -430,6 +431,7 @@ impl Config {
 
         Self {
             mod_key,
+            focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
             trackpad_speed,
             mouse_speed,
             friction,

@@ -278,6 +278,42 @@ impl DriftWm {
         self.update_decoration_cursor(canvas_pos);
     }
 
+    /// Sloppy focus: when enabled, focus the non-widget window under the pointer
+    /// without raising it. Skips layers, widgets, and empty canvas.
+    fn maybe_hover_focus(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
+        if !self.config.focus_follows_mouse
+            || self.pointer_over_layer
+            || self.active_fullscreen().is_some()
+        {
+            return;
+        }
+        let window = self.space.element_under(canvas_pos).map(|(w, _)| w.clone());
+        let Some(window) = window else { return };
+        let is_widget = window
+            .wl_surface()
+            .and_then(|s| driftwm::config::applied_rule(&s))
+            .is_some_and(|r| r.widget);
+        if is_widget {
+            return;
+        }
+
+        let focus_surface = self
+            .topmost_modal_child(&window)
+            .or(Some(window))
+            .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
+
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let already_focused = focus_surface
+            .as_ref()
+            .is_some_and(|target| keyboard.current_focus().is_some_and(|f| f.0 == target.0));
+        if already_focused {
+            return;
+        }
+
+        let serial = SERIAL_COUNTER.next_serial();
+        keyboard.set_focus(self, focus_surface, serial);
+    }
+
     fn on_pointer_motion_absolute<I: InputBackend>(
         &mut self,
         event: I::PointerMotionAbsoluteEvent,
@@ -308,6 +344,7 @@ impl DriftWm {
         let time = Event::time_msec(&event);
         let pointer = self.seat.get_pointer().unwrap();
         self.dispatch_pointer_focus(&pointer, screen_pos, canvas_pos, serial, time);
+        self.maybe_hover_focus(canvas_pos);
     }
 
     /// Handle relative pointer motion (libinput mice/trackpads).
@@ -419,6 +456,7 @@ impl DriftWm {
         );
 
         self.dispatch_pointer_focus(&pointer, screen_pos, canvas_pos, serial, time);
+        self.maybe_hover_focus(canvas_pos);
     }
 
     /// Find the Wayland surface and local coordinates under the given canvas position.

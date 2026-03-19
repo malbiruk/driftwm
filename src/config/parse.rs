@@ -93,6 +93,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             Ok(Action::PanViewport(dir))
         }
         "center-window" => Ok(Action::CenterWindow),
+        "focus-center" => Ok(Action::FocusCenter),
         "center-nearest" => {
             let dir = parse_direction(arg.ok_or("center-nearest requires a direction")?)?;
             Ok(Action::CenterNearest(dir))
@@ -244,7 +245,7 @@ fn parse_continuous_action(s: &str) -> Option<ContinuousAction> {
 fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
     match s {
         "center-nearest" => Ok(Some(ThresholdAction::CenterNearest)),
-        "center-window" | "home-toggle" | "zoom-to-fit" | "zoom-in" | "zoom-out"
+        "center-window" | "focus-center" | "home-toggle" | "zoom-to-fit" | "zoom-in" | "zoom-out"
         | "zoom-reset" | "toggle-fullscreen" | "fit-window" | "reload-config" | "quit" | "close-window" => {
             let action = parse_action(s)?;
             Ok(Some(ThresholdAction::Fixed(action)))

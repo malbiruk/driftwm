@@ -146,6 +146,13 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
         (
             KeyCombo {
                 modifiers: m.clone(),
+                sym: Keysym::from(keysyms::KEY_x),
+            },
+            Action::FocusCenter,
+        ),
+        (
+            KeyCombo {
+                modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_Up),
             },
             Action::CenterNearest(Direction::Up),

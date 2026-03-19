@@ -251,12 +251,12 @@ fn toml_invalid_keybinding_is_skipped() {
 fn toml_invalid_action_is_skipped() {
     let toml = r#"
         [keybindings]
-        "Mod+x" = "not-a-real-action"
+        "Mod+y" = "not-a-real-action"
         "Mod+c" = "center-window"
     "#;
     let config = Config::from_toml(toml).unwrap();
     // The invalid action binding should be skipped
-    let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_x));
+    let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_y));
     assert!(result.is_none());
     // Valid binding should still work
     let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_c));

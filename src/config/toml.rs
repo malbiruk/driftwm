@@ -7,6 +7,7 @@ use serde::Deserialize;
 pub(super) struct ConfigFile {
     pub mod_key: Option<String>,
     pub cycle_modifier: Option<String>,
+    pub focus_follows_mouse: Option<bool>,
     pub input: InputConfig,
     pub cursor: CursorConfig,
     pub navigation: NavigationConfig,

@@ -151,6 +151,14 @@ impl DriftWm {
                     }
                 }
             }
+            Action::FocusCenter => {
+                let pointer = self.seat.get_pointer().unwrap();
+                let pos = pointer.current_location();
+                if let Some((window, _)) = self.space.element_under(pos) {
+                    let window = window.clone();
+                    self.navigate_to_window(&window, true);
+                }
+            }
             Action::CenterNearest(dir) => {
                 #[derive(Clone, PartialEq)]
                 enum NavTarget {

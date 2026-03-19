@@ -14,6 +14,8 @@ autostart = [
      "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 330 '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh' timeout 600 'systemctl suspend' before-sleep '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh'",
 ]
 
+focus_follows_mouse = true
+
 [env]
 QT_QPA_PLATFORMTHEME = "qt6ct"
 

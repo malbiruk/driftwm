@@ -401,12 +401,22 @@ Truly borderless. Used for widgets and special windows.
 
 ## Focus model
 
-**Click-to-focus.** Clicking or gesture-interacting with a window focuses and
-raises it. This avoids accidental focus changes when panning over windows.
+Two modes, configured via `focus_follows_mouse` (default: `false`):
+
+**Click-to-focus (default).** Clicking or gesture-interacting with a window
+focuses and raises it. Avoids accidental focus changes when panning over windows.
+
+**Focus-follows-mouse (sloppy focus).** Keyboard focus follows the pointer to
+windows without raising them. Moving to empty canvas preserves focus; clicking
+empty canvas unfocuses. Widgets and layer surfaces are ignored (click still
+focuses them).
+
+Common behavior in both modes:
 
 - Click on window → focus + raise
 - 3-finger drag on window → focus + raise (at gesture start)
 - 4-finger pan jump → focus + raise target window
+- `focus-center` (Mod+X) → focus + raise + center + reset zoom on window under pointer
 - During a gesture, keyboard input goes to the focused window (the one being
   dragged, or the previously focused window if gesturing on desktop)
 
