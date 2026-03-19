@@ -302,12 +302,19 @@ impl<K: Eq + Hash, V> ContextBindings<K, V> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AccelProfile {
+    Flat,
+    Adaptive,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackpadSettings {
     pub tap_to_click: bool,
     pub natural_scroll: bool,
     pub tap_and_drag: bool,
     pub accel_speed: f64,
+    pub accel_profile: AccelProfile,
     pub click_method: Option<String>,
 }
 
@@ -318,7 +325,25 @@ impl Default for TrackpadSettings {
             natural_scroll: true,
             tap_and_drag: true,
             accel_speed: 0.0,
+            accel_profile: AccelProfile::Adaptive,
             click_method: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct MouseDeviceSettings {
+    pub accel_speed: f64,
+    pub accel_profile: AccelProfile,
+    pub natural_scroll: bool,
+}
+
+impl Default for MouseDeviceSettings {
+    fn default() -> Self {
+        Self {
+            accel_speed: 0.0,
+            accel_profile: AccelProfile::Flat,
+            natural_scroll: false,
         }
     }
 }

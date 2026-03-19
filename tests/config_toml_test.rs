@@ -1,9 +1,9 @@
 use driftwm::config::{
-    Action, BindingContext, Config, ContinuousAction, GestureConfigEntry, GestureTrigger,
-    MouseAction, BTN_RIGHT,
+    Action, BTN_RIGHT, BindingContext, Config, ContinuousAction, GestureConfigEntry,
+    GestureTrigger, MouseAction,
 };
 use smithay::backend::input::AxisSource;
-use smithay::input::keyboard::{keysyms, Keysym, ModifiersState};
+use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
 
 // ── Modifier helpers ─────────────────────────────────────────────────────
 
@@ -53,7 +53,10 @@ fn toml_mod_key_alt_switches_all_bindings() {
     );
     // Super+q should NOT be bound
     let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_q));
-    assert!(result.is_none(), "Super+q should not be bound when mod_key=alt");
+    assert!(
+        result.is_none(),
+        "Super+q should not be bound when mod_key=alt"
+    );
 }
 
 #[test]
@@ -84,7 +87,10 @@ fn toml_keybinding_unbind_with_none() {
     "#;
     let config = Config::from_toml(toml).unwrap();
     let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_q));
-    assert!(result.is_none(), "Mod+q should be unbound after setting to none");
+    assert!(
+        result.is_none(),
+        "Mod+q should be unbound after setting to none"
+    );
     // Other bindings should still work
     let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_c));
     assert!(
@@ -114,8 +120,12 @@ fn toml_mouse_binding_unbind_with_none() {
         "Mod+wheel-scroll" = "none"
     "#;
     let config = Config::from_toml(toml).unwrap();
-    let result = config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Wheel, BindingContext::Anywhere);
-    assert!(result.is_none(), "Mod+wheel-scroll should be unbound after setting to none");
+    let result =
+        config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Wheel, BindingContext::Anywhere);
+    assert!(
+        result.is_none(),
+        "Mod+wheel-scroll should be unbound after setting to none"
+    );
 }
 
 #[test]
@@ -130,7 +140,10 @@ fn toml_gesture_section_parses() {
         &GestureTrigger::Swipe { fingers: 4 },
         BindingContext::Anywhere,
     );
-    assert!(entry.is_some(), "4-finger-swipe should be bound in gestures.anywhere");
+    assert!(
+        entry.is_some(),
+        "4-finger-swipe should be bound in gestures.anywhere"
+    );
 }
 
 #[test]
@@ -149,7 +162,10 @@ fn toml_gesture_context_priority() {
         BindingContext::OnWindow,
     );
     assert!(
-        matches!(entry, Some(GestureConfigEntry::Continuous(ContinuousAction::MoveWindow))),
+        matches!(
+            entry,
+            Some(GestureConfigEntry::Continuous(ContinuousAction::MoveWindow))
+        ),
         "on-window should take priority over anywhere"
     );
     // on-canvas should fall back to anywhere
@@ -159,7 +175,12 @@ fn toml_gesture_context_priority() {
         BindingContext::OnCanvas,
     );
     assert!(
-        matches!(entry, Some(GestureConfigEntry::Continuous(ContinuousAction::PanViewport))),
+        matches!(
+            entry,
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::PanViewport
+            ))
+        ),
         "on-canvas should fall back to anywhere"
     );
 }
@@ -171,7 +192,10 @@ fn toml_old_flat_mouse_section_is_rejected() {
         "alt+left" = "move-window"
     "#;
     let result = Config::from_toml(toml);
-    assert!(result.is_err(), "old flat [mouse] format should be rejected by deny_unknown_fields");
+    assert!(
+        result.is_err(),
+        "old flat [mouse] format should be rejected by deny_unknown_fields"
+    );
 }
 
 #[test]
@@ -188,10 +212,26 @@ fn toml_scalar_overrides() {
         step = 1.2
     "#;
     let config = Config::from_toml(toml).unwrap();
-    assert!((config.scroll_speed - 2.5).abs() < f64::EPSILON);
+    assert!((config.trackpad_speed - 2.5).abs() < f64::EPSILON);
     assert!((config.friction - 0.92).abs() < f64::EPSILON);
     assert_eq!(config.nudge_step, 50);
     assert!((config.zoom_step - 1.2).abs() < f64::EPSILON);
+}
+
+#[test]
+fn toml_new_navigation_fields_override_deprecated_scroll() {
+    let toml = r#"
+        [input.scroll]
+        speed = 2.5
+        friction = 0.92
+
+        [navigation]
+        trackpad_speed = 3.0
+        friction = 0.96
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert!((config.trackpad_speed - 3.0).abs() < f64::EPSILON);
+    assert!((config.friction - 0.96).abs() < f64::EPSILON);
 }
 
 #[test]
@@ -227,7 +267,10 @@ fn toml_invalid_action_is_skipped() {
 fn toml_deny_unknown_fields() {
     let toml = "typo_field = \"oops\"";
     let result = Config::from_toml(toml);
-    assert!(result.is_err(), "unknown top-level field should be rejected");
+    assert!(
+        result.is_err(),
+        "unknown top-level field should be rejected"
+    );
 }
 
 #[test]
@@ -241,7 +284,10 @@ fn toml_cycle_modifier_ctrl() {
     );
     // Alt+Tab should no longer be bound for cycling
     let result = config.lookup(&alt(), Keysym::from(keysyms::KEY_Tab));
-    assert!(result.is_none(), "Alt+Tab should not be bound when cycle_modifier=ctrl");
+    assert!(
+        result.is_none(),
+        "Alt+Tab should not be bound when cycle_modifier=ctrl"
+    );
 }
 
 #[test]
@@ -272,7 +318,12 @@ fn toml_gesture_anywhere_only_not_on_window() {
         BindingContext::Anywhere,
     );
     assert!(
-        matches!(entry, Some(GestureConfigEntry::Continuous(ContinuousAction::PanViewport))),
+        matches!(
+            entry,
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::PanViewport
+            ))
+        ),
         "Anywhere context should return the anywhere binding, not on-window"
     );
 }

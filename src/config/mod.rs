@@ -34,8 +34,10 @@ const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
 
 pub struct Config {
     pub mod_key: ModKey,
-    /// Multiplier for scroll deltas. Higher = faster initial scroll. 1.0 = raw trackpad.
-    pub scroll_speed: f64,
+    /// Multiplier for trackpad scroll and gesture pan deltas. 1.0 = raw trackpad.
+    pub trackpad_speed: f64,
+    /// Multiplier for mouse drag pan (Mod+LMB or LMB on canvas). 1.0 = direct.
+    pub mouse_speed: f64,
     /// Scroll momentum decay factor per frame. 0.92 = snappy, 0.96 = floaty.
     pub friction: f64,
     /// Pixels per keyboard nudge (Mod+Shift+Arrow).
@@ -64,6 +66,7 @@ pub struct Config {
     pub snap_break_force: f64,
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
+    pub mouse_device: MouseDeviceSettings,
     pub gesture_thresholds: GestureThresholds,
     pub layout_independent: bool,
     pub keyboard_layout: KeyboardLayout,
@@ -320,12 +323,38 @@ impl Config {
 
         let trackpad = {
             let t = &raw.input.trackpad;
+            let accel_profile = match t.accel_profile.as_deref() {
+                Some("flat") => AccelProfile::Flat,
+                Some("adaptive") | None => AccelProfile::Adaptive,
+                Some(other) => {
+                    tracing::warn!("Unknown trackpad accel_profile '{other}', using adaptive");
+                    AccelProfile::Adaptive
+                }
+            };
             TrackpadSettings {
                 tap_to_click: t.tap_to_click.unwrap_or(true),
                 natural_scroll: t.natural_scroll.unwrap_or(true),
                 tap_and_drag: t.tap_and_drag.unwrap_or(true),
                 accel_speed: t.accel_speed.unwrap_or(0.0).clamp(-1.0, 1.0),
+                accel_profile,
                 click_method: t.click_method.clone(),
+            }
+        };
+
+        let mouse_device = {
+            let m = &raw.input.mouse;
+            let accel_profile = match m.accel_profile.as_deref() {
+                Some("adaptive") => AccelProfile::Adaptive,
+                Some("flat") | None => AccelProfile::Flat,
+                Some(other) => {
+                    tracing::warn!("Unknown mouse accel_profile '{other}', using flat");
+                    AccelProfile::Flat
+                }
+            };
+            MouseDeviceSettings {
+                accel_speed: m.accel_speed.unwrap_or(0.0).clamp(-1.0, 1.0),
+                accel_profile,
+                natural_scroll: m.natural_scroll.unwrap_or(false),
             }
         };
 
@@ -376,10 +405,34 @@ impl Config {
 
         let effects = parse_effects_config(raw.effects);
 
+        // Deprecation: [input.scroll] → [navigation] trackpad_speed / friction
+        let trackpad_speed = if let Some(s) = raw.navigation.trackpad_speed {
+            s
+        } else if let Some(s) = raw.input.scroll.speed {
+            tracing::warn!(
+                "[input.scroll] speed is deprecated, use [navigation] trackpad_speed instead"
+            );
+            s
+        } else {
+            1.5
+        };
+        let mouse_speed = raw.navigation.mouse_speed.unwrap_or(1.0);
+        let friction = if let Some(f) = raw.navigation.friction {
+            f
+        } else if let Some(f) = raw.input.scroll.friction {
+            tracing::warn!(
+                "[input.scroll] friction is deprecated, use [navigation] friction instead"
+            );
+            f
+        } else {
+            0.94
+        };
+
         Self {
             mod_key,
-            scroll_speed: raw.input.scroll.speed.unwrap_or(1.5),
-            friction: raw.input.scroll.friction.unwrap_or(0.94),
+            trackpad_speed,
+            mouse_speed,
+            friction,
             nudge_step: raw.navigation.nudge_step.unwrap_or(20),
             pan_step: raw.navigation.pan_step.unwrap_or(100.0),
             repeat_delay: raw.input.keyboard.repeat_delay.unwrap_or(200),
@@ -399,6 +452,7 @@ impl Config {
             decorations,
             effects,
             trackpad,
+            mouse_device,
             gesture_thresholds,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),
             keyboard_layout,

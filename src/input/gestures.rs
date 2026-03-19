@@ -75,6 +75,20 @@ pub enum GestureState {
 
 pub(crate) const DOUBLE_TAP_WINDOW_MS: u64 = 300;
 
+fn set_accel_profile(
+    device: &mut smithay::reexports::input::Device,
+    profile: driftwm::config::AccelProfile,
+) {
+    use driftwm::config::AccelProfile;
+    let libinput_profile = match profile {
+        AccelProfile::Flat => smithay::reexports::input::AccelProfile::Flat,
+        AccelProfile::Adaptive => smithay::reexports::input::AccelProfile::Adaptive,
+    };
+    if let Err(e) = device.config_accel_set_profile(libinput_profile) {
+        tracing::warn!("Failed to set accel_profile: {e:?}");
+    }
+}
+
 impl DriftWm {
     // ── Swipe ──────────────────────────────────────────────────────────
 
@@ -249,7 +263,7 @@ impl DriftWm {
 
         match state {
             GestureState::SwipePan => {
-                let s = self.config.scroll_speed;
+                let s = self.config.trackpad_speed;
                 let canvas_delta: Point<f64, Logical> =
                     (-delta.x * s / zoom, -delta.y * s / zoom).into();
                 if let Some(output) = self.gesture_output.clone() {
@@ -704,21 +718,25 @@ impl DriftWm {
 
     // ── DeviceAdded ────────────────────────────────────────────────────
 
-    /// Configure a libinput device using trackpad settings from config.
-    /// Called from the udev backend where we know the concrete device type.
+    /// Configure a libinput device using settings from config.
+    /// Trackpads get trackpad settings, mice get mouse settings.
     pub fn configure_libinput_device(&self, device: &mut smithay::reexports::input::Device) {
-        // Only configure touchpads (identified by tap support)
-        if device.config_tap_finger_count() == 0 {
-            return;
+        if device.config_tap_finger_count() > 0 {
+            self.configure_trackpad(device);
+        } else if device.has_capability(smithay::reexports::input::DeviceCapability::Pointer) {
+            self.configure_mouse(device);
         }
+    }
 
+    fn configure_trackpad(&self, device: &mut smithay::reexports::input::Device) {
         let cfg = &self.config.trackpad;
         tracing::info!(
-            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, click_method={:?})",
+            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, profile={:?}, click_method={:?})",
             device.name(),
             cfg.tap_to_click,
             cfg.natural_scroll,
             cfg.accel_speed,
+            cfg.accel_profile,
             cfg.click_method,
         );
 
@@ -742,6 +760,7 @@ impl DriftWm {
         if let Err(e) = device.config_accel_set_speed(cfg.accel_speed) {
             tracing::warn!("Failed to set accel_speed: {e:?}");
         }
+        set_accel_profile(device, cfg.accel_profile);
         if let Some(ref method) = cfg.click_method {
             let click = match method.as_str() {
                 "none" => None,
@@ -757,6 +776,25 @@ impl DriftWm {
             {
                 tracing::warn!("Failed to set click_method: {e:?}");
             }
+        }
+    }
+
+    fn configure_mouse(&self, device: &mut smithay::reexports::input::Device) {
+        let cfg = &self.config.mouse_device;
+        tracing::info!(
+            "Configuring mouse: {} (accel={}, profile={:?}, natural_scroll={})",
+            device.name(),
+            cfg.accel_speed,
+            cfg.accel_profile,
+            cfg.natural_scroll,
+        );
+
+        if let Err(e) = device.config_accel_set_speed(cfg.accel_speed) {
+            tracing::warn!("Failed to set mouse accel_speed: {e:?}");
+        }
+        set_accel_profile(device, cfg.accel_profile);
+        if let Err(e) = device.config_scroll_set_natural_scroll_enabled(cfg.natural_scroll) {
+            tracing::warn!("Failed to set mouse natural_scroll: {e:?}");
         }
     }
 

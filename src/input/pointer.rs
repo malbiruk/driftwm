@@ -461,7 +461,7 @@ impl DriftWm {
                         if source == AxisSource::Finger {
                             self.set_last_scroll_pan(Some(std::time::Instant::now()));
                         }
-                        let s = self.config.scroll_speed;
+                        let s = self.config.trackpad_speed;
                         let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
                             h * s / self.zoom(),
                             v * s / self.zoom(),
@@ -489,7 +489,7 @@ impl DriftWm {
                         .or_else(|| event.amount_v120(Axis::Vertical).map(|v| v * 15.0 / 120.0))
                         .unwrap_or(0.0);
                     if v != 0.0 {
-                        let steps = -v * self.config.scroll_speed / 30.0;
+                        let steps = -v / 30.0;
                         let factor = self.config.zoom_step.powf(steps);
                         let cur_zoom = self.zoom();
                         let new_zoom = (cur_zoom * factor).clamp(self.min_zoom(), canvas::MAX_ZOOM);

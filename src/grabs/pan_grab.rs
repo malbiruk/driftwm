@@ -52,9 +52,11 @@ impl PointerGrab<DriftWm> for PanGrab {
         let current_screen_pos = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
         let screen_delta = current_screen_pos - self.last_screen_pos;
 
-        // Dragging right → camera decreases → negate; convert screen→canvas delta
-        // No scroll_speed here — drag-pan is direct manipulation (1:1 with cursor)
-        let camera_delta = Point::from((-screen_delta.x / zoom, -screen_delta.y / zoom));
+        let mouse_speed = data.config.mouse_speed;
+        let camera_delta = Point::from((
+            -screen_delta.x * mouse_speed / zoom,
+            -screen_delta.y * mouse_speed / zoom,
+        ));
         data.drift_pan_on(camera_delta, &self.output);
         self.last_screen_pos = current_screen_pos;
 

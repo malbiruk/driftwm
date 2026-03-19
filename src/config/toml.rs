@@ -39,6 +39,7 @@ pub(super) struct InputConfig {
     pub keyboard: KeyboardConfig,
     pub scroll: ScrollConfig,
     pub trackpad: TrackpadConfig,
+    pub mouse: MouseDeviceFileConfig,
 }
 
 #[derive(Deserialize, Default)]
@@ -48,7 +49,16 @@ pub(super) struct TrackpadConfig {
     pub natural_scroll: Option<bool>,
     pub tap_and_drag: Option<bool>,
     pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
     pub click_method: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct MouseDeviceFileConfig {
+    pub accel_speed: Option<f64>,
+    pub accel_profile: Option<String>,
+    pub natural_scroll: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -84,6 +94,9 @@ pub(super) struct NavigationConfig {
     pub animation_speed: Option<f64>,
     pub nudge_step: Option<i32>,
     pub pan_step: Option<f64>,
+    pub trackpad_speed: Option<f64>,
+    pub mouse_speed: Option<f64>,
+    pub friction: Option<f64>,
     pub anchors: Option<Vec<[f64; 2]>>,
     pub edge_pan: EdgePanConfig,
 }
