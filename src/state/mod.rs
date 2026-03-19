@@ -1226,14 +1226,16 @@ impl DriftWm {
         )))
     }
 
-    /// Offset a spawn position so it doesn't perfectly overlap an existing window.
-    /// Walks in diagonal steps (title bar height) until no window shares the same top-left corner.
+    /// Offset a spawn position so it doesn't overlap an existing window.
+    /// Walks in diagonal steps (title bar height) until no window is within a few pixels.
     pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
         let step = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
         loop {
             let dominated = self.space.elements().any(|w| {
                 w != skip
-                    && self.space.element_location(w) == Some((pos.0, pos.1).into())
+                    && self.space.element_location(w).is_some_and(|loc| {
+                        (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2
+                    })
             });
             if !dominated {
                 break pos;

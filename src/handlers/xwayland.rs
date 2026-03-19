@@ -83,14 +83,15 @@ impl XwmHandler for DriftWm {
             let will_have_ssd = smithay_window.wants_ssd()
                 || rule.as_ref().is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
             let bar = if will_have_ssd { driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 } else { 0.0 };
+            let vc = self.usable_center_screen();
             let centered = self.active_output()
                 .and_then(|o| self.space.output_geometry(&o))
-                .map(|viewport| {
+                .map(|_| {
                     let cam = self.camera();
                     let z = self.zoom();
                     (
-                        (cam.x + viewport.size.w as f64 / (2.0 * z)).round() as i32 - geo.size.w / 2,
-                        (cam.y + bar / 2.0 + viewport.size.h as f64 / (2.0 * z)).round() as i32 - geo.size.h / 2,
+                        (cam.x + vc.x / z).round() as i32 - geo.size.w / 2,
+                        (cam.y + bar / 2.0 + vc.y / z).round() as i32 - geo.size.h / 2,
                     )
                 })
                 .unwrap_or((0, 0));
