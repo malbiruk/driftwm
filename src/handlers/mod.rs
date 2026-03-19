@@ -202,6 +202,11 @@ impl XdgActivationHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&surface))
             .cloned();
         if let Some(window) = window {
+            // Skip windows that haven't rendered yet — navigate_to_window on a
+            // zero-sized window sets a fractional camera that breaks cascade.
+            if window.geometry().size.w == 0 || window.geometry().size.h == 0 {
+                return;
+            }
             let mostly_visible = self.space.element_location(&window).is_some_and(|loc| {
                 driftwm::canvas::visible_fraction(
                     loc,

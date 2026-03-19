@@ -1194,6 +1194,23 @@ impl DriftWm {
         )))
     }
 
+    /// Offset a spawn position so it doesn't perfectly overlap an existing window.
+    /// Walks in diagonal steps (title bar height) until no window shares the same top-left corner.
+    pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
+        let step = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
+        loop {
+            let dominated = self.space.elements().any(|w| {
+                w != skip
+                    && self.space.element_location(w) == Some((pos.0, pos.1).into())
+            });
+            if !dominated {
+                break pos;
+            }
+            pos.0 += step;
+            pos.1 += step;
+        }
+    }
+
     /// Write viewport center + zoom to `$XDG_RUNTIME_DIR/driftwm/state` if changed.
     /// Atomic: writes to .tmp then renames.
     pub fn write_state_file_if_dirty(&mut self) {

@@ -276,14 +276,15 @@ impl CompositorHandler for DriftWm {
                                 let output = self.active_output();
                                 output.and_then(|o| self.space.output_geometry(&o))
                             };
-                            if let Some(output_geo) = output_geo {
+                            let centered = if let Some(output_geo) = output_geo {
                                 let cam = self.camera(); let z = self.zoom();
-                                let cx = (cam.x + output_geo.size.w as f64 / (2.0 * z)) as i32 - geo.size.w / 2;
-                                let cy = (cam.y + output_geo.size.h as f64 / (2.0 * z)) as i32 - geo.size.h / 2;
+                                let cx = (cam.x + output_geo.size.w as f64 / (2.0 * z)).round() as i32 - geo.size.w / 2;
+                                let cy = (cam.y + output_geo.size.h as f64 / (2.0 * z)).round() as i32 - geo.size.h / 2;
                                 (cx, cy)
                             } else {
                                 (0, 0)
-                            }
+                            };
+                            self.cascade_position(centered, &window)
                         };
 
                         let activate = rule.as_ref().is_none_or(|r| !r.widget);
@@ -320,7 +321,8 @@ impl CompositorHandler for DriftWm {
                     }
 
                     if has_size {
-                        if rule.as_ref().is_some_and(|r| r.position.is_some() && !r.widget) {
+                        let is_widget = rule.as_ref().is_some_and(|r| r.widget);
+                        if !is_widget {
                             self.navigate_to_window(&window, true);
                         }
 

@@ -159,10 +159,10 @@
 # "mod+0" = "zoom-reset"
 # "mod+z" = "zoom-reset"
 # "mod+w" = "zoom-to-fit"
-# "mod+1" = "go-to -1750 1750"     # top-left
-# "mod+2" = "go-to 1750 1750"      # top-right
-# "mod+3" = "go-to 1750 -1750"     # bottom-right
-# "mod+4" = "go-to -1750 -1750"    # bottom-left
+# "mod+1" = "go-to -1750 1750"     # top-left bookmark
+# "mod+2" = "go-to 1750 1750"      # top-right bookmark
+# "mod+3" = "go-to 1750 -1750"     # bottom-right bookmark
+# "mod+4" = "go-to -1750 -1750"    # bottom-left bookmark
 # "mod+alt+up" = "send-to-output up"        # move window to output above
 # "mod+alt+down" = "send-to-output down"
 # "mod+alt+left" = "send-to-output left"

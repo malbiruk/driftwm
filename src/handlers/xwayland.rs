@@ -77,17 +77,24 @@ impl XwmHandler for DriftWm {
             // Rule coords: window-center, Y-up. Convert to canvas: top-left, Y-down.
             (x - geo.size.w / 2, -y - geo.size.h / 2)
         } else {
-            self.active_output()
+            // Account for SSD title bar so the visual center matches viewport center.
+            // navigate_to_window uses camera_to_center_window which offsets by bar/2;
+            // the spawn position must be the exact inverse so cascade detects collisions.
+            let will_have_ssd = smithay_window.wants_ssd()
+                || rule.as_ref().is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
+            let bar = if will_have_ssd { driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 } else { 0.0 };
+            let centered = self.active_output()
                 .and_then(|o| self.space.output_geometry(&o))
                 .map(|viewport| {
                     let cam = self.camera();
                     let z = self.zoom();
                     (
-                        (cam.x + viewport.size.w as f64 / (2.0 * z)) as i32 - geo.size.w / 2,
-                        (cam.y + viewport.size.h as f64 / (2.0 * z)) as i32 - geo.size.h / 2,
+                        (cam.x + viewport.size.w as f64 / (2.0 * z)).round() as i32 - geo.size.w / 2,
+                        (cam.y + bar / 2.0 + viewport.size.h as f64 / (2.0 * z)).round() as i32 - geo.size.h / 2,
                     )
                 })
-                .unwrap_or((0, 0))
+                .unwrap_or((0, 0));
+            self.cascade_position(centered, &smithay_window)
         };
 
         // Only send configure if no rule size was applied (avoids redundant call)
@@ -382,14 +389,12 @@ impl XWaylandShellHandler for DriftWm {
             }
         }
 
-        // Focus — skip for widgets and child/utility X11 windows
+        // Focus + navigate — skip for widgets and child/utility X11 windows
         let is_child = surface.is_transient_for().is_some()
             || !matches!(surface.window_type(), None | Some(WmWindowType::Normal));
         let should_focus = !is_child && rule.as_ref().is_none_or(|r| !r.widget);
         if should_focus {
-            let serial = SERIAL_COUNTER.next_serial();
-            let keyboard = self.seat.get_keyboard().unwrap();
-            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+            self.navigate_to_window(&smithay_window, true);
         } else {
             // Widget: refocus previous window if this stole focus
             self.focus_history.retain(|w| w != &smithay_window);
