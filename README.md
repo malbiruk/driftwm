@@ -17,8 +17,7 @@ Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https
 
 Think Figma or Google Maps, but for your desktop. Your screen is a viewport
 onto an infinite canvas where windows live. Pan around to find what you need,
-zoom out to see everything at once, zoom back in to focus. Place windows
-anywhere — there are no edges, no workspaces, no grids.
+zoom out to see everything at once, zoom back in to focus.
 
 Zoom is cursor-anchored — the point under your cursor stays fixed as you zoom
 in or out, just like pinch-to-zoom on a map. Multiple monitors are just
