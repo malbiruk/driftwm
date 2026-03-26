@@ -316,6 +316,7 @@ impl XdgShellHandler for DriftWm {
             output,
             last_clamped_location,
             last_x11_configure: None,
+            snap: driftwm::snap::SnapState::default(),
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

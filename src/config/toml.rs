@@ -124,6 +124,7 @@ pub(super) struct SnapConfig {
     pub gap: Option<f64>,
     pub distance: Option<f64>,
     pub break_force: Option<f64>,
+    pub same_edge: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

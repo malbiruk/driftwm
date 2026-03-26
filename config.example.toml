@@ -77,6 +77,7 @@
 # gap = 12.0                   # gap between snapped windows (canvas px)
 # distance = 24.0              # activation threshold (screen px from edge)
 # break_force = 32.0           # screen px past snap to break free
+# same_edge = false            # also snap same edges (left-to-left, top-to-top)
 
 [decorations]
 # bg_color = "#303030"           # title bar background (default: dark gray)

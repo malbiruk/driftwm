@@ -270,6 +270,7 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 gap,
                 threshold: effective_distance,
                 break_force: effective_break,
+                same_edge: data.config.snap_same_edge,
             };
             let final_x = update_axis(
                 &mut self.snap.x, &mut self.snap.cooldown_x, natural_x, &params_x,
@@ -286,6 +287,7 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 gap,
                 threshold: effective_distance,
                 break_force: effective_break,
+                same_edge: data.config.snap_same_edge,
             };
             let final_visual_y = update_axis(
                 &mut self.snap.y, &mut self.snap.cooldown_y, visual_y, &params_y,
