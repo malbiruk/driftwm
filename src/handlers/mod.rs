@@ -245,14 +245,34 @@ impl DataControlHandler for DriftWm {
 delegate_data_control!(DriftWm);
 
 impl PointerConstraintsHandler for DriftWm {
-    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {}
+    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {
+        self.maybe_activate_pointer_constraint();
+    }
 
     fn cursor_position_hint(
         &mut self,
-        _surface: &WlSurface,
-        _pointer: &PointerHandle<Self>,
-        _location: Point<f64, Logical>,
+        surface: &WlSurface,
+        pointer: &PointerHandle<Self>,
+        location: Point<f64, Logical>,
     ) {
+        use smithay::wayland::pointer_constraints::with_pointer_constraint;
+
+        let is_active = with_pointer_constraint(surface, pointer, |c| {
+            c.is_some_and(|c| c.is_active())
+        });
+        if !is_active {
+            return;
+        }
+
+        // location is surface-local. Find the surface's canvas origin to convert.
+        let window = self.space.elements().find(|w| {
+            w.wl_surface().as_deref() == Some(surface)
+        }).cloned();
+        if let Some(window) = window
+            && let Some(loc) = self.space.element_location(&window)
+        {
+            self.pointer_position_hint = Some(loc.to_f64() + location);
+        }
     }
 }
 
