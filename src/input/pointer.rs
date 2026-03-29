@@ -138,6 +138,16 @@ impl DriftWm {
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
             if let Some((window, hit)) = self.decoration_under(pos) {
+                // Decoration interactions must only apply to the topmost window.
+                // Otherwise a lower SSD title bar/border can steal clicks through
+                // an overlapping window.
+                if self
+                    .surface_under(pos, None)
+                    .and_then(|(target, _)| self.window_for_surface(&target.0))
+                    .is_some_and(|top| top != window)
+                {
+                    // Occluded decoration hit; continue normal dispatch.
+                } else {
                 let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
                 let is_widget = config::applied_rule(&wl_surface)
                     .is_some_and(|r| r.widget);
@@ -181,13 +191,7 @@ impl DriftWm {
                             return;
                         }
                         DecorationHit::ResizeBorder(edge) if !is_widget => {
-                            self.space.raise_element(&window, true);
-                            keyboard.set_focus(
-                                self,
-                                Some(FocusTarget(wl_surface.clone())),
-                                serial,
-                            );
-                            self.enforce_below_windows();
+                            self.raise_and_focus(&window, serial);
                             self.start_compositor_resize_with_edge(
                                 &pointer, &window, pos, button, serial, Some(edge),
                             );
@@ -203,6 +207,7 @@ impl DriftWm {
                         }
                     }
                 }
+                }
             }
 
             // Check configured mouse bindings (context-aware)
@@ -215,10 +220,8 @@ impl DriftWm {
                             && let Some(surface) = window.wl_surface()
                             && !config::applied_rule(&surface).is_some_and(|r| r.widget)
                         {
-                            self.space.raise_element(&window, true);
-                            let wl_surface = surface.into_owned();
-                            keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
-                            self.enforce_below_windows();
+                            self.raise_and_focus(&window, serial);
+
                             let initial_window_location =
                                 self.space.element_location(&window).unwrap();
                             let start_data = GrabStartData {
@@ -244,11 +247,8 @@ impl DriftWm {
                                 .and_then(|s| config::applied_rule(&s))
                                 .is_some_and(|r| r.widget)
                         {
-                            self.space.raise_element(&window, true);
-                            if let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) {
-                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
-                            }
-                            self.enforce_below_windows();
+                            self.raise_and_focus(&window, serial);
+
                             self.start_compositor_resize(
                                 &pointer, &window, pos, button, serial,
                             );
