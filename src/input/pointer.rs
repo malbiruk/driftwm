@@ -379,8 +379,8 @@ impl DriftWm {
             });
         }
 
-        self.grab_cursor = true;
-        self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
+        self.cursor.grab_cursor = true;
+        self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
 
         let start_data = GrabStartData {
             focus: None,

@@ -99,8 +99,8 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
     // 3. Global animations (key repeat, cursor) → mark all dirty
     // mark_all_dirty() uses active_crtcs on DriftWm, not dev.surfaces
     if data.held_action.is_some()
-        || data.exec_cursor_show_at.is_some()
-        || data.exec_cursor_deadline.is_some()
+        || data.cursor.exec_cursor_show_at.is_some()
+        || data.cursor.exec_cursor_deadline.is_some()
         || data.cursor_is_animated()
     {
         data.mark_all_dirty();

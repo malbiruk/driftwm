@@ -1,13 +1,15 @@
 mod animation;
+mod cursor;
 pub mod fit;
 mod fullscreen;
 mod navigation;
 mod render_cache;
+pub use cursor::{CursorFrames, CursorState};
 pub use render_cache::RenderCache;
 
 use smithay::{
     desktop::{PopupManager, Space, Window},
-    input::{Seat, SeatState, keyboard::XkbConfig, pointer::CursorImageStatus},
+    input::{Seat, SeatState, keyboard::XkbConfig},
     output::Output,
     reexports::{
         calloop::{LoopHandle, LoopSignal},
@@ -32,11 +34,9 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Instant;
 
-use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::damage::OutputDamageTracker;
-use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::backend::renderer::gles::GlesTexture;
-use smithay::utils::{Physical, Transform};
+use smithay::utils::Physical;
 use smithay::wayland::content_type::ContentTypeState;
 use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
@@ -71,14 +71,6 @@ use crate::input::gestures::GestureState;
 use driftwm::canvas::MomentumState;
 use driftwm::config::Config;
 use driftwm::window_ext::WindowExt;
-
-/// All animation frames for a loaded xcursor, at a single nominal size.
-pub struct CursorFrames {
-    /// (buffer, hotspot, delay_ms) per frame.
-    pub frames: Vec<(MemoryRenderBuffer, Point<i32, Logical>, u32)>,
-    /// Sum of all frame delays. 0 = static cursor (single frame or all delays zero).
-    pub total_duration_ms: u32,
-}
 
 /// A layer surface placed at a fixed canvas position (instead of screen-anchored via LayerMap).
 /// Created when a layer surface's namespace matches a window rule with `position`.
@@ -277,14 +269,7 @@ pub struct DriftWm {
     pub seat: Seat<DriftWm>,
 
     // -- global: cursor --
-    pub cursor_status: CursorImageStatus,
-    /// True while a compositor grab (pan/resize) owns the cursor icon.
-    pub grab_cursor: bool,
-    /// Cursor warp target from a locked pointer's position hint (canvas coords).
-    pub pointer_position_hint: Option<Point<f64, Logical>>,
-    /// True while the pointer is over an SSD decoration area.
-    pub decoration_cursor: bool,
-    pub cursor_buffers: HashMap<String, CursorFrames>,
+    pub cursor: CursorState,
 
     // -- global: backend --
     pub backend: Option<Backend>,
@@ -387,9 +372,6 @@ pub struct DriftWm {
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
 
-    // -- global: loading cursor --
-    pub exec_cursor_show_at: Option<Instant>,
-    pub exec_cursor_deadline: Option<Instant>,
 
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
@@ -543,11 +525,7 @@ impl DriftWm {
             seat_state,
             data_device_state,
             seat,
-            cursor_status: CursorImageStatus::default_named(),
-            grab_cursor: false,
-            pointer_position_hint: None,
-            decoration_cursor: false,
-            cursor_buffers: HashMap::new(),
+            cursor: CursorState::new(),
             backend: None,
             decorations: HashMap::new(),
             pending_ssd: HashSet::new(),
@@ -603,8 +581,6 @@ impl DriftWm {
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
-            exec_cursor_show_at: None,
-            exec_cursor_deadline: None,
             config_file_mtime: None,
             last_animation_tick: Instant::now(),
             focused_output: None,
@@ -834,15 +810,8 @@ impl DriftWm {
         self.render.remove_capture_state(output_name);
     }
 
-    /// True if the current cursor is an animated xcursor (multiple frames with delays).
     pub fn cursor_is_animated(&self) -> bool {
-        let name = match &self.cursor_status {
-            CursorImageStatus::Named(icon) => icon.name(),
-            _ => return false,
-        };
-        self.cursor_buffers
-            .get(name)
-            .is_some_and(|cf| cf.total_duration_ms > 0)
+        self.cursor.is_animated()
     }
 
     /// True if a specific output has per-output animations in progress.
@@ -856,15 +825,14 @@ impl DriftWm {
     }
 
     /// True if any animation is still in progress and needs continued rendering.
-    #[allow(dead_code)]
     pub fn has_active_animations(&self) -> bool {
         self.space
             .outputs()
             .any(|o| self.output_has_active_animations(o))
             || self.held_action.is_some()
-            || self.exec_cursor_show_at.is_some()
-            || self.exec_cursor_deadline.is_some()
-            || self.cursor_is_animated()
+            || self.cursor.exec_cursor_show_at.is_some()
+            || self.cursor.exec_cursor_deadline.is_some()
+            || self.cursor.is_animated()
     }
 
     /// Forward a buffered middle-click press+release to the client.
@@ -1452,7 +1420,7 @@ impl DriftWm {
             }
 
             if theme_ok || size_changed {
-                self.cursor_buffers.clear();
+                self.cursor.cursor_buffers.clear();
             }
         }
 
@@ -1485,67 +1453,8 @@ impl DriftWm {
         tracing::info!("Config reloaded");
     }
 
-    /// Load all xcursor animation frames by name and cache them.
-    /// Returns a reference to the cached `CursorFrames`.
     pub fn load_xcursor(&mut self, name: &str) -> Option<&CursorFrames> {
-        if !self.cursor_buffers.contains_key(name) {
-            let theme_name = std::env::var("XCURSOR_THEME").unwrap_or_else(|_| "default".into());
-            let theme = xcursor::CursorTheme::load(&theme_name);
-            let path = theme.load_icon(name)?;
-            let data = std::fs::read(path).ok()?;
-            let images = xcursor::parser::parse_xcursor(&data)?;
-
-            let target_size = std::env::var("XCURSOR_SIZE")
-                .ok()
-                .and_then(|s| s.parse::<u32>().ok())
-                .unwrap_or(24);
-
-            // Find the nominal size closest to target
-            let best_size = images
-                .iter()
-                .map(|img| img.size)
-                .min_by_key(|&s| (s as i32 - target_size as i32).unsigned_abs())?;
-
-            // Collect all frames at that size
-            let mut frames = Vec::new();
-            let mut total_delay: u32 = 0;
-            for img in &images {
-                if img.size != best_size {
-                    continue;
-                }
-                let buffer = MemoryRenderBuffer::from_slice(
-                    &img.pixels_rgba,
-                    Fourcc::Abgr8888,
-                    (img.width as i32, img.height as i32),
-                    1,
-                    Transform::Normal,
-                    None,
-                );
-                let hotspot = Point::from((img.xhot as i32, img.yhot as i32));
-                frames.push((buffer, hotspot, img.delay));
-                total_delay = total_delay.saturating_add(img.delay);
-            }
-
-            if frames.is_empty() {
-                return None;
-            }
-
-            // Single frame or all delays zero → static cursor
-            let total_duration_ms = if frames.len() == 1 || total_delay == 0 {
-                0
-            } else {
-                total_delay
-            };
-
-            self.cursor_buffers.insert(
-                name.to_string(),
-                CursorFrames {
-                    frames,
-                    total_duration_ms,
-                },
-            );
-        }
-        self.cursor_buffers.get(name)
+        self.cursor.load_xcursor(name)
     }
 
     /// Build snap target rectangles for all windows except `exclude`, skipping widgets.

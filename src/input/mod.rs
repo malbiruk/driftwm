@@ -367,7 +367,7 @@ impl DriftWm {
             }
 
             // Warp pointer to hint position if one was set during a lock
-            if let Some(hint) = self.pointer_position_hint.take() {
+            if let Some(hint) = self.cursor.pointer_position_hint.take() {
                 let focus_with_origin = new_focus.as_ref().and_then(|f| {
                     let origin = window_origin_for_surface(self, &f.0)?;
                     Some((f.clone(), origin))
@@ -680,36 +680,36 @@ impl DriftWm {
     /// Update cursor icon based on what decoration area the pointer is over.
     /// Called after pointer motion to set resize/pointer cursors for SSD areas.
     fn update_decoration_cursor(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
-        if self.grab_cursor || self.pointer_over_layer {
+        if self.cursor.grab_cursor || self.pointer_over_layer {
             return;
         }
         match self.decoration_under(canvas_pos) {
             Some((ref window, DecorationHit::CloseButton)) => {
-                self.decoration_cursor = true;
-                self.cursor_status =
+                self.cursor.decoration_cursor = true;
+                self.cursor.cursor_status =
                     smithay::input::pointer::CursorImageStatus::Named(
                         smithay::input::pointer::CursorIcon::Pointer,
                     );
                 self.set_close_hovered(window, true);
             }
             Some((ref window, DecorationHit::ResizeBorder(edge))) => {
-                self.decoration_cursor = true;
-                self.cursor_status =
+                self.cursor.decoration_cursor = true;
+                self.cursor.cursor_status =
                     smithay::input::pointer::CursorImageStatus::Named(
                         crate::input::pointer::resize_cursor(edge),
                     );
                 self.set_close_hovered(window, false);
             }
             Some((ref window, DecorationHit::TitleBar)) => {
-                self.decoration_cursor = true;
-                self.cursor_status =
+                self.cursor.decoration_cursor = true;
+                self.cursor.cursor_status =
                     smithay::input::pointer::CursorImageStatus::default_named();
                 self.set_close_hovered(window, false);
             }
             None => {
-                if self.decoration_cursor {
-                    self.decoration_cursor = false;
-                    self.cursor_status =
+                if self.cursor.decoration_cursor {
+                    self.cursor.decoration_cursor = false;
+                    self.cursor.cursor_status =
                         smithay::input::pointer::CursorImageStatus::default_named();
                     self.clear_all_close_hovered();
                 }

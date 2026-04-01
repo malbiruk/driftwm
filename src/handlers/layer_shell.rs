@@ -40,9 +40,9 @@ impl WlrLayerShellHandler for DriftWm {
         tracing::info!("New layer surface: {namespace}");
 
         // New surface arrived — clear loading cursor
-        if self.exec_cursor_deadline.take().is_some() {
-            self.exec_cursor_show_at = None;
-            self.cursor_status = CursorImageStatus::default_named();
+        if self.cursor.exec_cursor_deadline.take().is_some() {
+            self.cursor.exec_cursor_show_at = None;
+            self.cursor.cursor_status = CursorImageStatus::default_named();
         }
 
         // Clear any stale destroyed marker — the wl_surface may be reused

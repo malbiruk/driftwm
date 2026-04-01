@@ -301,8 +301,8 @@ impl XdgShellHandler for DriftWm {
             state.states.set(xdg_toplevel::State::Resizing);
         });
 
-        self.grab_cursor = true;
-        self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
+        self.cursor.grab_cursor = true;
+        self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
 
         let output = self.active_output().unwrap();
         let last_clamped_location = start_data.location;

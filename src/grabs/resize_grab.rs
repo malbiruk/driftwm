@@ -227,8 +227,8 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
     }
 
     fn unset(&mut self, data: &mut DriftWm) {
-        data.grab_cursor = false;
-        data.cursor_status = CursorImageStatus::default_named();
+        data.cursor.grab_cursor = false;
+        data.cursor.cursor_status = CursorImageStatus::default_named();
     }
 
     crate::grabs::forward_pointer_grab_methods!();

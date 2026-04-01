@@ -30,9 +30,9 @@ impl DriftWm {
                 tracing::info!("Spawning: {cmd}");
                 crate::state::spawn_command(cmd);
                 let now = std::time::Instant::now();
-                self.exec_cursor_show_at =
+                self.cursor.exec_cursor_show_at =
                     Some(now + std::time::Duration::from_millis(150));
-                self.exec_cursor_deadline =
+                self.cursor.exec_cursor_deadline =
                     Some(now + std::time::Duration::from_secs(5));
             }
             Action::Spawn(cmd) => {

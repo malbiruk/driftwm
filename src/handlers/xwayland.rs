@@ -246,8 +246,8 @@ impl XwmHandler for DriftWm {
                 });
         });
 
-        self.grab_cursor = true;
-        self.cursor_status = CursorImageStatus::Named(resize_cursor(xdg_edge));
+        self.cursor.grab_cursor = true;
+        self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(xdg_edge));
 
         let output = self.active_output().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
@@ -349,9 +349,9 @@ impl XWaylandShellHandler for DriftWm {
         tracing::debug!("X11 surface associated: {:?}", surface.class());
 
         // Clear loading cursor (same as compositor.rs commit path for Wayland windows)
-        if self.exec_cursor_deadline.take().is_some() {
-            self.exec_cursor_show_at = None;
-            self.cursor_status = CursorImageStatus::default_named();
+        if self.cursor.exec_cursor_deadline.take().is_some() {
+            self.cursor.exec_cursor_show_at = None;
+            self.cursor.cursor_status = CursorImageStatus::default_named();
         }
 
         let Some(smithay_window) = self.find_x11_window(&surface) else {

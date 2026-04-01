@@ -675,12 +675,12 @@ pub fn build_cursor_elements(
     let physical_pos: Point<f64, Physical> = (screen_pos.x, screen_pos.y).into();
 
     // Separate the status check from mutable state access (Rust 2024 borrow rules)
-    let status = state.cursor_status.clone();
+    let status = state.cursor.cursor_status.clone();
     match status {
         CursorImageStatus::Hidden => vec![],
         CursorImageStatus::Surface(ref surface) => {
             if !surface.alive() {
-                state.cursor_status = CursorImageStatus::default_named();
+                state.cursor.cursor_status = CursorImageStatus::default_named();
                 return build_xcursor_elements(state, renderer, physical_pos, "default", alpha);
             }
             let hotspot = with_states(surface, |states| {
@@ -724,7 +724,7 @@ fn build_xcursor_elements(
         return vec![];
     }
     let key = if loaded { name } else { "default" };
-    let cursor_frames = state.cursor_buffers.get(key).unwrap();
+    let cursor_frames = state.cursor.cursor_buffers.get(key).unwrap();
 
     // Select the active frame
     let frame_idx = if cursor_frames.total_duration_ms == 0 {
@@ -2271,7 +2271,7 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     }
 
     // Cursor surface frame callbacks (animated cursors need these to advance)
-    if let CursorImageStatus::Surface(ref surface) = state.cursor_status {
+    if let CursorImageStatus::Surface(ref surface) = state.cursor.cursor_status {
         smithay::desktop::utils::send_frames_surface_tree(
             surface, output, time, Some(Duration::ZERO),
             |_, _| Some(output.clone()),

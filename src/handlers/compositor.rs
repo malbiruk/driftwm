@@ -67,7 +67,7 @@ impl CompositorHandler for DriftWm {
 
         // Bump blur scene generation for scene-affecting surfaces (skip cursor)
         let is_cursor = matches!(
-            &self.cursor_status,
+            &self.cursor.cursor_status,
             CursorImageStatus::Surface(s) if s.id() == surface.id()
         );
         if !is_cursor {
@@ -346,9 +346,9 @@ impl CompositorHandler for DriftWm {
                         }
 
                         // New window arrived — clear loading cursor
-                        if self.exec_cursor_deadline.take().is_some() {
-                            self.exec_cursor_show_at = None;
-                            self.cursor_status =
+                        if self.cursor.exec_cursor_deadline.take().is_some() {
+                            self.cursor.exec_cursor_show_at = None;
+                            self.cursor.cursor_status =
                                 smithay::input::pointer::CursorImageStatus::default_named();
                         }
                         self.pending_size.remove(&root);

@@ -553,8 +553,8 @@ impl DriftWm {
                     });
                 }
 
-                self.grab_cursor = false;
-                self.cursor_status = CursorImageStatus::default_named();
+                self.cursor.grab_cursor = false;
+                self.cursor.cursor_status = CursorImageStatus::default_named();
             }
             GestureState::SwipeThreshold { fired: false, .. } if !cancelled => {
                 // Short swipe that didn't reach threshold — no action
@@ -921,8 +921,8 @@ impl DriftWm {
             });
         }
 
-        self.grab_cursor = true;
-        self.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
+        self.cursor.grab_cursor = true;
+        self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
 
         self.gesture_state = Some(GestureState::SwipeResize {
             window,

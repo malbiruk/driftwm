@@ -60,21 +60,21 @@ impl SeatHandler for DriftWm {
     fn cursor_image(&mut self, _seat: &Seat<Self>, image: CursorImageStatus) {
         // During a compositor grab (pan, resize) or decoration hover,
         // we control the cursor. Ignore client updates.
-        if self.grab_cursor || self.decoration_cursor {
+        if self.cursor.grab_cursor || self.cursor.decoration_cursor {
             return;
         }
         // During exec loading (after grace period), replace default cursor with
         // Wait but let client surface cursors through (they take priority).
-        if self.exec_cursor_deadline.is_some()
+        if self.cursor.exec_cursor_deadline.is_some()
             && self
-                .exec_cursor_show_at
+                .cursor.exec_cursor_show_at
                 .is_none_or(|t| std::time::Instant::now() >= t)
             && matches!(&image, CursorImageStatus::Named(icon) if *icon == CursorIcon::Default)
         {
-            self.cursor_status = CursorImageStatus::Named(CursorIcon::Wait);
+            self.cursor.cursor_status = CursorImageStatus::Named(CursorIcon::Wait);
             return;
         }
-        self.cursor_status = image;
+        self.cursor.cursor_status = image;
     }
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
@@ -168,8 +168,8 @@ impl XdgActivationHandler for DriftWm {
     fn token_created(&mut self, _token: XdgActivationToken, data: XdgActivationTokenData) -> bool {
         if data.serial.is_some() {
             let now = std::time::Instant::now();
-            self.exec_cursor_show_at = Some(now + std::time::Duration::from_millis(150));
-            self.exec_cursor_deadline = Some(now + std::time::Duration::from_secs(5));
+            self.cursor.exec_cursor_show_at = Some(now + std::time::Duration::from_millis(150));
+            self.cursor.exec_cursor_deadline = Some(now + std::time::Duration::from_secs(5));
         }
         true
     }
@@ -185,8 +185,8 @@ impl XdgActivationHandler for DriftWm {
             let req_client = self.display_handle.get_client(req_surface.id()).ok();
             let act_client = self.display_handle.get_client(surface.id()).ok();
             if req_client.is_some() && req_client == act_client {
-                self.exec_cursor_show_at = None;
-                self.exec_cursor_deadline = None;
+                self.cursor.exec_cursor_show_at = None;
+                self.cursor.exec_cursor_deadline = None;
             }
         }
 
@@ -271,7 +271,7 @@ impl PointerConstraintsHandler for DriftWm {
         if let Some(window) = window
             && let Some(loc) = self.space.element_location(&window)
         {
-            self.pointer_position_hint = Some(loc.to_f64() + location);
+            self.cursor.pointer_position_hint = Some(loc.to_f64() + location);
         }
     }
 }
@@ -600,7 +600,7 @@ impl SessionLockHandler for DriftWm {
             os.zoom_animation_center = None;
         }
         self.held_action = None;
-        self.grab_cursor = false;
+        self.cursor.grab_cursor = false;
         if let Some(pending) = self.pending_middle_click.take() {
             self.loop_handle.remove(pending.timer_token);
         }
@@ -608,9 +608,9 @@ impl SessionLockHandler for DriftWm {
         let pointer = self.seat.get_pointer().unwrap();
         pointer.unset_grab(self, serial, 0);
 
-        self.exec_cursor_show_at = None;
-        self.exec_cursor_deadline = None;
-        self.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
+        self.cursor.exec_cursor_show_at = None;
+        self.cursor.exec_cursor_deadline = None;
+        self.cursor.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
         // Clear keyboard focus — no window should be interactable
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let keyboard = self.seat.get_keyboard().unwrap();
