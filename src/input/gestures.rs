@@ -24,7 +24,7 @@ use smithay::{
 use crate::grabs::{MoveSurfaceGrab, ResizeState, has_bottom, has_left, has_right, has_top};
 use crate::state::{DriftWm, FocusTarget, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::snap::{SnapRect, SnapState, snap_resize_edges};
+use driftwm::snap::{SnapState, snap_resize_edges};
 use driftwm::config::{
     Action, BindingContext, ContinuousAction, Direction, GestureConfigEntry, GestureTrigger,
     ThresholdAction,
@@ -402,50 +402,49 @@ impl DriftWm {
 
                 if self.config.snap_enabled
                     && let Some(ref output) = self.gesture_output
+                    && let Some(self_surface) = window.wl_surface().map(|s| s.into_owned())
                 {
-                        let zoom = output_state(output).zoom;
+                    let zoom = output_state(output).zoom;
+                    // Can't call self.snap_targets() here — gesture_state is
+                    // mutably borrowed by the match arm.
+                    let self_bar = if self.decorations.contains_key(&self_surface.id()) {
+                        driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
+                    } else {
+                        0
+                    };
+                    let mut others: Vec<driftwm::snap::SnapRect> = Vec::new();
+                    for w in self.space.elements() {
+                        let Some(surface) = w.wl_surface() else { continue };
+                        if *surface == self_surface { continue }
+                        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
+                        let Some(loc) = self.space.element_location(w) else { continue };
+                        let size = w.geometry().size;
+                        let bar = if self.decorations.contains_key(&surface.id()) {
+                            driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
+                        } else {
+                            0
+                        };
+                        others.push(driftwm::snap::SnapRect {
+                            x_low: loc.x as f64,
+                            x_high: loc.x as f64 + size.w as f64,
+                            y_low: loc.y as f64 - bar as f64,
+                            y_high: loc.y as f64 + size.h as f64,
+                        });
+                    }
 
-                        if let Some(self_surface) = window.wl_surface().map(|s| s.into_owned()) {
-                            let self_bar = if self.decorations.contains_key(&self_surface.id()) {
-                                driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
-                            } else {
-                                0
-                            };
-
-                            let mut others: Vec<SnapRect> = Vec::new();
-                            for w in self.space.elements() {
-                                let Some(surface) = w.wl_surface() else { continue };
-                                if *surface == self_surface { continue }
-                                if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
-                                let Some(loc) = self.space.element_location(w) else { continue };
-                                let size = w.geometry().size;
-                                let bar = if self.decorations.contains_key(&surface.id()) {
-                                    driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
-                                } else {
-                                    0
-                                };
-                                others.push(SnapRect {
-                                    x_low: loc.x as f64,
-                                    x_high: loc.x as f64 + size.w as f64,
-                                    y_low: loc.y as f64 - bar as f64,
-                                    y_high: loc.y as f64 + size.h as f64,
-                                });
-                            }
-
-                            snap_resize_edges(
-                                snap,
-                                *edges as u32,
-                                (initial_location.x, initial_location.y),
-                                (initial_size.w, initial_size.h),
-                                self_bar,
-                                &mut new_w, &mut new_h,
-                                &others, zoom,
-                                self.config.snap_gap,
-                                self.config.snap_distance,
-                                self.config.snap_break_force,
-                                self.config.snap_same_edge,
-                            );
-                        }
+                    snap_resize_edges(
+                        snap,
+                        *edges as u32,
+                        (initial_location.x, initial_location.y),
+                        (initial_size.w, initial_size.h),
+                        self_bar,
+                        &mut new_w, &mut new_h,
+                        &others, zoom,
+                        self.config.snap_gap,
+                        self.config.snap_distance,
+                        self.config.snap_break_force,
+                        self.config.snap_same_edge,
+                    );
                 }
 
                 let new_size = Size::from((new_w, new_h));

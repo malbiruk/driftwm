@@ -11,7 +11,6 @@ use smithay::{
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Size},
-    reexports::wayland_server::Resource,
     wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
@@ -19,8 +18,7 @@ use smithay::input::pointer::CursorImageStatus;
 
 use crate::state::{DriftWm, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::config;
-use driftwm::snap::{SnapRect, SnapState, snap_resize_edges};
+use driftwm::snap::{SnapState, snap_resize_edges};
 
 /// Tracks the resize lifecycle for a window. Stored in the surface data map
 /// (wrapped in `RefCell`) so that `compositor::commit()` can reposition
@@ -128,35 +126,11 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         new_h = new_h.max(1);
 
         // Snap active resize edges to nearby windows
-        if data.config.snap_enabled {
+        if data.config.snap_enabled
+            && let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned())
+        {
             let zoom = output_state(&self.output).zoom;
-
-            if let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned()) {
-            let self_bar = if data.decorations.contains_key(&self_surface.id()) {
-                config::DecorationConfig::TITLE_BAR_HEIGHT
-            } else {
-                0
-            };
-
-            let mut others: Vec<SnapRect> = Vec::new();
-            for w in data.space.elements() {
-                let Some(surface) = w.wl_surface() else { continue };
-                if *surface == self_surface { continue }
-                if config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
-                let Some(loc) = data.space.element_location(w) else { continue };
-                let size = w.geometry().size;
-                let bar = if data.decorations.contains_key(&surface.id()) {
-                    config::DecorationConfig::TITLE_BAR_HEIGHT
-                } else {
-                    0
-                };
-                others.push(SnapRect {
-                    x_low: loc.x as f64,
-                    x_high: loc.x as f64 + size.w as f64,
-                    y_low: loc.y as f64 - bar as f64,
-                    y_high: loc.y as f64 + size.h as f64,
-                });
-            }
+            let (others, self_bar) = data.snap_targets(&self_surface);
 
             snap_resize_edges(
                 &mut self.snap,
@@ -171,8 +145,6 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                 data.config.snap_break_force,
                 data.config.snap_same_edge,
             );
-
-            }  // if let Some(self_surface)
         }
 
         let new_size = Size::from((new_w, new_h));

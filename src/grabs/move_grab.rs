@@ -7,14 +7,12 @@ use smithay::{
         SeatHandler,
     },
     output::Output,
-    reexports::wayland_server::Resource,
     utils::{Logical, Point},
     wayland::seat::WaylandFocus,
 };
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
-use driftwm::config;
-use driftwm::snap::{SnapRect, SnapParams, SnapState, update_axis};
+use driftwm::snap::{SnapParams, SnapState, update_axis};
 use crate::state::{DriftWm, output_state, output_logical_size};
 
 /// Which output edge is inhibited after a cross-output teleport.
@@ -221,42 +219,13 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let effective_break = data.config.snap_break_force / zoom;
             let gap = data.config.snap_gap;
 
-            // Collect other windows' snap rects (exclude self and widgets)
             let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned()) else {
                 return;
             };
+            let (others, self_bar) = data.snap_targets(&self_surface);
             let window_size = self.window.geometry().size;
-            let self_bar = if data.decorations.contains_key(&self_surface.id()) {
-                config::DecorationConfig::TITLE_BAR_HEIGHT
-            } else {
-                0
-            };
             let extent_x = window_size.w as f64;
             let extent_y = window_size.h as f64 + self_bar as f64;
-
-            let mut others: Vec<SnapRect> = Vec::new();
-            for w in data.space.elements() {
-                let Some(surface) = w.wl_surface() else { continue; };
-                if *surface == self_surface {
-                    continue;
-                }
-                if config::applied_rule(&surface).is_some_and(|r| r.widget) {
-                    continue;
-                }
-                let Some(loc) = data.space.element_location(w) else { continue };
-                let size = w.geometry().size;
-                let bar = if data.decorations.contains_key(&surface.id()) {
-                    config::DecorationConfig::TITLE_BAR_HEIGHT
-                } else {
-                    0
-                };
-                others.push(SnapRect {
-                    x_low: loc.x as f64,
-                    x_high: loc.x as f64 + size.w as f64,
-                    y_low: loc.y as f64 - bar as f64,
-                    y_high: loc.y as f64 + size.h as f64,
-                });
-            }
 
             // Use natural (un-snapped) positions for perpendicular ranges
             let visual_y = natural_y - self_bar as f64;
