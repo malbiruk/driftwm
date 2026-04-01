@@ -93,7 +93,11 @@ impl WindowExt for Window {
             use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
             toplevel.with_pending_state(|state| {
                 state.states.unset(xdg_toplevel::State::Fullscreen);
-                state.size = None;
+                if state.states.contains(xdg_toplevel::State::Maximized) {
+                    state.size = Some(saved_size);
+                } else {
+                    state.size = None;
+                }
             });
             toplevel.send_configure();
         } else if let Some(x11) = self.x11_surface() {
