@@ -775,17 +775,7 @@ pub fn update_background_element(
     let camera_moved = cur_camera != last_rendered_camera;
     let zoom_changed = cur_zoom != last_rendered_zoom;
     let output_name = output.name();
-    let frac_scale = output.current_scale().fractional_scale();
-    let output_size = output
-        .current_mode()
-        .map(|m| {
-            output.current_transform()
-                .transform_size(m.size)
-                .to_f64()
-                .to_logical(frac_scale)
-                .to_i32_ceil()
-        })
-        .unwrap_or((1, 1).into());
+    let output_size = crate::state::output_logical_size(output);
     let canvas_w = (output_size.w as f64 / cur_zoom).ceil() as i32;
     let canvas_h = (output_size.h as f64 / cur_zoom).ceil() as i32;
     let canvas_area = Rectangle::from_size((canvas_w, canvas_h).into());
@@ -848,17 +838,7 @@ pub fn compose_frame(
 
     // Ensure this output has a background element (lazy init per output, and re-init after config reload)
     if !state.render.cached_bg_elements.contains_key(&output.name()) && !state.render.cached_tile_bg.contains_key(&output.name()) {
-        let output_size = output
-            .current_mode()
-            .map(|m| {
-                let scale = output.current_scale().fractional_scale();
-                output.current_transform()
-                    .transform_size(m.size)
-                    .to_f64()
-                    .to_logical(scale)
-                    .to_i32_ceil()
-            })
-            .unwrap_or((1, 1).into());
+        let output_size = crate::state::output_logical_size(output);
         init_background(state, renderer, output_size, &output.name());
     }
 
@@ -1350,16 +1330,8 @@ fn process_blur_requests(
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::Id;
 
-    let output_size = output
-        .current_mode()
-        .map(|m| {
-            let logical = output.current_transform().transform_size(
-                m.size.to_logical(output.current_scale().integer_scale()),
-            );
-            logical.to_physical_precise_round(output_scale)
-        })
-        .unwrap_or(Size::from((1, 1)));
-
+    let logical_size = crate::state::output_logical_size(output);
+    let output_size: Size<i32, Physical> = logical_size.to_physical_precise_round(output_scale);
     let out_buf_size = output_size.to_logical(1).to_buffer(1, Transform::Normal);
 
     // Shared full-output FBO for behind-content rendering — cached on DriftWm, reused if size matches

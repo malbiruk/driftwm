@@ -89,14 +89,7 @@ impl WlrLayerShellHandler for DriftWm {
             let desktop_surface = desktop::LayerSurface::new(surface, namespace.clone());
 
             // Configure with output width; height left to client
-            let output_mode = resolved_output.current_mode().unwrap();
-            let scale = resolved_output.current_scale().fractional_scale();
-            let output_w = resolved_output.current_transform()
-                .transform_size(output_mode.size)
-                .to_f64()
-                .to_logical(scale)
-                .to_i32_ceil()
-                .w;
+            let output_w = crate::state::output_logical_size(&resolved_output).w;
             desktop_surface.layer_surface().with_pending_state(|state| {
                 state.size = Some((output_w, 0).into());
             });
