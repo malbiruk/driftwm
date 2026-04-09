@@ -483,7 +483,7 @@ impl Config {
             mouse: mouse_bindings,
             gestures: gesture_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),
-            caps_lock: raw.input.keyboard.caps_lock.unwrap_or(true),
+            caps_lock: raw.input.keyboard.caps_lock.unwrap_or(false),
             virtual_keyboard: raw.input.keyboard.virtual_keyboard.unwrap_or(false),
         }
     }
