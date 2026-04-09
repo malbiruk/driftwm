@@ -14,6 +14,12 @@
 # Each entry is passed to sh -c, so full shell syntax works (pipes, &&, env vars).
 # autostart = []
 
+# Disable numlock on startup.
+# numlock = false
+
+# Enable virtual keyboard protocol.
+# virtual_keyboard = true
+
 # Environment variables set before any clients launch.
 # Child processes (autostart, exec bindings) inherit these.
 # These override the compositor's built-in toolkit defaults
