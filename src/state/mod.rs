@@ -418,9 +418,6 @@ pub struct DriftWm {
         Instant,
         smithay::reexports::wayland_server::backend::ObjectId,
     )>,
-
-    // -- global: virtual keyboard --
-    pub virtual_keyboard_state: Option<VirtualKeyboardManagerState>,
 }
 
 /// Per-client state stored by wayland-server for each connected client.
@@ -530,15 +527,7 @@ impl DriftWm {
         });
         seat.add_pointer();
 
-        let vk = config.virtual_keyboard.clone();
-        let virtual_keyboard_state = if vk {
-            Some(VirtualKeyboardManagerState::new::<Self, _>(
-                &dh,
-                move |_client| vk,
-            ))
-        } else {
-            None
-        };
+        VirtualKeyboardManagerState::new::<Self, _>(&dh, |_client| Config::load().virtual_keyboard);
 
         let autostart = config.autostart.clone();
         Self {
@@ -624,7 +613,6 @@ impl DriftWm {
             x11_display: None,
             xwayland_client: None,
             last_titlebar_click: None,
-            virtual_keyboard_state,
         }
     }
 
@@ -1476,18 +1464,6 @@ impl DriftWm {
                 tracing::info!("Config reload: env unset {key}");
                 unsafe { std::env::remove_var(key) };
             }
-        }
-
-        if new_config.virtual_keyboard != self.config.virtual_keyboard {
-            let nvk = new_config.virtual_keyboard.clone();
-            self.virtual_keyboard_state = if nvk {
-                Some(VirtualKeyboardManagerState::new::<Self, _>(
-                    &self.display_handle,
-                    move |_client| nvk,
-                ))
-            } else {
-                None
-            };
         }
 
         self.config = new_config;
