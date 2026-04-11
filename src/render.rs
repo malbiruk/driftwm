@@ -134,6 +134,7 @@ impl RenderElement<GlesRenderer> for TileShaderElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _user_data: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), GlesError> {
         frame.render_texture_from_to(
             &self.texture,
@@ -343,9 +344,10 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
         dst: Rectangle<i32, Physical>,
         damage: &[Rectangle<i32, Physical>],
         opaque_regions: &[Rectangle<i32, Physical>],
+        _user_data: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), GlesError> {
         frame.override_default_tex_program(self.shader.clone(), self.uniforms.clone());
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions);
+        let result = self.inner.draw(frame, src, dst, damage, opaque_regions, _user_data);
         frame.clear_tex_program_override();
         result
     }

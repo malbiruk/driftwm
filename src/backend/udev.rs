@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use tracing::trace;
 
 use smithay::{
     backend::{
@@ -11,7 +12,7 @@ use smithay::{
         },
         drm::{
             DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
-            compositor::{DrmCompositor, FrameFlags},
+            compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
         egl::{EGLContext, EGLDisplay},
@@ -171,7 +172,7 @@ pub fn init_udev(
     // 3. Try each GPU until one has connected displays
     let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
 
-    let (mut drm, drm_notifier, gbm, renderer, render_formats, render_node) = 'found: {
+    let (mut drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd) = 'found: {
         for path in &gpu_paths {
             let node = match DrmNode::from_path(path) {
                 Ok(n) => n,
@@ -194,6 +195,26 @@ pub fn init_udev(
             };
             let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
+            // Check if GPU is NVIDIA
+            let is_nvidia = path.file_name()
+                .and_then(|name| std::fs::read_to_string(format!("/sys/class/drm/{}/device/vendor", name.to_string_lossy())).ok())
+                .is_some_and(|v| v.trim() == "0x10de");
+
+            // Task 1: Disable Atomic Modesetting for NVIDIA (0x10de)
+            // Smithay uses SMITHAY_USE_LEGACY env var to force legacy DRM API
+            if is_nvidia {
+                tracing::info!("NVIDIA GPU detected, forcing Legacy DRM API and hardening EGL");
+                unsafe {
+                    std::env::set_var("SMITHAY_USE_LEGACY", "1");
+                    // Task 4: EGL Opaque/Hardening (prevent driver blending flickers)
+                    std::env::set_var("__GL_GSYNC_ALLOWED", "0");
+                    std::env::set_var("__GL_VRR_ALLOWED", "0");
+                    std::env::set_var("__GL_MaxFramesAllowed", "1");
+                }
+            } else {
+                unsafe { std::env::remove_var("SMITHAY_USE_LEGACY"); }
+            }
+
             // true = release existing CRTCs for a clean modeset (avoids conflicts
             // with previous session's DRM state)
             let (drm, drm_notifier) = match DrmDevice::new(device_fd.clone(), true) {
@@ -212,13 +233,20 @@ pub fn init_udev(
                 continue;
             }
 
-            let gbm = match GbmDevice::new(device_fd) {
+            let gbm = match GbmDevice::new(device_fd.clone()) {
                 Ok(g) => g,
                 Err(e) => {
                     tracing::warn!("{}: failed to create GBM device ({e})", path.display());
                     continue;
                 }
             };
+            
+            // Force NVD_BACKEND=direct for NVIDIA explicit sync optimization
+            if is_nvidia && std::env::var("NVD_BACKEND").is_err() {
+                unsafe { std::env::set_var("NVD_BACKEND", "direct"); }
+            }
+            data.is_nvidia = is_nvidia;
+
             let egl_display = match unsafe { EGLDisplay::new(gbm.clone()) } {
                 Ok(d) => d,
                 Err(e) => {
@@ -279,7 +307,7 @@ pub fn init_udev(
                 .unwrap_or(node);
 
             tracing::info!("Using GPU: {}", path.display());
-            break 'found (drm, drm_notifier, gbm, renderer, render_formats, render_node);
+            break 'found (drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd);
         }
         return Err("No GPU with connected displays found (are you running from a TTY?)".into());
     };
@@ -297,6 +325,10 @@ pub fn init_udev(
             &default_feedback,
         );
     data.dmabuf_global = Some(dmabuf_global);
+    data.drm_syncobj_state = Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
+        &data.display_handle,
+        device_fd.clone(),
+    ));
 
     // 5. Set up libinput
     let libinput_session = LibinputSessionInterface::from(session.clone());
@@ -780,6 +812,7 @@ fn create_surface(
             subpixel: convert_subpixel(connector.subpixel()),
             make: make.clone(),
             model: model.clone(),
+            serial_number: serial_number.clone(),
         },
     );
 
@@ -826,7 +859,7 @@ fn create_surface(
         drm_surface,
         None,
         allocator.clone(),
-        GbmFramebufferExporter::new(gbm.clone(), None),
+        GbmFramebufferExporter::new(gbm.clone(), None.into()),
         SUPPORTED_COLOR_FORMATS.iter().copied(),
         render_formats.iter().copied(),
         drm.cursor_size(),
@@ -860,7 +893,7 @@ fn create_surface(
                 fallback_surface,
                 None,
                 allocator,
-                GbmFramebufferExporter::new(gbm.clone(), None),
+                GbmFramebufferExporter::new(gbm.clone(), None.into()),
                 SUPPORTED_COLOR_FORMATS.iter().copied(),
                 fallback_formats,
                 drm.cursor_size(),
@@ -974,14 +1007,37 @@ fn render_frame(
     let renderer = backend.renderer();
     let elements = crate::render::compose_frame(data, renderer, output, cursor_elements);
 
+    // Task 3: Global Scanout Lockdown for NVIDIA devices.
+    // Completely strip FrameFlags::ALLOW_SCANOUT to ensure EGL composition.
+    let frame_flags = if data.is_nvidia {
+        FrameFlags::empty()
+    } else {
+        FrameFlags::ALLOW_SCANOUT
+    };
+
     // Render via DRM compositor (latency-sensitive — do first)
     let renderer = backend.renderer();
-    match compositor.render_frame::<_, OutputRenderElements>(
+    let match_result = compositor.render_frame::<_, OutputRenderElements>(
         renderer,
         &elements,
         [0.0f32, 0.0, 0.0, 1.0],
-        FrameFlags::empty(),
-    ) {
+        frame_flags,
+    );
+
+    // Task 5: Wait for Buffer Ready (Explicit Sync Ready signal)
+    // In Legacy DRM mode, we must manually wait for the GPU fence before flipping.
+    if data.is_nvidia {
+        if let Ok(ref render_result) = match_result {
+            if render_result.needs_sync() {
+                if let PrimaryPlaneElement::Swapchain(ref element) = render_result.primary_element {
+                    trace!("Waiting for GPU fence on NVIDIA Legacy DRM path");
+                    let _ = element.sync.wait();
+                }
+            }
+        }
+    }
+
+    match match_result {
         Ok(_render_result) => {
             if let Err(e) = compositor.queue_frame(()) {
                 tracing::warn!("Failed to queue frame: {e:?}");

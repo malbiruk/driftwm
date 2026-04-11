@@ -1,0 +1,6 @@
+[Desktop Entry]
+Name=DriftWM (Patched)
+Comment=Tiling Wayland compositor with Explicit Sync
+Exec=/usr/local/bin/driftwm
+Type=Application
+DesktopNames=DriftWM

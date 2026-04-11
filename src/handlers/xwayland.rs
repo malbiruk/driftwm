@@ -298,7 +298,7 @@ impl XwmHandler for DriftWm {
 
     fn send_selection(&mut self, _xwm: XwmId, sel: SelectionTarget, mime: String, fd: std::os::fd::OwnedFd) {
         if let Some(wm) = self.x11_wm.as_mut() {
-            wm.send_selection(sel, mime, fd, self.loop_handle.clone()).ok();
+            wm.send_selection(sel, mime, fd).ok();
         }
     }
 
