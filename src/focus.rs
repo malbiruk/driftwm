@@ -281,7 +281,7 @@ impl TouchTarget<DriftWm> for FocusTarget {
     }
 }
 
-use smithay::input::dnd::{DndFocus, OfferData, Source};
+use smithay::input::dnd::{DndFocus, Source};
 use smithay::utils::{Logical, Point};
 use smithay::reexports::wayland_server::DisplayHandle;
 use smithay::input::SeatHandler;

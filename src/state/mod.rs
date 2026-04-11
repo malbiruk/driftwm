@@ -1077,18 +1077,6 @@ impl DriftWm {
     pub fn set_camera_target(&mut self, val: Option<Point<f64, Logical>>) {
         output_state(&self.active_output().unwrap()).camera_target = val;
     }
-    pub fn camera_velocity(&self) -> Point<f64, Logical> {
-        output_state(&self.active_output().unwrap()).camera_velocity
-    }
-    pub fn set_camera_velocity(&mut self, val: Point<f64, Logical>) {
-        output_state(&self.active_output().unwrap()).camera_velocity = val;
-    }
-    pub fn zoom_velocity(&self) -> f64 {
-        output_state(&self.active_output().unwrap()).zoom_velocity
-    }
-    pub fn set_zoom_velocity(&mut self, val: f64) {
-        output_state(&self.active_output().unwrap()).zoom_velocity = val;
-    }
     pub fn last_scroll_pan(&self) -> Option<Instant> {
         output_state(&self.active_output().unwrap()).last_scroll_pan
     }

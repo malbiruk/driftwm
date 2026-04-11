@@ -14,7 +14,7 @@ use smithay::{
         gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType, element::PixelShaderElement},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
         damage,
-        ImportDma, Texture,
+        Texture,
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
@@ -1358,7 +1358,6 @@ fn process_blur_requests(
 ) {
     use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
     use smithay::backend::renderer::Color32F;
-    use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::Id;
 
     let logical_size = crate::state::output_logical_size(output);

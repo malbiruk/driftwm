@@ -19,7 +19,6 @@ use smithay::reexports::wayland_server::{
 };
 use crate::window_ext::WindowExt;
 use smithay::wayland::compositor::with_states;
-use smithay::wayland::shell::xdg::ToplevelStateSet;
 use wayland_protocols_wlr::foreign_toplevel::v1::server::{
     zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
 };
