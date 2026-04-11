@@ -88,6 +88,11 @@
 # blur_radius = 2                # number of Kawase down+up passes (default: 2)
 # blur_strength = 1.1            # per-pass texel spread (default: 1.1)
 
+[animations]
+# enabled = false              # enable spring physics for camera/zoom and entry animations
+# spring_stiffness = 400.0     # tension of the spring (higher = more snappy)
+# spring_damping = 26.0        # friction of the spring (higher = less bounce)
+
 [output]
 # Global output settings. Per-output scale/transform/mode/position
 # are configured in [[outputs]] sections below.

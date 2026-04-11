@@ -156,6 +156,9 @@ pub struct FullscreenState {
     pub saved_size: Size<i32, Logical>,
 }
 
+/// Per-window mapping time for entry animations.
+pub struct MappingTime(pub Instant);
+
 /// Per-output viewport state, stored on each `Output` via `UserDataMap`.
 /// Wrapped in `Mutex` since `UserDataMap` requires `Sync`.
 /// Fields that are !Send (PixelShaderElement) stay on DriftWm.
@@ -170,6 +173,8 @@ pub struct OutputState {
     pub last_rendered_zoom: f64,
     pub overview_return: Option<(Point<f64, Logical>, f64)>,
     pub camera_target: Option<Point<f64, Logical>>,
+    pub camera_velocity: Point<f64, Logical>,
+    pub zoom_velocity: f64,
     pub last_scroll_pan: Option<Instant>,
     pub momentum: MomentumState,
     pub panning: bool,
@@ -203,6 +208,8 @@ pub fn init_output_state(
             last_rendered_zoom: f64::NAN,
             overview_return: None,
             camera_target: None,
+            camera_velocity: (0.0, 0.0).into(),
+            zoom_velocity: 0.0,
             last_scroll_pan: None,
             momentum: MomentumState::new(friction),
             panning: false,
@@ -1069,6 +1076,18 @@ impl DriftWm {
     }
     pub fn set_camera_target(&mut self, val: Option<Point<f64, Logical>>) {
         output_state(&self.active_output().unwrap()).camera_target = val;
+    }
+    pub fn camera_velocity(&self) -> Point<f64, Logical> {
+        output_state(&self.active_output().unwrap()).camera_velocity
+    }
+    pub fn set_camera_velocity(&mut self, val: Point<f64, Logical>) {
+        output_state(&self.active_output().unwrap()).camera_velocity = val;
+    }
+    pub fn zoom_velocity(&self) -> f64 {
+        output_state(&self.active_output().unwrap()).zoom_velocity
+    }
+    pub fn set_zoom_velocity(&mut self, val: f64) {
+        output_state(&self.active_output().unwrap()).zoom_velocity = val;
     }
     pub fn last_scroll_pan(&self) -> Option<Instant> {
         output_state(&self.active_output().unwrap()).last_scroll_pan

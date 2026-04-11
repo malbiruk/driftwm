@@ -18,7 +18,7 @@ use smithay::utils::{Logical, Point, Transform};
 
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
 use toml::{
-    ConfigFile, DecorationFileConfig, EffectsFileConfig, OutputRuleFile, WindowRuleFile,
+    ConfigFile, DecorationFileConfig, EffectsFileConfig, AnimationFileConfig, OutputRuleFile, WindowRuleFile,
     expand_tilde,
 };
 
@@ -80,6 +80,7 @@ pub struct Config {
     pub decorations: DecorationConfig,
     pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
+    pub animations: AnimationConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
     pub xwayland_enabled: bool,
@@ -406,6 +407,7 @@ impl Config {
         };
 
         let effects = parse_effects_config(raw.effects);
+        let animations = parse_animation_config(raw.animations);
 
         // Deprecation: [input.scroll] → [navigation] trackpad_speed / friction
         let trackpad_speed = if let Some(s) = raw.navigation.trackpad_speed {
@@ -455,6 +457,7 @@ impl Config {
             background,
             decorations,
             effects,
+            animations,
             trackpad,
             mouse_device,
             gesture_thresholds,
@@ -627,6 +630,15 @@ fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
     EffectsConfig {
         blur_radius: raw.blur_radius.unwrap_or(2),
         blur_strength: raw.blur_strength.unwrap_or(1.1),
+    }
+}
+
+fn parse_animation_config(raw: AnimationFileConfig) -> AnimationConfig {
+    let defaults = AnimationConfig::default();
+    AnimationConfig {
+        enabled: raw.enabled.unwrap_or(defaults.enabled),
+        spring_stiffness: raw.spring_stiffness.unwrap_or(defaults.spring_stiffness),
+        spring_damping: raw.spring_damping.unwrap_or(defaults.spring_damping),
     }
 }
 

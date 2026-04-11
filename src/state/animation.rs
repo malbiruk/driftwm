@@ -178,28 +178,53 @@ impl DriftWm {
         super::output_state(output).momentum.launch();
     }
 
-    /// Advance the camera animation toward `camera_target` using frame-rate independent lerp.
-    /// Shifts the pointer by the camera delta so the cursor stays at the same screen position.
+    /// Advance the camera animation toward `camera_target`.
+    /// Uses spring dynamics if enabled in config, otherwise falls back to lerp.
     pub fn apply_camera_animation(&mut self, dt: Duration) {
         let Some(target) = self.camera_target() else {
             return;
         };
 
         let old_camera = self.camera();
+        let dt_secs = dt.as_secs_f64();
 
-        let factor = self.animation_factor(dt);
+        if self.config.animations.enabled {
+            let stiffness = self.config.animations.spring_stiffness;
+            let damping = self.config.animations.spring_damping;
 
-        let dx = target.x - old_camera.x;
-        let dy = target.y - old_camera.y;
+            self.with_output_state(|os| {
+                let force_x = stiffness * (target.x - os.camera.x) - damping * os.camera_velocity.x;
+                let force_y = stiffness * (target.y - os.camera.y) - damping * os.camera_velocity.y;
 
-        if dx * dx + dy * dy < 0.25 {
-            self.set_camera(target);
-            self.set_camera_target(None);
+                os.camera_velocity.x += force_x * dt_secs;
+                os.camera_velocity.y += force_y * dt_secs;
+
+                os.camera.x += os.camera_velocity.x * dt_secs;
+                os.camera.y += os.camera_velocity.y * dt_secs;
+
+                // Stop condition: close enough and slow enough
+                let dist_sq = (target.x - os.camera.x).powi(2) + (target.y - os.camera.y).powi(2);
+                let vel_sq = os.camera_velocity.x.powi(2) + os.camera_velocity.y.powi(2);
+                if dist_sq < 0.25 && vel_sq < 10.0 {
+                    os.camera = target;
+                    os.camera_target = None;
+                    os.camera_velocity = (0.0, 0.0).into();
+                }
+            });
         } else {
-            self.set_camera(Point::from((
-                old_camera.x + dx * factor,
-                old_camera.y + dy * factor,
-            )));
+            let factor = self.animation_factor(dt);
+            let dx = target.x - old_camera.x;
+            let dy = target.y - old_camera.y;
+
+            if dx * dx + dy * dy < 0.25 {
+                self.set_camera(target);
+                self.set_camera_target(None);
+            } else {
+                self.set_camera(Point::from((
+                    old_camera.x + dx * factor,
+                    old_camera.y + dy * factor,
+                )));
+            }
         }
 
         self.update_output_from_camera();
@@ -229,10 +254,8 @@ impl DriftWm {
         }
     }
 
-    /// Advance zoom animation toward `zoom_target` using frame-rate independent lerp.
-    /// When `zoom_animation_center` is set (combined zoom+camera animation), lerps
-    /// the on-screen center directly and derives camera, preventing lateral drift.
-    /// Otherwise just adjusts pointer so cursor stays at the same screen position.
+    /// Advance zoom animation toward `zoom_target`.
+    /// Uses spring dynamics if enabled in config, otherwise falls back to lerp.
     pub fn apply_zoom_animation(&mut self, dt: Duration) {
         let Some(target) = self.zoom_target() else {
             return;
@@ -240,16 +263,42 @@ impl DriftWm {
 
         let old_zoom = self.zoom();
         let old_camera = self.camera();
-
+        let dt_secs = dt.as_secs_f64();
         let factor = self.animation_factor(dt);
 
-        let dz = target - old_zoom;
-        if dz.abs() < 0.001 {
-            self.set_zoom(target);
-            self.set_zoom_target(None);
-            self.render.blur_scene_generation += 1;
+        if self.config.animations.enabled {
+            let stiffness = self.config.animations.spring_stiffness;
+            let damping = self.config.animations.spring_damping;
+
+            let blur_dirty = self.with_output_state(|os| {
+                let force = stiffness * (target - os.zoom) - damping * os.zoom_velocity;
+                os.zoom_velocity += force * dt_secs;
+                os.zoom += os.zoom_velocity * dt_secs;
+
+                // Stop condition
+                let dist = (target - os.zoom).abs();
+                let vel = os.zoom_velocity.abs();
+                if dist < 0.001 && vel < 0.1 {
+                    os.zoom = target;
+                    os.zoom_target = None;
+                    os.zoom_velocity = 0.0;
+                    true
+                } else {
+                    false
+                }
+            });
+            if blur_dirty {
+                self.render.blur_scene_generation += 1;
+            }
         } else {
-            self.set_zoom(old_zoom + dz * factor);
+            let dz = target - old_zoom;
+            if dz.abs() < 0.001 {
+                self.set_zoom(target);
+                self.set_zoom_target(None);
+                self.render.blur_scene_generation += 1;
+            } else {
+                self.set_zoom(old_zoom + dz * factor);
+            }
         }
 
         if let Some(target_center) = self.zoom_animation_center() {
@@ -398,21 +447,48 @@ impl DriftWm {
             (target, os.camera)
         };
 
-        let factor = self.animation_factor(dt);
+        let dt_secs = dt.as_secs_f64();
 
-        let dx = target.x - old_camera.x;
-        let dy = target.y - old_camera.y;
+        if self.config.animations.enabled {
+            let stiffness = self.config.animations.spring_stiffness;
+            let damping = self.config.animations.spring_damping;
 
-        {
-            let mut os = output_state(output);
-            if dx * dx + dy * dy < 0.25 {
-                os.camera = target;
-                os.camera_target = None;
-            } else {
-                os.camera = Point::from((
-                    old_camera.x + dx * factor,
-                    old_camera.y + dy * factor,
-                ));
+            {
+                let mut os = output_state(output);
+                let force_x = stiffness * (target.x - os.camera.x) - damping * os.camera_velocity.x;
+                let force_y = stiffness * (target.y - os.camera.y) - damping * os.camera_velocity.y;
+
+                os.camera_velocity.x += force_x * dt_secs;
+                os.camera_velocity.y += force_y * dt_secs;
+
+                os.camera.x += os.camera_velocity.x * dt_secs;
+                os.camera.y += os.camera_velocity.y * dt_secs;
+
+                // Stop condition
+                let dist_sq = (target.x - os.camera.x).powi(2) + (target.y - os.camera.y).powi(2);
+                let vel_sq = os.camera_velocity.x.powi(2) + os.camera_velocity.y.powi(2);
+                if dist_sq < 0.25 && vel_sq < 10.0 {
+                    os.camera = target;
+                    os.camera_target = None;
+                    os.camera_velocity = (0.0, 0.0).into();
+                }
+            }
+        } else {
+            let factor = self.animation_factor(dt);
+            let dx = target.x - old_camera.x;
+            let dy = target.y - old_camera.y;
+
+            {
+                let mut os = output_state(output);
+                if dx * dx + dy * dy < 0.25 {
+                    os.camera = target;
+                    os.camera_target = None;
+                } else {
+                    os.camera = Point::from((
+                        old_camera.x + dx * factor,
+                        old_camera.y + dy * factor,
+                    ));
+                }
             }
         }
 
@@ -432,18 +508,46 @@ impl DriftWm {
             (target, os.zoom, os.camera, os.zoom_animation_center)
         };
 
+        let dt_secs = dt.as_secs_f64();
         let factor = self.animation_factor(dt);
 
-        let dz = target - old_zoom;
-        {
-            let mut os = output_state(output);
-            if dz.abs() < 0.001 {
-                os.zoom = target;
-                os.zoom_target = None;
-                drop(os);
+        if self.config.animations.enabled {
+            let stiffness = self.config.animations.spring_stiffness;
+            let damping = self.config.animations.spring_damping;
+
+            let blur_dirty = {
+                let mut os = output_state(output);
+                let force = stiffness * (target - os.zoom) - damping * os.zoom_velocity;
+                os.zoom_velocity += force * dt_secs;
+                os.zoom += os.zoom_velocity * dt_secs;
+
+                // Stop condition
+                let dist = (target - os.zoom).abs();
+                let vel = os.zoom_velocity.abs();
+                if dist < 0.001 && vel < 0.1 {
+                    os.zoom = target;
+                    os.zoom_target = None;
+                    os.zoom_velocity = 0.0;
+                    true
+                } else {
+                    false
+                }
+            };
+            if blur_dirty {
                 self.render.blur_scene_generation += 1;
-            } else {
-                os.zoom = old_zoom + dz * factor;
+            }
+        } else {
+            let dz = target - old_zoom;
+            {
+                let mut os = output_state(output);
+                if dz.abs() < 0.001 {
+                    os.zoom = target;
+                    os.zoom_target = None;
+                    drop(os);
+                    self.render.blur_scene_generation += 1;
+                } else {
+                    os.zoom = old_zoom + dz * factor;
+                }
             }
         }
 

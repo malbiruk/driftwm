@@ -33,6 +33,7 @@ impl XdgShellHandler for DriftWm {
         tracing::info!("New toplevel surface");
         let wl_surface = surface.wl_surface().clone();
         let window = Window::new_wayland_window(surface);
+        window.user_data().insert_if_missing(|| crate::state::MappingTime(std::time::Instant::now()));
 
         // Place at screen center (no size offset — size unknown until first commit).
         // The pending_center set will trigger proper centering once size is known.

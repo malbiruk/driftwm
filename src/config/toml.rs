@@ -17,6 +17,7 @@ pub(super) struct ConfigFile {
     pub background: BackgroundFileConfig,
     pub decorations: DecorationFileConfig,
     pub effects: EffectsFileConfig,
+    pub animations: AnimationFileConfig,
     pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: MouseFileConfig,
@@ -25,6 +26,14 @@ pub(super) struct ConfigFile {
     pub xwayland: XWaylandConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct AnimationFileConfig {
+    pub enabled: Option<bool>,
+    pub spring_stiffness: Option<f64>,
+    pub spring_damping: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]
