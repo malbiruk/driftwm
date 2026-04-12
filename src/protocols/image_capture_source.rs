@@ -94,6 +94,7 @@ where
                             subpixel: smithay::output::Subpixel::Unknown,
                             make: String::new(),
                             model: String::new(),
+                            serial_number: String::new(),
                         },
                     )));
                     return;

@@ -265,6 +265,7 @@ pub struct DriftWm {
 
     // -- global: protocol state --
     pub compositor_state: CompositorState,
+    pub drm_syncobj_state: Option<smithay::wayland::drm_syncobj::DrmSyncobjState>,
     pub xdg_shell_state: XdgShellState,
     pub shm_state: ShmState,
     #[allow(dead_code)]
@@ -378,7 +379,6 @@ pub struct DriftWm {
     pub active_crtcs: HashSet<crtc::Handle>,
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
-
 
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
@@ -526,6 +526,7 @@ impl DriftWm {
             space: Space::default(),
             popups: PopupManager::default(),
             compositor_state,
+            drm_syncobj_state: None,
             xdg_shell_state,
             shm_state,
             output_manager_state,

@@ -6,7 +6,7 @@ license = "GPL-3.0-or-later"
 authors = ["Klim Kostiuk <2601074@gmail.com>"]
 
 [dependencies]
-smithay = { version = "0.7.0", default-features = false, features = [
+smithay = { git = "https://github.com/Smithay/smithay.git", default-features = false, features = [
     "backend_winit",
     "backend_udev",
     "backend_drm",

@@ -33,7 +33,7 @@ use smithay::{
         selection::{
             SelectionHandler,
             data_device::{
-                ClientDndGrabHandler, DataDeviceHandler, DataDeviceState, ServerDndGrabHandler,
+                DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
                 set_data_device_focus,
             },
             primary_selection::{
@@ -109,13 +109,13 @@ impl SelectionHandler for DriftWm {
 }
 
 impl DataDeviceHandler for DriftWm {
-    fn data_device_state(&self) -> &DataDeviceState {
-        &self.data_device_state
+    fn data_device_state(&mut self) -> &mut DataDeviceState {
+        &mut self.data_device_state
     }
 }
 
-impl ClientDndGrabHandler for DriftWm {}
-impl ServerDndGrabHandler for DriftWm {}
+impl WaylandDndGrabHandler for DriftWm {}
+impl smithay::input::dnd::DndGrabHandler for DriftWm {}
 
 delegate_data_device!(DriftWm);
 
@@ -229,16 +229,16 @@ impl XdgActivationHandler for DriftWm {
 delegate_xdg_activation!(DriftWm);
 
 impl PrimarySelectionHandler for DriftWm {
-    fn primary_selection_state(&self) -> &PrimarySelectionState {
-        &self.primary_selection_state
+    fn primary_selection_state(&mut self) -> &mut PrimarySelectionState {
+        &mut self.primary_selection_state
     }
 }
 
 delegate_primary_selection!(DriftWm);
 
 impl DataControlHandler for DriftWm {
-    fn data_control_state(&self) -> &DataControlState {
-        &self.data_control_state
+    fn data_control_state(&mut self) -> &mut DataControlState {
+        &mut self.data_control_state
     }
 }
 
@@ -334,8 +334,8 @@ use smithay::delegate_xdg_dialog;
 use smithay::wayland::shell::xdg::dialog::XdgDialogHandler;
 
 impl XdgDialogHandler for DriftWm {
-    fn modal_changed(&mut self, toplevel: ToplevelSurface, is_modal: bool) {
-        if is_modal {
+    fn dialog_hint_changed(&mut self, toplevel: ToplevelSurface, hint: smithay::wayland::shell::xdg::dialog::ToplevelDialogHint) {
+        if hint == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal {
             // Redirect focus from parent to this modal dialog
             let wl_surface = toplevel.wl_surface().clone();
             let window = self.window_for_surface(&wl_surface);
