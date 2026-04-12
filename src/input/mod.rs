@@ -10,7 +10,7 @@ use smithay::{
         },
         session::Session,
     },
-    desktop::{layer_map_for_output, WindowSurfaceType},
+    desktop::{WindowSurfaceType, layer_map_for_output},
     input::keyboard::FilterResult,
     input::pointer::{MotionEvent, RelativeMotionEvent},
     utils::{Point, SERIAL_COUNTER},
@@ -19,24 +19,25 @@ use smithay::{
 
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
-use smithay::wayland::pointer_constraints::{with_pointer_constraint, PointerConstraint};
+use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 use smithay::wayland::seat::WaylandFocus;
 
 use smithay::utils::{Logical, Rectangle};
-use smithay::wayland::compositor::{RegionAttributes, RectangleKind};
+use smithay::wayland::compositor::{RectangleKind, RegionAttributes};
 
-use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use crate::decorations::DecorationHit;
 use crate::state::{DriftWm, FocusTarget};
+use driftwm::canvas::{ScreenPos, screen_to_canvas};
 
 /// Find the canvas-space element location of the window that owns the given surface.
 fn window_origin_for_surface(
     state: &DriftWm,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
 ) -> Option<Point<f64, smithay::utils::Logical>> {
-    let window = state.space.elements().find(|w| {
-        w.wl_surface().as_deref() == Some(surface)
-    })?;
+    let window = state
+        .space
+        .elements()
+        .find(|w| w.wl_surface().as_deref() == Some(surface))?;
     Some(state.space.element_location(window)?.to_f64())
 }
 
@@ -60,7 +61,10 @@ impl DriftWm {
         self.mark_all_dirty();
 
         // Notify idle tracker of user activity (skip device add/remove metadata events)
-        if !matches!(&event, InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }) {
+        if !matches!(
+            &event,
+            InputEvent::DeviceAdded { .. } | InputEvent::DeviceRemoved { .. }
+        ) {
             self.idle_notifier_state.notify_activity(&self.seat);
         }
 
@@ -88,9 +92,9 @@ impl DriftWm {
                 }
                 InputEvent::PointerAxis { event } => {
                     let pointer = self.seat.get_pointer().unwrap();
-                    let mut frame = smithay::input::pointer::AxisFrame::new(
-                        Event::time_msec(&event),
-                    ).source(event.source());
+                    let mut frame =
+                        smithay::input::pointer::AxisFrame::new(Event::time_msec(&event))
+                            .source(event.source());
                     for axis in [Axis::Horizontal, Axis::Vertical] {
                         if let Some(amount) = event.amount(axis) {
                             frame = frame
@@ -140,7 +144,11 @@ impl DriftWm {
         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
             let keyboard = self.seat.get_keyboard().unwrap();
             keyboard.input::<(), _>(
-                self, keycode, key_state, serial, time,
+                self,
+                keycode,
+                key_state,
+                serial,
+                time,
                 |state, _modifiers, handle| {
                     if key_state == KeyState::Pressed {
                         let raw = handle.modified_sym().raw();
@@ -177,8 +185,7 @@ impl DriftWm {
             time,
             |state, modifiers, handle| {
                 // If cycling is active and the cycle modifier was released, end cycle
-                if state.cycle_state.is_some()
-                    && !state.config.cycle_modifier.is_pressed(modifiers)
+                if state.cycle_state.is_some() && !state.config.cycle_modifier.is_pressed(modifiers)
                 {
                     state.end_cycle();
                     return FilterResult::Forward;
@@ -229,7 +236,11 @@ impl DriftWm {
             // Set up key repeat for repeatable actions
             if action.is_repeatable() {
                 let delay = std::time::Duration::from_millis(self.config.repeat_delay as u64);
-                self.held_action = Some((keycode_u32, action.clone(), std::time::Instant::now() + delay));
+                self.held_action = Some((
+                    keycode_u32,
+                    action.clone(),
+                    std::time::Instant::now() + delay,
+                ));
             } else {
                 // Non-repeatable action pressed — cancel any active repeat
                 self.held_action = None;
@@ -251,15 +262,33 @@ impl DriftWm {
         // Override-redirect X11 windows (popups, menus) — above everything
         if let Some(hit) = self.override_redirect_under(canvas_pos) {
             self.pointer_over_layer = false;
-            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                Some(hit),
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
 
         // Check Overlay and Top layers at screen coords
-        if let Some(hit) = self.layer_surface_under(screen_pos, canvas_pos, &[WlrLayer::Overlay, WlrLayer::Top]) {
+        if let Some(hit) =
+            self.layer_surface_under(screen_pos, canvas_pos, &[WlrLayer::Overlay, WlrLayer::Top])
+        {
             self.pointer_over_layer = true;
-            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                Some(hit),
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
@@ -268,7 +297,15 @@ impl DriftWm {
         let under = self.surface_under(canvas_pos, Some(false));
         if under.is_some() {
             self.pointer_over_layer = false;
-            pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                under,
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             self.update_decoration_cursor(canvas_pos);
             return;
@@ -277,7 +314,15 @@ impl DriftWm {
         // Canvas-positioned layer surfaces
         if let Some(hit) = self.canvas_layer_under(canvas_pos) {
             self.pointer_over_layer = false;
-            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                Some(hit),
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
@@ -286,23 +331,51 @@ impl DriftWm {
         let under = self.surface_under(canvas_pos, Some(true));
         if under.is_some() {
             self.pointer_over_layer = false;
-            pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                under,
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             self.update_decoration_cursor(canvas_pos);
             return;
         }
 
         // Check Bottom and Background layers at screen coords
-        if let Some(hit) = self.layer_surface_under(screen_pos, canvas_pos, &[WlrLayer::Bottom, WlrLayer::Background]) {
+        if let Some(hit) = self.layer_surface_under(
+            screen_pos,
+            canvas_pos,
+            &[WlrLayer::Bottom, WlrLayer::Background],
+        ) {
             self.pointer_over_layer = true;
-            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
+            pointer.motion(
+                self,
+                Some(hit),
+                &MotionEvent {
+                    location: canvas_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
 
         // No hit — empty canvas
         self.pointer_over_layer = false;
-        pointer.motion(self, None, &MotionEvent { location: canvas_pos, serial, time });
+        pointer.motion(
+            self,
+            None,
+            &MotionEvent {
+                location: canvas_pos,
+                serial,
+                time,
+            },
+        );
         pointer.frame(self);
         self.update_decoration_cursor(canvas_pos);
     }
@@ -376,7 +449,11 @@ impl DriftWm {
                 pointer.motion(
                     self,
                     focus_with_origin,
-                    &MotionEvent { location: hint, serial, time },
+                    &MotionEvent {
+                        location: hint,
+                        serial,
+                        time,
+                    },
                 );
                 pointer.frame(self);
             }
@@ -389,11 +466,15 @@ impl DriftWm {
     /// and within the constraint region.
     pub(crate) fn maybe_activate_pointer_constraint(&self) {
         let pointer = self.seat.get_pointer().unwrap();
-        let Some(focus) = pointer.current_focus() else { return };
+        let Some(focus) = pointer.current_focus() else {
+            return;
+        };
 
         with_pointer_constraint(&focus.0, &pointer, |constraint| {
             let Some(constraint) = constraint else { return };
-            if constraint.is_active() { return; }
+            if constraint.is_active() {
+                return;
+            }
 
             if let Some(region) = constraint.region() {
                 let pointer_canvas = pointer.current_location();
@@ -429,10 +510,24 @@ impl DriftWm {
             let serial = SERIAL_COUNTER.next_serial();
             let time = Event::time_msec(&event);
             let pointer = self.seat.get_pointer().unwrap();
-            let focus = self.active_output().and_then(|o| self.lock_surfaces.get(&o)).map(|ls| {
-                (FocusTarget(ls.wl_surface().clone()), Point::<f64, smithay::utils::Logical>::from((0.0, 0.0)))
-            });
-            pointer.motion(self, focus, &MotionEvent { location: screen_pos, serial, time });
+            let focus = self
+                .active_output()
+                .and_then(|o| self.lock_surfaces.get(&o))
+                .map(|ls| {
+                    (
+                        FocusTarget(ls.wl_surface().clone()),
+                        Point::<f64, smithay::utils::Logical>::from((0.0, 0.0)),
+                    )
+                });
+            pointer.motion(
+                self,
+                focus,
+                &MotionEvent {
+                    location: screen_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
@@ -448,10 +543,7 @@ impl DriftWm {
     /// Handle relative pointer motion (libinput mice/trackpads).
     /// Multi-monitor aware: converts to layout space for output crossing,
     /// then to target output's canvas coords.
-    fn on_pointer_motion_relative<I: InputBackend>(
-        &mut self,
-        event: I::PointerMotionEvent,
-    ) {
+    fn on_pointer_motion_relative<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
         // When locked, pointer only targets the lock surface
         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
             let pointer = self.seat.get_pointer().unwrap();
@@ -461,10 +553,24 @@ impl DriftWm {
                 (old_pos.x + delta.x, old_pos.y + delta.y).into();
             let serial = SERIAL_COUNTER.next_serial();
             let time = Event::time_msec(&event);
-            let focus = self.active_output().and_then(|o| self.lock_surfaces.get(&o)).map(|ls| {
-                (FocusTarget(ls.wl_surface().clone()), Point::<f64, smithay::utils::Logical>::from((0.0, 0.0)))
-            });
-            pointer.motion(self, focus, &MotionEvent { location: new_pos, serial, time });
+            let focus = self
+                .active_output()
+                .and_then(|o| self.lock_surfaces.get(&o))
+                .map(|ls| {
+                    (
+                        FocusTarget(ls.wl_surface().clone()),
+                        Point::<f64, smithay::utils::Logical>::from((0.0, 0.0)),
+                    )
+                });
+            pointer.motion(
+                self,
+                focus,
+                &MotionEvent {
+                    location: new_pos,
+                    serial,
+                    time,
+                },
+            );
             pointer.frame(self);
             return;
         }
@@ -481,8 +587,7 @@ impl DriftWm {
                 c.is_some_and(|c| c.is_active() && matches!(&*c, PointerConstraint::Locked(_)))
             });
             if locked {
-                let origin = window_origin_for_surface(self, &focus.0)
-                    .unwrap_or(old_canvas);
+                let origin = window_origin_for_surface(self, &focus.0).unwrap_or(old_canvas);
                 pointer.relative_motion(
                     self,
                     Some((focus, origin)),
@@ -512,61 +617,69 @@ impl DriftWm {
 
         // Convert old canvas pos to screen pos, add layout_position → old layout pos
         let old_screen = driftwm::canvas::canvas_to_screen(
-            driftwm::canvas::CanvasPos(old_canvas), cur_camera, cur_zoom,
-        ).0;
+            driftwm::canvas::CanvasPos(old_canvas),
+            cur_camera,
+            cur_zoom,
+        )
+        .0;
         let old_layout: Point<f64, smithay::utils::Logical> = Point::from((
             old_screen.x + cur_layout_pos.x as f64,
             old_screen.y + cur_layout_pos.y as f64,
         ));
 
         // Add delta to get new layout pos (libinput deltas are logical pixels = layout space)
-        let new_layout: Point<f64, smithay::utils::Logical> = (
-            old_layout.x + delta.x,
-            old_layout.y + delta.y,
-        ).into();
+        let new_layout: Point<f64, smithay::utils::Logical> =
+            (old_layout.x + delta.x, old_layout.y + delta.y).into();
 
         // Find target output at new layout pos
-        let (target_output, mut screen_pos) = if let Some(target) = self.output_at_layout_pos(new_layout) {
-            if target != cur_output {
-                // Cross to target output
-                let target_lp = crate::state::output_state(&target).layout_position;
-                let target_screen: Point<f64, smithay::utils::Logical> = (
-                    new_layout.x - target_lp.x as f64,
-                    new_layout.y - target_lp.y as f64,
-                ).into();
-                (target, target_screen)
+        let (target_output, mut screen_pos) =
+            if let Some(target) = self.output_at_layout_pos(new_layout) {
+                if target != cur_output {
+                    // Cross to target output
+                    let target_lp = crate::state::output_state(&target).layout_position;
+                    let target_screen: Point<f64, smithay::utils::Logical> = (
+                        new_layout.x - target_lp.x as f64,
+                        new_layout.y - target_lp.y as f64,
+                    )
+                        .into();
+                    (target, target_screen)
+                } else {
+                    // Same output — compute screen pos within it
+                    let screen: Point<f64, smithay::utils::Logical> = (
+                        new_layout.x - cur_layout_pos.x as f64,
+                        new_layout.y - cur_layout_pos.y as f64,
+                    )
+                        .into();
+                    (cur_output.clone(), screen)
+                }
             } else {
-                // Same output — compute screen pos within it
-                let screen: Point<f64, smithay::utils::Logical> = (
-                    new_layout.x - cur_layout_pos.x as f64,
-                    new_layout.y - cur_layout_pos.y as f64,
-                ).into();
-                (cur_output.clone(), screen)
-            }
-        } else {
-            // No output at new pos → clamp to current output
-            let clamped: Point<f64, smithay::utils::Logical> = (
-                (old_screen.x + delta.x).clamp(0.0, output_size.w as f64 - 1.0),
-                (old_screen.y + delta.y).clamp(0.0, output_size.h as f64 - 1.0),
-            ).into();
-            (cur_output.clone(), clamped)
-        };
+                // No output at new pos → clamp to current output
+                let clamped: Point<f64, smithay::utils::Logical> = (
+                    (old_screen.x + delta.x).clamp(0.0, output_size.w as f64 - 1.0),
+                    (old_screen.y + delta.y).clamp(0.0, output_size.h as f64 - 1.0),
+                )
+                    .into();
+                (cur_output.clone(), clamped)
+            };
 
         // Convert target-output-local screen pos to canvas via target's camera/zoom
         let (target_camera, target_zoom) = {
             let os = crate::state::output_state(&target_output);
             (os.camera, os.zoom)
         };
-        let mut canvas_pos = driftwm::canvas::screen_to_canvas(
-            ScreenPos(screen_pos), target_camera, target_zoom,
-        ).0;
+        let mut canvas_pos =
+            driftwm::canvas::screen_to_canvas(ScreenPos(screen_pos), target_camera, target_zoom).0;
 
         // Pointer confinement: clamp position to the constraint region
         if let Some(focus) = pointer.current_focus() {
             let clamped = with_pointer_constraint(&focus.0, &pointer, |c| {
                 let c = c?;
-                if !c.is_active() { return None; }
-                let PointerConstraint::Confined(_) = &*c else { return None };
+                if !c.is_active() {
+                    return None;
+                }
+                let PointerConstraint::Confined(_) = &*c else {
+                    return None;
+                };
 
                 // Look up the constrained window's origin directly
                 let surface_origin = window_origin_for_surface(self, &focus.0)?;
@@ -579,21 +692,30 @@ impl DriftWm {
                     // Clamp to bounding box of the region's Add rects (approximation)
                     let bbox = region_bounding_box(region);
                     let clamped_local: Point<f64, smithay::utils::Logical> = (
-                        local.x.clamp(bbox.loc.x as f64, (bbox.loc.x + bbox.size.w) as f64),
-                        local.y.clamp(bbox.loc.y as f64, (bbox.loc.y + bbox.size.h) as f64),
-                    ).into();
+                        local
+                            .x
+                            .clamp(bbox.loc.x as f64, (bbox.loc.x + bbox.size.w) as f64),
+                        local
+                            .y
+                            .clamp(bbox.loc.y as f64, (bbox.loc.y + bbox.size.h) as f64),
+                    )
+                        .into();
                     Some(surface_origin + clamped_local)
                 } else {
                     // No region = confine to entire surface
-                    let window = self.space.elements().find(|w| {
-                        w.wl_surface().as_deref() == Some(&focus.0)
-                    })?;
+                    let window = self
+                        .space
+                        .elements()
+                        .find(|w| w.wl_surface().as_deref() == Some(&focus.0))?;
                     let size = window.geometry().size;
                     let clamped_local: Point<f64, smithay::utils::Logical> = (
                         local.x.clamp(0.0, size.w as f64),
                         local.y.clamp(0.0, size.h as f64),
-                    ).into();
-                    if local == clamped_local { return None; }
+                    )
+                        .into();
+                    if local == clamped_local {
+                        return None;
+                    }
                     Some(surface_origin + clamped_local)
                 }
             });
@@ -601,8 +723,11 @@ impl DriftWm {
                 canvas_pos = pos;
                 // Recompute screen_pos so layer shell hit-testing uses the clamped position
                 screen_pos = driftwm::canvas::canvas_to_screen(
-                    driftwm::canvas::CanvasPos(canvas_pos), target_camera, target_zoom,
-                ).0;
+                    driftwm::canvas::CanvasPos(canvas_pos),
+                    target_camera,
+                    target_zoom,
+                )
+                .0;
             }
         }
 
@@ -640,14 +765,20 @@ impl DriftWm {
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
         for window in self.space.elements().rev() {
-            let Some(wl_surface) = window.wl_surface() else { continue; };
+            let Some(wl_surface) = window.wl_surface() else {
+                continue;
+            };
             let rule = driftwm::config::applied_rule(&wl_surface);
             if let Some(want_widget) = widget_filter {
                 let is_widget = rule.as_ref().is_some_and(|r| r.widget);
-                if is_widget != want_widget { continue; }
+                if is_widget != want_widget {
+                    continue;
+                }
             }
 
-            let Some(loc) = self.space.element_location(window) else { continue };
+            let Some(loc) = self.space.element_location(window) else {
+                continue;
+            };
 
             // element_location returns the geometry origin, but surface_under
             // expects coords relative to the surface origin (which includes
@@ -656,11 +787,13 @@ impl DriftWm {
             let surface_origin = loc - geom_offset;
 
             // Check window content first (higher priority than decorations)
-            if let Some((surface, surface_loc)) = window.surface_under(
-                pos - surface_origin.to_f64(),
-                WindowSurfaceType::ALL,
-            ) {
-                return Some((FocusTarget(surface), (surface_loc + surface_origin).to_f64()));
+            if let Some((surface, surface_loc)) =
+                window.surface_under(pos - surface_origin.to_f64(), WindowSurfaceType::ALL)
+            {
+                return Some((
+                    FocusTarget(surface),
+                    (surface_loc + surface_origin).to_f64(),
+                ));
             }
 
             // Then check SSD decoration areas for this window
@@ -668,7 +801,8 @@ impl DriftWm {
                 let size = window.geometry().size;
                 if crate::decorations::close_button_contains(pos, loc, size.w, bar_height)
                     || crate::decorations::title_bar_contains(pos, loc, size.w, bar_height)
-                    || crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width).is_some()
+                    || crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width)
+                        .is_some()
                 {
                     return Some((FocusTarget((*wl_surface).clone()), loc.to_f64()));
                 }
@@ -686,18 +820,16 @@ impl DriftWm {
         match self.decoration_under(canvas_pos) {
             Some((ref window, DecorationHit::CloseButton)) => {
                 self.cursor.decoration_cursor = true;
-                self.cursor.cursor_status =
-                    smithay::input::pointer::CursorImageStatus::Named(
-                        smithay::input::pointer::CursorIcon::Pointer,
-                    );
+                self.cursor.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+                    smithay::input::pointer::CursorIcon::Pointer,
+                );
                 self.set_close_hovered(window, true);
             }
             Some((ref window, DecorationHit::ResizeBorder(edge))) => {
                 self.cursor.decoration_cursor = true;
-                self.cursor.cursor_status =
-                    smithay::input::pointer::CursorImageStatus::Named(
-                        crate::input::pointer::resize_cursor(edge),
-                    );
+                self.cursor.cursor_status = smithay::input::pointer::CursorImageStatus::Named(
+                    crate::input::pointer::resize_cursor(edge),
+                );
                 self.set_close_hovered(window, false);
             }
             Some((ref window, DecorationHit::TitleBar)) => {
@@ -719,13 +851,18 @@ impl DriftWm {
 
     /// Set the close button hover state for a specific window's decoration.
     fn set_close_hovered(&mut self, window: &Window, hovered: bool) {
-        let Some(wl_surface) = window.wl_surface() else { return; };
+        let Some(wl_surface) = window.wl_surface() else {
+            return;
+        };
         if let Some(deco) = self.decorations.get_mut(&wl_surface.id())
             && deco.close_hovered != hovered
         {
             deco.close_hovered = hovered;
             deco.title_bar = crate::decorations::render_title_bar(
-                deco.width, deco.focused, hovered, &self.config.decorations,
+                deco.width,
+                deco.focused,
+                hovered,
+                &self.config.decorations,
             );
         }
     }
@@ -736,7 +873,10 @@ impl DriftWm {
             if deco.close_hovered {
                 deco.close_hovered = false;
                 deco.title_bar = crate::decorations::render_title_bar(
-                    deco.width, deco.focused, false, &self.config.decorations,
+                    deco.width,
+                    deco.focused,
+                    false,
+                    &self.config.decorations,
                 );
             }
         }
@@ -753,7 +893,9 @@ impl DriftWm {
 
         // Iterate in z-order (topmost first, matching space.elements().rev())
         for window in self.space.elements().rev() {
-            let Some(wl_surface) = window.wl_surface() else { continue; };
+            let Some(wl_surface) = window.wl_surface() else {
+                continue;
+            };
             if !self.decorations.contains_key(&wl_surface.id()) {
                 continue;
             }
@@ -788,14 +930,17 @@ impl DriftWm {
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         for or_surface in self.x11_override_redirect.iter().rev() {
-            let Some(wl_surface) = or_surface.wl_surface() else { continue };
+            let Some(wl_surface) = or_surface.wl_surface() else {
+                continue;
+            };
             let pos = self.or_canvas_position(or_surface);
             let surface_local = canvas_pos - pos.to_f64();
-            if let Some((hit_surface, sub_loc)) =
-                smithay::desktop::utils::under_from_surface_tree(
-                    &wl_surface, surface_local, (0, 0), WindowSurfaceType::ALL,
-                )
-            {
+            if let Some((hit_surface, sub_loc)) = smithay::desktop::utils::under_from_surface_tree(
+                &wl_surface,
+                surface_local,
+                (0, 0),
+                WindowSurfaceType::ALL,
+            ) {
                 let loc = (sub_loc + pos).to_f64();
                 return Some((FocusTarget(hit_surface), loc));
             }
@@ -810,10 +955,13 @@ impl DriftWm {
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         for cl in &self.canvas_layers {
-            let Some(pos) = cl.position else { continue; };
+            let Some(pos) = cl.position else {
+                continue;
+            };
             let surface_local = canvas_pos - pos.to_f64();
-            if let Some((wl_surface, sub_loc)) =
-                cl.surface.surface_under(surface_local, WindowSurfaceType::ALL)
+            if let Some((wl_surface, sub_loc)) = cl
+                .surface
+                .surface_under(surface_local, WindowSurfaceType::ALL)
             {
                 let loc = (sub_loc + pos).to_f64();
                 return Some((FocusTarget(wl_surface), loc));

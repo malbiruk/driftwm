@@ -18,8 +18,16 @@ fn camera_to_center_window_standard_window() {
     let loc = Point::<i32, Logical>::from((100, 100));
     let win_size = Size::<i32, Logical>::from((200, 200));
     let camera = camera_to_center_window(loc, win_size, sc(1920, 1080), 1.0, 0);
-    assert!((camera.x - (-760.0)).abs() < 1e-10, "camera.x should be -760, got {}", camera.x);
-    assert!((camera.y - (-340.0)).abs() < 1e-10, "camera.y should be -340, got {}", camera.y);
+    assert!(
+        (camera.x - (-760.0)).abs() < 1e-10,
+        "camera.x should be -760, got {}",
+        camera.x
+    );
+    assert!(
+        (camera.y - (-340.0)).abs() < 1e-10,
+        "camera.y should be -340, got {}",
+        camera.y
+    );
 }
 
 #[test]
@@ -30,8 +38,16 @@ fn camera_to_center_window_small_viewport() {
     let loc = Point::<i32, Logical>::from((0, 0));
     let win_size = Size::<i32, Logical>::from((100, 100));
     let camera = camera_to_center_window(loc, win_size, sc(800, 600), 1.0, 0);
-    assert!((camera.x - (-350.0)).abs() < 1e-10, "camera.x should be -350, got {}", camera.x);
-    assert!((camera.y - (-250.0)).abs() < 1e-10, "camera.y should be -250, got {}", camera.y);
+    assert!(
+        (camera.x - (-350.0)).abs() < 1e-10,
+        "camera.x should be -350, got {}",
+        camera.x
+    );
+    assert!(
+        (camera.y - (-250.0)).abs() < 1e-10,
+        "camera.y should be -250, got {}",
+        camera.y
+    );
 }
 
 #[test]
@@ -42,8 +58,16 @@ fn camera_to_center_window_far_offset_window() {
     let loc = Point::<i32, Logical>::from((1000, 2000));
     let win_size = Size::<i32, Logical>::from((400, 300));
     let camera = camera_to_center_window(loc, win_size, sc(1920, 1080), 1.0, 0);
-    assert!((camera.x - 240.0).abs() < 1e-10, "camera.x should be 240, got {}", camera.x);
-    assert!((camera.y - 1610.0).abs() < 1e-10, "camera.y should be 1610, got {}", camera.y);
+    assert!(
+        (camera.x - 240.0).abs() < 1e-10,
+        "camera.x should be 240, got {}",
+        camera.x
+    );
+    assert!(
+        (camera.y - 1610.0).abs() < 1e-10,
+        "camera.y should be 1610, got {}",
+        camera.y
+    );
 }
 
 #[test]
@@ -54,8 +78,16 @@ fn camera_to_center_window_already_centered_returns_zero() {
     let loc = Point::<i32, Logical>::from((860, 440));
     let win_size = Size::<i32, Logical>::from((200, 200));
     let camera = camera_to_center_window(loc, win_size, sc(1920, 1080), 1.0, 0);
-    assert!((camera.x).abs() < 1e-10, "camera.x should be 0 for already-centered window, got {}", camera.x);
-    assert!((camera.y).abs() < 1e-10, "camera.y should be 0 for already-centered window, got {}", camera.y);
+    assert!(
+        (camera.x).abs() < 1e-10,
+        "camera.x should be 0 for already-centered window, got {}",
+        camera.x
+    );
+    assert!(
+        (camera.y).abs() < 1e-10,
+        "camera.y should be 0 for already-centered window, got {}",
+        camera.y
+    );
 }
 
 #[test]
@@ -67,8 +99,16 @@ fn camera_to_center_window_with_zoom_half() {
     let loc = Point::<i32, Logical>::from((0, 0));
     let win_size = Size::<i32, Logical>::from((100, 100));
     let camera = camera_to_center_window(loc, win_size, sc(1920, 1080), 0.5, 0);
-    assert!((camera.x - (-1870.0)).abs() < 1e-10, "camera.x should be -1870, got {}", camera.x);
-    assert!((camera.y - (-1030.0)).abs() < 1e-10, "camera.y should be -1030, got {}", camera.y);
+    assert!(
+        (camera.x - (-1870.0)).abs() < 1e-10,
+        "camera.x should be -1870, got {}",
+        camera.x
+    );
+    assert!(
+        (camera.y - (-1030.0)).abs() < 1e-10,
+        "camera.y should be -1030, got {}",
+        camera.y
+    );
 }
 
 // --- Direction::to_unit_vec tests ---
@@ -104,34 +144,63 @@ fn direction_right_unit_vec() {
 #[test]
 fn direction_upleft_unit_vec() {
     let (x, y) = Direction::UpLeft.to_unit_vec();
-    assert!((x - (-FRAC_1_SQRT_2)).abs() < 1e-15, "UpLeft x should be -FRAC_1_SQRT_2, got {x}");
-    assert!((y - (-FRAC_1_SQRT_2)).abs() < 1e-15, "UpLeft y should be -FRAC_1_SQRT_2, got {y}");
+    assert!(
+        (x - (-FRAC_1_SQRT_2)).abs() < 1e-15,
+        "UpLeft x should be -FRAC_1_SQRT_2, got {x}"
+    );
+    assert!(
+        (y - (-FRAC_1_SQRT_2)).abs() < 1e-15,
+        "UpLeft y should be -FRAC_1_SQRT_2, got {y}"
+    );
 }
 
 #[test]
 fn direction_upright_unit_vec() {
     let (x, y) = Direction::UpRight.to_unit_vec();
-    assert!((x - FRAC_1_SQRT_2).abs() < 1e-15, "UpRight x should be FRAC_1_SQRT_2, got {x}");
-    assert!((y - (-FRAC_1_SQRT_2)).abs() < 1e-15, "UpRight y should be -FRAC_1_SQRT_2, got {y}");
+    assert!(
+        (x - FRAC_1_SQRT_2).abs() < 1e-15,
+        "UpRight x should be FRAC_1_SQRT_2, got {x}"
+    );
+    assert!(
+        (y - (-FRAC_1_SQRT_2)).abs() < 1e-15,
+        "UpRight y should be -FRAC_1_SQRT_2, got {y}"
+    );
 }
 
 #[test]
 fn direction_downleft_unit_vec() {
     let (x, y) = Direction::DownLeft.to_unit_vec();
-    assert!((x - (-FRAC_1_SQRT_2)).abs() < 1e-15, "DownLeft x should be -FRAC_1_SQRT_2, got {x}");
-    assert!((y - FRAC_1_SQRT_2).abs() < 1e-15, "DownLeft y should be FRAC_1_SQRT_2, got {y}");
+    assert!(
+        (x - (-FRAC_1_SQRT_2)).abs() < 1e-15,
+        "DownLeft x should be -FRAC_1_SQRT_2, got {x}"
+    );
+    assert!(
+        (y - FRAC_1_SQRT_2).abs() < 1e-15,
+        "DownLeft y should be FRAC_1_SQRT_2, got {y}"
+    );
 }
 
 #[test]
 fn direction_downright_unit_vec() {
     let (x, y) = Direction::DownRight.to_unit_vec();
-    assert!((x - FRAC_1_SQRT_2).abs() < 1e-15, "DownRight x should be FRAC_1_SQRT_2, got {x}");
-    assert!((y - FRAC_1_SQRT_2).abs() < 1e-15, "DownRight y should be FRAC_1_SQRT_2, got {y}");
+    assert!(
+        (x - FRAC_1_SQRT_2).abs() < 1e-15,
+        "DownRight x should be FRAC_1_SQRT_2, got {x}"
+    );
+    assert!(
+        (y - FRAC_1_SQRT_2).abs() < 1e-15,
+        "DownRight y should be FRAC_1_SQRT_2, got {y}"
+    );
 }
 
 #[test]
 fn cardinal_directions_have_one_zero_component() {
-    for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+    for dir in [
+        Direction::Up,
+        Direction::Down,
+        Direction::Left,
+        Direction::Right,
+    ] {
         let (x, y) = dir.to_unit_vec();
         assert!(
             x == 0.0 || y == 0.0,
@@ -142,7 +211,12 @@ fn cardinal_directions_have_one_zero_component() {
 
 #[test]
 fn diagonal_directions_have_equal_magnitude_components() {
-    for dir in [Direction::UpLeft, Direction::UpRight, Direction::DownLeft, Direction::DownRight] {
+    for dir in [
+        Direction::UpLeft,
+        Direction::UpRight,
+        Direction::DownLeft,
+        Direction::DownRight,
+    ] {
         let (x, y) = dir.to_unit_vec();
         assert!(
             (x.abs() - y.abs()).abs() < 1e-15,
@@ -215,7 +289,11 @@ fn find_nearest_exactly_45_degrees_is_on_boundary() {
     // At exactly 45°, cross == dot, so cross <= dot → included
     let w = items(&[("a", 100.0, 100.0)]);
     let result = find_nearest(origin(0.0, 0.0), &Direction::Right, w.into_iter(), None);
-    assert_eq!(result, Some("a"), "exactly 45° (boundary) should be included");
+    assert_eq!(
+        result,
+        Some("a"),
+        "exactly 45° (boundary) should be included"
+    );
 }
 
 #[test]

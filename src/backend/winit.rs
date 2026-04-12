@@ -1,10 +1,6 @@
 use smithay::{
     backend::{
-        renderer::{
-            ImportDma,
-            damage::OutputDamageTracker,
-            gles::GlesRenderer,
-        },
+        renderer::{ImportDma, damage::OutputDamageTracker, gles::GlesRenderer},
         winit::{self, WinitEvent},
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
@@ -16,8 +12,8 @@ use smithay::{
 };
 use std::time::Duration;
 
-use crate::render::build_cursor_elements;
 use crate::backend::Backend;
+use crate::render::build_cursor_elements;
 use crate::state::{DriftWm, init_output_state};
 
 /// Initialize the winit backend: create a window, set up the output, and
@@ -52,12 +48,7 @@ pub fn init_winit(
     output.create_global::<crate::state::DriftWm>(&data.display_handle);
 
     // Create DMA-BUF global — advertise GPU buffer formats to clients
-    let formats = data
-        .backend
-        .as_mut()
-        .unwrap()
-        .renderer()
-        .dmabuf_formats();
+    let formats = data.backend.as_mut().unwrap().renderer().dmabuf_formats();
     let dmabuf_global = data
         .dmabuf_state
         .create_global::<crate::state::DriftWm>(&data.display_handle, formats);
@@ -67,8 +58,10 @@ pub fn init_winit(
         let mut backend = data.backend.take().unwrap();
         crate::render::init_background(data, backend.renderer(), size.to_logical(1), "winit");
         data.render.shadow_shader = crate::render::compile_shadow_shader(backend.renderer());
-        data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(backend.renderer());
-        let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(backend.renderer());
+        data.render.corner_clip_shader =
+            crate::render::compile_corner_clip_shader(backend.renderer());
+        let (blur_down, blur_up, blur_mask) =
+            crate::render::compile_blur_shaders(backend.renderer());
         data.render.blur_down_shader = blur_down;
         data.render.blur_up_shader = blur_up;
         data.render.blur_mask_shader = blur_mask;
@@ -83,17 +76,21 @@ pub fn init_winit(
     ));
 
     // Initialize per-output state for this output
-    init_output_state(&output, initial_camera, data.config.friction, Point::from((0, 0)));
+    init_output_state(
+        &output,
+        initial_camera,
+        data.config.friction,
+        Point::from((0, 0)),
+    );
     data.focused_output = Some(output.clone());
 
     // Map the output into the space at the initial camera position
-    data
-        .space
+    data.space
         .map_output(&output, initial_camera.to_i32_round());
 
     // Notify output management clients about the winit output
     {
-        use driftwm::protocols::output_management::{OutputHeadState, ModeInfo};
+        use driftwm::protocols::output_management::{ModeInfo, OutputHeadState};
         let mut heads = std::collections::HashMap::new();
         heads.insert(
             "winit".to_string(),
@@ -187,20 +184,33 @@ pub fn init_winit(
             // --- Read per-output state for this frame ---
             let (cur_camera, cur_zoom, last_cam, last_zoom) = {
                 let os = crate::state::output_state(&output);
-                (os.camera, os.zoom, os.last_rendered_camera, os.last_rendered_zoom)
+                (
+                    os.camera,
+                    os.zoom,
+                    os.last_rendered_camera,
+                    os.last_rendered_zoom,
+                )
             };
 
             // --- Update cached background element ---
-            let (camera_moved, zoom_changed) =
-                crate::render::update_background_element(data, &output, cur_camera, cur_zoom, last_cam, last_zoom);
+            let (camera_moved, zoom_changed) = crate::render::update_background_element(
+                data, &output, cur_camera, cur_zoom, last_cam, last_zoom,
+            );
 
             // --- Take backend to split borrow from state ---
-            let Backend::Winit(mut backend) = data.backend.take().unwrap()  else {
+            let Backend::Winit(mut backend) = data.backend.take().unwrap() else {
                 unreachable!("winit timer with non-winit backend");
             };
 
             // --- Build cursor + compose frame ---
-            let cursor_elements = build_cursor_elements(data, backend.renderer(), cur_camera, cur_zoom, output.current_scale().fractional_scale(), 1.0);
+            let cursor_elements = build_cursor_elements(
+                data,
+                backend.renderer(),
+                cur_camera,
+                cur_zoom,
+                output.current_scale().fractional_scale(),
+                1.0,
+            );
             let mut age = backend.buffer_age().unwrap_or(0);
             if !data.render.cached_tile_bg.is_empty() && (camera_moved || zoom_changed) {
                 age = 0;

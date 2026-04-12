@@ -1,8 +1,9 @@
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+use smithay::backend::allocator::{Buffer, Fourcc};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols_wlr::screencopy::v1::server::{
     zwlr_screencopy_frame_v1, zwlr_screencopy_manager_v1,
@@ -12,7 +13,6 @@ use smithay::reexports::wayland_server::protocol::wl_shm::Format;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use smithay::backend::allocator::{Buffer, Fourcc};
 use smithay::utils::{Physical, Point, Rectangle, Size};
 use smithay::wayland::shm;
 use zwlr_screencopy_frame_v1::{Flags, ZwlrScreencopyFrameV1};
@@ -27,7 +27,6 @@ pub struct ScreencopyQueue {
 }
 
 impl ScreencopyQueue {
-
     pub fn is_empty(&self) -> bool {
         self.pending_frames.is_empty() && self.screencopies.is_empty()
     }
@@ -131,7 +130,9 @@ where
     ) {
         let manager = data_init.init(manager, ());
         let state = state.screencopy_state();
-        state.queues.insert(manager.clone(), ScreencopyQueue::default());
+        state
+            .queues
+            .insert(manager.clone(), ScreencopyQueue::default());
     }
 
     fn can_view(client: Client, global_data: &ScreencopyManagerGlobalData) -> bool {
@@ -378,38 +379,37 @@ where
         let size = info.buffer_size;
 
         // Try DMA-BUF first, fall back to SHM
-        let sc_buffer =
-            if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
-                if dmabuf.format().code != Fourcc::Xrgb8888
-                    || dmabuf.width() != size.w as u32
-                    || dmabuf.height() != size.h as u32
-                {
-                    frame.post_error(
-                        zwlr_screencopy_frame_v1::Error::InvalidBuffer,
-                        "invalid dmabuf format or size",
-                    );
-                    return;
-                }
-                ScreencopyBuffer::Dmabuf(dmabuf.clone())
-            } else {
-                let valid = shm::with_buffer_contents(&buffer, |_, shm_len, buffer_data| {
-                    buffer_data.format == Format::Xrgb8888
-                        && buffer_data.width == size.w
-                        && buffer_data.height == size.h
-                        && buffer_data.stride == size.w * 4
-                        && shm_len == buffer_data.stride as usize * buffer_data.height as usize
-                })
-                .unwrap_or(false);
+        let sc_buffer = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
+            if dmabuf.format().code != Fourcc::Xrgb8888
+                || dmabuf.width() != size.w as u32
+                || dmabuf.height() != size.h as u32
+            {
+                frame.post_error(
+                    zwlr_screencopy_frame_v1::Error::InvalidBuffer,
+                    "invalid dmabuf format or size",
+                );
+                return;
+            }
+            ScreencopyBuffer::Dmabuf(dmabuf.clone())
+        } else {
+            let valid = shm::with_buffer_contents(&buffer, |_, shm_len, buffer_data| {
+                buffer_data.format == Format::Xrgb8888
+                    && buffer_data.width == size.w
+                    && buffer_data.height == size.h
+                    && buffer_data.stride == size.w * 4
+                    && shm_len == buffer_data.stride as usize * buffer_data.height as usize
+            })
+            .unwrap_or(false);
 
-                if !valid {
-                    frame.post_error(
-                        zwlr_screencopy_frame_v1::Error::InvalidBuffer,
-                        "invalid buffer",
-                    );
-                    return;
-                }
-                ScreencopyBuffer::Shm(buffer)
-            };
+            if !valid {
+                frame.post_error(
+                    zwlr_screencopy_frame_v1::Error::InvalidBuffer,
+                    "invalid buffer",
+                );
+                return;
+            }
+            ScreencopyBuffer::Shm(buffer)
+        };
 
         copied.store(true, Ordering::SeqCst);
 

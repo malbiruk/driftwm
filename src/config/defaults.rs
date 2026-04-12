@@ -4,7 +4,10 @@ use smithay::input::keyboard::{Keysym, keysyms};
 
 use super::types::*;
 
-pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> HashMap<KeyCombo, Action> {
+pub(super) fn default_bindings(
+    mod_key: ModKey,
+    cycle_mod: CycleModifier,
+) -> HashMap<KeyCombo, Action> {
     let terminal = detect_terminal();
     let launcher = detect_launcher();
 
@@ -254,37 +257,64 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
         ),
         // Media keys
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioRaiseVolume) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_XF86AudioRaiseVolume),
+            },
             Action::Spawn("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+".into()),
         ),
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioLowerVolume) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_XF86AudioLowerVolume),
+            },
             Action::Spawn("wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-".into()),
         ),
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86AudioMute) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_XF86AudioMute),
+            },
             Action::Spawn("wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle".into()),
         ),
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86MonBrightnessUp) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_XF86MonBrightnessUp),
+            },
             Action::Spawn("brightnessctl set +5%".into()),
         ),
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_XF86MonBrightnessDown) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_XF86MonBrightnessDown),
+            },
             Action::Spawn("brightnessctl set 5%-".into()),
         ),
         // Screenshot
         (
-            KeyCombo { modifiers: Modifiers::EMPTY, sym: Keysym::from(keysyms::KEY_Print) },
+            KeyCombo {
+                modifiers: Modifiers::EMPTY,
+                sym: Keysym::from(keysyms::KEY_Print),
+            },
             Action::Spawn("grim - | wl-copy".into()),
         ),
         (
-            KeyCombo { modifiers: Modifiers { shift: true, ..Modifiers::EMPTY }, sym: Keysym::from(keysyms::KEY_Print) },
+            KeyCombo {
+                modifiers: Modifiers {
+                    shift: true,
+                    ..Modifiers::EMPTY
+                },
+                sym: Keysym::from(keysyms::KEY_Print),
+            },
             Action::Spawn("grim -g \"$(slurp -d)\" - | wl-copy".into()),
         ),
         // Lock screen
         (
-            KeyCombo { modifiers: m.clone(), sym: Keysym::from(keysyms::KEY_l) },
+            KeyCombo {
+                modifiers: m.clone(),
+                sym: Keysym::from(keysyms::KEY_l),
+            },
             Action::Spawn("swaylock -f -c 000000 -kl".into()),
         ),
     ]);
@@ -298,19 +328,31 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
         };
         bindings.extend([
             (
-                KeyCombo { modifiers: m_alt.clone(), sym: Keysym::from(keysyms::KEY_Up) },
+                KeyCombo {
+                    modifiers: m_alt.clone(),
+                    sym: Keysym::from(keysyms::KEY_Up),
+                },
                 Action::SendToOutput(Direction::Up),
             ),
             (
-                KeyCombo { modifiers: m_alt.clone(), sym: Keysym::from(keysyms::KEY_Down) },
+                KeyCombo {
+                    modifiers: m_alt.clone(),
+                    sym: Keysym::from(keysyms::KEY_Down),
+                },
                 Action::SendToOutput(Direction::Down),
             ),
             (
-                KeyCombo { modifiers: m_alt.clone(), sym: Keysym::from(keysyms::KEY_Left) },
+                KeyCombo {
+                    modifiers: m_alt.clone(),
+                    sym: Keysym::from(keysyms::KEY_Left),
+                },
                 Action::SendToOutput(Direction::Left),
             ),
             (
-                KeyCombo { modifiers: m_alt, sym: Keysym::from(keysyms::KEY_Right) },
+                KeyCombo {
+                    modifiers: m_alt,
+                    sym: Keysym::from(keysyms::KEY_Right),
+                },
                 Action::SendToOutput(Direction::Right),
             ),
         ]);
@@ -319,7 +361,9 @@ pub(super) fn default_bindings(mod_key: ModKey, cycle_mod: CycleModifier) -> Has
     bindings
 }
 
-pub(super) fn default_mouse_bindings(mod_key: ModKey) -> ContextBindings<MouseBinding, MouseAction> {
+pub(super) fn default_mouse_bindings(
+    mod_key: ModKey,
+) -> ContextBindings<MouseBinding, MouseAction> {
     let m = mod_key.base();
     let alt_only = Modifiers {
         alt: true,
@@ -423,7 +467,9 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> ContextBindings<MouseBi
     }
 }
 
-pub(super) fn default_gesture_bindings(mod_key: ModKey) -> ContextBindings<GestureBinding, GestureConfigEntry> {
+pub(super) fn default_gesture_bindings(
+    mod_key: ModKey,
+) -> ContextBindings<GestureBinding, GestureConfigEntry> {
     let m = mod_key.base();
     let alt_only = Modifiers {
         alt: true,
@@ -475,15 +521,13 @@ pub(super) fn default_gesture_bindings(mod_key: ModKey) -> ContextBindings<Gestu
         ),
     ]);
 
-    let on_canvas = HashMap::from([
-        (
-            GestureBinding {
-                modifiers: Modifiers::EMPTY,
-                trigger: GestureTrigger::Pinch { fingers: 2 },
-            },
-            GestureConfigEntry::Continuous(ContinuousAction::Zoom),
-        ),
-    ]);
+    let on_canvas = HashMap::from([(
+        GestureBinding {
+            modifiers: Modifiers::EMPTY,
+            trigger: GestureTrigger::Pinch { fingers: 2 },
+        },
+        GestureConfigEntry::Continuous(ContinuousAction::Zoom),
+    )]);
 
     let anywhere = HashMap::from([
         // mod+2-finger-pinch = zoom (even over windows)

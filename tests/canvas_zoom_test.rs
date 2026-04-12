@@ -1,6 +1,6 @@
 use driftwm::canvas::{
-    all_windows_bbox, is_origin_visible, snap_zoom,
-    visible_canvas_rect, zoom_anchor_camera, zoom_to_fit, MIN_ZOOM_FLOOR,
+    MIN_ZOOM_FLOOR, all_windows_bbox, is_origin_visible, snap_zoom, visible_canvas_rect,
+    zoom_anchor_camera, zoom_to_fit,
 };
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
@@ -47,13 +47,21 @@ fn origin_not_visible_when_scrolled_far_down() {
 #[test]
 fn origin_visible_at_bottom_right_edge() {
     // camera = (-1920, -1080) → viewport spans [-1920..0, -1080..0] — origin at exact corner
-    assert!(is_origin_visible(cam(-1920.0, -1080.0), vp(1920, 1080), 1.0));
+    assert!(is_origin_visible(
+        cam(-1920.0, -1080.0),
+        vp(1920, 1080),
+        1.0
+    ));
 }
 
 #[test]
 fn origin_not_visible_just_past_edge() {
     // camera = (-1920.1, -1080) → viewport x spans [-1920.1..-0.1] — origin at x=0 is outside
-    assert!(!is_origin_visible(cam(-1920.1, -1080.0), vp(1920, 1080), 1.0));
+    assert!(!is_origin_visible(
+        cam(-1920.1, -1080.0),
+        vp(1920, 1080),
+        1.0
+    ));
 }
 
 #[test]
@@ -217,9 +225,10 @@ fn all_windows_bbox_empty() {
 
 #[test]
 fn all_windows_bbox_single_window() {
-    let windows = vec![
-        (Point::<i32, Logical>::from((100, 200)), Size::<i32, Logical>::from((300, 400))),
-    ];
+    let windows = vec![(
+        Point::<i32, Logical>::from((100, 200)),
+        Size::<i32, Logical>::from((300, 400)),
+    )];
     let bbox = all_windows_bbox(windows.into_iter()).unwrap();
     assert_eq!(bbox.loc.x, 100);
     assert_eq!(bbox.loc.y, 200);
@@ -230,8 +239,14 @@ fn all_windows_bbox_single_window() {
 #[test]
 fn all_windows_bbox_multiple_windows() {
     let windows = vec![
-        (Point::<i32, Logical>::from((-100, -200)), Size::<i32, Logical>::from((200, 200))),
-        (Point::<i32, Logical>::from((500, 300)), Size::<i32, Logical>::from((100, 100))),
+        (
+            Point::<i32, Logical>::from((-100, -200)),
+            Size::<i32, Logical>::from((200, 200)),
+        ),
+        (
+            Point::<i32, Logical>::from((500, 300)),
+            Size::<i32, Logical>::from((100, 100)),
+        ),
     ];
     let bbox = all_windows_bbox(windows.into_iter()).unwrap();
     // min_x=-100, min_y=-200, max_x=600, max_y=400

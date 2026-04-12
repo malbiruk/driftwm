@@ -102,7 +102,8 @@ impl WindowExt for Window {
             toplevel.send_configure();
         } else if let Some(x11) = self.x11_surface() {
             x11.set_fullscreen(false).ok();
-            x11.configure(Rectangle::new(x11.geometry().loc, saved_size)).ok();
+            x11.configure(Rectangle::new(x11.geometry().loc, saved_size))
+                .ok();
         }
     }
 
@@ -130,7 +131,8 @@ impl WindowExt for Window {
             toplevel.send_configure();
         } else if let Some(x11) = self.x11_surface() {
             x11.set_maximized(false).ok();
-            x11.configure(Rectangle::new(x11.geometry().loc, saved_size)).ok();
+            x11.configure(Rectangle::new(x11.geometry().loc, saved_size))
+                .ok();
         }
     }
 
@@ -156,7 +158,10 @@ impl WindowExt for Window {
                     .data_map
                     .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
                     .and_then(|d| d.lock().ok())
-                    .is_some_and(|guard| guard.dialog_hint == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal)
+                    .is_some_and(|guard| {
+                        guard.dialog_hint
+                            == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal
+                    })
             })
         } else {
             false

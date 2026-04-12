@@ -1,5 +1,5 @@
 use driftwm::config::{Action, Config, Direction};
-use smithay::input::keyboard::{keysyms, Keysym, ModifiersState};
+use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
 
 // ── Modifier helpers ─────────────────────────────────────────────────────
 

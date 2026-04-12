@@ -11,13 +11,13 @@ use smithay::{
     utils::{Logical, Rectangle, SERIAL_COUNTER},
     wayland::{
         compositor::with_states,
-        selection::SelectionTarget,
         seat::WaylandFocus,
+        selection::SelectionTarget,
         xwayland_shell::{XWaylandShellHandler, XWaylandShellState},
     },
     xwayland::{
-        xwm::{Reorder, ResizeEdge, WmWindowType, X11Wm, XwmHandler, XwmId},
         X11Surface,
+        xwm::{Reorder, ResizeEdge, WmWindowType, X11Wm, XwmHandler, XwmId},
     },
 };
 
@@ -35,7 +35,6 @@ fn x11_edge_to_xdg(edge: ResizeEdge) -> xdg_toplevel::ResizeEdge {
         ResizeEdge::BottomRight => xdg_toplevel::ResizeEdge::BottomRight,
     }
 }
-
 
 impl XwmHandler for DriftWm {
     fn xwm_state(&mut self, _xwm: XwmId) -> &mut X11Wm {
@@ -81,10 +80,17 @@ impl XwmHandler for DriftWm {
             // navigate_to_window uses camera_to_center_window which offsets by bar/2;
             // the spawn position must be the exact inverse so cascade detects collisions.
             let will_have_ssd = smithay_window.wants_ssd()
-                || rule.as_ref().is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
-            let bar = if will_have_ssd { driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 } else { 0.0 };
+                || rule
+                    .as_ref()
+                    .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
+            let bar = if will_have_ssd {
+                driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64
+            } else {
+                0.0
+            };
             let vc = self.usable_center_screen();
-            let centered = self.active_output()
+            let centered = self
+                .active_output()
                 .and_then(|o| self.space.output_geometry(&o))
                 .map(|_| {
                     let cam = self.camera();
@@ -104,7 +110,8 @@ impl XwmHandler for DriftWm {
         }
 
         let activate = rule.as_ref().is_none_or(|r| !r.widget);
-        self.space.map_element(smithay_window.clone(), pos, activate);
+        self.space
+            .map_element(smithay_window.clone(), pos, activate);
         self.space.raise_element(&smithay_window, true);
         self.enforce_below_windows();
         // Focus, decorations, and applied_rule storage are deferred to
@@ -124,11 +131,7 @@ impl XwmHandler for DriftWm {
             if let Some(wl_surface) = smithay_window.wl_surface() {
                 let keyboard = self.seat.get_keyboard().unwrap();
                 if keyboard.current_focus().is_some_and(|f| f.0 == *wl_surface) {
-                    keyboard.set_focus(
-                        self,
-                        None::<FocusTarget>,
-                        SERIAL_COUNTER.next_serial(),
-                    );
+                    keyboard.set_focus(self, None::<FocusTarget>, SERIAL_COUNTER.next_serial());
                 }
                 self.decorations.remove(&wl_surface.id());
                 self.render.csd_shadows.remove(&wl_surface.id());
@@ -220,8 +223,12 @@ impl XwmHandler for DriftWm {
     }
 
     fn resize_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32, edge: ResizeEdge) {
-        let Some(smithay_window) = self.find_x11_window(&window) else { return };
-        let Some(wl_surface) = smithay_window.wl_surface().map(|s| s.into_owned()) else { return };
+        let Some(smithay_window) = self.find_x11_window(&window) else {
+            return;
+        };
+        let Some(wl_surface) = smithay_window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
 
         let pointer = self.seat.get_pointer().unwrap();
         let start_data = GrabStartData {
@@ -267,8 +274,12 @@ impl XwmHandler for DriftWm {
     }
 
     fn move_request(&mut self, _xwm: XwmId, window: X11Surface, _button: u32) {
-        let Some(smithay_window) = self.find_x11_window(&window) else { return };
-        let Some(wl_surface) = smithay_window.wl_surface().map(|s| s.into_owned()) else { return };
+        let Some(smithay_window) = self.find_x11_window(&window) else {
+            return;
+        };
+        let Some(wl_surface) = smithay_window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
 
         if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
@@ -296,7 +307,13 @@ impl XwmHandler for DriftWm {
         true
     }
 
-    fn send_selection(&mut self, _xwm: XwmId, sel: SelectionTarget, mime: String, fd: std::os::fd::OwnedFd) {
+    fn send_selection(
+        &mut self,
+        _xwm: XwmId,
+        sel: SelectionTarget,
+        mime: String,
+        fd: std::os::fd::OwnedFd,
+    ) {
         if let Some(wm) = self.x11_wm.as_mut() {
             wm.send_selection(sel, mime, fd).ok();
         }
@@ -365,26 +382,34 @@ impl XWaylandShellHandler for DriftWm {
         if let Some(ref rule) = rule {
             let applied = driftwm::config::AppliedWindowRule::from(rule);
             with_states(&wl_surface, |states| {
-                states.data_map.insert_if_missing_threadsafe(|| {
-                    std::sync::Mutex::new(applied.clone())
-                });
-                *states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                    .unwrap().lock().unwrap() = applied;
+                states
+                    .data_map
+                    .insert_if_missing_threadsafe(|| std::sync::Mutex::new(applied.clone()));
+                *states
+                    .data_map
+                    .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                    .unwrap()
+                    .lock()
+                    .unwrap() = applied;
             });
         }
 
         // SSD decorations: check MOTIF hints + window rule overrides
         let wants_ssd = smithay_window.wants_ssd();
-        let rule_forces_ssd = rule.as_ref()
+        let rule_forces_ssd = rule
+            .as_ref()
             .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
-        let rule_forces_none = rule.as_ref()
+        let rule_forces_none = rule
+            .as_ref()
             .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::None);
 
         if (wants_ssd || rule_forces_ssd) && !rule_forces_none {
             let geo = smithay_window.geometry();
             if geo.size.w > 0 && !self.decorations.contains_key(&wl_surface.id()) {
                 let deco = crate::decorations::WindowDecoration::new(
-                    geo.size.w, true, &self.config.decorations,
+                    geo.size.w,
+                    true,
+                    &self.config.decorations,
                 );
                 self.decorations.insert(wl_surface.id(), deco);
                 self.pending_ssd.insert(wl_surface.id());

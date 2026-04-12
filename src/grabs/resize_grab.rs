@@ -3,10 +3,8 @@ use std::cell::RefCell;
 use smithay::{
     desktop::Window,
     input::{
-        pointer::{
-            ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
-        },
         SeatHandler,
+        pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     },
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -78,7 +76,11 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
     ) {
         // Force pointer back if Phase 3 input routing crossed to another output.
         // event.location is in the wrong canvas space — use last valid position.
-        if data.focused_output.as_ref().is_some_and(|fo| *fo != self.output) {
+        if data
+            .focused_output
+            .as_ref()
+            .is_some_and(|fo| *fo != self.output)
+        {
             data.focused_output = Some(self.output.clone());
             let clamped_event = MotionEvent {
                 location: self.last_clamped_location,
@@ -99,10 +101,9 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         let clamped_screen: Point<f64, Logical> = (
             screen.x.clamp(0.0, output_size.w as f64 - 1.0),
             screen.y.clamp(0.0, output_size.h as f64 - 1.0),
-        ).into();
-        let clamped = canvas::screen_to_canvas(
-            canvas::ScreenPos(clamped_screen), camera, zoom,
-        ).0;
+        )
+            .into();
+        let clamped = canvas::screen_to_canvas(canvas::ScreenPos(clamped_screen), camera, zoom).0;
         self.last_clamped_location = clamped;
 
         let delta = clamped - self.start_data.location;
@@ -135,11 +136,16 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
             snap_resize_edges(
                 &mut self.snap,
                 self.edges as u32,
-                (self.initial_window_location.x, self.initial_window_location.y),
+                (
+                    self.initial_window_location.x,
+                    self.initial_window_location.y,
+                ),
                 (self.initial_window_size.w, self.initial_window_size.h),
                 self_bar,
-                &mut new_w, &mut new_h,
-                &others, zoom,
+                &mut new_w,
+                &mut new_h,
+                &others,
+                zoom,
                 data.config.snap_gap,
                 data.config.snap_distance,
                 data.config.snap_break_force,
@@ -162,9 +168,9 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
             } else if let Some(x11) = self.window.x11_surface() {
                 // Throttle X11 configures to ~60fps — X11 apps redraw synchronously
                 let now = std::time::Instant::now();
-                let throttle_ok = self.last_x11_configure.is_none_or(|t| {
-                    now.duration_since(t) >= std::time::Duration::from_millis(16)
-                });
+                let throttle_ok = self
+                    .last_x11_configure
+                    .is_none_or(|t| now.duration_since(t) >= std::time::Duration::from_millis(16));
                 if throttle_ok {
                     self.last_x11_configure = Some(now);
                     let mut geo = x11.geometry();

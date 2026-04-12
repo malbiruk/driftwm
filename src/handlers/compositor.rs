@@ -4,25 +4,25 @@ use crate::grabs::{ResizeState, has_left, has_top};
 use crate::handlers::layer_shell::LayerDestroyedMarker;
 use crate::state::{ClientState, DriftWm, FocusTarget};
 use driftwm::window_ext::WindowExt;
+use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::utils::Rectangle;
-use smithay::xwayland::XWaylandClientData;
-use smithay::desktop::layer_map_for_output;
 use smithay::wayland::shell::wlr_layer::{
-    Anchor, KeyboardInteractivity, LayerSurfaceData, LayerSurfaceCachedState,
+    Anchor, KeyboardInteractivity, LayerSurfaceCachedState, LayerSurfaceData,
 };
+use smithay::xwayland::XWaylandClientData;
 use smithay::{
     delegate_compositor, delegate_shm,
     reexports::{
         calloop::Interest,
-        wayland_server::{Resource, protocol::wl_buffer::WlBuffer, Client},
+        wayland_server::{Client, Resource, protocol::wl_buffer::WlBuffer},
     },
     wayland::{
         buffer::BufferHandler,
         compositor::{
-            add_blocker, add_pre_commit_hook, get_parent, is_sync_subsurface, with_states,
             BufferAssignment, CompositorClientState, CompositorHandler, CompositorState,
-            RectangleKind, SurfaceAttributes,
+            RectangleKind, SurfaceAttributes, add_blocker, add_pre_commit_hook, get_parent,
+            is_sync_subsurface, with_states,
         },
         dmabuf::get_dmabuf,
         seat::WaylandFocus,
@@ -46,14 +46,21 @@ impl CompositorHandler for DriftWm {
         }
     }
 
-    fn new_surface(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+    fn new_surface(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
         // Register an early pre-commit hook. Since this runs at surface creation
         // (before get_layer_surface registers smithay's validation hook), it fires
         // first on every commit. For destroyed layer surfaces, it sets full anchors
         // so smithay's size validation passes on the orphaned final commit.
         add_pre_commit_hook::<DriftWm, _>(surface, |_state, _dh, surface| {
             with_states(surface, |states| {
-                if states.data_map.get::<LayerDestroyedMarker>().is_some_and(|m| m.0.load(std::sync::atomic::Ordering::Relaxed)) {
+                if states
+                    .data_map
+                    .get::<LayerDestroyedMarker>()
+                    .is_some_and(|m| m.0.load(std::sync::atomic::Ordering::Relaxed))
+                {
                     let mut guard = states.cached_state.get::<LayerSurfaceCachedState>();
                     guard.pending().anchor =
                         Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT;
@@ -62,7 +69,10 @@ impl CompositorHandler for DriftWm {
         });
     }
 
-    fn commit(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+    fn commit(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
         self.mark_all_dirty();
 
         // Bump blur scene generation for scene-affecting surfaces (skip cursor)
@@ -79,9 +89,10 @@ impl CompositorHandler for DriftWm {
                 while let Some(parent) = get_parent(&root) {
                     root = parent;
                 }
-                root != *surface && with_states(&root, |states| {
-                    states.data_map.get::<XdgToplevelSurfaceData>().is_some()
-                })
+                root != *surface
+                    && with_states(&root, |states| {
+                        states.data_map.get::<XdgToplevelSurfaceData>().is_some()
+                    })
             };
             if is_scene_surface {
                 self.render.blur_scene_generation += 1;
@@ -113,9 +124,7 @@ impl CompositorHandler for DriftWm {
                 .insert_source(source, move |_, _, data: &mut DriftWm| {
                     if let Some(client_state) = client.get_data::<ClientState>() {
                         let dh = data.display_handle.clone();
-                        client_state
-                            .compositor_state
-                            .blocker_cleared(data, &dh);
+                        client_state.compositor_state.blocker_cleared(data, &dh);
                     }
                     Ok(())
                 })
@@ -139,14 +148,19 @@ impl CompositorHandler for DriftWm {
                 let mut guard = states.cached_state.get::<SurfaceAttributes>();
                 let attrs = guard.current();
                 if let Some(ref mut region) = attrs.opaque_region {
-                    let Some(bounds) = region.rects.iter()
+                    let Some(bounds) = region
+                        .rects
+                        .iter()
                         .filter(|(k, _)| matches!(k, RectangleKind::Add))
                         .map(|(_, r)| *r)
                         .reduce(|a, b| a.merge(b))
-                    else { return };
+                    else {
+                        return;
+                    };
                     let r = self.config.decorations.corner_radius + 2;
                     if bounds.size.w > 2 * r && bounds.size.h > 2 * r {
-                        let (x, y, w, h) = (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
+                        let (x, y, w, h) =
+                            (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
                         for corner in [
                             Rectangle::new((x, y).into(), (r, r).into()),
                             Rectangle::new((x + w - r, y).into(), (r, r).into()),
@@ -172,7 +186,8 @@ impl CompositorHandler for DriftWm {
                 .any(|ls| ls.wl_surface() == surface);
             if is_lock_surface {
                 // Take the locker out of the enum to call lock() (consumes it)
-                let old = std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Locked);
+                let old =
+                    std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Locked);
                 if let crate::state::SessionLock::Pending(locker) = old {
                     locker.lock();
                     tracing::info!("Session lock confirmed");
@@ -214,16 +229,22 @@ impl CompositorHandler for DriftWm {
                             .unwrap_or_default()
                     });
 
-                    let rule = self.config.match_window_rule(
-                        app_id.as_deref().unwrap_or(""),
-                        title.as_deref().unwrap_or(""),
-                    ).cloned();
+                    let rule = self
+                        .config
+                        .match_window_rule(
+                            app_id.as_deref().unwrap_or(""),
+                            title.as_deref().unwrap_or(""),
+                        )
+                        .cloned();
 
                     // Check if rule side-effects were already applied on a
                     // previous commit (happens when the first commit had zero
                     // size and we re-inserted into pending_center for retry).
                     let already_applied = with_states(&root, |states| {
-                        states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>().is_some()
+                        states
+                            .data_map
+                            .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                            .is_some()
                     });
 
                     if let Some(ref rule) = rule {
@@ -233,8 +254,12 @@ impl CompositorHandler for DriftWm {
                             states.data_map.insert_if_missing_threadsafe(|| {
                                 std::sync::Mutex::new(applied.clone())
                             });
-                            *states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                                .unwrap().lock().unwrap() = applied;
+                            *states
+                                .data_map
+                                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                                .unwrap()
+                                .lock()
+                                .unwrap() = applied;
                         });
                     }
 
@@ -278,7 +303,8 @@ impl CompositorHandler for DriftWm {
                             };
                             let centered = if output_geo.is_some() {
                                 let vc = self.usable_center_screen();
-                                let cam = self.camera(); let z = self.zoom();
+                                let cam = self.camera();
+                                let z = self.zoom();
                                 let cx = (cam.x + vc.x / z).round() as i32 - geo.size.w / 2;
                                 let cy = (cam.y + vc.y / z).round() as i32 - geo.size.h / 2;
                                 (cx, cy)
@@ -292,7 +318,9 @@ impl CompositorHandler for DriftWm {
                     }
 
                     // Decoration override: always re-apply (idempotent, needed on tray reopen)
-                    if let Some(ref rule) = rule && rule.decoration != driftwm::config::DecorationMode::Client {
+                    if let Some(ref rule) = rule
+                        && rule.decoration != driftwm::config::DecorationMode::Client
+                    {
                         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
                         if let Some(toplevel) = window.toplevel() {
                             toplevel.with_pending_state(|state| {
@@ -304,7 +332,9 @@ impl CompositorHandler for DriftWm {
                     }
 
                     // Widget side-effects: only on first apply
-                    if let Some(ref rule) = rule && !already_applied {
+                    if let Some(ref rule) = rule
+                        && !already_applied
+                    {
                         if rule.widget {
                             self.enforce_below_windows();
                         }
@@ -333,9 +363,13 @@ impl CompositorHandler for DriftWm {
                         // since the double-buffer state may have been consumed by configure/ack.
                         {
                             let is_server_side = self.pending_ssd.contains(&root.id());
-                            let is_none_mode = rule.as_ref()
-                                .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::None);
-                            if is_server_side && !is_none_mode && !self.decorations.contains_key(&root.id()) {
+                            let is_none_mode = rule.as_ref().is_some_and(|r| {
+                                r.decoration == driftwm::config::DecorationMode::None
+                            });
+                            if is_server_side
+                                && !is_none_mode
+                                && !self.decorations.contains_key(&root.id())
+                            {
                                 let deco = crate::decorations::WindowDecoration::new(
                                     geo.size.w,
                                     true,
@@ -396,9 +430,8 @@ fn ensure_initial_configure(
         let Some(toplevel) = window.toplevel() else {
             return; // X11 windows don't have xdg toplevels
         };
-        let initial_configure_sent = smithay::wayland::compositor::with_states(
-            toplevel.wl_surface(),
-            |states| {
+        let initial_configure_sent =
+            smithay::wayland::compositor::with_states(toplevel.wl_surface(), |states| {
                 states
                     .data_map
                     .get::<XdgToplevelSurfaceData>()
@@ -406,8 +439,7 @@ fn ensure_initial_configure(
                     .lock()
                     .unwrap()
                     .initial_configure_sent
-            },
-        );
+            });
         if !initial_configure_sent {
             toplevel.send_configure();
         }
@@ -416,7 +448,10 @@ fn ensure_initial_configure(
 
 impl DriftWm {
     /// Give keyboard focus to a layer surface if it doesn't already have it.
-    fn focus_exclusive_layer(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
+    fn focus_exclusive_layer(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
         let keyboard = self.seat.get_keyboard().unwrap();
         let already_focused = keyboard
             .current_focus()
@@ -443,7 +478,9 @@ impl DriftWm {
             .canvas_layers
             .iter()
             .position(|cl| cl.surface.wl_surface() == &root);
-        let Some(idx) = idx else { return false; };
+        let Some(idx) = idx else {
+            return false;
+        };
 
         // Resolve position on first commit (once surface size is known)
         if self.canvas_layers[idx].position.is_none() {
@@ -567,10 +604,16 @@ impl DriftWm {
         });
 
         let (edges, initial_window_location, initial_window_size) = match resize_state {
-            ResizeState::Resizing { edges, initial_window_location, initial_window_size }
-            | ResizeState::WaitingForLastCommit { edges, initial_window_location, initial_window_size } => {
-                (edges, initial_window_location, initial_window_size)
+            ResizeState::Resizing {
+                edges,
+                initial_window_location,
+                initial_window_size,
             }
+            | ResizeState::WaitingForLastCommit {
+                edges,
+                initial_window_location,
+                initial_window_size,
+            } => (edges, initial_window_location, initial_window_size),
             ResizeState::Idle => return,
         };
 

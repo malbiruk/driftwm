@@ -1,19 +1,17 @@
 use smithay::{
     desktop::Window,
     input::{
-        pointer::{
-            ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
-        },
         SeatHandler,
+        pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     },
     output::Output,
     utils::{Logical, Point},
     wayland::seat::WaylandFocus,
 };
 
+use crate::state::{DriftWm, output_logical_size, output_state};
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use driftwm::snap::{SnapParams, SnapState, update_axis};
-use crate::state::{DriftWm, output_state, output_logical_size};
 
 /// Which output edge is inhibited after a cross-output teleport.
 #[derive(Clone, Copy)]
@@ -80,10 +78,18 @@ impl MoveSurfaceGrab {
         // Direction: push away from the nearest edge(s)
         let mut vx = 0.0;
         let mut vy = 0.0;
-        if dist_left < edge_zone { vx -= speed * ((edge_zone - dist_left) / edge_zone); }
-        if dist_right < edge_zone { vx += speed * ((edge_zone - dist_right) / edge_zone); }
-        if dist_top < edge_zone { vy -= speed * ((edge_zone - dist_top) / edge_zone); }
-        if dist_bottom < edge_zone { vy += speed * ((edge_zone - dist_bottom) / edge_zone); }
+        if dist_left < edge_zone {
+            vx -= speed * ((edge_zone - dist_left) / edge_zone);
+        }
+        if dist_right < edge_zone {
+            vx += speed * ((edge_zone - dist_right) / edge_zone);
+        }
+        if dist_top < edge_zone {
+            vy -= speed * ((edge_zone - dist_top) / edge_zone);
+        }
+        if dist_bottom < edge_zone {
+            vy += speed * ((edge_zone - dist_bottom) / edge_zone);
+        }
 
         // Normalize diagonal so it doesn't go √2 faster
         let len = (vx * vx + vy * vy).sqrt();
@@ -148,12 +154,32 @@ impl MoveSurfaceGrab {
     ) -> Option<Point<f64, Logical>> {
         let mut v = velocity?;
         match edge {
-            Edge::Left => { if v.x < 0.0 { v.x = 0.0; } }
-            Edge::Right => { if v.x > 0.0 { v.x = 0.0; } }
-            Edge::Top => { if v.y < 0.0 { v.y = 0.0; } }
-            Edge::Bottom => { if v.y > 0.0 { v.y = 0.0; } }
+            Edge::Left => {
+                if v.x < 0.0 {
+                    v.x = 0.0;
+                }
+            }
+            Edge::Right => {
+                if v.x > 0.0 {
+                    v.x = 0.0;
+                }
+            }
+            Edge::Top => {
+                if v.y < 0.0 {
+                    v.y = 0.0;
+                }
+            }
+            Edge::Bottom => {
+                if v.y > 0.0 {
+                    v.y = 0.0;
+                }
+            }
         }
-        if v.x == 0.0 && v.y == 0.0 { None } else { Some(v) }
+        if v.x == 0.0 && v.y == 0.0 {
+            None
+        } else {
+            Some(v)
+        }
     }
 }
 
@@ -171,7 +197,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
         // Phase 3 input routing already converted event.location to the focused
         // output's canvas space and updated data.focused_output. If that differs
         // from self.output, the pointer crossed an output boundary.
-        if data.focused_output.as_ref().is_some_and(|fo| *fo != self.output) {
+        if data
+            .focused_output
+            .as_ref()
+            .is_some_and(|fo| *fo != self.output)
+        {
             let new_output = data.focused_output.clone().unwrap();
 
             // event.location is already in the new output's canvas space.
@@ -197,11 +227,8 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             self.inhibited_edge = Some(entry_edge);
 
             // Map window at new position immediately.
-            data.space.map_element(
-                self.window.clone(),
-                self.initial_window_location,
-                false,
-            );
+            data.space
+                .map_element(self.window.clone(), self.initial_window_location, false);
             handle.motion(data, None, event);
             return;
         }
@@ -242,7 +269,10 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 same_edge: data.config.snap_same_edge,
             };
             let final_x = update_axis(
-                &mut self.snap.x, &mut self.snap.cooldown_x, natural_x, &params_x,
+                &mut self.snap.x,
+                &mut self.snap.cooldown_x,
+                natural_x,
+                &params_x,
             );
 
             // Shift y into visual space (title bar top) for snapping,
@@ -259,7 +289,10 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 same_edge: data.config.snap_same_edge,
             };
             let final_visual_y = update_axis(
-                &mut self.snap.y, &mut self.snap.cooldown_y, visual_y, &params_y,
+                &mut self.snap.y,
+                &mut self.snap.cooldown_y,
+                visual_y,
+                &params_y,
             );
             let final_y = final_visual_y + self_bar as f64;
 
@@ -291,7 +324,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
 
             let effective_velocity = if let Some(edge) = self.inhibited_edge {
                 if Self::should_clear_inhibition(
-                    edge, screen_pos, size.w as f64, size.h as f64, cfg.edge_zone,
+                    edge,
+                    screen_pos,
+                    size.w as f64,
+                    size.h as f64,
+                    cfg.edge_zone,
                 ) {
                     self.inhibited_edge = None;
                     velocity

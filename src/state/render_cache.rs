@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture};
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::utils::{Physical, Size};
 

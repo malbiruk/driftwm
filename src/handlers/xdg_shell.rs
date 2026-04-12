@@ -12,7 +12,10 @@ use smithay::{
     input::pointer::{CursorIcon, CursorImageStatus, Focus, GrabStartData},
     reexports::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
-        wayland_server::{Resource, protocol::{wl_output, wl_seat}},
+        wayland_server::{
+            Resource,
+            protocol::{wl_output, wl_seat},
+        },
     },
     utils::{Rectangle, Serial},
     wayland::{
@@ -40,9 +43,12 @@ impl XdgShellHandler for DriftWm {
             .active_output()
             .and_then(|o| self.space.output_geometry(&o))
             .map(|geo| {
-                { let cam = self.camera(); let z = self.zoom();
-                ((cam.x + geo.size.w as f64 / (2.0 * z)) as i32,
-                 (cam.y + geo.size.h as f64 / (2.0 * z)) as i32) }
+                let cam = self.camera();
+                let z = self.zoom();
+                (
+                    (cam.x + geo.size.w as f64 / (2.0 * z)) as i32,
+                    (cam.y + geo.size.h as f64 / (2.0 * z)) as i32,
+                )
             })
             .unwrap_or((0, 0));
 
@@ -79,10 +85,7 @@ impl XdgShellHandler for DriftWm {
         };
 
         let root_focus = FocusTarget(root);
-        let Ok(mut grab) =
-            self.popups
-                .grab_popup(root_focus, kind, &self.seat, serial)
-        else {
+        let Ok(mut grab) = self.popups.grab_popup(root_focus, kind, &self.seat, serial) else {
             return;
         };
 
@@ -91,9 +94,7 @@ impl XdgShellHandler for DriftWm {
 
         if keyboard.is_grabbed()
             && !(keyboard.has_grab(serial)
-                || grab
-                    .previous_serial()
-                    .is_none_or(|s| keyboard.has_grab(s)))
+                || grab.previous_serial().is_none_or(|s| keyboard.has_grab(s)))
         {
             grab.ungrab(PopupUngrabStrategy::All);
             return;
@@ -181,22 +182,22 @@ impl XdgShellHandler for DriftWm {
             let parent_focus = window.parent_surface().and_then(|ps| {
                 let parent = self.window_for_surface(&ps)?;
                 // If parent has another modal child, focus that instead
-                let target = self.topmost_modal_child(&parent)
+                let target = self
+                    .topmost_modal_child(&parent)
                     .filter(|mc| mc != window)
                     .unwrap_or(parent);
                 target.wl_surface().map(|s| FocusTarget(s.into_owned()))
             });
 
             let keyboard = self.seat.get_keyboard().unwrap();
-            if keyboard
-                .current_focus()
-                .is_some_and(|f| f.0 == wl_surface)
-            {
+            if keyboard.current_focus().is_some_and(|f| f.0 == wl_surface) {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                 keyboard.set_focus(self, parent_focus, serial);
             }
             // If the destroyed window was fullscreen, restore viewport
-            let fs_output = self.fullscreen.iter()
+            let fs_output = self
+                .fullscreen
+                .iter()
                 .find(|(_, fs)| &fs.window == window)
                 .map(|(o, _)| o.clone());
             if let Some(output) = fs_output {
@@ -220,12 +221,7 @@ impl XdgShellHandler for DriftWm {
         }
     }
 
-    fn move_request(
-        &mut self,
-        surface: ToplevelSurface,
-        _seat: wl_seat::WlSeat,
-        serial: Serial,
-    ) {
+    fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, serial: Serial) {
         let wl_surface = surface.wl_surface().clone();
         if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
@@ -365,7 +361,8 @@ impl DriftWm {
         {
             // Parent is an xdg window — target is the output rect in window-relative coords
             let window_loc = self.space.element_location(window).unwrap_or_default();
-            let output_geo = active_output.as_ref()
+            let output_geo = active_output
+                .as_ref()
                 .and_then(|o| self.space.output_geometry(o))
                 .unwrap_or_default();
 
@@ -382,7 +379,8 @@ impl DriftWm {
             && let Some(pos) = cl.position
         {
             // Parent is a canvas-positioned layer surface
-            let output_geo = active_output.as_ref()
+            let output_geo = active_output
+                .as_ref()
                 .and_then(|o| self.space.output_geometry(o))
                 .unwrap_or_default();
             // Constrain to the visible canvas area (accounts for zoom)

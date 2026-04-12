@@ -4,14 +4,13 @@ use std::time::Duration;
 use smithay::{
     backend::renderer::{
         element::{
-            Element, RenderElement,
-            Kind,
-            memory::MemoryRenderBufferRenderElement,
-            render_elements,
-            texture::TextureRenderElement,
-            utils::RescaleRenderElement,
+            Element, Kind, RenderElement, memory::MemoryRenderBufferRenderElement, render_elements,
+            texture::TextureRenderElement, utils::RescaleRenderElement,
         },
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType, element::PixelShaderElement},
+        gles::{
+            GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName,
+            UniformType, element::PixelShaderElement,
+        },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
@@ -79,7 +78,10 @@ impl TileShaderElement {
             area,
             opaque_regions: opaque_regions.unwrap_or_default(),
             alpha,
-            additional_uniforms: additional_uniforms.into_iter().map(|u| u.into_owned()).collect(),
+            additional_uniforms: additional_uniforms
+                .into_iter()
+                .map(|u| u.into_owned())
+                .collect(),
             kind,
         }
     }
@@ -98,14 +100,21 @@ impl TileShaderElement {
     }
 
     pub fn update_uniforms(&mut self, additional_uniforms: Vec<Uniform<'_>>) {
-        self.additional_uniforms = additional_uniforms.into_iter().map(|u| u.into_owned()).collect();
+        self.additional_uniforms = additional_uniforms
+            .into_iter()
+            .map(|u| u.into_owned())
+            .collect();
         self.commit_counter.increment();
     }
 }
 
 impl Element for TileShaderElement {
-    fn id(&self) -> &Id { &self.id }
-    fn current_commit(&self) -> CommitCounter { self.commit_counter }
+    fn id(&self) -> &Id {
+        &self.id
+    }
+    fn current_commit(&self) -> CommitCounter {
+        self.commit_counter
+    }
 
     fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
         Rectangle::from_size((self.tex_w as f64, self.tex_h as f64).into())
@@ -122,8 +131,12 @@ impl Element for TileShaderElement {
             .collect()
     }
 
-    fn alpha(&self) -> f32 { self.alpha }
-    fn kind(&self) -> Kind { self.kind }
+    fn alpha(&self) -> f32 {
+        self.alpha
+    }
+    fn kind(&self) -> Kind {
+        self.kind
+    }
 }
 
 impl RenderElement<GlesRenderer> for TileShaderElement {
@@ -204,7 +217,9 @@ pub const SHADOW_UNIFORMS: &[UniformName<'static>] = &[
 ];
 
 /// Compile the shadow shader program. Called once at startup alongside the background shader.
-pub fn compile_shadow_shader(renderer: &mut GlesRenderer) -> Option<smithay::backend::renderer::gles::GlesPixelProgram> {
+pub fn compile_shadow_shader(
+    renderer: &mut GlesRenderer,
+) -> Option<smithay::backend::renderer::gles::GlesPixelProgram> {
     match renderer.compile_custom_pixel_shader(SHADOW_SHADER_SRC, SHADOW_UNIFORMS) {
         Ok(shader) => Some(shader),
         Err(e) => {
@@ -224,15 +239,25 @@ fn shadow_uniforms(
     use driftwm::config::DecorationConfig;
     let sc = DecorationConfig::SHADOW_COLOR;
     vec![
-        Uniform::new("u_window_rect", (
-            shadow_padding as f32, shadow_padding as f32,
-            content_w as f32, content_h as f32,
-        )),
+        Uniform::new(
+            "u_window_rect",
+            (
+                shadow_padding as f32,
+                shadow_padding as f32,
+                content_w as f32,
+                content_h as f32,
+            ),
+        ),
         Uniform::new("u_radius", shadow_radius),
-        Uniform::new("u_color", (
-            sc[0] as f32 / 255.0, sc[1] as f32 / 255.0,
-            sc[2] as f32 / 255.0, sc[3] as f32 / 255.0,
-        )),
+        Uniform::new(
+            "u_color",
+            (
+                sc[0] as f32 / 255.0,
+                sc[1] as f32 / 255.0,
+                sc[2] as f32 / 255.0,
+                sc[3] as f32 / 255.0,
+            ),
+        ),
         Uniform::new("u_corner_radius", corner_radius),
     ]
 }
@@ -240,11 +265,26 @@ fn shadow_uniforms(
 const CORNER_CLIP_SRC: &str = include_str!("shaders/corner_clip.glsl");
 
 pub const CORNER_CLIP_UNIFORMS: &[UniformName<'static>] = &[
-    UniformName { name: Cow::Borrowed("u_size"), type_: UniformType::_2f },
-    UniformName { name: Cow::Borrowed("u_geo"), type_: UniformType::_4f },
-    UniformName { name: Cow::Borrowed("u_radius"), type_: UniformType::_1f },
-    UniformName { name: Cow::Borrowed("u_clip_top"), type_: UniformType::_1f },
-    UniformName { name: Cow::Borrowed("u_clip_shadow"), type_: UniformType::_1f },
+    UniformName {
+        name: Cow::Borrowed("u_size"),
+        type_: UniformType::_2f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_geo"),
+        type_: UniformType::_4f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_radius"),
+        type_: UniformType::_1f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_clip_top"),
+        type_: UniformType::_1f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_clip_shadow"),
+        type_: UniformType::_1f,
+    },
 ];
 
 pub fn compile_corner_clip_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
@@ -260,9 +300,18 @@ pub fn compile_corner_clip_shader(renderer: &mut GlesRenderer) -> Option<GlesTex
 const TILE_BG_SRC: &str = include_str!("shaders/tile_bg.glsl");
 
 pub const TILE_BG_UNIFORMS: &[UniformName<'static>] = &[
-    UniformName { name: Cow::Borrowed("u_camera"), type_: UniformType::_2f },
-    UniformName { name: Cow::Borrowed("u_tile_size"), type_: UniformType::_2f },
-    UniformName { name: Cow::Borrowed("u_output_size"), type_: UniformType::_2f },
+    UniformName {
+        name: Cow::Borrowed("u_camera"),
+        type_: UniformType::_2f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_tile_size"),
+        type_: UniformType::_2f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_output_size"),
+        type_: UniformType::_2f,
+    },
 ];
 
 pub fn compile_tile_bg_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
@@ -292,25 +341,43 @@ impl RoundedCornerElement {
         corner_radius: f64,
         clip_top: bool,
     ) -> Self {
-        Self { inner, shader, uniforms, corner_radius, clip_top }
+        Self {
+            inner,
+            shader,
+            uniforms,
+            corner_radius,
+            clip_top,
+        }
     }
 }
 
 impl Element for RoundedCornerElement {
-    fn id(&self) -> &smithay::backend::renderer::element::Id { self.inner.id() }
-    fn current_commit(&self) -> CommitCounter { self.inner.current_commit() }
-    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> { self.inner.location(scale) }
-    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> { self.inner.src() }
-    fn transform(&self) -> Transform { self.inner.transform() }
-    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> { self.inner.geometry(scale) }
+    fn id(&self) -> &smithay::backend::renderer::element::Id {
+        self.inner.id()
+    }
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        self.inner.location(scale)
+    }
+    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
+        self.inner.src()
+    }
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.inner.geometry(scale)
+    }
     fn damage_since(
-        &self, scale: Scale<f64>, commit: Option<CommitCounter>,
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
         self.inner.damage_since(scale, commit)
     }
-    fn opaque_regions(
-        &self, scale: Scale<f64>,
-    ) -> OpaqueRegions<i32, Physical> {
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
         let regions = self.inner.opaque_regions(scale);
         if regions.is_empty() || self.corner_radius <= 0.0 {
             return regions;
@@ -330,10 +397,16 @@ impl Element for RoundedCornerElement {
         corners.push(Rectangle::new((0, h - r).into(), (r, r).into()));
         corners.push(Rectangle::new((w - r, h - r).into(), (r, r).into()));
         let rects: Vec<_> = regions.into_iter().collect();
-        Rectangle::subtract_rects_many_in_place(rects, corners).into_iter().collect()
+        Rectangle::subtract_rects_many_in_place(rects, corners)
+            .into_iter()
+            .collect()
     }
-    fn alpha(&self) -> f32 { self.inner.alpha() }
-    fn kind(&self) -> Kind { self.inner.kind() }
+    fn alpha(&self) -> f32 {
+        self.inner.alpha()
+    }
+    fn kind(&self) -> Kind {
+        self.inner.kind()
+    }
 }
 
 impl RenderElement<GlesRenderer> for RoundedCornerElement {
@@ -347,13 +420,16 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
         _user_data: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), GlesError> {
         frame.override_default_tex_program(self.shader.clone(), self.uniforms.clone());
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions, _user_data);
+        let result = self
+            .inner
+            .draw(frame, src, dst, damage, opaque_regions, _user_data);
         frame.clear_tex_program_override();
         result
     }
 
     fn underlying_storage(
-        &self, renderer: &mut GlesRenderer,
+        &self,
+        renderer: &mut GlesRenderer,
     ) -> Option<smithay::backend::renderer::element::UnderlyingStorage<'_>> {
         self.inner.underlying_storage(renderer)
     }
@@ -380,22 +456,33 @@ impl BlurCache {
     pub fn new(renderer: &mut GlesRenderer, size: Size<i32, Physical>) -> Option<Self> {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
-        let t1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
-        let t2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
-        let t3 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let t1 =
+            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let t2 =
+            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let t3 =
+            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         Some(Self {
-            texture: t1, scratch: t2, mask: t3, size,
-            dirty: true, last_scene_generation: 0,
-            last_geometry_generation: 0, last_camera_generation: 0,
+            texture: t1,
+            scratch: t2,
+            mask: t3,
+            size,
+            dirty: true,
+            last_scene_generation: 0,
+            last_geometry_generation: 0,
+            last_camera_generation: 0,
         })
     }
 
     pub fn resize(&mut self, renderer: &mut GlesRenderer, size: Size<i32, Physical>) {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
-        if let Ok(t1) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
-            && let Ok(t2) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
-            && let Ok(t3) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+        if let Ok(t1) =
+            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+            && let Ok(t2) =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+            && let Ok(t3) =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
         {
             self.texture = t1;
             self.scratch = t2;
@@ -408,7 +495,13 @@ impl BlurCache {
 
 static BLUR_MASK_SRC: &str = include_str!("shaders/blur_mask.glsl");
 
-pub fn compile_blur_shaders(renderer: &mut GlesRenderer) -> (Option<GlesTexProgram>, Option<GlesTexProgram>, Option<GlesTexProgram>) {
+pub fn compile_blur_shaders(
+    renderer: &mut GlesRenderer,
+) -> (
+    Option<GlesTexProgram>,
+    Option<GlesTexProgram>,
+    Option<GlesTexProgram>,
+) {
     let uniforms = &[
         UniformName::new("u_halfpixel", UniformType::_2f),
         UniformName::new("u_offset", UniformType::_1f),
@@ -442,12 +535,24 @@ fn render_blur(
     let tex_size = tex_a.size();
 
     for i in 0..passes {
-        blur_pass(renderer, down_shader, tex_a, tex_b, tex_size, offset, i, passes, true)?;
+        blur_pass(
+            renderer,
+            down_shader,
+            tex_a,
+            tex_b,
+            tex_size,
+            offset,
+            i,
+            passes,
+            true,
+        )?;
         std::mem::swap(tex_a, tex_b);
     }
 
     for i in 0..passes {
-        blur_pass(renderer, up_shader, tex_a, tex_b, tex_size, offset, i, passes, false)?;
+        blur_pass(
+            renderer, up_shader, tex_a, tex_b, tex_size, offset, i, passes, false,
+        )?;
         std::mem::swap(tex_a, tex_b);
     }
 
@@ -492,10 +597,7 @@ fn blur_pass(
     {
         let mut target = renderer.bind(tex_b)?;
         let mut frame = renderer.render(&mut target, dst_phys, Transform::Normal)?;
-        frame.clear(
-            Color32F::TRANSPARENT,
-            &[Rectangle::from_size(dst_phys)],
-        )?;
+        frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(dst_phys)])?;
         frame.render_texture_from_to(
             &src,
             src_buf,
@@ -532,11 +634,15 @@ fn build_override_redirect_elements(
     let mut elements = Vec::new();
     // Reverse: newest OR window = topmost
     for or_surface in state.x11_override_redirect.iter().rev() {
-        let Some(wl_surface) = or_surface.wl_surface() else { continue };
+        let Some(wl_surface) = or_surface.wl_surface() else {
+            continue;
+        };
         let canvas_pos = state.or_canvas_position(or_surface);
         let or_size = or_surface.geometry().size;
         let or_rect = Rectangle::new(canvas_pos, or_size);
-        if !visible_rect.overlaps(or_rect) { continue }
+        if !visible_rect.overlaps(or_rect) {
+            continue;
+        }
 
         let render_loc: Point<f64, Logical> = Point::from((
             canvas_pos.x as f64 - camera.x,
@@ -576,12 +682,12 @@ pub fn build_canvas_layer_elements(
     let mut elements = Vec::new();
 
     for cl in &state.canvas_layers {
-        let Some(pos) = cl.position else { continue; };
+        let Some(pos) = cl.position else {
+            continue;
+        };
         // Camera-relative position (same as render_elements_for_region does for windows)
-        let rel: Point<f64, Logical> = Point::from((
-            pos.x as f64 - camera.x,
-            pos.y as f64 - camera.y,
-        ));
+        let rel: Point<f64, Logical> =
+            Point::from((pos.x as f64 - camera.x, pos.y as f64 - camera.y));
         let physical_loc = rel.to_physical_precise_round(output_scale);
 
         let surface_elements = cl
@@ -639,7 +745,9 @@ fn build_layer_elements(
 
         if let Some((config, blur_enabled, layer_tag)) = blur_config
             && blur_enabled
-            && config.match_window_rule(surface.namespace(), "").is_some_and(|r| r.blur)
+            && config
+                .match_window_rule(surface.namespace(), "")
+                .is_some_and(|r| r.blur)
         {
             let elem_count = elements.len() - elem_start;
             let screen_rect = geo.to_physical_precise_round(output_scale);
@@ -695,7 +803,8 @@ pub fn build_cursor_elements(
             let pos: Point<i32, Physical> = (
                 (physical_pos.x - hotspot.x as f64) as i32,
                 (physical_pos.y - hotspot.y as f64) as i32,
-            ).into();
+            )
+                .into();
             let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
                 smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
                     renderer,
@@ -705,7 +814,10 @@ pub fn build_cursor_elements(
                     alpha,
                     Kind::Cursor,
                 );
-            elems.into_iter().map(|e| OutputRenderElements::CursorSurface(e.into())).collect()
+            elems
+                .into_iter()
+                .map(|e| OutputRenderElements::CursorSurface(e.into()))
+                .collect()
         }
         CursorImageStatus::Named(icon) => {
             build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
@@ -732,8 +844,8 @@ fn build_xcursor_elements(
     let frame_idx = if cursor_frames.total_duration_ms == 0 {
         0
     } else {
-        let elapsed = state.start_time.elapsed().as_millis() as u32
-            % cursor_frames.total_duration_ms;
+        let elapsed =
+            state.start_time.elapsed().as_millis() as u32 % cursor_frames.total_duration_ms;
         let mut acc = 0u32;
         let mut idx = 0;
         for (i, &(_, _, delay)) in cursor_frames.frames.iter().enumerate() {
@@ -811,14 +923,15 @@ fn compose_lock_frame(
 
     if let Some(lock_surface) = state.lock_surfaces.get(output) {
         let output_scale = output.current_scale().fractional_scale();
-        let lock_elements = smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
-            renderer,
-            lock_surface.wl_surface(),
-            (0, 0),
-            Scale::from(output_scale),
-            1.0,
-            Kind::Unspecified,
-        );
+        let lock_elements =
+            smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                renderer,
+                lock_surface.wl_surface(),
+                (0, 0),
+                Scale::from(output_scale),
+                1.0,
+                Kind::Unspecified,
+            );
         elements.extend(lock_elements.into_iter().map(OutputRenderElements::Layer));
     }
 
@@ -839,7 +952,9 @@ pub fn compose_frame(
     }
 
     // Ensure this output has a background element (lazy init per output, and re-init after config reload)
-    if !state.render.cached_bg_elements.contains_key(&output.name()) && !state.render.cached_tile_bg.contains_key(&output.name()) {
+    if !state.render.cached_bg_elements.contains_key(&output.name())
+        && !state.render.cached_tile_bg.contains_key(&output.name())
+    {
         let output_size = crate::state::output_logical_size(output);
         init_background(state, renderer, output_size, &output.name());
     }
@@ -851,11 +966,7 @@ pub fn compose_frame(
     };
 
     let viewport_size = crate::state::output_logical_size(output);
-    let visible_rect = canvas::visible_canvas_rect(
-        camera.to_i32_round(),
-        viewport_size,
-        zoom,
-    );
+    let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom);
     let output_scale = output.current_scale().fractional_scale();
     let scale = Scale::from(output_scale);
 
@@ -864,7 +975,9 @@ pub fn compose_frame(
     let mut zoomed_normal: Vec<OutputRenderElements> = Vec::new();
     let mut zoomed_widgets: Vec<OutputRenderElements> = Vec::new();
 
-    let blur_enabled = state.render.blur_down_shader.is_some() && state.render.blur_up_shader.is_some() && state.render.blur_mask_shader.is_some();
+    let blur_enabled = state.render.blur_down_shader.is_some()
+        && state.render.blur_up_shader.is_some()
+        && state.render.blur_mask_shader.is_some();
     let mut blur_requests: Vec<BlurRequestData> = Vec::new();
 
     // Focused surface for decoration focus state
@@ -875,10 +988,14 @@ pub fn compose_frame(
         .map(|f| f.0);
 
     for window in state.space.elements().rev() {
-        let Some(loc) = state.space.element_location(window) else { continue };
+        let Some(loc) = state.space.element_location(window) else {
+            continue;
+        };
         let geom_loc = window.geometry().loc;
         let geom_size = window.geometry().size;
-        let Some(wl_surface) = window.wl_surface() else { continue; };
+        let Some(wl_surface) = window.wl_surface() else {
+            continue;
+        };
         let is_fullscreen = state.fullscreen.values().any(|fs| &fs.window == window);
         let has_ssd = !is_fullscreen && state.decorations.contains_key(&wl_surface.id());
 
@@ -892,7 +1009,9 @@ pub fn compose_frame(
             bbox.size.w += 2 * r;
             bbox.size.h += bar + 2 * r;
         }
-        if !visible_rect.overlaps(bbox) { continue }
+        if !visible_rect.overlaps(bbox) {
+            continue;
+        }
 
         let render_loc: Point<f64, Logical> = Point::from((
             loc.x as f64 - geom_loc.x as f64 - camera.x,
@@ -910,7 +1029,11 @@ pub fn compose_frame(
             opacity as f32,
         );
 
-        let target = if is_widget { &mut zoomed_widgets } else { &mut zoomed_normal };
+        let target = if is_widget {
+            &mut zoomed_widgets
+        } else {
+            &mut zoomed_normal
+        };
         let elem_start = target.len();
         let mut shadow_count = 0usize;
 
@@ -925,12 +1048,14 @@ pub fn compose_frame(
 
             // Title bar element: positioned above the window
             if let Some(deco) = state.decorations.get(&wl_surface.id()) {
-                let bar_loc: Point<f64, Logical> = Point::from((
-                    render_loc.x,
-                    render_loc.y - bar_height as f64,
-                ));
+                let bar_loc: Point<f64, Logical> =
+                    Point::from((render_loc.x, render_loc.y - bar_height as f64));
                 let bar_physical: Point<f64, Physical> = bar_loc.to_physical_precise_round(scale);
-                let bar_alpha = if opacity < 1.0 { Some(opacity as f32) } else { None };
+                let bar_alpha = if opacity < 1.0 {
+                    Some(opacity as f32)
+                } else {
+                    None
+                };
                 if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     bar_physical,
@@ -954,7 +1079,10 @@ pub fn compose_frame(
             if let Some(ref shader) = state.render.corner_clip_shader {
                 let radius = state.config.decorations.corner_radius as f32;
                 if radius > 0.0 {
-                    let toplevel_id = smithay::backend::renderer::element::Id::from_wayland_resource(&*wl_surface);
+                    let toplevel_id =
+                        smithay::backend::renderer::element::Id::from_wayland_resource(
+                            &*wl_surface,
+                        );
                     for elem in elems {
                         if *elem.id() == toplevel_id {
                             let buf = elem.buffer_size();
@@ -966,17 +1094,27 @@ pub fn compose_frame(
                                 Uniform::new("u_clip_top", 0.0f32),
                                 Uniform::new("u_clip_shadow", 0.0f32),
                             ];
-                            target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
-                                RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, false),
-                                Point::<i32, Physical>::from((0, 0)),
-                                zoom,
-                            )));
+                            target.push(OutputRenderElements::CsdWindow(
+                                RescaleRenderElement::from_element(
+                                    RoundedCornerElement::new(
+                                        elem,
+                                        shader.clone(),
+                                        uniforms,
+                                        radius as f64,
+                                        false,
+                                    ),
+                                    Point::<i32, Physical>::from((0, 0)),
+                                    zoom,
+                                ),
+                            ));
                         } else {
-                            target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
-                                elem,
-                                Point::<i32, Physical>::from((0, 0)),
-                                zoom,
-                            )));
+                            target.push(OutputRenderElements::Window(
+                                RescaleRenderElement::from_element(
+                                    elem,
+                                    Point::<i32, Physical>::from((0, 0)),
+                                    zoom,
+                                ),
+                            ));
                         }
                     }
                 } else {
@@ -1015,14 +1153,22 @@ pub fn compose_frame(
 
                 if let Some(deco) = state.decorations.get_mut(&wl_surface.id()) {
                     let content_size = (geom_size.w, geom_size.h);
-                    if deco.cached_shadow.as_ref().is_some_and(|s| (s.alpha() - opacity as f32).abs() > f32::EPSILON) {
+                    if deco
+                        .cached_shadow
+                        .as_ref()
+                        .is_some_and(|s| (s.alpha() - opacity as f32).abs() > f32::EPSILON)
+                    {
                         deco.cached_shadow = None;
                     }
                     let shadow_elem = if let Some(shadow) = &mut deco.cached_shadow {
                         if deco.shadow_content_size != content_size {
                             deco.shadow_content_size = content_size;
                             shadow.update_uniforms(shadow_uniforms(
-                                r, geom_size.w, geom_size.h + bar_height, radius, corner_r,
+                                r,
+                                geom_size.w,
+                                geom_size.h + bar_height,
+                                radius,
+                                corner_r,
                             ));
                         }
                         shadow.resize(shadow_area, None);
@@ -1034,7 +1180,13 @@ pub fn compose_frame(
                             shadow_area,
                             None,
                             opacity as f32,
-                            shadow_uniforms(r, geom_size.w, geom_size.h + bar_height, radius, corner_r),
+                            shadow_uniforms(
+                                r,
+                                geom_size.w,
+                                geom_size.h + bar_height,
+                                radius,
+                                corner_r,
+                            ),
                             Kind::Unspecified,
                         );
                         deco.cached_shadow = Some(elem.clone());
@@ -1054,37 +1206,55 @@ pub fn compose_frame(
             let geo = window.geometry();
             let radius = state.config.decorations.corner_radius as f32;
 
-            let rule_forced = applied.as_ref().is_some_and(|r| {
-                r.decoration != driftwm::config::DecorationMode::Client
-            });
+            let rule_forced = applied
+                .as_ref()
+                .is_some_and(|r| r.decoration != driftwm::config::DecorationMode::Client);
 
             if !rule_forced && !is_fullscreen {
                 if radius > 0.0 {
-                    let toplevel_id = smithay::backend::renderer::element::Id::from_wayland_resource(&*wl_surface);
+                    let toplevel_id =
+                        smithay::backend::renderer::element::Id::from_wayland_resource(
+                            &*wl_surface,
+                        );
                     for elem in elems {
                         if *elem.id() == toplevel_id {
                             let buf = elem.buffer_size();
                             let uniforms = vec![
                                 Uniform::new("u_size", (buf.w as f32, buf.h as f32)),
-                                Uniform::new("u_geo", (
-                                    geo.loc.x as f32, geo.loc.y as f32,
-                                    geo.size.w as f32, geo.size.h as f32,
-                                )),
+                                Uniform::new(
+                                    "u_geo",
+                                    (
+                                        geo.loc.x as f32,
+                                        geo.loc.y as f32,
+                                        geo.size.w as f32,
+                                        geo.size.h as f32,
+                                    ),
+                                ),
                                 Uniform::new("u_radius", radius),
                                 Uniform::new("u_clip_top", 1.0f32),
                                 Uniform::new("u_clip_shadow", 1.0f32),
                             ];
-                            target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
-                                RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, true),
-                                Point::<i32, Physical>::from((0, 0)),
-                                zoom,
-                            )));
+                            target.push(OutputRenderElements::CsdWindow(
+                                RescaleRenderElement::from_element(
+                                    RoundedCornerElement::new(
+                                        elem,
+                                        shader.clone(),
+                                        uniforms,
+                                        radius as f64,
+                                        true,
+                                    ),
+                                    Point::<i32, Physical>::from((0, 0)),
+                                    zoom,
+                                ),
+                            ));
                         } else {
-                            target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
-                                elem,
-                                Point::<i32, Physical>::from((0, 0)),
-                                zoom,
-                            )));
+                            target.push(OutputRenderElements::Window(
+                                RescaleRenderElement::from_element(
+                                    elem,
+                                    Point::<i32, Physical>::from((0, 0)),
+                                    zoom,
+                                ),
+                            ));
                         }
                     }
                 } else {
@@ -1129,7 +1299,11 @@ pub fn compose_frame(
                     if *cached_size != content_size {
                         *cached_size = content_size;
                         shadow_elem.update_uniforms(shadow_uniforms(
-                            sr, geom_size.w, geom_size.h, shadow_radius, corner_r,
+                            sr,
+                            geom_size.w,
+                            geom_size.h,
+                            shadow_radius,
+                            corner_r,
                         ));
                     }
                     shadow_elem.resize(shadow_area, None);
@@ -1163,27 +1337,29 @@ pub fn compose_frame(
 
         if wants_blur {
             let elem_count = target.len() - elem_start - shadow_count;
-            let screen_loc: Point<i32, Logical> = Point::from((
-                (render_loc.x * zoom) as i32,
-                (render_loc.y * zoom) as i32,
-            ));
+            let screen_loc: Point<i32, Logical> =
+                Point::from(((render_loc.x * zoom) as i32, (render_loc.y * zoom) as i32));
             let screen_size: Size<i32, Logical> = if has_ssd {
                 let bar = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
                 (
                     (geom_size.w as f64 * zoom).ceil() as i32,
                     ((geom_size.h + bar) as f64 * zoom).ceil() as i32,
-                ).into()
+                )
+                    .into()
             } else {
                 (
                     (geom_size.w as f64 * zoom).ceil() as i32,
                     (geom_size.h as f64 * zoom).ceil() as i32,
-                ).into()
+                )
+                    .into()
             };
             let screen_rect = Rectangle::new(
                 if has_ssd {
                     Point::from((
                         screen_loc.x,
-                        screen_loc.y - (driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 * zoom) as i32,
+                        screen_loc.y
+                            - (driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 * zoom)
+                                as i32,
                     ))
                 } else {
                     // CSD windows: geometry starts at render_loc + geo.loc, not at render_loc
@@ -1194,13 +1370,18 @@ pub fn compose_frame(
                     ))
                 },
                 screen_size,
-            ).to_physical_precise_round(output_scale);
+            )
+            .to_physical_precise_round(output_scale);
             blur_requests.push(BlurRequestData {
                 surface_id: wl_surface.id(),
                 screen_rect,
                 elem_start,
                 elem_count,
-                layer: if is_widget { BlurLayer::Widget } else { BlurLayer::Normal },
+                layer: if is_widget {
+                    BlurLayer::Widget
+                } else {
+                    BlurLayer::Normal
+                },
             });
         }
     }
@@ -1209,9 +1390,8 @@ pub fn compose_frame(
 
     let or_elements = build_override_redirect_elements(state, renderer, output, camera, zoom);
 
-    let outline_elements = build_output_outline_elements(
-        state, renderer, output, camera, zoom, viewport_size,
-    );
+    let outline_elements =
+        build_output_outline_elements(state, renderer, output, camera, zoom, viewport_size);
 
     let bg_elements: Vec<OutputRenderElements> =
         if let Some(elem) = state.render.cached_bg_elements.get(&output.name()) {
@@ -1236,12 +1416,16 @@ pub fn compose_frame(
 
     let is_fullscreen = state.is_output_fullscreen(output);
     let (overlay_elements, overlay_blur) = build_layer_elements(
-        output, renderer, WlrLayer::Overlay,
+        output,
+        renderer,
+        WlrLayer::Overlay,
         Some((&state.config, blur_enabled, BlurLayer::Overlay)),
     );
     let (top_elements, top_blur) = if !is_fullscreen {
         build_layer_elements(
-            output, renderer, WlrLayer::Top,
+            output,
+            renderer,
+            WlrLayer::Top,
             Some((&state.config, blur_enabled, BlurLayer::Top)),
         )
     } else {
@@ -1252,15 +1436,14 @@ pub fn compose_frame(
     } else {
         (vec![], vec![])
     };
-    let (background_layer_elements, _) = build_layer_elements(output, renderer, WlrLayer::Background, None);
+    let (background_layer_elements, _) =
+        build_layer_elements(output, renderer, WlrLayer::Background, None);
 
     // Compute prefix offsets so we know where each group lands in all_elements
     let overlay_prefix = cursor_elements.len() + or_elements.len();
     let top_prefix = overlay_prefix + overlay_elements.len();
     let normal_prefix = top_prefix + top_elements.len();
-    let widget_prefix = normal_prefix
-        + zoomed_normal.len()
-        + canvas_layer_elements.len();
+    let widget_prefix = normal_prefix + zoomed_normal.len() + canvas_layer_elements.len();
 
     // Merge blur requests: layer surfaces first (front-to-back), then windows
     let mut all_blur_requests: Vec<BlurRequestData> = Vec::new();
@@ -1296,17 +1479,29 @@ pub fn compose_frame(
     // Process blur requests: render behind-content, blur, insert
     if !all_blur_requests.is_empty() {
         process_blur_requests(
-            state, renderer, output, output_scale,
-            &mut all_elements, &all_blur_requests,
-            overlay_prefix, top_prefix, normal_prefix, widget_prefix,
+            state,
+            renderer,
+            output,
+            output_scale,
+            &mut all_elements,
+            &all_blur_requests,
+            overlay_prefix,
+            top_prefix,
+            normal_prefix,
+            widget_prefix,
         );
     }
 
     // Prune stale blur cache entries
     if blur_enabled {
-        let active_ids: std::collections::HashSet<_> =
-            all_blur_requests.iter().map(|r| r.surface_id.clone()).collect();
-        state.render.blur_cache.retain(|id, _| active_ids.contains(id));
+        let active_ids: std::collections::HashSet<_> = all_blur_requests
+            .iter()
+            .map(|r| r.surface_id.clone())
+            .collect();
+        state
+            .render
+            .blur_cache
+            .retain(|id, _| active_ids.contains(id));
     }
 
     all_elements
@@ -1327,10 +1522,10 @@ fn process_blur_requests(
     normal_prefix: usize,
     widget_prefix: usize,
 ) {
-    use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
     use smithay::backend::renderer::Color32F;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::Id;
+    use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
 
     let logical_size = crate::state::output_logical_size(output);
     let output_size: Size<i32, Physical> = logical_size.to_physical_precise_round(output_scale);
@@ -1340,8 +1535,11 @@ fn process_blur_requests(
     let mut bg_tex = match state.render.blur_bg_fbo.take() {
         Some((tex, cached_size)) if cached_size == output_size => tex,
         _ => {
-            let Ok(t) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size)
-            else { return };
+            let Ok(t) =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size)
+            else {
+                return;
+            };
             t
         }
     };
@@ -1395,15 +1593,18 @@ fn process_blur_requests(
     }
 
     // Precompute per-request behind depth (index into all_elements where "below this window" begins)
-    let behind_starts: Vec<usize> = blur_requests.iter().map(|req| {
-        let prefix = match req.layer {
-            BlurLayer::Overlay => overlay_prefix,
-            BlurLayer::Top => top_prefix,
-            BlurLayer::Normal => normal_prefix,
-            BlurLayer::Widget => widget_prefix,
-        };
-        (prefix + req.elem_start + req.elem_count).min(all_elements.len())
-    }).collect();
+    let behind_starts: Vec<usize> = blur_requests
+        .iter()
+        .map(|req| {
+            let prefix = match req.layer {
+                BlurLayer::Overlay => overlay_prefix,
+                BlurLayer::Top => top_prefix,
+                BlurLayer::Normal => normal_prefix,
+                BlurLayer::Widget => widget_prefix,
+            };
+            (prefix + req.elem_start + req.elem_count).min(all_elements.len())
+        })
+        .collect();
 
     let mask_shader = state.render.blur_mask_shader.clone();
 
@@ -1412,10 +1613,16 @@ fn process_blur_requests(
     // bg render is a shorter suffix — cheaper). Re-render only when depth changes.
     let mut last_bg_depth: Option<usize> = None;
     for (i, req) in blur_requests.iter().enumerate() {
-        if !needs_recompute[i] { continue; }
+        if !needs_recompute[i] {
+            continue;
+        }
         let win_size = req.screen_rect.size;
-        if win_size.w <= 0 || win_size.h <= 0 { continue; }
-        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else { continue };
+        if win_size.w <= 0 || win_size.h <= 0 {
+            continue;
+        }
+        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else {
+            continue;
+        };
 
         let behind = behind_starts[i];
         if last_bg_depth != Some(behind) {
@@ -1437,8 +1644,12 @@ fn process_blur_requests(
         // Crop from bg_tex into cache.texture
         {
             let bg_src = bg_tex.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+                continue;
+            };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                continue;
+            };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
             let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
                 (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
@@ -1473,9 +1684,13 @@ fn process_blur_requests(
 
     // ── Loop 2: mask render + apply for all dirty windows (safe to overwrite bg_tex) ──
     for (i, req) in blur_requests.iter().enumerate() {
-        if !needs_recompute[i] { continue; }
+        if !needs_recompute[i] {
+            continue;
+        }
         let win_size = req.screen_rect.size;
-        if win_size.w <= 0 || win_size.h <= 0 { continue; }
+        if win_size.w <= 0 || win_size.h <= 0 {
+            continue;
+        }
 
         let prefix = match req.layer {
             BlurLayer::Overlay => overlay_prefix,
@@ -1489,7 +1704,9 @@ fn process_blur_requests(
         let surf_start = prefix + req.elem_start;
         let surf_end = (surf_start + req.elem_count).min(all_elements.len());
         {
-            let Ok(mut target) = renderer.bind(&mut bg_tex) else { continue };
+            let Ok(mut target) = renderer.bind(&mut bg_tex) else {
+                continue;
+            };
             let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
             let _ = dt.render_output(
                 renderer,
@@ -1500,13 +1717,19 @@ fn process_blur_requests(
             );
         }
 
-        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else { continue };
+        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else {
+            continue;
+        };
 
         // Crop surface region into cache.mask
         {
             let bg_src = bg_tex.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.mask) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let Ok(mut target) = renderer.bind(&mut cache.mask) else {
+                continue;
+            };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                continue;
+            };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
             let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
                 (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
@@ -1527,18 +1750,21 @@ fn process_blur_requests(
         }
 
         // Masking pass — threshold surface alpha, multiply blur by it
-        let Some(ref shader) = mask_shader else { continue };
+        let Some(ref shader) = mask_shader else {
+            continue;
+        };
         {
             use smithay::backend::renderer::gles::ffi;
             let mask_src = cache.mask.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+                continue;
+            };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                continue;
+            };
             let _ = frame.with_context(|gl| unsafe {
                 gl.Enable(ffi::BLEND);
-                gl.BlendFuncSeparate(
-                    ffi::ZERO, ffi::SRC_ALPHA,
-                    ffi::ZERO, ffi::SRC_ALPHA,
-                );
+                gl.BlendFuncSeparate(ffi::ZERO, ffi::SRC_ALPHA, ffi::ZERO, ffi::SRC_ALPHA);
             });
             let _ = frame.render_texture_from_to(
                 &mask_src,
@@ -1564,8 +1790,12 @@ fn process_blur_requests(
     let mut index_shift = 0usize;
     for req in blur_requests.iter() {
         let win_size = req.screen_rect.size;
-        if win_size.w <= 0 || win_size.h <= 0 { continue; }
-        let Some(cache) = state.render.blur_cache.get(&req.surface_id) else { continue };
+        if win_size.w <= 0 || win_size.h <= 0 {
+            continue;
+        }
+        let Some(cache) = state.render.blur_cache.get(&req.surface_id) else {
+            continue;
+        };
 
         let prefix = match req.layer {
             BlurLayer::Overlay => overlay_prefix,
@@ -1601,7 +1831,12 @@ fn process_blur_requests(
 
 /// Which element group a blur request belongs to — determines its prefix offset.
 #[derive(Clone, Copy)]
-enum BlurLayer { Overlay, Top, Normal, Widget }
+enum BlurLayer {
+    Overlay,
+    Top,
+    Normal,
+    Widget,
+}
 
 /// Data extracted from a blur request.
 struct BlurRequestData {
@@ -1622,17 +1857,23 @@ fn build_output_outline_elements(
     viewport_size: Size<i32, Logical>,
 ) -> Vec<OutputRenderElements> {
     let thickness = state.config.output_outline.thickness;
-    if thickness <= 0 { return vec![]; }
+    if thickness <= 0 {
+        return vec![];
+    }
 
     let opacity = state.config.output_outline.opacity as f32;
-    if opacity <= 0.0 { return vec![]; }
+    if opacity <= 0.0 {
+        return vec![];
+    }
     let color = state.config.output_outline.color;
     let scale = output.current_scale().fractional_scale();
 
     let mut elements = Vec::new();
 
     for other in state.space.outputs() {
-        if *other == *output { continue }
+        if *other == *output {
+            continue;
+        }
 
         let (other_camera, other_zoom) = {
             let os = crate::state::output_state(other);
@@ -1641,11 +1882,8 @@ fn build_output_outline_elements(
         let other_size = crate::state::output_logical_size(other);
 
         // Other output's visible canvas rect
-        let other_canvas = canvas::visible_canvas_rect(
-            other_camera.to_i32_round(),
-            other_size,
-            other_zoom,
-        );
+        let other_canvas =
+            canvas::visible_canvas_rect(other_camera.to_i32_round(), other_size, other_zoom);
 
         // Transform to screen coords on *this* output
         let screen_x = ((other_canvas.loc.x as f64 - camera.x) * zoom) as i32;
@@ -1656,14 +1894,26 @@ fn build_output_outline_elements(
         // Clip to viewport
         let vp = Rectangle::from_size(viewport_size);
         let outline_rect = Rectangle::new((screen_x, screen_y).into(), (screen_w, screen_h).into());
-        if !vp.overlaps(outline_rect) { continue }
+        if !vp.overlaps(outline_rect) {
+            continue;
+        }
 
         // Draw 4 edges as thin filled buffers
         let edges: [(i32, i32, i32, i32); 4] = [
-            (screen_x, screen_y, screen_w, thickness),                         // top
-            (screen_x, screen_y + screen_h - thickness, screen_w, thickness),  // bottom
-            (screen_x, screen_y, thickness, screen_h),                         // left
-            (screen_x + screen_w - thickness, screen_y, thickness, screen_h),  // right
+            (screen_x, screen_y, screen_w, thickness), // top
+            (
+                screen_x,
+                screen_y + screen_h - thickness,
+                screen_w,
+                thickness,
+            ), // bottom
+            (screen_x, screen_y, thickness, screen_h), // left
+            (
+                screen_x + screen_w - thickness,
+                screen_y,
+                thickness,
+                screen_h,
+            ), // right
         ];
 
         for (ex, ey, ew, eh) in edges {
@@ -1672,7 +1922,9 @@ fn build_output_outline_elements(
             let y0 = ey.max(0);
             let x1 = (ex + ew).min(viewport_size.w);
             let y1 = (ey + eh).min(viewport_size.h);
-            if x1 <= x0 || y1 <= y0 { continue }
+            if x1 <= x0 || y1 <= y0 {
+                continue;
+            }
 
             let w = x1 - x0;
             let h = y1 - y0;
@@ -1694,7 +1946,13 @@ fn build_output_outline_elements(
 
             let loc: Point<f64, Physical> = Point::from((x0, y0)).to_f64().to_physical(scale);
             if let Ok(elem) = MemoryRenderBufferRenderElement::from_buffer(
-                renderer, loc, &buf, Some(opacity), None, None, Kind::Unspecified,
+                renderer,
+                loc,
+                &buf,
+                Some(opacity),
+                None,
+                None,
+                Kind::Unspecified,
             ) {
                 elements.push(OutputRenderElements::Decoration(
                     RescaleRenderElement::from_element(
@@ -1713,7 +1971,12 @@ fn build_output_outline_elements(
 /// Compile background shader and/or load tile image.
 /// Called at startup and on config reload (lazy re-init).
 /// On failure, falls back to `DEFAULT_SHADER` — never leaves background uninitialized.
-pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRenderer, initial_size: Size<i32, smithay::utils::Logical>, output_name: &str) {
+pub fn init_background(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    initial_size: Size<i32, smithay::utils::Logical>,
+    output_name: &str,
+) {
     // Try loading tile image first (if configured and no shader_path)
     if state.config.background.shader_path.is_none()
         && let Some(path) = state.config.background.tile_path.as_deref()
@@ -1751,11 +2014,17 @@ pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRen
                                 vec![
                                     Uniform::new("u_camera", (0.0f32, 0.0f32)),
                                     Uniform::new("u_tile_size", (tw as f32, th as f32)),
-                                    Uniform::new("u_output_size", (initial_size.w as f32, initial_size.h as f32)),
+                                    Uniform::new(
+                                        "u_output_size",
+                                        (initial_size.w as f32, initial_size.h as f32),
+                                    ),
                                 ],
                                 Kind::Unspecified,
                             );
-                            state.render.cached_tile_bg.insert(output_name.to_string(), elem);
+                            state
+                                .render
+                                .cached_tile_bg
+                                .insert(output_name.to_string(), elem);
                             return;
                         }
                         tracing::error!("Tile shader compilation failed, using default shader");
@@ -1802,14 +2071,17 @@ pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRen
     };
 
     let area = Rectangle::from_size(initial_size);
-    state.render.cached_bg_elements.insert(output_name.to_string(), PixelShaderElement::new(
-        shader,
-        area,
-        Some(vec![area]),
-        1.0,
-        vec![Uniform::new("u_camera", (0.0f32, 0.0f32))],
-        Kind::Unspecified,
-    ));
+    state.render.cached_bg_elements.insert(
+        output_name.to_string(),
+        PixelShaderElement::new(
+            shader,
+            area,
+            Some(vec![area]),
+            1.0,
+            vec![Uniform::new("u_camera", (0.0f32, 0.0f32))],
+            Kind::Unspecified,
+        ),
+    );
 }
 
 /// Get or create persistent capture state for an output+protocol pair.
@@ -1821,14 +2093,15 @@ fn get_capture_state<'a>(
     transform: Transform,
     paint_cursors: bool,
 ) -> &'a mut crate::state::CaptureOutputState {
-    map.entry(key.to_owned()).or_insert_with(|| {
-        crate::state::CaptureOutputState {
-            damage_tracker: smithay::backend::renderer::damage::OutputDamageTracker::new(size, scale, transform),
+    map.entry(key.to_owned())
+        .or_insert_with(|| crate::state::CaptureOutputState {
+            damage_tracker: smithay::backend::renderer::damage::OutputDamageTracker::new(
+                size, scale, transform,
+            ),
             offscreen_texture: None,
             age: 0,
             last_paint_cursors: paint_cursors,
-        }
-    })
+        })
 }
 
 /// Fulfill pending screencopy requests by rendering to offscreen textures.
@@ -1838,9 +2111,9 @@ pub fn render_screencopy(
     output: &Output,
     elements: &[OutputRenderElements],
 ) {
+    use driftwm::protocols::screencopy::ScreencopyBuffer;
     use smithay::backend::renderer::{ExportMem, Renderer};
     use smithay::wayland::shm;
-    use driftwm::protocols::screencopy::ScreencopyBuffer;
     use std::ptr;
 
     // Extract only requests for this output, keep the rest
@@ -1873,7 +2146,12 @@ pub fn render_screencopy(
         } else {
             elements
                 .iter()
-                .filter(|e| !matches!(e, OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)))
+                .filter(|e| {
+                    !matches!(
+                        e,
+                        OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)
+                    )
+                })
                 .collect()
         };
 
@@ -1893,11 +2171,26 @@ pub fn render_screencopy(
             ScreencopyBuffer::Dmabuf(dmabuf) => {
                 let mut dmabuf = dmabuf.clone();
                 let cs = if use_persistent {
-                    Some(get_capture_state(&mut state.render.capture_state, &capture_key, size, scale, transform, paint_cursors))
+                    Some(get_capture_state(
+                        &mut state.render.capture_state,
+                        &capture_key,
+                        size,
+                        scale,
+                        transform,
+                        paint_cursors,
+                    ))
                 } else {
                     None
                 };
-                match render_to_dmabuf(renderer, &mut dmabuf, size, scale, transform, &use_elements, cs) {
+                match render_to_dmabuf(
+                    renderer,
+                    &mut dmabuf,
+                    size,
+                    scale,
+                    transform,
+                    &use_elements,
+                    cs,
+                ) {
                     Ok(sync) => {
                         if let Err(e) = renderer.wait(&sync) {
                             tracing::warn!("screencopy: dmabuf sync wait failed: {e:?}");
@@ -1912,11 +2205,19 @@ pub fn render_screencopy(
             }
             ScreencopyBuffer::Shm(wl_buffer) => {
                 let cs = if use_persistent {
-                    Some(get_capture_state(&mut state.render.capture_state, &capture_key, size, scale, transform, paint_cursors))
+                    Some(get_capture_state(
+                        &mut state.render.capture_state,
+                        &capture_key,
+                        size,
+                        scale,
+                        transform,
+                        paint_cursors,
+                    ))
                 } else {
                     None
                 };
-                let result = render_to_offscreen(renderer, size, scale, transform, &use_elements, cs);
+                let result =
+                    render_to_offscreen(renderer, size, scale, transform, &use_elements, cs);
                 match result {
                     Ok(mapping) => {
                         let copy_ok =
@@ -1930,7 +2231,11 @@ pub fn render_screencopy(
                                 };
                                 let copy_len = shm_len.min(bytes.len());
                                 unsafe {
-                                    ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
+                                    ptr::copy_nonoverlapping(
+                                        bytes.as_ptr(),
+                                        shm_buf.cast(),
+                                        copy_len,
+                                    );
                                 }
                                 true
                             });
@@ -1964,9 +2269,9 @@ fn render_to_offscreen(
     elements: &[&OutputRenderElements],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>> {
-    use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::gles::GlesTexture;
+    use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 
     let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
 
@@ -1975,7 +2280,11 @@ fn render_to_offscreen(
         let tex = match &mut cs.offscreen_texture {
             Some((tex, cached_size)) if *cached_size == size => tex,
             slot => {
-                let new_tex: GlesTexture = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
+                let new_tex: GlesTexture = Offscreen::<GlesTexture>::create_buffer(
+                    renderer,
+                    Fourcc::Xrgb8888,
+                    buffer_size,
+                )?;
                 *slot = Some((new_tex, size));
                 cs.damage_tracker = OutputDamageTracker::new(size, scale, transform);
                 cs.age = 0;
@@ -1996,10 +2305,15 @@ fn render_to_offscreen(
         cs.age += 1;
 
         let target = renderer.bind(tex)?;
-        let mapping = renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Xrgb8888)?;
+        let mapping = renderer.copy_framebuffer(
+            &target,
+            Rectangle::from_size(buffer_size),
+            Fourcc::Xrgb8888,
+        )?;
         Ok(mapping)
     } else {
-        let mut texture: GlesTexture = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
+        let mut texture: GlesTexture =
+            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Xrgb8888, buffer_size)?;
         {
             let mut target = renderer.bind(&mut texture)?;
             let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
@@ -2012,7 +2326,11 @@ fn render_to_offscreen(
             )?;
         }
         let target = renderer.bind(&mut texture)?;
-        let mapping = renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), Fourcc::Xrgb8888)?;
+        let mapping = renderer.copy_framebuffer(
+            &target,
+            Rectangle::from_size(buffer_size),
+            Fourcc::Xrgb8888,
+        )?;
         Ok(mapping)
     }
 }
@@ -2039,26 +2357,25 @@ fn render_to_dmabuf(
     let sync = match capture_state {
         Some(cs) => {
             let mut target = renderer.bind(dmabuf)?;
-            let result = cs.damage_tracker.render_output(
-                renderer,
-                &mut target,
-                cs.age,
-                elements,
-                [0.0f32, 0.0, 0.0, 1.0],
-            )?.sync;
+            let result = cs
+                .damage_tracker
+                .render_output(
+                    renderer,
+                    &mut target,
+                    cs.age,
+                    elements,
+                    [0.0f32, 0.0, 0.0, 1.0],
+                )?
+                .sync;
             cs.age += 1;
             result
         }
         None => {
             let mut target = renderer.bind(dmabuf)?;
             let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
-            damage_tracker.render_output(
-                renderer,
-                &mut target,
-                0,
-                elements,
-                [0.0f32, 0.0, 0.0, 1.0],
-            )?.sync
+            damage_tracker
+                .render_output(renderer, &mut target, 0, elements, [0.0f32, 0.0, 0.0, 1.0])?
+                .sync
         }
     };
 
@@ -2112,7 +2429,12 @@ pub fn render_capture_frames(
         } else {
             elements
                 .iter()
-                .filter(|e| !matches!(e, OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)))
+                .filter(|e| {
+                    !matches!(
+                        e,
+                        OutputRenderElements::Cursor(_) | OutputRenderElements::CursorSurface(_)
+                    )
+                })
                 .collect()
         };
 
@@ -2132,11 +2454,26 @@ pub fn render_capture_frames(
         let ok = if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&capture.buffer) {
             let mut dmabuf = dmabuf.clone();
             let cs = if use_persistent {
-                Some(get_capture_state(&mut state.render.capture_state, &capture_key, capture.buffer_size, scale, Transform::Normal, paint_cursors))
+                Some(get_capture_state(
+                    &mut state.render.capture_state,
+                    &capture_key,
+                    capture.buffer_size,
+                    scale,
+                    Transform::Normal,
+                    paint_cursors,
+                ))
             } else {
                 None
             };
-            match render_to_dmabuf(renderer, &mut dmabuf, capture.buffer_size, scale, Transform::Normal, &use_elements, cs) {
+            match render_to_dmabuf(
+                renderer,
+                &mut dmabuf,
+                capture.buffer_size,
+                scale,
+                Transform::Normal,
+                &use_elements,
+                cs,
+            ) {
                 Ok(sync) => {
                     if let Err(e) = renderer.wait(&sync) {
                         tracing::warn!("capture: dmabuf sync wait failed: {e:?}");
@@ -2152,11 +2489,25 @@ pub fn render_capture_frames(
             }
         } else {
             let cs = if use_persistent {
-                Some(get_capture_state(&mut state.render.capture_state, &capture_key, capture.buffer_size, scale, Transform::Normal, paint_cursors))
+                Some(get_capture_state(
+                    &mut state.render.capture_state,
+                    &capture_key,
+                    capture.buffer_size,
+                    scale,
+                    Transform::Normal,
+                    paint_cursors,
+                ))
             } else {
                 None
             };
-            let result = render_to_offscreen(renderer, capture.buffer_size, scale, Transform::Normal, &use_elements, cs);
+            let result = render_to_offscreen(
+                renderer,
+                capture.buffer_size,
+                scale,
+                Transform::Normal,
+                &use_elements,
+                cs,
+            );
             match result {
                 Ok(mapping) => {
                     shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {
@@ -2185,15 +2536,22 @@ pub fn render_capture_frames(
         if ok {
             let w = capture.buffer_size.w;
             let h = capture.buffer_size.h;
-            capture.frame.transform(smithay::utils::Transform::Normal.into());
+            capture
+                .frame
+                .transform(smithay::utils::Transform::Normal.into());
             capture.frame.damage(0, 0, w, h);
             let tv_sec_hi = (timestamp.as_secs() >> 32) as u32;
             let tv_sec_lo = (timestamp.as_secs() & 0xFFFFFFFF) as u32;
             let tv_nsec = timestamp.subsec_nanos();
-            capture.frame.presentation_time(tv_sec_hi, tv_sec_lo, tv_nsec);
+            capture
+                .frame
+                .presentation_time(tv_sec_hi, tv_sec_lo, tv_nsec);
             capture.frame.ready();
 
-            let frame_data = capture.frame.data::<std::sync::Mutex<driftwm::protocols::image_copy_capture::CaptureFrameData>>();
+            let frame_data = capture
+                .frame
+                .data::<std::sync::Mutex<driftwm::protocols::image_copy_capture::CaptureFrameData>>(
+                );
             if let Some(fd) = frame_data {
                 let fd = fd.lock().unwrap();
                 state.image_copy_capture_state.frame_done(&fd.session);
@@ -2229,18 +2587,18 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
         (os.camera, os.zoom)
     };
     let viewport_size = crate::state::output_logical_size(output);
-    let visible_rect = canvas::visible_canvas_rect(
-        camera.to_i32_round(),
-        viewport_size,
-        zoom,
-    );
+    let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom);
 
     for window in state.space.elements() {
-        let Some(loc) = state.space.element_location(window) else { continue };
+        let Some(loc) = state.space.element_location(window) else {
+            continue;
+        };
         let geom_loc = window.geometry().loc;
         let mut bbox = window.bbox();
         bbox.loc += loc - geom_loc;
-        if !visible_rect.overlaps(bbox) { continue }
+        if !visible_rect.overlaps(bbox) {
+            continue;
+        }
 
         window.send_frame(output, time, Some(Duration::ZERO), |_, _| {
             Some(output.clone())
@@ -2259,16 +2617,20 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
 
     // Canvas-positioned layer surface frame callbacks
     for cl in &state.canvas_layers {
-        cl.surface.send_frame(output, time, Some(Duration::ZERO), |_, _| {
-            Some(output.clone())
-        });
+        cl.surface
+            .send_frame(output, time, Some(Duration::ZERO), |_, _| {
+                Some(output.clone())
+            });
     }
 
     // Override-redirect X11 surface frame callbacks
     for or_surface in &state.x11_override_redirect {
         if let Some(wl_surface) = or_surface.wl_surface() {
             smithay::desktop::utils::send_frames_surface_tree(
-                &wl_surface, output, time, Some(Duration::ZERO),
+                &wl_surface,
+                output,
+                time,
+                Some(Duration::ZERO),
                 |_, _| Some(output.clone()),
             );
         }
@@ -2277,7 +2639,10 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     // Cursor surface frame callbacks (animated cursors need these to advance)
     if let CursorImageStatus::Surface(ref surface) = state.cursor.cursor_status {
         smithay::desktop::utils::send_frames_surface_tree(
-            surface, output, time, Some(Duration::ZERO),
+            surface,
+            output,
+            time,
+            Some(Duration::ZERO),
             |_, _| Some(output.clone()),
         );
     }

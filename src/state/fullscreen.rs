@@ -4,13 +4,15 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use driftwm::window_ext::WindowExt;
 use super::{DriftWm, FocusTarget, FullscreenState};
+use driftwm::window_ext::WindowExt;
 
 impl DriftWm {
     /// Enter fullscreen for the given window: lock viewport, expand window to fill screen.
     pub fn enter_fullscreen(&mut self, window: &Window) {
-        if window.wl_surface().as_ref()
+        if window
+            .wl_surface()
+            .as_ref()
             .and_then(|s| driftwm::config::applied_rule(s))
             .is_some_and(|r| r.widget)
         {
@@ -26,13 +28,16 @@ impl DriftWm {
         let viewport_size = self.get_viewport_size();
         let saved_location = self.space.element_location(window).unwrap_or_default();
 
-        self.fullscreen.insert(output, FullscreenState {
-            window: window.clone(),
-            saved_location,
-            saved_camera: self.camera(),
-            saved_zoom: self.zoom(),
-            saved_size: window.geometry().size,
-        });
+        self.fullscreen.insert(
+            output,
+            FullscreenState {
+                window: window.clone(),
+                saved_location,
+                saved_camera: self.camera(),
+                saved_zoom: self.zoom(),
+                saved_size: window.geometry().size,
+            },
+        );
 
         window.enter_fullscreen_configure(viewport_size);
 
@@ -71,7 +76,9 @@ impl DriftWm {
             // Deactivate any constraint on the old focused surface
             if let Some(old) = pointer.current_focus() {
                 smithay::wayland::pointer_constraints::with_pointer_constraint(
-                    &old.0, &pointer, |c| {
+                    &old.0,
+                    &pointer,
+                    |c| {
                         if let Some(c) = c
                             && c.is_active()
                         {
@@ -81,7 +88,11 @@ impl DriftWm {
                 );
             }
             let canvas_pos = pointer.current_location();
-            let origin = self.space.element_location(window).unwrap_or_default().to_f64();
+            let origin = self
+                .space
+                .element_location(window)
+                .unwrap_or_default()
+                .to_f64();
             pointer.motion(
                 self,
                 Some((FocusTarget(wl_surface.into_owned()), origin)),
@@ -98,7 +109,9 @@ impl DriftWm {
 
     /// Exit fullscreen on the active output: restore window position, camera, and zoom.
     pub fn exit_fullscreen(&mut self) {
-        let Some(output) = self.active_output() else { return };
+        let Some(output) = self.active_output() else {
+            return;
+        };
         self.exit_fullscreen_on(&output);
     }
 
@@ -125,7 +138,8 @@ impl DriftWm {
         &self,
         wl_surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> Option<smithay::output::Output> {
-        self.fullscreen.iter()
+        self.fullscreen
+            .iter()
             .find(|(_, fs)| fs.window.wl_surface().as_deref() == Some(wl_surface))
             .map(|(o, _)| o.clone())
     }

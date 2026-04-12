@@ -189,9 +189,15 @@ pub fn update_axis(
     if let Some(ref s) = *snap {
         // Directional break: retreat past engagement point OR overshoot past snap
         let (retreat, overshoot) = if s.snapped_pos > s.natural_at_engage {
-            (s.natural_at_engage - natural_pos, natural_pos - s.snapped_pos)
+            (
+                s.natural_at_engage - natural_pos,
+                natural_pos - s.snapped_pos,
+            )
         } else {
-            (natural_pos - s.natural_at_engage, s.snapped_pos - natural_pos)
+            (
+                natural_pos - s.natural_at_engage,
+                s.snapped_pos - natural_pos,
+            )
         };
         if retreat >= p.break_force || overshoot >= p.break_force {
             *cooldown = Some(s.snapped_pos);
@@ -267,9 +273,14 @@ pub fn snap_resize_edges(
     if has_right {
         let natural_right = loc_x + *new_w as f64;
         let hp = EdgeSnapParams {
-            perp_low: visual_top, perp_high: visual_bottom,
-            horizontal: true, same_edge, others,
-            gap, threshold: effective_distance, break_force: effective_break,
+            perp_low: visual_top,
+            perp_high: visual_bottom,
+            horizontal: true,
+            same_edge,
+            others,
+            gap,
+            threshold: effective_distance,
+            break_force: effective_break,
             high_edge: true,
         };
         let snapped = update_edge(&mut snap.x, &mut snap.cooldown_x, natural_right, &hp);
@@ -278,9 +289,14 @@ pub fn snap_resize_edges(
         let fixed_right = loc_x + init_w;
         let natural_left = fixed_right - *new_w as f64;
         let hp = EdgeSnapParams {
-            perp_low: visual_top, perp_high: visual_bottom,
-            horizontal: true, same_edge, others,
-            gap, threshold: effective_distance, break_force: effective_break,
+            perp_low: visual_top,
+            perp_high: visual_bottom,
+            horizontal: true,
+            same_edge,
+            others,
+            gap,
+            threshold: effective_distance,
+            break_force: effective_break,
             high_edge: false,
         };
         let snapped = update_edge(&mut snap.x, &mut snap.cooldown_x, natural_left, &hp);
@@ -290,9 +306,14 @@ pub fn snap_resize_edges(
     if has_bottom {
         let natural_bottom = loc_y + *new_h as f64;
         let vp = EdgeSnapParams {
-            perp_low: loc_x, perp_high: loc_x + *new_w as f64,
-            horizontal: false, same_edge, others,
-            gap, threshold: effective_distance, break_force: effective_break,
+            perp_low: loc_x,
+            perp_high: loc_x + *new_w as f64,
+            horizontal: false,
+            same_edge,
+            others,
+            gap,
+            threshold: effective_distance,
+            break_force: effective_break,
             high_edge: true,
         };
         let snapped = update_edge(&mut snap.y, &mut snap.cooldown_y, natural_bottom, &vp);
@@ -301,9 +322,14 @@ pub fn snap_resize_edges(
         let fixed_bottom = loc_y + init_h;
         let natural_top = fixed_bottom - *new_h as f64 - self_bar as f64;
         let vp = EdgeSnapParams {
-            perp_low: loc_x, perp_high: loc_x + *new_w as f64,
-            horizontal: false, same_edge, others,
-            gap, threshold: effective_distance, break_force: effective_break,
+            perp_low: loc_x,
+            perp_high: loc_x + *new_w as f64,
+            horizontal: false,
+            same_edge,
+            others,
+            gap,
+            threshold: effective_distance,
+            break_force: effective_break,
             high_edge: false,
         };
         let snapped = update_edge(&mut snap.y, &mut snap.cooldown_y, natural_top, &vp);
@@ -323,9 +349,15 @@ pub fn update_edge(
 ) -> f64 {
     if let Some(ref s) = *snap {
         let (retreat, overshoot) = if s.snapped_pos > s.natural_at_engage {
-            (s.natural_at_engage - natural_edge, natural_edge - s.snapped_pos)
+            (
+                s.natural_at_engage - natural_edge,
+                natural_edge - s.snapped_pos,
+            )
         } else {
-            (natural_edge - s.natural_at_engage, s.snapped_pos - natural_edge)
+            (
+                natural_edge - s.natural_at_engage,
+                s.snapped_pos - natural_edge,
+            )
         };
         if retreat >= p.break_force || overshoot >= p.break_force {
             *cooldown = Some(s.snapped_pos);

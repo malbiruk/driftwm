@@ -8,9 +8,7 @@ use smithay::{
         compositor::with_states,
         seat::WaylandFocus,
         shell::{
-            wlr_layer::{
-                Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState,
-            },
+            wlr_layer::{Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState},
             xdg::PopupSurface,
         },
     },
@@ -58,10 +56,9 @@ impl WlrLayerShellHandler for DriftWm {
             .as_ref()
             .and_then(|wl_out| {
                 let client = wl_out.client()?;
-                self.space.outputs().find(|o| {
-                    o.client_outputs(&client)
-                        .any(|co| co == *wl_out)
-                })
+                self.space
+                    .outputs()
+                    .find(|o| o.client_outputs(&client).any(|co| co == *wl_out))
             })
             .cloned()
             .or_else(|| self.active_output());

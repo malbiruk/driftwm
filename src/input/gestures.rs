@@ -8,7 +8,6 @@ use smithay::{
     },
     desktop::Window,
     input::pointer::{
-
         CursorImageStatus, Focus, GestureHoldBeginEvent as WlHoldBegin,
         GestureHoldEndEvent as WlHoldEnd, GesturePinchBeginEvent as WlPinchBegin,
         GesturePinchEndEvent as WlPinchEnd, GesturePinchUpdateEvent as WlPinchUpdate,
@@ -17,19 +16,19 @@ use smithay::{
     },
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     reexports::wayland_server::Resource,
-    utils::{Logical, Point, Size, SERIAL_COUNTER},
+    utils::{Logical, Point, SERIAL_COUNTER, Size},
     wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
+use super::pointer::{edges_from_position, resize_cursor};
 use crate::grabs::{MoveSurfaceGrab, ResizeState, has_bottom, has_left, has_right, has_top};
 use crate::state::{DriftWm, FocusTarget, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::snap::{SnapState, snap_resize_edges};
 use driftwm::config::{
     Action, BindingContext, ContinuousAction, Direction, GestureConfigEntry, GestureTrigger,
     ThresholdAction,
 };
-use super::pointer::{edges_from_position, resize_cursor};
+use driftwm::snap::{SnapState, snap_resize_edges};
 
 /// Active gesture — decided at Begin, locked for the gesture's duration.
 pub enum GestureState {
@@ -74,7 +73,6 @@ pub enum GestureState {
     /// Hold gesture — fires action on release.
     HoldAction { action: Action },
 }
-
 
 pub(crate) const DOUBLE_TAP_WINDOW_MS: u64 = 300;
 
@@ -121,7 +119,10 @@ impl DriftWm {
         if let Some(pending) = self.pending_middle_click.take() {
             self.loop_handle.remove(pending.timer_token);
             let dt_trigger = GestureTrigger::DoubletapSwipe { fingers };
-            let dt_entry = self.config.gesture_lookup(&mods, &dt_trigger, context).cloned();
+            let dt_entry = self
+                .config
+                .gesture_lookup(&mods, &dt_trigger, context)
+                .cloned();
             if let Some(entry) = dt_entry {
                 self.cancel_animations();
                 self.gesture_output = self.active_output();
@@ -134,12 +135,12 @@ impl DriftWm {
                         self.flush_middle_click(pending.press_time, pending.release_time);
                     }
                     GestureConfigEntry::Continuous(ContinuousAction::ResizeWindow) => {
-                        if let Some((window, _)) = self.window_under(pos)
-                            .filter(|(w, _)| {
-                                !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
-                                    .is_some_and(|r| r.widget)
-                            })
-                        {
+                        if let Some((window, _)) = self.window_under(pos).filter(|(w, _)| {
+                            !w.wl_surface()
+                                .as_ref()
+                                .and_then(|s| driftwm::config::applied_rule(s))
+                                .is_some_and(|r| r.widget)
+                        }) {
                             return self.start_gesture_resize(window, pos);
                         }
                         self.flush_middle_click(pending.press_time, pending.release_time);
@@ -157,7 +158,10 @@ impl DriftWm {
 
         // Priority 2: Look up Swipe { fingers } in config
         let swipe_trigger = GestureTrigger::Swipe { fingers };
-        let entry = self.config.gesture_lookup(&mods, &swipe_trigger, context).cloned();
+        let entry = self
+            .config
+            .gesture_lookup(&mods, &swipe_trigger, context)
+            .cloned();
 
         match entry {
             Some(GestureConfigEntry::Continuous(action)) => {
@@ -175,12 +179,12 @@ impl DriftWm {
                         self.gesture_state = Some(GestureState::SwipePan);
                     }
                     ContinuousAction::ResizeWindow => {
-                        if let Some((window, _)) = self.window_under(pos)
-                            .filter(|(w, _)| {
-                                !w.wl_surface().as_ref().and_then(|s| driftwm::config::applied_rule(s))
-                                    .is_some_and(|r| r.widget)
-                            })
-                        {
+                        if let Some((window, _)) = self.window_under(pos).filter(|(w, _)| {
+                            !w.wl_surface()
+                                .as_ref()
+                                .and_then(|s| driftwm::config::applied_rule(s))
+                                .is_some_and(|r| r.widget)
+                        }) {
                             return self.start_gesture_resize(window, pos);
                         }
                         self.gesture_state = Some(GestureState::SwipePan);
@@ -194,7 +198,8 @@ impl DriftWm {
             Some(GestureConfigEntry::Threshold(action)) => {
                 self.cancel_animations();
                 self.gesture_output = self.active_output();
-                self.gesture_state = Some(self.build_swipe_threshold(fingers, &mods, context, Some(action)));
+                self.gesture_state =
+                    Some(self.build_swipe_threshold(fingers, &mods, context, Some(action)));
             }
             None => {
                 // Check if per-direction overrides exist even without a Swipe fallback
@@ -202,7 +207,8 @@ impl DriftWm {
                 if has_dirs {
                     self.cancel_animations();
                     self.gesture_output = self.active_output();
-                    self.gesture_state = Some(self.build_swipe_threshold(fingers, &mods, context, None));
+                    self.gesture_state =
+                        Some(self.build_swipe_threshold(fingers, &mods, context, None));
                 } else {
                     self.forward_swipe_begin(fingers, time);
                 }
@@ -219,12 +225,14 @@ impl DriftWm {
         directional: Option<ThresholdAction>,
     ) -> GestureState {
         let resolve_dir = |trigger: GestureTrigger| -> Option<ThresholdAction> {
-            self.config.gesture_lookup(mods, &trigger, context).and_then(|entry| {
-                match entry {
-                    GestureConfigEntry::Threshold(a) => Some(a.clone()),
-                    _ => None, // continuous on a directional trigger was rejected at parse time
-                }
-            })
+            self.config
+                .gesture_lookup(mods, &trigger, context)
+                .and_then(|entry| {
+                    match entry {
+                        GestureConfigEntry::Threshold(a) => Some(a.clone()),
+                        _ => None, // continuous on a directional trigger was rejected at parse time
+                    }
+                })
         };
         GestureState::SwipeThreshold {
             cumulative: Point::from((0.0, 0.0)),
@@ -296,14 +304,13 @@ impl DriftWm {
 
                 // Current canvas → screen on gesture output, then to layout space
                 let old_screen = canvas_to_screen(CanvasPos(cursor_pos), cur_camera, cur_zoom).0;
-                let new_screen: Point<f64, Logical> = (
-                    old_screen.x + delta.x,
-                    old_screen.y + delta.y,
-                ).into();
+                let new_screen: Point<f64, Logical> =
+                    (old_screen.x + delta.x, old_screen.y + delta.y).into();
                 let new_layout: Point<f64, Logical> = (
                     new_screen.x + cur_layout_pos.x as f64,
                     new_screen.y + cur_layout_pos.y as f64,
-                ).into();
+                )
+                    .into();
 
                 let (target_output, target_screen) =
                     if let Some(target) = self.output_at_layout_pos(new_layout) {
@@ -312,7 +319,8 @@ impl DriftWm {
                             let ts: Point<f64, Logical> = (
                                 new_layout.x - target_lp.x as f64,
                                 new_layout.y - target_lp.y as f64,
-                            ).into();
+                            )
+                                .into();
                             (target, ts)
                         } else {
                             (gesture_output.clone(), new_screen)
@@ -322,7 +330,8 @@ impl DriftWm {
                         let clamped: Point<f64, Logical> = (
                             new_screen.x.clamp(0.0, output_size.w as f64 - 1.0),
                             new_screen.y.clamp(0.0, output_size.h as f64 - 1.0),
-                        ).into();
+                        )
+                            .into();
                         (gesture_output.clone(), clamped)
                     };
 
@@ -331,8 +340,11 @@ impl DriftWm {
                     (os.camera, os.zoom)
                 };
                 let new_canvas = canvas::screen_to_canvas(
-                    canvas::ScreenPos(target_screen), target_camera, target_zoom,
-                ).0;
+                    canvas::ScreenPos(target_screen),
+                    target_camera,
+                    target_zoom,
+                )
+                .0;
 
                 if target_output != gesture_output {
                     self.focused_output = Some(target_output.clone());
@@ -366,12 +378,14 @@ impl DriftWm {
                     };
                     let output_size = crate::state::output_logical_size(output);
                     let pointer = self.seat.get_pointer().unwrap();
-                    let cur_screen = canvas_to_screen(CanvasPos(pointer.current_location()), cam, zm).0;
+                    let cur_screen =
+                        canvas_to_screen(CanvasPos(pointer.current_location()), cam, zm).0;
                     drop(pointer);
                     let new_screen: Point<f64, Logical> = (
                         (cur_screen.x + delta.x).clamp(0.0, output_size.w as f64 - 1.0),
                         (cur_screen.y + delta.y).clamp(0.0, output_size.h as f64 - 1.0),
-                    ).into();
+                    )
+                        .into();
                     let clamped_dx = new_screen.x - cur_screen.x;
                     let clamped_dy = new_screen.y - cur_screen.y;
                     Point::from((clamped_dx / zm, clamped_dy / zm))
@@ -414,10 +428,18 @@ impl DriftWm {
                     };
                     let mut others: Vec<driftwm::snap::SnapRect> = Vec::new();
                     for w in self.space.elements() {
-                        let Some(surface) = w.wl_surface() else { continue };
-                        if *surface == self_surface { continue }
-                        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
-                        let Some(loc) = self.space.element_location(w) else { continue };
+                        let Some(surface) = w.wl_surface() else {
+                            continue;
+                        };
+                        if *surface == self_surface {
+                            continue;
+                        }
+                        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
+                            continue;
+                        }
+                        let Some(loc) = self.space.element_location(w) else {
+                            continue;
+                        };
                         let size = w.geometry().size;
                         let bar = if self.decorations.contains_key(&surface.id()) {
                             driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
@@ -438,8 +460,10 @@ impl DriftWm {
                         (initial_location.x, initial_location.y),
                         (initial_size.w, initial_size.h),
                         self_bar,
-                        &mut new_w, &mut new_h,
-                        &others, zoom,
+                        &mut new_w,
+                        &mut new_h,
+                        &others,
+                        zoom,
                         self.config.snap_gap,
                         self.config.snap_distance,
                         self.config.snap_break_force,
@@ -472,7 +496,15 @@ impl DriftWm {
 
                 self.warp_pointer(warp_target);
             }
-            GestureState::SwipeThreshold { cumulative, fired, up, down, left, right, directional } => {
+            GestureState::SwipeThreshold {
+                cumulative,
+                fired,
+                up,
+                down,
+                left,
+                right,
+                directional,
+            } => {
                 if *fired {
                     return;
                 }
@@ -481,7 +513,11 @@ impl DriftWm {
                 if mag_sq >= self.config.gesture_thresholds.swipe_distance.powi(2) {
                     *fired = true;
                     let action = if cumulative.y.abs() > cumulative.x.abs() {
-                        if cumulative.y < 0.0 { up.clone() } else { down.clone() }
+                        if cumulative.y < 0.0 {
+                            up.clone()
+                        } else {
+                            down.clone()
+                        }
                     } else if cumulative.x < 0.0 {
                         left.clone()
                     } else {
@@ -590,7 +626,10 @@ impl DriftWm {
         // Check continuous Pinch trigger first
         let pinch_trigger = GestureTrigger::Pinch { fingers };
         if let Some(entry) = self.config.gesture_lookup(&mods, &pinch_trigger, context)
-            && matches!(entry, GestureConfigEntry::Continuous(ContinuousAction::Zoom))
+            && matches!(
+                entry,
+                GestureConfigEntry::Continuous(ContinuousAction::Zoom)
+            )
         {
             self.cancel_animations();
             self.gesture_output = self.active_output();
@@ -601,8 +640,12 @@ impl DriftWm {
         }
 
         // Check threshold PinchIn/PinchOut triggers
-        let pin_in = self.config.gesture_lookup(&mods, &GestureTrigger::PinchIn { fingers }, context);
-        let pin_out = self.config.gesture_lookup(&mods, &GestureTrigger::PinchOut { fingers }, context);
+        let pin_in =
+            self.config
+                .gesture_lookup(&mods, &GestureTrigger::PinchIn { fingers }, context);
+        let pin_out =
+            self.config
+                .gesture_lookup(&mods, &GestureTrigger::PinchOut { fingers }, context);
 
         let action_in = pin_in.and_then(|e| match e {
             GestureConfigEntry::Threshold(ThresholdAction::Fixed(a)) => Some(a.clone()),
@@ -669,8 +712,14 @@ impl DriftWm {
             GestureState::PinchForward => {
                 self.forward_pinch_update(delta, scale, rotation, time);
             }
-            GestureState::PinchThreshold { fired_in, fired_out, action_in, action_out } => {
-                let to_exec = if !*fired_in && scale < self.config.gesture_thresholds.pinch_in_scale {
+            GestureState::PinchThreshold {
+                fired_in,
+                fired_out,
+                action_in,
+                action_out,
+            } => {
+                let to_exec = if !*fired_in && scale < self.config.gesture_thresholds.pinch_in_scale
+                {
                     *fired_in = true;
                     action_in.clone()
                 } else if !*fired_out && scale > self.config.gesture_thresholds.pinch_out_scale {
@@ -723,7 +772,11 @@ impl DriftWm {
             GestureState::PinchForward => {
                 self.forward_pinch_end(cancelled, time);
             }
-            GestureState::PinchThreshold { fired_in: false, fired_out: false, .. } if !cancelled => {
+            GestureState::PinchThreshold {
+                fired_in: false,
+                fired_out: false,
+                ..
+            } if !cancelled => {
                 // Pinch that didn't reach threshold — no action
             }
             _ => {}
@@ -803,9 +856,9 @@ impl DriftWm {
         // LRM: 1-finger=left, 2-finger=right, 3-finger=middle.
         // Hardcoded — the compositor uses BTN_MIDDLE from 3-finger tap
         // for double-tap+drag window move detection.
-        if let Err(e) = device.config_tap_set_button_map(
-            smithay::reexports::input::TapButtonMap::LeftRightMiddle,
-        ) {
+        if let Err(e) = device
+            .config_tap_set_button_map(smithay::reexports::input::TapButtonMap::LeftRightMiddle)
+        {
             tracing::warn!("Failed to set button_map: {e:?}");
         }
         if let Err(e) = device.config_accel_set_speed(cfg.accel_speed) {
@@ -856,7 +909,9 @@ impl DriftWm {
     /// handles window positioning (identical to Alt+click drag).
     /// If the window is pinned, falls through to Swipe3Pan instead.
     fn start_gesture_move(&mut self, window: Window, pos: Point<f64, Logical>) {
-        if window.wl_surface().as_ref()
+        if window
+            .wl_surface()
+            .as_ref()
             .and_then(|s| driftwm::config::applied_rule(s))
             .is_some_and(|r| r.widget)
         {
@@ -866,7 +921,9 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         self.space.raise_element(&window, true);
         let keyboard = self.seat.get_keyboard().unwrap();
-        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
         keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
         self.enforce_below_windows();
 
@@ -890,7 +947,9 @@ impl DriftWm {
     /// Enter Swipe3Resize state: store initial geometry, set resize state + cursor.
     fn start_gesture_resize(&mut self, window: Window, pos: Point<f64, Logical>) {
         let serial = SERIAL_COUNTER.next_serial();
-        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
         self.space.raise_element(&window, true);
         let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
@@ -937,7 +996,11 @@ impl DriftWm {
     }
 
     /// Execute a threshold action, injecting direction from the swipe vector for CenterNearest.
-    fn execute_threshold_action(&mut self, action: &ThresholdAction, cumulative: Point<f64, Logical>) {
+    fn execute_threshold_action(
+        &mut self,
+        action: &ThresholdAction,
+        cumulative: Point<f64, Logical>,
+    ) {
         match action {
             ThresholdAction::CenterNearest => {
                 let dir = direction_from_vector(cumulative);
@@ -950,13 +1013,8 @@ impl DriftWm {
     }
 
     /// Return the window under `pos` for move/resize gestures.
-    fn window_under(
-        &self,
-        pos: Point<f64, Logical>,
-    ) -> Option<(Window, Point<i32, Logical>)> {
-        self.space
-            .element_under(pos)
-            .map(|(w, l)| (w.clone(), l))
+    fn window_under(&self, pos: Point<f64, Logical>) -> Option<(Window, Point<i32, Logical>)> {
+        self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
     }
 
     /// Read camera/zoom from the pinned gesture output, falling back to active output.
@@ -1109,7 +1167,11 @@ pub(crate) fn direction_from_vector(v: Point<f64, Logical>) -> Direction {
             (false, false) => Direction::UpLeft,
         }
     } else if ax > ay {
-        if v.x > 0.0 { Direction::Right } else { Direction::Left }
+        if v.x > 0.0 {
+            Direction::Right
+        } else {
+            Direction::Left
+        }
     } else if v.y > 0.0 {
         Direction::Down
     } else {

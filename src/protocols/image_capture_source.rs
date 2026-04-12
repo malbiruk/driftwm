@@ -1,3 +1,5 @@
+use ext_image_capture_source_v1::ExtImageCaptureSourceV1;
+use ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1;
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::server::{
     ext_image_capture_source_v1, ext_output_image_capture_source_manager_v1,
@@ -5,8 +7,6 @@ use smithay::reexports::wayland_protocols::ext::image_capture_source::v1::server
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New,
 };
-use ext_image_capture_source_v1::ExtImageCaptureSourceV1;
-use ext_output_image_capture_source_manager_v1::ExtOutputImageCaptureSourceManagerV1;
 
 const VERSION: u32 = 1;
 
@@ -83,20 +83,26 @@ where
         data_init: &mut DataInit<'_, D>,
     ) {
         match request {
-            ext_output_image_capture_source_manager_v1::Request::CreateSource { source, output } => {
+            ext_output_image_capture_source_manager_v1::Request::CreateSource {
+                source,
+                output,
+            } => {
                 let Some(output) = Output::from_resource(&output) else {
                     tracing::warn!("image_capture_source: client requested non-existent output");
                     // Still init to avoid protocol error, client will get stopped on session
-                    data_init.init(source, CaptureSource::Output(Output::new(
-                        "invalid".to_string(),
-                        smithay::output::PhysicalProperties {
-                            size: (0, 0).into(),
-                            subpixel: smithay::output::Subpixel::Unknown,
-                            make: String::new(),
-                            model: String::new(),
-                            serial_number: String::new(),
-                        },
-                    )));
+                    data_init.init(
+                        source,
+                        CaptureSource::Output(Output::new(
+                            "invalid".to_string(),
+                            smithay::output::PhysicalProperties {
+                                size: (0, 0).into(),
+                                subpixel: smithay::output::Subpixel::Unknown,
+                                make: String::new(),
+                                model: String::new(),
+                                serial_number: String::new(),
+                            },
+                        )),
+                    );
                     return;
                 };
                 data_init.init(source, CaptureSource::Output(output));

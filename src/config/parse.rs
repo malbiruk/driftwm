@@ -103,7 +103,9 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             match dir_str {
                 "forward" => Ok(Action::CycleWindows { backward: false }),
                 "backward" => Ok(Action::CycleWindows { backward: true }),
-                other => Err(format!("cycle-windows: expected forward or backward, got '{other}'")),
+                other => Err(format!(
+                    "cycle-windows: expected forward or backward, got '{other}'"
+                )),
             }
         }
         "home-toggle" => Ok(Action::HomeToggle),
@@ -113,8 +115,12 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             if parts.len() != 2 {
                 return Err("go-to requires exactly two coordinates: go-to <x> <y>".to_string());
             }
-            let x: f64 = parts[0].parse().map_err(|_| format!("invalid x coordinate: {}", parts[0]))?;
-            let y: f64 = parts[1].parse().map_err(|_| format!("invalid y coordinate: {}", parts[1]))?;
+            let x: f64 = parts[0]
+                .parse()
+                .map_err(|_| format!("invalid x coordinate: {}", parts[0]))?;
+            let y: f64 = parts[1]
+                .parse()
+                .map_err(|_| format!("invalid y coordinate: {}", parts[1]))?;
             Ok(Action::GoToPosition(x, y))
         }
         "zoom-in" => Ok(Action::ZoomIn),
@@ -205,7 +211,9 @@ pub fn parse_gesture_trigger(s: &str) -> Result<GestureTrigger, String> {
 
     // Extract finger count: "N-finger-..."
     let Some((fingers_str, gesture_type)) = s.split_once("-finger-") else {
-        return Err(format!("invalid gesture trigger '{s}' (expected N-finger-<type>)"));
+        return Err(format!(
+            "invalid gesture trigger '{s}' (expected N-finger-<type>)"
+        ));
     };
 
     let fingers: u32 = fingers_str
@@ -245,12 +253,16 @@ fn parse_continuous_action(s: &str) -> Option<ContinuousAction> {
 fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
     match s {
         "center-nearest" => Ok(Some(ThresholdAction::CenterNearest)),
-        "center-window" | "focus-center" | "home-toggle" | "zoom-to-fit" | "zoom-in" | "zoom-out"
-        | "zoom-reset" | "toggle-fullscreen" | "fit-window" | "reload-config" | "quit" | "close-window" => {
+        "center-window" | "focus-center" | "home-toggle" | "zoom-to-fit" | "zoom-in"
+        | "zoom-out" | "zoom-reset" | "toggle-fullscreen" | "fit-window" | "reload-config"
+        | "quit" | "close-window" => {
             let action = parse_action(s)?;
             Ok(Some(ThresholdAction::Fixed(action)))
         }
-        s if s.starts_with("exec ") || s.starts_with("spawn ") || s.starts_with("send-to-output ") => {
+        s if s.starts_with("exec ")
+            || s.starts_with("spawn ")
+            || s.starts_with("send-to-output ") =>
+        {
             let action = parse_action(s)?;
             Ok(Some(ThresholdAction::Fixed(action)))
         }
@@ -271,9 +283,7 @@ pub fn parse_gesture_config_entry(
     match trigger {
         GestureTrigger::Swipe { .. } => {
             if let Some(ContinuousAction::Zoom) = is_continuous {
-                return Err(
-                    "zoom requires a pinch trigger (needs scale from input)".to_string(),
-                );
+                return Err("zoom requires a pinch trigger (needs scale from input)".to_string());
             }
             if let Some(ca) = is_continuous {
                 Ok(GestureConfigEntry::Continuous(ca))
@@ -289,7 +299,9 @@ pub fn parse_gesture_config_entry(
                     return Ok(GestureConfigEntry::Continuous(ContinuousAction::MoveWindow));
                 }
                 Some(ContinuousAction::ResizeWindow) => {
-                    return Ok(GestureConfigEntry::Continuous(ContinuousAction::ResizeWindow));
+                    return Ok(GestureConfigEntry::Continuous(
+                        ContinuousAction::ResizeWindow,
+                    ));
                 }
                 Some(_) => {
                     return Err(

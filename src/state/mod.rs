@@ -1161,9 +1161,10 @@ impl DriftWm {
         loop {
             let dominated = self.space.elements().any(|w| {
                 w != skip
-                    && self.space.element_location(w).is_some_and(|loc| {
-                        (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2
-                    })
+                    && self
+                        .space
+                        .element_location(w)
+                        .is_some_and(|loc| (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2)
             });
             if !dominated {
                 break pos;
@@ -1474,10 +1475,18 @@ impl DriftWm {
         };
         let mut others = Vec::new();
         for w in self.space.elements() {
-            let Some(surface) = w.wl_surface() else { continue };
-            if *surface == *exclude { continue }
-            if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
-            let Some(loc) = self.space.element_location(w) else { continue };
+            let Some(surface) = w.wl_surface() else {
+                continue;
+            };
+            if *surface == *exclude {
+                continue;
+            }
+            if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
+                continue;
+            }
+            let Some(loc) = self.space.element_location(w) else {
+                continue;
+            };
             let size = w.geometry().size;
             let bar = if self.decorations.contains_key(&surface.id()) {
                 driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT

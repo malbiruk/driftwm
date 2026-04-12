@@ -196,9 +196,9 @@ where
                 options,
             } => {
                 let capture_source: CaptureSource = source.data::<CaptureSource>().unwrap().clone();
-                let paint_cursors = options
-                    .into_result()
-                    .is_ok_and(|o| o.contains(ext_image_copy_capture_manager_v1::Options::PaintCursors));
+                let paint_cursors = options.into_result().is_ok_and(|o| {
+                    o.contains(ext_image_copy_capture_manager_v1::Options::PaintCursors)
+                });
 
                 let CaptureSource::Output(ref output) = capture_source;
                 let buffer_size = output
@@ -265,10 +265,7 @@ where
         match request {
             ext_image_copy_capture_session_v1::Request::CreateFrame { frame } => {
                 let cap_state = state.image_copy_capture_state();
-                let session_entry = cap_state
-                    .sessions
-                    .iter_mut()
-                    .find(|(s, _)| s == session);
+                let session_entry = cap_state.sessions.iter_mut().find(|(s, _)| s == session);
 
                 if let Some((_, session_data)) = session_entry {
                     if session_data.has_active_frame {
@@ -292,10 +289,8 @@ where
             }
             ext_image_copy_capture_session_v1::Request::Destroy => {
                 let cap_state = state.image_copy_capture_state();
-                if let Some((_, session_data)) = cap_state
-                    .sessions
-                    .iter_mut()
-                    .find(|(s, _)| s == session)
+                if let Some((_, session_data)) =
+                    cap_state.sessions.iter_mut().find(|(s, _)| s == session)
                 {
                     session_data.stopped = true;
                     session_data.waiting_frame = None;
@@ -334,7 +329,7 @@ where
         _data_init: &mut DataInit<'_, D>,
     ) {
         match request {
-            ext_image_copy_capture_frame_v1::Request::Destroy => {},
+            ext_image_copy_capture_frame_v1::Request::Destroy => {}
             ext_image_copy_capture_frame_v1::Request::AttachBuffer { buffer } => {
                 let mut fd = data.lock().unwrap();
                 if fd.captured {

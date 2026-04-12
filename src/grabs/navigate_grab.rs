@@ -1,18 +1,16 @@
 use smithay::{
     input::{
-        pointer::{
-            ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
-        },
         SeatHandler,
+        pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     },
     output::Output,
     utils::{Logical, Point},
 };
 
-use driftwm::canvas::{CanvasPos, canvas_to_screen};
-use driftwm::config::Action;
 use crate::input::gestures::direction_from_vector;
 use crate::state::{DriftWm, output_state};
+use driftwm::canvas::{CanvasPos, canvas_to_screen};
+use driftwm::config::Action;
 
 /// Squared pixel threshold before a direction is chosen (same as 4-finger swipe).
 const THRESHOLD_SQ: f64 = 16.0 * 16.0;
@@ -65,8 +63,8 @@ impl PointerGrab<DriftWm> for NavigateGrab {
             // Natural direction: negate delta (drag right → navigate right)
             self.cumulative -= screen_delta;
 
-            let mag_sq = self.cumulative.x * self.cumulative.x
-                + self.cumulative.y * self.cumulative.y;
+            let mag_sq =
+                self.cumulative.x * self.cumulative.x + self.cumulative.y * self.cumulative.y;
 
             if mag_sq >= THRESHOLD_SQ {
                 let dir = direction_from_vector(self.cumulative);

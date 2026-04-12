@@ -92,10 +92,7 @@ pub fn is_origin_visible(
 ) -> bool {
     let visible_w = viewport_size.w as f64 / zoom;
     let visible_h = viewport_size.h as f64 / zoom;
-    camera.x <= 0.0
-        && 0.0 <= camera.x + visible_w
-        && camera.y <= 0.0
-        && 0.0 <= camera.y + visible_h
+    camera.x <= 0.0 && 0.0 <= camera.x + visible_w && camera.y <= 0.0 && 0.0 <= camera.y + visible_h
 }
 
 /// The canvas rectangle visible at the current camera + zoom.
@@ -164,9 +161,8 @@ pub fn dynamic_min_zoom(
     viewport_size: Size<i32, Logical>,
     padding: f64,
 ) -> f64 {
-    let bbox = all_windows_bbox(windows).unwrap_or_else(|| {
-        Rectangle::new((-2, -2).into(), (5, 5).into())
-    });
+    let bbox =
+        all_windows_bbox(windows).unwrap_or_else(|| Rectangle::new((-2, -2).into(), (5, 5).into()));
     // Allow zooming out to 50% beyond the fit zoom for breathing room
     let fit = zoom_to_fit(bbox, viewport_size, padding);
     (fit * 0.5).max(MIN_ZOOM_FLOOR)
@@ -187,11 +183,7 @@ pub fn zoom_anchor_camera(
 
 /// Snap zoom to 1.0 if within ±0.05 dead zone (avoids stuck-near-1.0 feel).
 pub fn snap_zoom(z: f64) -> f64 {
-    if (z - 1.0).abs() < 0.05 {
-        1.0
-    } else {
-        z
-    }
+    if (z - 1.0).abs() < 0.05 { 1.0 } else { z }
 }
 
 /// Closest point on an axis-aligned rect to `origin`.
@@ -280,10 +272,12 @@ impl VelocityTracker {
         if elapsed < 1e-6 {
             return Point::from((0.0, 0.0));
         }
-        let total: Point<f64, Logical> = self.samples.iter().fold(
-            Point::from((0.0, 0.0)),
-            |acc, (_, d)| Point::from((acc.x + d.x, acc.y + d.y)),
-        );
+        let total: Point<f64, Logical> = self
+            .samples
+            .iter()
+            .fold(Point::from((0.0, 0.0)), |acc, (_, d)| {
+                Point::from((acc.x + d.x, acc.y + d.y))
+            });
         Point::from((total.x / elapsed, total.y / elapsed))
     }
 
@@ -390,27 +384,51 @@ mod tests {
     #[test]
     fn fully_visible() {
         // 100x100 window at (200, 200), camera at (0,0), viewport 1000x1000, zoom 1.0
-        let f = visible_fraction((200, 200).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        let f = visible_fraction(
+            (200, 200).into(),
+            (100, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+        );
         assert!((f - 1.0).abs() < 1e-9);
     }
 
     #[test]
     fn fully_off_screen() {
         // Window completely to the right of viewport
-        let f = visible_fraction((2000, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        let f = visible_fraction(
+            (2000, 0).into(),
+            (100, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+        );
         assert!((f - 0.0).abs() < 1e-9);
     }
 
     #[test]
     fn half_off_right_edge() {
         // 100x100 window, right half off-screen
-        let f = visible_fraction((950, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        let f = visible_fraction(
+            (950, 0).into(),
+            (100, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+        );
         assert!((f - 0.5).abs() < 1e-9);
     }
 
     #[test]
     fn zero_area_window() {
-        let f = visible_fraction((0, 0).into(), (0, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        let f = visible_fraction(
+            (0, 0).into(),
+            (0, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+        );
         assert!((f - 0.0).abs() < 1e-9);
     }
 
@@ -418,11 +436,23 @@ mod tests {
     fn zoom_affects_viewport() {
         // At zoom 0.5, viewport covers 2000x2000 canvas units.
         // 100x100 window at (1500, 0) is fully visible.
-        let f = visible_fraction((1500, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 0.5);
+        let f = visible_fraction(
+            (1500, 0).into(),
+            (100, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            0.5,
+        );
         assert!((f - 1.0).abs() < 1e-9);
 
         // Same window at zoom 1.0 is fully off-screen.
-        let f = visible_fraction((1500, 0).into(), (100, 100).into(), cam(0.0, 0.0), vp(1000, 1000), 1.0);
+        let f = visible_fraction(
+            (1500, 0).into(),
+            (100, 100).into(),
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+        );
         assert!((f - 0.0).abs() < 1e-9);
     }
 
@@ -473,7 +503,11 @@ mod tests {
     fn center_window_zoom_1() {
         // 200x100 window at (300, 400), 1920x1080 viewport, zoom 1.0
         let cam = camera_to_center_window(
-            (300, 400).into(), (200, 100).into(), vp_center(1920, 1080), 1.0, 0,
+            (300, 400).into(),
+            (200, 100).into(),
+            vp_center(1920, 1080),
+            1.0,
+            0,
         );
         // window center: (400, 450), viewport center offset: (960, 540)
         assert!((cam.x - (400.0 - 960.0)).abs() < 1e-9);
@@ -484,7 +518,11 @@ mod tests {
     fn center_window_zoomed_out() {
         // At zoom 0.5, viewport center = viewport_size / (2 * 0.5) = viewport_size
         let cam = camera_to_center_window(
-            (0, 0).into(), (100, 100).into(), vp_center(1000, 1000), 0.5, 0,
+            (0, 0).into(),
+            (100, 100).into(),
+            vp_center(1000, 1000),
+            0.5,
+            0,
         );
         // window center: (50, 50), viewport center offset at 0.5: (1000, 1000)
         assert!((cam.x - (50.0 - 1000.0)).abs() < 1e-9);
@@ -501,9 +539,9 @@ mod tests {
     fn find_nearest_right() {
         let origin = pt(0.0, 0.0);
         let items = vec![
-            ("a", pt(100.0, 0.0)),   // directly right
-            ("b", pt(-100.0, 0.0)),  // directly left
-            ("c", pt(200.0, 0.0)),   // further right
+            ("a", pt(100.0, 0.0)),  // directly right
+            ("b", pt(-100.0, 0.0)), // directly left
+            ("c", pt(200.0, 0.0)),  // further right
         ];
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), None::<&&str>);
         assert_eq!(result, Some("a"));
@@ -512,10 +550,7 @@ mod tests {
     #[test]
     fn find_nearest_up() {
         let origin = pt(0.0, 0.0);
-        let items = vec![
-            ("above", pt(0.0, -100.0)),
-            ("below", pt(0.0, 100.0)),
-        ];
+        let items = vec![("above", pt(0.0, -100.0)), ("below", pt(0.0, 100.0))];
         let result = find_nearest(origin, &Direction::Up, items.into_iter(), None::<&&str>);
         assert_eq!(result, Some("above"));
     }
@@ -523,10 +558,7 @@ mod tests {
     #[test]
     fn find_nearest_down() {
         let origin = pt(0.0, 0.0);
-        let items = vec![
-            ("above", pt(0.0, -100.0)),
-            ("below", pt(0.0, 100.0)),
-        ];
+        let items = vec![("above", pt(0.0, -100.0)), ("below", pt(0.0, 100.0))];
         let result = find_nearest(origin, &Direction::Down, items.into_iter(), None::<&&str>);
         assert_eq!(result, Some("below"));
     }
@@ -534,10 +566,7 @@ mod tests {
     #[test]
     fn find_nearest_left() {
         let origin = pt(0.0, 0.0);
-        let items = vec![
-            ("left", pt(-100.0, 0.0)),
-            ("right", pt(100.0, 0.0)),
-        ];
+        let items = vec![("left", pt(-100.0, 0.0)), ("right", pt(100.0, 0.0))];
         let result = find_nearest(origin, &Direction::Left, items.into_iter(), None::<&&str>);
         assert_eq!(result, Some("left"));
     }
@@ -546,9 +575,7 @@ mod tests {
     fn find_nearest_outside_cone() {
         // Item at 60° from the right axis — outside the 45° cone
         let origin = pt(0.0, 0.0);
-        let items = vec![
-            ("diagonal", pt(50.0, 100.0)),
-        ];
+        let items = vec![("diagonal", pt(50.0, 100.0))];
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), None::<&&str>);
         assert_eq!(result, None);
     }
@@ -556,10 +583,7 @@ mod tests {
     #[test]
     fn find_nearest_skips_self() {
         let origin = pt(0.0, 0.0);
-        let items = vec![
-            ("self", pt(10.0, 0.0)),
-            ("other", pt(20.0, 0.0)),
-        ];
+        let items = vec![("self", pt(10.0, 0.0)), ("other", pt(20.0, 0.0))];
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), Some(&"self"));
         assert_eq!(result, Some("other"));
     }

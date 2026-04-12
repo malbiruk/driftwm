@@ -1,9 +1,6 @@
 use std::time::{Duration, Instant};
 
-use driftwm::canvas::{
-    CanvasPos, MomentumState, ScreenPos,
-    canvas_to_screen, screen_to_canvas,
-};
+use driftwm::canvas::{CanvasPos, MomentumState, ScreenPos, canvas_to_screen, screen_to_canvas};
 use smithay::utils::Point;
 
 // --- Coordinate transform round-trip tests (zoom=1.0) ---
@@ -154,7 +151,10 @@ fn momentum_accumulate_prevents_tick() {
     m.accumulate(Point::from((5.0, 5.0)), now);
     // accumulate sets coasting=false, so tick returns None
     let result = m.tick(DT_16MS);
-    assert!(result.is_none(), "tick during accumulation should return None");
+    assert!(
+        result.is_none(),
+        "tick during accumulation should return None"
+    );
 }
 
 #[test]
@@ -169,7 +169,10 @@ fn momentum_launch_enables_coasting() {
     m.launch();
     assert!(m.coasting);
     // Velocity should be non-zero (displacement/time)
-    assert!(m.velocity.x > 0.0, "launch should produce positive velocity from accumulated deltas");
+    assert!(
+        m.velocity.x > 0.0,
+        "launch should produce positive velocity from accumulated deltas"
+    );
     let delta = m.tick(DT_16MS);
     assert!(delta.is_some(), "tick after launch should produce delta");
 }
@@ -186,7 +189,10 @@ fn momentum_decays_monotonically_and_stops() {
             Some(_) => {
                 ticked = true;
                 let speed = (m.velocity.x.powi(2) + m.velocity.y.powi(2)).sqrt();
-                assert!(speed <= prev_speed + 1e-10, "speed should decrease monotonically");
+                assert!(
+                    speed <= prev_speed + 1e-10,
+                    "speed should decrease monotonically"
+                );
                 prev_speed = speed;
             }
             None => {
@@ -208,8 +214,11 @@ fn momentum_velocity_tracker_launch() {
     }
     m.launch();
     // 5 samples over 40ms, total displacement = 50px → velocity ≈ 1250 px/sec
-    assert!((m.velocity.x - 1250.0).abs() < 50.0,
-        "expected ~1250 px/sec, got {}", m.velocity.x);
+    assert!(
+        (m.velocity.x - 1250.0).abs() < 50.0,
+        "expected ~1250 px/sec, got {}",
+        m.velocity.x
+    );
 }
 
 #[test]

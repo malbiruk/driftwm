@@ -1,17 +1,15 @@
 use smithay::{
     input::{
-        pointer::{
-            ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
-        },
         SeatHandler,
+        pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     },
     output::Output,
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
-use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use crate::focus::FocusTarget;
 use crate::state::{DriftWm, output_state};
+use driftwm::canvas::{CanvasPos, canvas_to_screen};
 
 /// Max squared screen-pixel distance for a press-release to count as a
 /// "click" (deselect) rather than a "drag" (pan). 5px → 25.

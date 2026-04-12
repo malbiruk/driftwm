@@ -5,9 +5,9 @@ use smithay::{
     wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
+use super::DriftWm;
 use driftwm::config;
 use driftwm::window_ext::WindowExt;
-use super::DriftWm;
 
 /// Per-window fit state stored in the surface data_map via Mutex.
 /// Some(size) = currently fit, holding the pre-fit size.
@@ -15,7 +15,9 @@ use super::DriftWm;
 pub struct FitState(pub Option<Size<i32, Logical>>);
 
 pub fn is_fit(window: &Window) -> bool {
-    let Some(wl_surface) = window.wl_surface() else { return false };
+    let Some(wl_surface) = window.wl_surface() else {
+        return false;
+    };
     with_states(&wl_surface, |states| {
         states
             .data_map
@@ -37,7 +39,9 @@ pub fn clear_fit_state(wl_surface: &WlSurface) {
 
 impl DriftWm {
     pub fn fit_window(&mut self, window: &Window) {
-        let Some(wl_surface) = window.wl_surface() else { return };
+        let Some(wl_surface) = window.wl_surface() else {
+            return;
+        };
         if config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
         }
@@ -69,10 +73,7 @@ impl DriftWm {
         let usable_center_x = usable.loc.x as f64 + usable.size.w as f64 / 2.0;
         let usable_center_y = usable.loc.y as f64 + usable.size.h as f64 / 2.0;
         let center = self.window_visual_center(window).unwrap_or_default();
-        let target_camera = Point::from((
-            center.x - usable_center_x,
-            center.y - usable_center_y,
-        ));
+        let target_camera = Point::from((center.x - usable_center_x, center.y - usable_center_y));
 
         // Window location: usable area offset + gap from the target camera edges
         let new_loc = Point::from((
@@ -96,7 +97,9 @@ impl DriftWm {
     }
 
     pub fn unfit_window(&mut self, window: &Window) {
-        let Some(wl_surface) = window.wl_surface() else { return };
+        let Some(wl_surface) = window.wl_surface() else {
+            return;
+        };
 
         let saved_size = with_states(&wl_surface, |states| {
             let size = states

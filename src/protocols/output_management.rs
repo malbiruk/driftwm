@@ -171,11 +171,7 @@ fn send_new_head<D>(
     let version = client_data.manager.version();
 
     let Ok(head) =
-        client.create_resource::<ZwlrOutputHeadV1, _, D>(
-            display,
-            version,
-            output_name.to_string(),
-        )
+        client.create_resource::<ZwlrOutputHeadV1, _, D>(display, version, output_name.to_string())
     else {
         return;
     };
@@ -191,22 +187,22 @@ fn send_new_head<D>(
     if head.version() >= zwlr_output_head_v1::EVT_MODEL_SINCE {
         head.model(state.model.clone());
     }
-    if head.version() >= zwlr_output_head_v1::EVT_SERIAL_NUMBER_SINCE && !state.serial_number.is_empty() {
+    if head.version() >= zwlr_output_head_v1::EVT_SERIAL_NUMBER_SINCE
+        && !state.serial_number.is_empty()
+    {
         head.serial_number(state.serial_number.clone());
     }
 
     let mut wl_modes = Vec::with_capacity(state.modes.len());
     for (i, mode) in state.modes.iter().enumerate() {
-        let Ok(wl_mode) =
-            client.create_resource::<ZwlrOutputModeV1, _, D>(
-                display,
-                version,
-                ModeData {
-                    output_name: output_name.to_string(),
-                    mode_index: i,
-                },
-            )
-        else {
+        let Ok(wl_mode) = client.create_resource::<ZwlrOutputModeV1, _, D>(
+            display,
+            version,
+            ModeData {
+                output_name: output_name.to_string(),
+                mode_index: i,
+            },
+        ) else {
             continue;
         };
         head.mode(&wl_mode);
@@ -262,8 +258,7 @@ fn wl_to_transform(t: WlTransform) -> Option<Transform> {
 
 // 1. GlobalDispatch — bind
 
-impl<D> GlobalDispatch<ZwlrOutputManagerV1, OutputManagementGlobalData, D>
-    for OutputManagementState
+impl<D> GlobalDispatch<ZwlrOutputManagerV1, OutputManagementGlobalData, D> for OutputManagementState
 where
     D: GlobalDispatch<ZwlrOutputManagerV1, OutputManagementGlobalData>,
     D: Dispatch<ZwlrOutputManagerV1, ()>,
@@ -428,10 +423,7 @@ where
                         scale: None,
                     },
                 );
-                data_init.init(
-                    id,
-                    ConfigHeadData::Ok(output_name.clone(), conf.clone()),
-                );
+                data_init.init(id, ConfigHeadData::Ok(output_name.clone(), conf.clone()));
             }
             zwlr_output_configuration_v1::Request::DisableHead { head } => {
                 let Some(output_name) = head.data::<String>() else {
@@ -479,8 +471,7 @@ where
                     conf.failed();
                     return;
                 };
-                let ConfigState::Ongoing(heads) =
-                    mem::replace(new_config, ConfigState::Finished)
+                let ConfigState::Ongoing(heads) = mem::replace(new_config, ConfigState::Finished)
                 else {
                     conf.post_error(
                         zwlr_output_configuration_v1::Error::AlreadyUsed,
@@ -514,8 +505,7 @@ where
                     conf.failed();
                     return;
                 };
-                let ConfigState::Ongoing(heads) =
-                    mem::replace(new_config, ConfigState::Finished)
+                let ConfigState::Ongoing(heads) = mem::replace(new_config, ConfigState::Finished)
                 else {
                     conf.post_error(
                         zwlr_output_configuration_v1::Error::AlreadyUsed,
