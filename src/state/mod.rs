@@ -159,6 +159,9 @@ pub struct FullscreenState {
     pub saved_size: Size<i32, Logical>,
 }
 
+/// Per-window mapping time for entry animations.
+pub struct MappingTime(pub Instant);
+
 /// Per-output viewport state, stored on each `Output` via `UserDataMap`.
 /// Wrapped in `Mutex` since `UserDataMap` requires `Sync`.
 /// Fields that are !Send (PixelShaderElement) stay on DriftWm.
@@ -173,6 +176,8 @@ pub struct OutputState {
     pub last_rendered_zoom: f64,
     pub overview_return: Option<(Point<f64, Logical>, f64)>,
     pub camera_target: Option<Point<f64, Logical>>,
+    pub camera_velocity: Point<f64, Logical>,
+    pub zoom_velocity: f64,
     pub last_scroll_pan: Option<Instant>,
     pub momentum: MomentumState,
     pub panning: bool,
@@ -206,6 +211,8 @@ pub fn init_output_state(
             last_rendered_zoom: f64::NAN,
             overview_return: None,
             camera_target: None,
+            camera_velocity: (0.0, 0.0).into(),
+            zoom_velocity: 0.0,
             last_scroll_pan: None,
             momentum: MomentumState::new(friction),
             panning: false,
@@ -382,6 +389,7 @@ pub struct DriftWm {
     pub active_crtcs: HashSet<crtc::Handle>,
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
+    pub is_nvidia: bool,
 
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
@@ -599,6 +607,7 @@ impl DriftWm {
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
+            is_nvidia: false,
             config_file_mtime: None,
             last_animation_tick: Instant::now(),
             focused_output: None,
