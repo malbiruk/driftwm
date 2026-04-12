@@ -60,7 +60,7 @@ pub fn spawn_xwayland(
             data.x11_display = Some(display_number);
             data.xwayland_client = Some(client.clone());
 
-            match X11Wm::start_wm(handle.clone(), x11_socket, client.clone()) {
+            match X11Wm::start_wm(handle.clone(), &data.display_handle, x11_socket, client.clone()) {
                 Ok(wm) => {
                     tracing::info!("X11 window manager started");
                     data.x11_wm = Some(wm);

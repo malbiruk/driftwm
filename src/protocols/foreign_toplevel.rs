@@ -19,7 +19,6 @@ use smithay::reexports::wayland_server::{
 };
 use crate::window_ext::WindowExt;
 use smithay::wayland::compositor::with_states;
-use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 use wayland_protocols_wlr::foreign_toplevel::v1::server::{
     zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
 };
@@ -187,9 +186,12 @@ fn refresh_toplevel<D>(
     let app_id = window.app_id_or_class();
     let xdg_states = with_states(wl_surface, |states| {
         states
-            .data_map
-            .get::<XdgToplevelSurfaceData>()
-            .map(|d| d.lock().unwrap().current.states.clone())
+            .cached_state
+            .get::<smithay::wayland::shell::xdg::ToplevelCachedState>()
+            .current()
+            .last_acked
+            .as_ref()
+            .map(|c| c.state.states.clone())
             .unwrap_or_default()
     });
 
