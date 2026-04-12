@@ -31,7 +31,6 @@ use smithay::{
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
         shm::ShmState,
-        virtual_keyboard::VirtualKeyboardManagerState,
     },
 };
 use std::collections::{HashMap, HashSet};
@@ -526,8 +525,6 @@ impl DriftWm {
             ..Default::default()
         });
         seat.add_pointer();
-
-        VirtualKeyboardManagerState::new::<Self, _>(&dh, |_client| Config::load().virtual_keyboard);
 
         let autostart = config.autostart.clone();
         Self {

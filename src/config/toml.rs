@@ -74,7 +74,6 @@ pub(super) struct KeyboardConfig {
     pub layout_independent: Option<bool>,
     pub num_lock: Option<bool>,
     pub caps_lock: Option<bool>,
-    pub virtual_keyboard: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

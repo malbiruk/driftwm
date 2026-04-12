@@ -306,8 +306,8 @@ impl IdleInhibitHandler for DriftWm {
 
 delegate_idle_inhibit!(DriftWm);
 
+use smithay::delegate_idle_notify;
 use smithay::wayland::idle_notify::{IdleNotifierHandler, IdleNotifierState};
-use smithay::{delegate_idle_notify, delegate_virtual_keyboard_manager};
 
 impl IdleNotifierHandler for DriftWm {
     fn idle_notifier_state(&mut self) -> &mut IdleNotifierState<Self> {
@@ -650,5 +650,3 @@ impl SessionLockHandler for DriftWm {
 }
 
 delegate_session_lock!(DriftWm);
-
-delegate_virtual_keyboard_manager!(DriftWm);

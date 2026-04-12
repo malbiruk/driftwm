@@ -90,7 +90,6 @@ pub struct Config {
     pub gestures: ContextBindings<GestureBinding, GestureConfigEntry>,
     pub num_lock: bool,
     pub caps_lock: bool,
-    pub virtual_keyboard: bool,
 }
 
 impl Config {
@@ -484,7 +483,6 @@ impl Config {
             gestures: gesture_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),
             caps_lock: raw.input.keyboard.caps_lock.unwrap_or(false),
-            virtual_keyboard: raw.input.keyboard.virtual_keyboard.unwrap_or(false),
         }
     }
 
