@@ -6,10 +6,10 @@
 use std::collections::hash_map::Entry;
 use std::collections::HashMap;
 
+use crate::window_ext::WindowExt;
 use smithay::desktop::{Space, Window};
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-use smithay::wayland::seat::WaylandFocus;
 use smithay::reexports::wayland_protocols_wlr;
 use smithay::reexports::wayland_server::backend::ClientId;
 use smithay::reexports::wayland_server::protocol::wl_output::WlOutput;
@@ -17,8 +17,8 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::reexports::wayland_server::{
     Client, DataInit, Dispatch, DisplayHandle, GlobalDispatch, New, Resource,
 };
-use crate::window_ext::WindowExt;
 use smithay::wayland::compositor::with_states;
+use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::xdg::ToplevelStateSet;
 use wayland_protocols_wlr::foreign_toplevel::v1::server::{
     zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
@@ -108,7 +108,9 @@ pub fn refresh<D>(
     // 2. Refresh non-focused windows first (deactivate-before-activate ordering)
     let mut focused_entry = None;
     for window in space.elements() {
-        let Some(wl_surface) = window.wl_surface() else { continue; };
+        let Some(wl_surface) = window.wl_surface() else {
+            continue;
+        };
         if crate::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             continue;
         }
@@ -123,16 +125,15 @@ pub fn refresh<D>(
 
     // 3. Refresh focused window last (with Activated state)
     if let Some(window) = focused_entry {
-        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
         refresh_toplevel::<D>(ft_state, &window, &wl_surface, outputs, true);
     }
 }
 
 /// Send output_enter for a newly connected output to all existing toplevels.
-pub fn send_output_enter_all(
-    ft_state: &mut ForeignToplevelManagerState,
-    output: &Output,
-) {
+pub fn send_output_enter_all(ft_state: &mut ForeignToplevelManagerState, output: &Output) {
     for data in ft_state.toplevels.values_mut() {
         for (instance, outputs) in &mut data.instances {
             if let Some(client) = instance.client() {
@@ -149,10 +150,7 @@ pub fn send_output_enter_all(
 }
 
 /// Send output_leave for a disconnected output to all existing toplevels.
-pub fn send_output_leave_all(
-    ft_state: &mut ForeignToplevelManagerState,
-    output: &Output,
-) {
+pub fn send_output_leave_all(ft_state: &mut ForeignToplevelManagerState, output: &Output) {
     for data in ft_state.toplevels.values_mut() {
         for (instance, outputs) in &mut data.instances {
             if let Some(client) = instance.client() {
@@ -220,8 +218,7 @@ fn refresh_toplevel<D>(
                 states_changed = true;
             }
 
-            let something_changed =
-                new_title.is_some() || new_app_id.is_some() || states_changed;
+            let something_changed = new_title.is_some() || new_app_id.is_some() || states_changed;
 
             if something_changed {
                 for instance in data.instances.keys() {
@@ -232,12 +229,7 @@ fn refresh_toplevel<D>(
                         instance.app_id(new_app_id.to_owned());
                     }
                     if states_changed {
-                        instance.state(
-                            data.states
-                                .iter()
-                                .flat_map(|x| x.to_ne_bytes())
-                                .collect(),
-                        );
+                        instance.state(data.states.iter().flat_map(|x| x.to_ne_bytes()).collect());
                     }
                     instance.done();
                 }
@@ -259,12 +251,7 @@ fn refresh_toplevel<D>(
 
             for manager in &protocol_state.instances {
                 if let Some(client) = manager.client() {
-                    data.add_instance::<D>(
-                        &protocol_state.display,
-                        &client,
-                        manager,
-                        outputs,
-                    );
+                    data.add_instance::<D>(&protocol_state.display, &client, manager, outputs);
                 }
             }
 
@@ -447,10 +434,7 @@ where
     }
 }
 
-fn to_state_vec(
-    states: &smithay::wayland::shell::xdg::ToplevelStateSet,
-    has_focus: bool,
-) -> Vec<u32> {
+fn to_state_vec(states: &ToplevelStateSet, has_focus: bool) -> Vec<u32> {
     let mut rv = Vec::with_capacity(3);
     if states.contains(xdg_toplevel::State::Maximized) {
         rv.push(zwlr_foreign_toplevel_handle_v1::State::Maximized as u32);
