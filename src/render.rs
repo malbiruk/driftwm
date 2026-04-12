@@ -914,7 +914,23 @@ pub fn compose_frame(
         let applied = driftwm::config::applied_rule(&wl_surface);
         let is_widget = applied.as_ref().is_some_and(|r| r.widget);
         let wants_blur = blur_enabled && applied.as_ref().is_some_and(|r| r.blur);
-        let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
+        let mut opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
+
+        let mut entry_anim_zoom = 1.0f64;
+        if state.config.animations.enabled {
+            if let Some(mapping_time) = window.user_data().get::<crate::state::MappingTime>() {
+                let elapsed = mapping_time.0.elapsed().as_secs_f64();
+                let duration = 0.25; // 250ms entry animation
+                if elapsed < duration {
+                    let t = elapsed / duration;
+                    let ease_out = 1.0 - (1.0 - t).powi(3);
+                    opacity *= ease_out;
+                    entry_anim_zoom = 0.92 + 0.08 * ease_out;
+                }
+            }
+        }
+
+        let window_zoom = zoom * entry_anim_zoom;
 
         let elems = window.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
             renderer,
@@ -957,7 +973,7 @@ pub fn compose_frame(
                         RescaleRenderElement::from_element(
                             bar_elem,
                             Point::<i32, Physical>::from((0, 0)),
-                            zoom,
+                            window_zoom,
                         ),
                     ));
                 }
@@ -982,13 +998,13 @@ pub fn compose_frame(
                             target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
                                 RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, false),
                                 Point::<i32, Physical>::from((0, 0)),
-                                zoom,
+                                window_zoom,
                             )));
                         } else {
                             target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
                                 elem,
                                 Point::<i32, Physical>::from((0, 0)),
-                                zoom,
+                                window_zoom,
                             )));
                         }
                     }
@@ -997,7 +1013,7 @@ pub fn compose_frame(
                         OutputRenderElements::Window(RescaleRenderElement::from_element(
                             elem,
                             Point::<i32, Physical>::from((0, 0)),
-                            zoom,
+                            window_zoom,
                         ))
                     }));
                 }
@@ -1006,7 +1022,7 @@ pub fn compose_frame(
                     OutputRenderElements::Window(RescaleRenderElement::from_element(
                         elem,
                         Point::<i32, Physical>::from((0, 0)),
-                        zoom,
+                        window_zoom,
                     ))
                 }));
             }
@@ -1057,7 +1073,7 @@ pub fn compose_frame(
                         RescaleRenderElement::from_element(
                             shadow_elem,
                             Point::<i32, Physical>::from((0, 0)),
-                            zoom,
+                            window_zoom,
                         ),
                     ));
                     shadow_count = 1;
@@ -1090,13 +1106,13 @@ pub fn compose_frame(
                             target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
                                 RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, true),
                                 Point::<i32, Physical>::from((0, 0)),
-                                zoom,
+                                window_zoom,
                             )));
                         } else {
                             target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
                                 elem,
                                 Point::<i32, Physical>::from((0, 0)),
-                                zoom,
+                                window_zoom,
                             )));
                         }
                     }
@@ -1105,7 +1121,7 @@ pub fn compose_frame(
                         OutputRenderElements::Window(RescaleRenderElement::from_element(
                             elem,
                             Point::<i32, Physical>::from((0, 0)),
-                            zoom,
+                            window_zoom,
                         ))
                     }));
                 }
@@ -1150,7 +1166,7 @@ pub fn compose_frame(
                         RescaleRenderElement::from_element(
                             shadow_elem.clone(),
                             Point::<i32, Physical>::from((0, 0)),
-                            zoom,
+                            window_zoom,
                         ),
                     ));
                     shadow_count = 1;
@@ -1160,7 +1176,7 @@ pub fn compose_frame(
                     OutputRenderElements::Window(RescaleRenderElement::from_element(
                         elem,
                         Point::<i32, Physical>::from((0, 0)),
-                        zoom,
+                        window_zoom,
                     ))
                 }));
             }
@@ -1169,7 +1185,7 @@ pub fn compose_frame(
                 OutputRenderElements::Window(RescaleRenderElement::from_element(
                     elem,
                     Point::<i32, Physical>::from((0, 0)),
-                    zoom,
+                    window_zoom,
                 ))
             }));
         }
@@ -1177,33 +1193,33 @@ pub fn compose_frame(
         if wants_blur {
             let elem_count = target.len() - elem_start - shadow_count;
             let screen_loc: Point<i32, Logical> = Point::from((
-                (render_loc.x * zoom) as i32,
-                (render_loc.y * zoom) as i32,
+                (render_loc.x * window_zoom) as i32,
+                (render_loc.y * window_zoom) as i32,
             ));
             let screen_size: Size<i32, Logical> = if has_ssd {
                 let bar = driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT;
                 (
-                    (geom_size.w as f64 * zoom).ceil() as i32,
-                    ((geom_size.h + bar) as f64 * zoom).ceil() as i32,
+                    (geom_size.w as f64 * window_zoom).ceil() as i32,
+                    ((geom_size.h + bar) as f64 * window_zoom).ceil() as i32,
                 ).into()
             } else {
                 (
-                    (geom_size.w as f64 * zoom).ceil() as i32,
-                    (geom_size.h as f64 * zoom).ceil() as i32,
+                    (geom_size.w as f64 * window_zoom).ceil() as i32,
+                    (geom_size.h as f64 * window_zoom).ceil() as i32,
                 ).into()
             };
             let screen_rect = Rectangle::new(
                 if has_ssd {
                     Point::from((
                         screen_loc.x,
-                        screen_loc.y - (driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 * zoom) as i32,
+                        screen_loc.y - (driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 * window_zoom) as i32,
                     ))
                 } else {
                     // CSD windows: geometry starts at render_loc + geo.loc, not at render_loc
                     let geo = window.geometry();
                     Point::from((
-                        ((render_loc.x + geo.loc.x as f64) * zoom) as i32,
-                        ((render_loc.y + geo.loc.y as f64) * zoom) as i32,
+                        ((render_loc.x + geo.loc.x as f64) * window_zoom) as i32,
+                        ((render_loc.y + geo.loc.y as f64) * window_zoom) as i32,
                     ))
                 },
                 screen_size,
