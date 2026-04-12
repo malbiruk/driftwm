@@ -421,6 +421,40 @@ impl From<&WindowRule> for AppliedWindowRule {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct BackendConfig {
+    pub force_legacy_drm: bool,
+    pub wait_for_frame_completion: bool,
+    pub disable_direct_scanout: bool,
+}
+
+impl Default for BackendConfig {
+    fn default() -> Self {
+        Self {
+            force_legacy_drm: false,
+            wait_for_frame_completion: false,
+            disable_direct_scanout: false,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct AnimationConfig {
+    pub enabled: bool,
+    pub spring_stiffness: f64,
+    pub spring_damping: f64,
+}
+
+impl Default for AnimationConfig {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            spring_stiffness: 400.0,
+            spring_damping: 26.0,
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct EffectsConfig {
     pub blur_radius: u32,
     pub blur_strength: f64,

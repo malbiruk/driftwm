@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use tracing::trace;
 
 use smithay::{
     backend::{
@@ -11,7 +12,7 @@ use smithay::{
         },
         drm::{
             DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
-            compositor::{DrmCompositor, FrameFlags},
+            compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
         egl::{EGLContext, EGLDisplay},
@@ -194,6 +195,22 @@ pub fn init_udev(
             };
             let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
+            // Setup environment variables for stability based on config flags
+            if data.config.backend.force_legacy_drm {
+                tracing::info!("force_legacy_drm is enabled, hardening environment");
+                unsafe {
+                    std::env::set_var("SMITHAY_USE_LEGACY", "1");
+                    std::env::set_var("__GL_GSYNC_ALLOWED", "0");
+                    std::env::set_var("__GL_VRR_ALLOWED", "0");
+                    std::env::set_var("__GL_MaxFramesAllowed", "1");
+                    if std::env::var("NVD_BACKEND").is_err() {
+                        std::env::set_var("NVD_BACKEND", "direct");
+                    }
+                }
+            } else {
+                unsafe { std::env::remove_var("SMITHAY_USE_LEGACY"); }
+            }
+
             // true = release existing CRTCs for a clean modeset (avoids conflicts
             // with previous session's DRM state)
             let (drm, drm_notifier) = match DrmDevice::new(device_fd.clone(), true) {
@@ -220,6 +237,8 @@ pub fn init_udev(
                 }
             };
             
+            data.is_nvidia = data.config.backend.force_legacy_drm;
+
             let egl_display = match unsafe { EGLDisplay::new(gbm.clone()) } {
                 Ok(d) => d,
                 Err(e) => {
@@ -980,14 +999,37 @@ fn render_frame(
     let renderer = backend.renderer();
     let elements = crate::render::compose_frame(data, renderer, output, cursor_elements);
 
+    // Task 3: Global Scanout Lockdown (Quirk).
+    // If enabled, completely strip FrameFlags::ALLOW_SCANOUT to ensure EGL composition.
+    let frame_flags = if data.config.backend.disable_direct_scanout {
+        FrameFlags::empty()
+    } else {
+        FrameFlags::ALLOW_SCANOUT
+    };
+
     // Render via DRM compositor (latency-sensitive — do first)
     let renderer = backend.renderer();
-    match compositor.render_frame::<_, OutputRenderElements>(
+    let match_result = compositor.render_frame::<_, OutputRenderElements>(
         renderer,
         &elements,
         [0.0f32, 0.0, 0.0, 1.0],
-        FrameFlags::ALLOW_SCANOUT,
-    ) {
+        frame_flags,
+    );
+
+    // Task 5: Wait for Buffer Ready (Explicit Sync Ready signal)
+    // If enabled, we manually wait for the GPU fence before flipping.
+    if data.config.backend.wait_for_frame_completion {
+        if let Ok(ref render_result) = match_result {
+            if render_result.needs_sync() {
+                if let PrimaryPlaneElement::Swapchain(ref element) = render_result.primary_element {
+                    trace!("wait_for_frame_completion is enabled, waiting for GPU fence");
+                    let _ = element.sync.wait();
+                }
+            }
+        }
+    }
+
+    match match_result {
         Ok(_render_result) => {
             if let Err(e) = compositor.queue_frame(()) {
                 tracing::warn!("Failed to queue frame: {e:?}");
