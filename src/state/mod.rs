@@ -157,6 +157,7 @@ pub struct FullscreenState {
 }
 
 /// Per-window mapping time for entry animations.
+#[allow(dead_code)]
 pub struct MappingTime(pub Instant);
 
 /// Per-output viewport state, stored on each `Output` via `UserDataMap`.
@@ -173,7 +174,9 @@ pub struct OutputState {
     pub last_rendered_zoom: f64,
     pub overview_return: Option<(Point<f64, Logical>, f64)>,
     pub camera_target: Option<Point<f64, Logical>>,
+    #[allow(dead_code)]
     pub camera_velocity: Point<f64, Logical>,
+    #[allow(dead_code)]
     pub zoom_velocity: f64,
     pub last_scroll_pan: Option<Instant>,
     pub momentum: MomentumState,
