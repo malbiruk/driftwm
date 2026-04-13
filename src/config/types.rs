@@ -421,21 +421,13 @@ impl From<&WindowRule> for AppliedWindowRule {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[derive(Default)]
 pub struct BackendConfig {
     pub force_legacy_drm: bool,
     pub wait_for_frame_completion: bool,
     pub disable_direct_scanout: bool,
 }
 
-impl Default for BackendConfig {
-    fn default() -> Self {
-        Self {
-            force_legacy_drm: false,
-            wait_for_frame_completion: false,
-            disable_direct_scanout: false,
-        }
-    }
-}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnimationConfig {

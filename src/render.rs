@@ -917,8 +917,8 @@ pub fn compose_frame(
         let mut opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
 
         let mut entry_anim_zoom = 1.0f64;
-        if state.config.animations.enabled {
-            if let Some(mapping_time) = window.user_data().get::<crate::state::MappingTime>() {
+        if state.config.animations.enabled
+            && let Some(mapping_time) = window.user_data().get::<crate::state::MappingTime>() {
                 let elapsed = mapping_time.0.elapsed().as_secs_f64();
                 let duration = 0.25; // 250ms entry animation
                 if elapsed < duration {
@@ -928,7 +928,6 @@ pub fn compose_frame(
                     entry_anim_zoom = 0.92 + 0.08 * ease_out;
                 }
             }
-        }
 
         let window_zoom = zoom * entry_anim_zoom;
 
