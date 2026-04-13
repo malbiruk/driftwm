@@ -1575,6 +1575,8 @@ mod tests {
             last_rendered_zoom: zoom,
             overview_return: None,
             camera_target: None,
+            camera_velocity: (0.0, 0.0).into(),
+            zoom_velocity: 0.0,
             last_scroll_pan: None,
             momentum: MomentumState::new(0.96),
             panning: false,
