@@ -31,6 +31,8 @@
 # repeat_rate = 25           # keys/sec
 # repeat_delay = 200         # ms before repeat starts
 # layout_independent = true  # match bindings by physical key position across layouts
+# num_lock = true            # num lock state on startup
+# caps_lock = false          # caps lock state on startup
 
 [input.trackpad]
 # tap_to_click = true         # enable tap-to-click

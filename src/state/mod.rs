@@ -9,7 +9,10 @@ pub use render_cache::RenderCache;
 
 use smithay::{
     desktop::{PopupManager, Space, Window},
-    input::{Seat, SeatState, keyboard::XkbConfig},
+    input::{
+        Seat, SeatState,
+        keyboard::{ModifiersState, XkbConfig},
+    },
     output::Output,
     reexports::{
         calloop::{LoopHandle, LoopSignal},
@@ -21,10 +24,10 @@ use smithay::{
         },
     },
     utils::{Logical, Point, Rectangle, Size},
-    wayland::output::OutputManagerState,
     wayland::{
         compositor::{CompositorClientState, CompositorState},
         cursor_shape::CursorShapeManagerState,
+        output::OutputManagerState,
         selection::data_device::DataDeviceState,
         shell::xdg::XdgShellState,
         shm::ShmState,
@@ -379,7 +382,6 @@ pub struct DriftWm {
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
 
-
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
 
@@ -514,9 +516,16 @@ impl DriftWm {
             model: &kb.model,
             ..Default::default()
         };
-        seat.add_keyboard(xkb, config.repeat_delay, config.repeat_rate)
+        let keyboard = seat
+            .add_keyboard(xkb, config.repeat_delay, config.repeat_rate)
             .expect("Failed to add keyboard");
+        keyboard.set_modifier_state(ModifiersState {
+            num_lock: config.num_lock,
+            caps_lock: config.caps_lock,
+            ..Default::default()
+        });
         seat.add_pointer();
+
         let autostart = config.autostart.clone();
         Self {
             start_time: Instant::now(),
@@ -1158,9 +1167,10 @@ impl DriftWm {
         loop {
             let dominated = self.space.elements().any(|w| {
                 w != skip
-                    && self.space.element_location(w).is_some_and(|loc| {
-                        (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2
-                    })
+                    && self
+                        .space
+                        .element_location(w)
+                        .is_some_and(|loc| (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2)
             });
             if !dominated {
                 break pos;
@@ -1471,10 +1481,18 @@ impl DriftWm {
         };
         let mut others = Vec::new();
         for w in self.space.elements() {
-            let Some(surface) = w.wl_surface() else { continue };
-            if *surface == *exclude { continue }
-            if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) { continue }
-            let Some(loc) = self.space.element_location(w) else { continue };
+            let Some(surface) = w.wl_surface() else {
+                continue;
+            };
+            if *surface == *exclude {
+                continue;
+            }
+            if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
+                continue;
+            }
+            let Some(loc) = self.space.element_location(w) else {
+                continue;
+            };
             let size = w.geometry().size;
             let bar = if self.decorations.contains_key(&surface.id()) {
                 driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
