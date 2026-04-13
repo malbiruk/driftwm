@@ -649,11 +649,10 @@ fn is_nvidia_gpu() -> bool {
     // Check common DRM paths for NVIDIA vendor ID (0x10de)
     if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
         for entry in entries.flatten() {
-            if let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor")) {
-                if vendor.trim() == "0x10de" {
+            if let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor"))
+                && vendor.trim() == "0x10de" {
                     return true;
                 }
-            }
         }
     }
     false

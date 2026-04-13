@@ -1018,16 +1018,13 @@ fn render_frame(
 
     // Task 5: Wait for Buffer Ready (Explicit Sync Ready signal)
     // If enabled, we manually wait for the GPU fence before flipping.
-    if data.config.backend.wait_for_frame_completion {
-        if let Ok(ref render_result) = match_result {
-            if render_result.needs_sync() {
-                if let PrimaryPlaneElement::Swapchain(ref element) = render_result.primary_element {
+    if data.config.backend.wait_for_frame_completion
+        && let Ok(ref render_result) = match_result
+            && render_result.needs_sync()
+                && let PrimaryPlaneElement::Swapchain(ref element) = render_result.primary_element {
                     trace!("wait_for_frame_completion is enabled, waiting for GPU fence");
                     let _ = element.sync.wait();
                 }
-            }
-        }
-    }
 
     match match_result {
         Ok(_render_result) => {
