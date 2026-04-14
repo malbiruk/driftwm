@@ -18,7 +18,7 @@ use smithay::utils::{Logical, Point, Transform};
 
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
 use toml::{
-    ConfigFile, DecorationFileConfig, EffectsFileConfig, AnimationFileConfig, BackendFileConfig, OutputRuleFile, WindowRuleFile,
+    ConfigFile, DecorationFileConfig, EffectsFileConfig, BackendFileConfig, OutputRuleFile, WindowRuleFile,
     expand_tilde,
 };
 
@@ -80,7 +80,6 @@ pub struct Config {
     pub decorations: DecorationConfig,
     pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
-    pub animations: AnimationConfig,
     pub backend: BackendConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
@@ -408,7 +407,6 @@ impl Config {
         };
 
         let effects = parse_effects_config(raw.effects);
-        let animations = parse_animation_config(raw.animations);
         let backend = parse_backend_config(raw.backend);
 
         // Deprecation: [input.scroll] → [navigation] trackpad_speed / friction
@@ -459,7 +457,6 @@ impl Config {
             background,
             decorations,
             effects,
-            animations,
             backend,
             trackpad,
             mouse_device,
@@ -636,34 +633,11 @@ fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
     }
 }
 
-fn parse_animation_config(raw: AnimationFileConfig) -> AnimationConfig {
-    let defaults = AnimationConfig::default();
-    AnimationConfig {
-        enabled: raw.enabled.unwrap_or(defaults.enabled),
-        spring_stiffness: raw.spring_stiffness.unwrap_or(defaults.spring_stiffness),
-        spring_damping: raw.spring_damping.unwrap_or(defaults.spring_damping),
-    }
-}
-
-fn is_nvidia_gpu() -> bool {
-    // Check common DRM paths for NVIDIA vendor ID (0x10de)
-    if let Ok(entries) = std::fs::read_dir("/sys/class/drm") {
-        for entry in entries.flatten() {
-            if let Ok(vendor) = std::fs::read_to_string(entry.path().join("device/vendor"))
-                && vendor.trim() == "0x10de" {
-                    return true;
-                }
-        }
-    }
-    false
-}
-
 fn parse_backend_config(raw: BackendFileConfig) -> BackendConfig {
-    let nvidia = is_nvidia_gpu();
     BackendConfig {
-        force_legacy_drm: raw.force_legacy_drm.unwrap_or(nvidia),
-        wait_for_frame_completion: raw.wait_for_frame_completion.unwrap_or(nvidia),
-        disable_direct_scanout: raw.disable_direct_scanout.unwrap_or(nvidia),
+        force_legacy_drm: raw.force_legacy_drm.unwrap_or(false),
+        wait_for_frame_completion: raw.wait_for_frame_completion.unwrap_or(false),
+        disable_direct_scanout: raw.disable_direct_scanout.unwrap_or(false),
     }
 }
 

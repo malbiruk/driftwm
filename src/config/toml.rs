@@ -17,7 +17,6 @@ pub(super) struct ConfigFile {
     pub background: BackgroundFileConfig,
     pub decorations: DecorationFileConfig,
     pub effects: EffectsFileConfig,
-    pub animations: AnimationFileConfig,
     pub backend: BackendFileConfig,
     pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
@@ -35,14 +34,6 @@ pub(super) struct BackendFileConfig {
     pub force_legacy_drm: Option<bool>,
     pub wait_for_frame_completion: Option<bool>,
     pub disable_direct_scanout: Option<bool>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct AnimationFileConfig {
-    pub enabled: Option<bool>,
-    pub spring_stiffness: Option<f64>,
-    pub spring_damping: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]

@@ -389,7 +389,6 @@ pub struct DriftWm {
     pub active_crtcs: HashSet<crtc::Handle>,
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
-    pub is_nvidia: bool,
 
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
@@ -600,7 +599,7 @@ impl DriftWm {
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
-            is_nvidia: false,
+
             config_file_mtime: None,
             last_animation_tick: Instant::now(),
             focused_output: None,
