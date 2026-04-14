@@ -422,7 +422,6 @@ impl From<&WindowRule> for AppliedWindowRule {
 
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct BackendConfig {
-    pub force_legacy_drm: bool,
     pub wait_for_frame_completion: bool,
     pub disable_direct_scanout: bool,
 }

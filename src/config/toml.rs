@@ -31,7 +31,6 @@ pub(super) struct ConfigFile {
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct BackendFileConfig {
-    pub force_legacy_drm: Option<bool>,
     pub wait_for_frame_completion: Option<bool>,
     pub disable_direct_scanout: Option<bool>,
 }

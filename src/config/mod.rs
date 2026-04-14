@@ -646,7 +646,6 @@ fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
 
 fn parse_backend_config(raw: BackendFileConfig) -> BackendConfig {
     BackendConfig {
-        force_legacy_drm: raw.force_legacy_drm.unwrap_or(false),
         wait_for_frame_completion: raw.wait_for_frame_completion.unwrap_or(false),
         disable_direct_scanout: raw.disable_direct_scanout.unwrap_or(false),
     }
