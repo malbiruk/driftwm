@@ -1478,7 +1478,8 @@ fn process_blur_requests(
         }
 
         // Run Kawase blur passes
-        let offset = blur_strength * output_scale as f32;
+        // Account for 2x downscaling: we're working at half resolution
+        let offset = blur_strength * (output_scale as f32 / 2.0);
         let _ = render_blur(
             renderer,
             &down_shader,
