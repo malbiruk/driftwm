@@ -420,30 +420,11 @@ impl From<&WindowRule> for AppliedWindowRule {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-#[derive(Default)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct BackendConfig {
     pub force_legacy_drm: bool,
     pub wait_for_frame_completion: bool,
     pub disable_direct_scanout: bool,
-}
-
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct AnimationConfig {
-    pub enabled: bool,
-    pub spring_stiffness: f64,
-    pub spring_damping: f64,
-}
-
-impl Default for AnimationConfig {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            spring_stiffness: 400.0,
-            spring_damping: 26.0,
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

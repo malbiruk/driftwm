@@ -195,22 +195,6 @@ pub fn init_udev(
             };
             let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
 
-            // Setup environment variables for stability based on config flags
-            if data.config.backend.force_legacy_drm {
-                tracing::info!("force_legacy_drm is enabled, hardening environment");
-                unsafe {
-                    std::env::set_var("SMITHAY_USE_LEGACY", "1");
-                    std::env::set_var("__GL_GSYNC_ALLOWED", "0");
-                    std::env::set_var("__GL_VRR_ALLOWED", "0");
-                    std::env::set_var("__GL_MaxFramesAllowed", "1");
-                    if std::env::var("NVD_BACKEND").is_err() {
-                        std::env::set_var("NVD_BACKEND", "direct");
-                    }
-                }
-            } else {
-                unsafe { std::env::remove_var("SMITHAY_USE_LEGACY"); }
-            }
-
             // true = release existing CRTCs for a clean modeset (avoids conflicts
             // with previous session's DRM state)
             let (drm, drm_notifier) = match DrmDevice::new(device_fd.clone(), true) {
@@ -237,8 +221,6 @@ pub fn init_udev(
                 }
             };
             
-            data.is_nvidia = data.config.backend.force_legacy_drm;
-
             let egl_display = match unsafe { EGLDisplay::new(gbm.clone()) } {
                 Ok(d) => d,
                 Err(e) => {
