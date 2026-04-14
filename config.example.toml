@@ -123,6 +123,13 @@
 # Examples:
 # # shader_path = "~/.config/driftwm/bg.glsl"   # custom GLSL fragment shader
 # # tile_path = "~/.config/driftwm/tile.png"     # tiled image (mutually exclusive with shader)
+#
+# Custom shaders receive these uniforms:
+# - u_camera: vec2 - camera position in canvas coordinates
+# - u_time: float - time in seconds since compositor start (for animations)
+# - u_size: vec2 - viewport size in pixels
+#
+# Example animated shader: extras/wallpapers/animated_waves.glsl
 
 # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
 # Merges with defaults. Use "none" to unbind a default binding.

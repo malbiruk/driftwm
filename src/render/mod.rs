@@ -46,11 +46,18 @@ use smithay::wayland::seat::WaylandFocus;
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 
 /// Uniform declarations for background shaders.
-/// Shaders receive only u_camera — zoom is handled externally via RescaleRenderElement.
-pub const BG_UNIFORMS: &[UniformName<'static>] = &[UniformName {
-    name: std::borrow::Cow::Borrowed("u_camera"),
-    type_: UniformType::_2f,
-}];
+/// Shaders receive u_camera and u_time.
+/// Zoom is handled externally via RescaleRenderElement.
+pub const BG_UNIFORMS: &[UniformName<'static>] = &[
+    UniformName {
+        name: std::borrow::Cow::Borrowed("u_camera"),
+        type_: UniformType::_2f,
+    },
+    UniformName {
+        name: std::borrow::Cow::Borrowed("u_time"),
+        type_: UniformType::_1f,
+    },
+];
 
 /// Shadow shader source — soft box-shadow around SSD windows.
 const SHADOW_SHADER_SRC: &str = include_str!("../shaders/shadow.glsl");
@@ -477,10 +484,11 @@ pub fn update_background_element(
 
     if let Some(elem) = state.render.cached_bg_elements.get_mut(&output_name) {
         elem.resize(canvas_area, Some(vec![canvas_area]));
-        elem.update_uniforms(vec![Uniform::new(
-            "u_camera",
-            (cur_camera.x as f32, cur_camera.y as f32),
-        )]);
+        let time_secs = state.start_time.elapsed().as_secs_f32();
+        elem.update_uniforms(vec![
+            Uniform::new("u_camera", (cur_camera.x as f32, cur_camera.y as f32)),
+            Uniform::new("u_time", time_secs),
+        ]);
     } else if let Some(elem) = state.render.cached_tile_bg.get_mut(&output_name) {
         elem.resize(canvas_area, Some(vec![canvas_area]));
         elem.update_uniforms(vec![
@@ -1209,17 +1217,25 @@ pub fn init_background(state: &mut crate::state::DriftWm, renderer: &mut GlesRen
                     .expect("Default shader must compile")
             }
         };
+        
+        // Detect if shader is animated (contains u_time)
+        state.render.background_is_animated = shader_source.contains("u_time");
+        
         state.render.background_shader = Some(compiled.clone());
         compiled
     };
 
     let area = Rectangle::from_size(initial_size);
+    let time_secs = state.start_time.elapsed().as_secs_f32();
     state.render.cached_bg_elements.insert(output_name.to_string(), PixelShaderElement::new(
         shader,
         area,
         Some(vec![area]),
         1.0,
-        vec![Uniform::new("u_camera", (0.0f32, 0.0f32))],
+        vec![
+            Uniform::new("u_camera", (0.0f32, 0.0f32)),
+            Uniform::new("u_time", time_secs),
+        ],
         Kind::Unspecified,
     ));
 }
@@ -1317,4 +1333,10 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     state.space.refresh();
     state.popups.cleanup();
     layer_map_for_output(output).cleanup();
+    
+    // Schedule continuous redraws for animated background shaders
+    // This ensures u_time updates even when there's no other damage
+    if state.render.background_is_animated {
+        state.mark_all_dirty();
+    }
 }

@@ -1,19 +1,24 @@
 use std::collections::HashMap;
 
-use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture};
 use smithay::backend::renderer::gles::element::PixelShaderElement;
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture};
 use smithay::reexports::wayland_server::backend::ObjectId;
 use smithay::utils::{Physical, Size};
 
 use super::CaptureOutputState;
 
-pub type CsdShadowEntry = (PixelShaderElement, (i32, i32), Option<crate::render::ShadowPhysKey>);
+pub type CsdShadowEntry = (
+    PixelShaderElement,
+    (i32, i32),
+    Option<crate::render::ShadowPhysKey>,
+);
 
 /// Cached GPU resources: compiled shaders, blur textures, background elements, capture state.
 pub struct RenderCache {
     pub shadow_shader: Option<GlesPixelProgram>,
     pub corner_clip_shader: Option<GlesTexProgram>,
     pub background_shader: Option<GlesPixelProgram>,
+    pub background_is_animated: bool,
     pub blur_down_shader: Option<GlesTexProgram>,
     pub blur_up_shader: Option<GlesTexProgram>,
     pub blur_mask_shader: Option<GlesTexProgram>,
@@ -35,6 +40,7 @@ impl RenderCache {
             shadow_shader: None,
             corner_clip_shader: None,
             background_shader: None,
+            background_is_animated: false,
             blur_down_shader: None,
             blur_up_shader: None,
             blur_mask_shader: None,
