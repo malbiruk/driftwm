@@ -227,13 +227,24 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let extent_x = window_size.w as f64;
             let extent_y = window_size.h as f64 + self_bar as f64;
 
-            // Use natural (un-snapped) positions for perpendicular ranges
             let visual_y = natural_y - self_bar as f64;
+
+            // Perpendicular ranges must reflect the *visual* window position,
+            // not the raw cursor. When an axis is held-snapped, the cursor may
+            // drift by up to break_force while the window stays pinned, so the
+            // natural cursor position can wander into another window's perp
+            // range without any visual overlap. Using that for the other axis's
+            // candidate search would produce spurious corner snaps.
+            let visual_y_for_perp = self
+                .snap
+                .y
+                .as_ref()
+                .map_or(visual_y, |s| s.snapped_pos);
 
             let params_x = SnapParams {
                 extent: extent_x,
-                perp_low: visual_y,
-                perp_high: visual_y + extent_y,
+                perp_low: visual_y_for_perp,
+                perp_high: visual_y_for_perp + extent_y,
                 horizontal: true,
                 others: &others,
                 gap,
@@ -245,12 +256,18 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 &mut self.snap.x, &mut self.snap.cooldown_x, natural_x, &params_x,
             );
 
-            // Shift y into visual space (title bar top) for snapping,
-            // then convert back to geometry origin.
+            // X was just updated above — self.snap.x now reflects this frame's
+            // state (engaged, broken, or untouched).
+            let visual_x_for_perp = self
+                .snap
+                .x
+                .as_ref()
+                .map_or(natural_x, |s| s.snapped_pos);
+
             let params_y = SnapParams {
                 extent: extent_y,
-                perp_low: natural_x,
-                perp_high: natural_x + extent_x,
+                perp_low: visual_x_for_perp,
+                perp_high: visual_x_for_perp + extent_x,
                 horizontal: false,
                 others: &others,
                 gap,
