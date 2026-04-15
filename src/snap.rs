@@ -58,9 +58,7 @@ pub fn find_snap_candidate(natural_edge_low: f64, p: &SnapParams<'_>) -> Option<
             (other.y_low, other.y_high, other.x_low, other.x_high)
         };
 
-        if p.perp_high + p.threshold <= other_perp_low
-            || other_perp_high + p.threshold <= p.perp_low
-        {
+        if p.perp_high <= other_perp_low || other_perp_high <= p.perp_low {
             continue;
         }
 
@@ -133,9 +131,7 @@ pub fn find_edge_snap(natural_edge: f64, p: &EdgeSnapParams<'_>) -> Option<(f64,
             (other.y_low, other.y_high, other.x_low, other.x_high)
         };
 
-        if p.perp_high + p.threshold <= other_perp_low
-            || other_perp_high + p.threshold <= p.perp_low
-        {
+        if p.perp_high <= other_perp_low || other_perp_high <= p.perp_low {
             continue;
         }
 
@@ -253,13 +249,22 @@ pub fn snap_resize_edges(
     let has_left = edges_mask & 4 != 0;
     let has_right = edges_mask & 8 != 0;
 
+    // When a Y edge is already held-snapped, use the snapped visual position
+    // instead of the natural (cursor-driven) one. Otherwise break_force drift
+    // in the natural height could let the X-edge snap engage against a target
+    // the window doesn't visually overlap — spurious corner snap.
     let visual_top = if has_top {
-        loc_y + init_h - *new_h as f64 - self_bar as f64
+        snap.y.as_ref().map_or(
+            loc_y + init_h - *new_h as f64 - self_bar as f64,
+            |s| s.snapped_pos,
+        )
     } else {
         loc_y - self_bar as f64
     };
     let visual_bottom = if has_bottom {
-        loc_y + *new_h as f64
+        snap.y
+            .as_ref()
+            .map_or(loc_y + *new_h as f64, |s| s.snapped_pos)
     } else {
         loc_y + init_h
     };
@@ -287,10 +292,22 @@ pub fn snap_resize_edges(
         *new_w = (fixed_right - snapped) as i32;
     }
 
+    // Visual X range for the Y-edge snap's perpendicular check. The X block
+    // above has already updated *new_w to reflect any X snap, so we can derive
+    // the visual range from that. A left-edge resize anchors to the right side
+    // (fixed_right), so its visual X range is NOT (loc_x, loc_x + new_w).
+    let (x_perp_low, x_perp_high) = if has_left {
+        (loc_x + init_w - *new_w as f64, loc_x + init_w)
+    } else if has_right {
+        (loc_x, loc_x + *new_w as f64)
+    } else {
+        (loc_x, loc_x + init_w)
+    };
+
     if has_bottom {
         let natural_bottom = loc_y + *new_h as f64;
         let vp = EdgeSnapParams {
-            perp_low: loc_x, perp_high: loc_x + *new_w as f64,
+            perp_low: x_perp_low, perp_high: x_perp_high,
             horizontal: false, same_edge, others,
             gap, threshold: effective_distance, break_force: effective_break,
             high_edge: true,
@@ -301,7 +318,7 @@ pub fn snap_resize_edges(
         let fixed_bottom = loc_y + init_h;
         let natural_top = fixed_bottom - *new_h as f64 - self_bar as f64;
         let vp = EdgeSnapParams {
-            perp_low: loc_x, perp_high: loc_x + *new_w as f64,
+            perp_low: x_perp_low, perp_high: x_perp_high,
             horizontal: false, same_edge, others,
             gap, threshold: effective_distance, break_force: effective_break,
             high_edge: false,
