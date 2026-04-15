@@ -13,8 +13,6 @@ use smithay::{
         },
         gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType, element::PixelShaderElement},
         utils::{CommitCounter, DamageSet, OpaqueRegions},
-        damage,
-        Texture,
     },
     input::pointer::{CursorImageStatus, CursorImageSurfaceData},
     output::Output,
@@ -381,31 +379,20 @@ pub struct BlurCache {
 impl BlurCache {
     pub fn new(renderer: &mut GlesRenderer, size: Size<i32, Physical>) -> Option<Self> {
         use smithay::backend::renderer::Offscreen;
-        // Optimization: Work at half resolution for blur. 
-        // 2x downscale = 4x fewer pixels to process.
-        let downscaled_size: Size<i32, Physical> = Size::from((
-            (size.w / 2).max(1),
-            (size.h / 2).max(1),
-        ));
-        let buf_size = downscaled_size.to_logical(1).to_buffer(1, Transform::Normal);
+        let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
         let t1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let t2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let t3 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         Some(Self {
             texture: t1, scratch: t2, mask: t3, size,
             dirty: true, last_scene_generation: 0,
-            last_geometry_generation: 0,
-            last_camera_generation: 0,
+            last_geometry_generation: 0, last_camera_generation: 0,
         })
     }
 
     pub fn resize(&mut self, renderer: &mut GlesRenderer, size: Size<i32, Physical>) {
         use smithay::backend::renderer::Offscreen;
-        let downscaled_size: Size<i32, Physical> = Size::from((
-            (size.w / 2).max(1),
-            (size.h / 2).max(1),
-        ));
-        let buf_size = downscaled_size.to_logical(1).to_buffer(1, Transform::Normal);
+        let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
         if let Ok(t1) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(t2) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(t3) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
@@ -1342,21 +1329,16 @@ fn process_blur_requests(
 ) {
     use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
     use smithay::backend::renderer::Color32F;
+    use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::element::Id;
 
     let logical_size = crate::state::output_logical_size(output);
     let output_size: Size<i32, Physical> = logical_size.to_physical_precise_round(output_scale);
-    
-    // Optimization: Render background for blur at half resolution.
-    let downscaled_output_size: Size<i32, Physical> = Size::from((
-        (output_size.w / 2).max(1),
-        (output_size.h / 2).max(1),
-    ));
-    let out_buf_size = downscaled_output_size.to_logical(1).to_buffer(1, Transform::Normal);
+    let out_buf_size = output_size.to_logical(1).to_buffer(1, Transform::Normal);
 
     // Shared full-output FBO for behind-content rendering — cached on DriftWm, reused if size matches
     let mut bg_tex = match state.render.blur_bg_fbo.take() {
-        Some((tex, cached_size)) if cached_size == downscaled_output_size => tex,
+        Some((tex, cached_size)) if cached_size == output_size => tex,
         _ => {
             let Ok(t) = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size)
             else { return };
@@ -1438,10 +1420,10 @@ fn process_blur_requests(
         let behind = behind_starts[i];
         if last_bg_depth != Some(behind) {
             let Ok(mut target) = renderer.bind(&mut bg_tex) else {
-                state.render.blur_bg_fbo = Some((bg_tex, downscaled_output_size));
+                state.render.blur_bg_fbo = Some((bg_tex, output_size));
                 return;
             };
-            let mut dt = damage::OutputDamageTracker::new(downscaled_output_size, output_scale / 2.0, Transform::Normal);
+            let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
             let _ = dt.render_output(
                 renderer,
                 &mut target,
@@ -1455,19 +1437,18 @@ fn process_blur_requests(
         // Crop from bg_tex into cache.texture
         {
             let bg_src = bg_tex.clone();
-            let target_size = Texture::size(&cache.texture).to_logical(1, Transform::Normal).to_physical(1);
             let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, target_size, Transform::Normal) else { continue };
-            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(target_size)]);
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
             let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
-                (req.screen_rect.loc.x as f64 / 2.0, req.screen_rect.loc.y as f64 / 2.0).into(),
-                (win_size.w as f64 / 2.0, win_size.h as f64 / 2.0).into(),
+                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (win_size.w as f64, win_size.h as f64).into(),
             );
             let _ = frame.render_texture_from_to(
                 &bg_src,
                 src_rect,
-                Rectangle::from_size(target_size),
-                &[Rectangle::from_size(target_size)],
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
                 &[],
                 Transform::Normal,
                 1.0,
@@ -1509,7 +1490,7 @@ fn process_blur_requests(
         let surf_end = (surf_start + req.elem_count).min(all_elements.len());
         {
             let Ok(mut target) = renderer.bind(&mut bg_tex) else { continue };
-            let mut dt = damage::OutputDamageTracker::new(downscaled_output_size, output_scale / 2.0, Transform::Normal);
+            let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
             let _ = dt.render_output(
                 renderer,
                 &mut target,
@@ -1524,19 +1505,18 @@ fn process_blur_requests(
         // Crop surface region into cache.mask
         {
             let bg_src = bg_tex.clone();
-            let target_size = Texture::size(&cache.mask).to_logical(1, Transform::Normal).to_physical(1);
             let Ok(mut target) = renderer.bind(&mut cache.mask) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, target_size, Transform::Normal) else { continue };
-            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(target_size)]);
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
             let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
-                (req.screen_rect.loc.x as f64 / 2.0, req.screen_rect.loc.y as f64 / 2.0).into(),
-                (win_size.w as f64 / 2.0, win_size.h as f64 / 2.0).into(),
+                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (win_size.w as f64, win_size.h as f64).into(),
             );
             let _ = frame.render_texture_from_to(
                 &bg_src,
                 src_rect,
-                Rectangle::from_size(target_size),
-                &[Rectangle::from_size(target_size)],
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
                 &[],
                 Transform::Normal,
                 1.0,
@@ -1551,9 +1531,8 @@ fn process_blur_requests(
         {
             use smithay::backend::renderer::gles::ffi;
             let mask_src = cache.mask.clone();
-            let target_size = Texture::size(&cache.texture).to_logical(1, Transform::Normal).to_physical(1);
             let Ok(mut target) = renderer.bind(&mut cache.texture) else { continue };
-            let Ok(mut frame) = renderer.render(&mut target, target_size, Transform::Normal) else { continue };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else { continue };
             let _ = frame.with_context(|gl| unsafe {
                 gl.Enable(ffi::BLEND);
                 gl.BlendFuncSeparate(
@@ -1563,9 +1542,9 @@ fn process_blur_requests(
             });
             let _ = frame.render_texture_from_to(
                 &mask_src,
-                Rectangle::from_size((target_size.w as f64, target_size.h as f64).into()),
-                Rectangle::from_size(target_size),
-                &[Rectangle::from_size(target_size)],
+                Rectangle::from_size((win_size.w as f64, win_size.h as f64).into()),
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
                 &[],
                 Transform::Normal,
                 1.0,
@@ -1617,7 +1596,7 @@ fn process_blur_requests(
     }
 
     // Cache bg_tex back for next frame
-    state.render.blur_bg_fbo = Some((bg_tex, downscaled_output_size));
+    state.render.blur_bg_fbo = Some((bg_tex, output_size));
 }
 
 /// Which element group a blur request belongs to — determines its prefix offset.
