@@ -38,6 +38,7 @@ pub fn init_winit(
             subpixel: Subpixel::Unknown,
             make: "driftwm".to_string(),
             model: "winit".to_string(),
+            serial_number: "0".to_string(),
         },
     );
     let mode = Mode {

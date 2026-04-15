@@ -18,7 +18,7 @@ use smithay::utils::{Logical, Point, Transform};
 
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
 use toml::{
-    ConfigFile, DecorationFileConfig, EffectsFileConfig, OutputRuleFile, WindowRuleFile,
+    ConfigFile, DecorationFileConfig, EffectsFileConfig, BackendFileConfig, OutputRuleFile, WindowRuleFile,
     expand_tilde,
 };
 
@@ -85,6 +85,7 @@ pub struct Config {
     pub decorations: DecorationConfig,
     pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
+    pub backend: BackendConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
     pub xwayland_enabled: bool,
@@ -413,6 +414,7 @@ impl Config {
         };
 
         let effects = parse_effects_config(raw.effects);
+        let backend = parse_backend_config(raw.backend);
 
         // Deprecation: [input.scroll] → [navigation] trackpad_speed / friction
         let trackpad_speed = if let Some(s) = raw.navigation.trackpad_speed {
@@ -464,6 +466,7 @@ impl Config {
             background,
             decorations,
             effects,
+            backend,
             trackpad,
             mouse_device,
             gesture_thresholds,
@@ -638,6 +641,13 @@ fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
     EffectsConfig {
         blur_radius: raw.blur_radius.unwrap_or(2),
         blur_strength: raw.blur_strength.unwrap_or(1.1),
+    }
+}
+
+fn parse_backend_config(raw: BackendFileConfig) -> BackendConfig {
+    BackendConfig {
+        wait_for_frame_completion: raw.wait_for_frame_completion.unwrap_or(false),
+        disable_direct_scanout: raw.disable_direct_scanout.unwrap_or(false),
     }
 }
 

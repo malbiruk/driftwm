@@ -162,7 +162,7 @@ impl WindowExt for Window {
                     .data_map
                     .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
                     .and_then(|d| d.lock().ok())
-                    .is_some_and(|guard| guard.modal)
+                    .is_some_and(|guard| guard.dialog_hint == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal)
             })
         } else {
             false

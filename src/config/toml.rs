@@ -17,6 +17,7 @@ pub(super) struct ConfigFile {
     pub background: BackgroundFileConfig,
     pub decorations: DecorationFileConfig,
     pub effects: EffectsFileConfig,
+    pub backend: BackendFileConfig,
     pub autostart: Option<Vec<String>>,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: MouseFileConfig,
@@ -25,6 +26,13 @@ pub(super) struct ConfigFile {
     pub xwayland: XWaylandConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct BackendFileConfig {
+    pub wait_for_frame_completion: Option<bool>,
+    pub disable_direct_scanout: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

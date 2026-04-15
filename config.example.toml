@@ -95,6 +95,21 @@
 # blur_radius = 2                # number of Kawase down+up passes (default: 2)
 # blur_strength = 1.1            # per-pass texel spread (default: 1.1)
 
+[backend]
+# Hardware stability quirks. All default to false (opt-in).
+# Enable these if you experience flickering, crashes, or rendering issues.
+# Particularly useful on NVIDIA GPUs with proprietary drivers.
+# Note: These flags must be set before launching driftwm. Changing them requires a restart.
+# For additional NVIDIA-specific settings, set these environment variables in your
+# session wrapper script or shell profile before starting driftwm:
+#   export SMITHAY_USE_LEGACY=1          # Use legacy DRM API instead of atomic modesetting
+#   export __GL_GSYNC_ALLOWED=0
+#   export __GL_VRR_ALLOWED=0
+#   export __GL_MaxFramesAllowed=1
+#   export NVD_BACKEND=direct
+# wait_for_frame_completion = false  # Wait for GPU fences before page flip
+# disable_direct_scanout = false     # Force EGL composition (disable direct scanout)
+
 [output]
 # Global output settings. Per-output scale/transform/mode/position
 # are configured in [[outputs]] sections below.

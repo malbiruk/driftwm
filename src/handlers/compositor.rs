@@ -612,3 +612,10 @@ impl ShmHandler for DriftWm {
 
 delegate_compositor!(DriftWm);
 delegate_shm!(DriftWm);
+
+impl smithay::wayland::drm_syncobj::DrmSyncobjHandler for DriftWm {
+    fn drm_syncobj_state(&mut self) -> Option<&mut smithay::wayland::drm_syncobj::DrmSyncobjState> {
+        self.drm_syncobj_state.as_mut()
+    }
+}
+smithay::delegate_drm_syncobj!(DriftWm);

@@ -420,6 +420,12 @@ impl From<&WindowRule> for AppliedWindowRule {
     }
 }
 
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct BackendConfig {
+    pub wait_for_frame_completion: bool,
+    pub disable_direct_scanout: bool,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct EffectsConfig {
     pub blur_radius: u32,
