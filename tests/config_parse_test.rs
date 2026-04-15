@@ -187,6 +187,12 @@ fn parse_mouse_action_move_window() {
 }
 
 #[test]
+fn parse_mouse_action_move_snapped_windows() {
+    let result = parse_mouse_action("move-snapped-windows").unwrap();
+    assert!(matches!(result, MouseAction::MoveSnappedWindows));
+}
+
+#[test]
 fn parse_mouse_action_zoom() {
     let result = parse_mouse_action("zoom").unwrap();
     assert!(matches!(result, MouseAction::Zoom));
@@ -232,6 +238,19 @@ fn default_mouse_bindings_move_window_on_alt_left() {
     assert!(
         matches!(result.unwrap(), MouseAction::MoveWindow),
         "Alt+Left on window should resolve to MoveWindow"
+    );
+}
+
+#[test]
+fn default_mouse_bindings_move_snapped_windows_on_alt_shift_left() {
+    let config = Config::default();
+    let alt_shift = mods(true, false, true, false);
+    let result =
+        config.mouse_button_lookup_ctx(&alt_shift, BTN_LEFT, BindingContext::OnWindow);
+    assert!(result.is_some(), "Alt+Shift+Left on window should be bound");
+    assert!(
+        matches!(result.unwrap(), MouseAction::MoveSnappedWindows),
+        "Alt+Shift+Left on window should resolve to MoveSnappedWindows"
     );
 }
 

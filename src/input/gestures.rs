@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use smithay::{
     backend::input::{
@@ -407,8 +408,12 @@ impl DriftWm {
                     // Can't call self.snap_targets() here — gesture_state is
                     // mutably borrowed by the match arm, so go through the
                     // free function on disjoint field borrows instead.
-                    let (others, self_bar) =
-                        snap_targets_impl(&self.space, &self.decorations, &self_surface);
+                    let (others, self_bar) = snap_targets_impl(
+                        &self.space,
+                        &self.decorations,
+                        &self_surface,
+                        &HashSet::new(),
+                    );
 
                     snap_resize_edges(
                         snap,
@@ -848,6 +853,10 @@ impl DriftWm {
         keyboard.set_focus(self, Some(FocusTarget(surface)), serial);
         self.enforce_below_windows();
 
+        // 3-finger double-tap+drag is the trackpad-first way to move a
+        // single window. Cluster drag is a mouse action (Alt+Shift+Left);
+        // there's no modifier on a gesture to distinguish single-vs-cluster,
+        // so gestures always move the focused window alone.
         let initial_window_location = self.space.element_location(&window).unwrap_or_default();
         let pointer = self.seat.get_pointer().unwrap();
         let grab = MoveSurfaceGrab::new(
@@ -859,6 +868,8 @@ impl DriftWm {
             window,
             initial_window_location,
             self.active_output().unwrap(),
+            Vec::new(),
+            HashSet::new(),
         );
         pointer.set_grab(self, grab, serial, Focus::Clear);
 

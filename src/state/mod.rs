@@ -1795,11 +1795,78 @@ impl DriftWm {
         self.cursor.load_xcursor(name)
     }
 
-    /// Build snap target rectangles for all windows except `exclude`, skipping widgets.
-    pub fn snap_targets(&self, exclude: &WlSurface) -> (Vec<driftwm::snap::SnapRect>, i32) {
-        snap_targets_impl(&self.space, &self.decorations, exclude)
+    /// Build snap target rectangles for all windows except `primary` and
+    /// anything in `cluster_excludes` (used during a multi-window cluster
+    /// drag to stop members from snapping against each other). Widgets are
+    /// always skipped.
+    pub fn snap_targets(
+        &self,
+        primary: &WlSurface,
+        cluster_excludes: &HashSet<WlSurface>,
+    ) -> (Vec<driftwm::snap::SnapRect>, i32) {
+        snap_targets_impl(&self.space, &self.decorations, primary, cluster_excludes)
+    }
+
+    /// Every non-widget window in the space with its `SnapRect`. Used to
+    /// feed `cluster::cluster_of` at drag start. The surface is discarded —
+    /// `Window` identity is what the BFS needs.
+    pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::snap::SnapRect)> {
+        self.space
+            .elements()
+            .filter_map(|w| {
+                window_snap_rect(&self.space, &self.decorations, w)
+                    .map(|(_, rect)| (w.clone(), rect))
+            })
+            .collect()
+    }
+
+    /// Snapshot the focused window's cluster for a move drag.
+    ///
+    /// Returns both the member offsets (from the primary's canvas position)
+    /// AND the exclude set of member surfaces. Both are frozen at drag start:
+    /// cluster membership doesn't change mid-drag and offsets are invariant
+    /// over motion, snap, and cross-output teleport.
+    //
+    // smithay's `Window` wraps `Arc<WindowInner>` which contains an
+    // `AtomicF64` (scale), so clippy flags it as an interior-mutable hash
+    // key. Here that's a false positive: `Window: Hash + Eq` are both
+    // implemented on the `Arc` pointer identity, which is stable under any
+    // interior mutation of `WindowInner`. Safe to use as a HashSet member.
+    #[allow(clippy::mutable_key_type)]
+    pub fn cluster_snapshot_for_drag(
+        &self,
+        window: &Window,
+        primary_pos: Point<i32, Logical>,
+    ) -> ClusterDragSnapshot {
+        let rects = self.all_windows_with_snap_rects();
+        let component = crate::cluster::cluster_of(window, &rects, self.config.snap_gap);
+
+        let mut members = Vec::new();
+        let mut surfaces = HashSet::new();
+        for m in component {
+            if &m == window {
+                continue;
+            }
+            let Some(pos) = self.space.element_location(&m) else {
+                continue;
+            };
+            let offset = pos - primary_pos;
+            if let Some(s) = m.wl_surface() {
+                surfaces.insert(s.into_owned());
+            }
+            members.push((m, offset));
+        }
+        (members, surfaces)
     }
 }
+
+/// `(cluster_members, cluster_member_surfaces)` — snapshot for a move drag.
+/// Members carry their canvas-offset-from-primary; surfaces are the exclude
+/// set for `snap_targets` during the drag.
+pub type ClusterDragSnapshot = (
+    Vec<(Window, Point<i32, Logical>)>,
+    HashSet<WlSurface>,
+);
 
 /// Free-function form of `DriftWm::snap_targets` for callers that already hold
 /// a mutable borrow on another `DriftWm` field (e.g. `gesture_state`) and so
@@ -1812,6 +1879,7 @@ pub(crate) fn snap_targets_impl(
         crate::decorations::WindowDecoration,
     >,
     primary: &WlSurface,
+    cluster_excludes: &HashSet<WlSurface>,
 ) -> (Vec<driftwm::snap::SnapRect>, i32) {
     let self_bar = if decorations.contains_key(&primary.id()) {
         driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
@@ -1820,32 +1888,49 @@ pub(crate) fn snap_targets_impl(
     };
     let mut others = Vec::new();
     for w in space.elements() {
-        let Some(surface) = w.wl_surface() else {
+        let Some((surface, rect)) = window_snap_rect(space, decorations, w) else {
             continue;
         };
-        if *surface == *primary {
+        if surface == *primary || cluster_excludes.contains(&surface) {
             continue;
         }
-        if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
-            continue;
-        }
-        let Some(loc) = space.element_location(w) else {
-            continue;
-        };
-        let size = w.geometry().size;
-        let bar = if decorations.contains_key(&surface.id()) {
-            driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
-        } else {
-            0
-        };
-        others.push(driftwm::snap::SnapRect {
+        others.push(rect);
+    }
+    (others, self_bar)
+}
+
+/// Compute the snap rectangle for a single window, returning its surface
+/// alongside (needed by `snap_targets_impl` for exclusion checks). Returns
+/// `None` for widgets, unmapped windows, or anything without a `wl_surface`.
+/// Y-low includes the title-bar height for CSD-decorated windows.
+fn window_snap_rect(
+    space: &Space<Window>,
+    decorations: &HashMap<
+        smithay::reexports::wayland_server::backend::ObjectId,
+        crate::decorations::WindowDecoration,
+    >,
+    w: &Window,
+) -> Option<(WlSurface, driftwm::snap::SnapRect)> {
+    let surface = w.wl_surface()?.into_owned();
+    if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
+        return None;
+    }
+    let loc = space.element_location(w)?;
+    let size = w.geometry().size;
+    let bar = if decorations.contains_key(&surface.id()) {
+        driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
+    } else {
+        0
+    };
+    Some((
+        surface,
+        driftwm::snap::SnapRect {
             x_low: loc.x as f64,
             x_high: loc.x as f64 + size.w as f64,
             y_low: loc.y as f64 - bar as f64,
             y_high: loc.y as f64 + size.h as f64,
-        });
-    }
-    (others, self_bar)
+        },
+    ))
 }
 
 fn state_file_dir() -> Option<std::path::PathBuf> {

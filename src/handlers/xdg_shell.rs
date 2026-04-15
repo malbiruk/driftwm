@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
 use crate::state::{DriftWm, FocusTarget, output_state};
@@ -258,12 +259,17 @@ impl XdgShellHandler for DriftWm {
             return;
         };
 
+        // Client-initiated xdg move_request: the client asked to move itself,
+        // not its cluster neighbors. Clients don't know about clusters, so
+        // always single-window.
         let initial_window_location = self.space.element_location(&window).unwrap();
         let grab = MoveSurfaceGrab::new(
             start_data,
             window,
             initial_window_location,
             self.active_output().unwrap(),
+            Vec::new(),
+            HashSet::new(),
         );
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

@@ -137,16 +137,20 @@ fn no_snap_without_perpendicular_overlap() {
 }
 
 #[test]
-fn snap_with_edge_to_edge_perpendicular_within_tolerance() {
-    let others = vec![SnapRect { x_low: 310.0, x_high: 510.0, y_low: 110.0, y_high: 300.0 }];
+fn no_snap_when_perp_edges_only_touch() {
+    // perp_high (100) exactly meets other.y_low (100) — zero shared length.
+    // Strict overlap (post-tightening) rejects this: edges meeting at a
+    // point is not overlap, so the corresponding axis won't snap.
+    let others = vec![SnapRect { x_low: 310.0, x_high: 510.0, y_low: 100.0, y_high: 300.0 }];
     let p = SnapParams {
         extent: 200.0, perp_low: 0.0, perp_high: 100.0, horizontal: true,
         others: &others, gap: 8.0, threshold: 16.0, break_force: 32.0, same_edge: false,
     };
     let result = find_snap_candidate(100.0, &p);
-    assert!(result.is_some(), "should snap when perp gap is within threshold");
-    let (origin, _) = result.unwrap();
-    assert!((origin - 102.0).abs() < 0.001);
+    assert!(
+        result.is_none(),
+        "exact perpendicular edge-touch should not count as overlap",
+    );
 }
 
 #[test]

@@ -223,11 +223,16 @@
 # Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll
 # Merges with defaults. Use "none" to unbind.
 #
-# Mouse actions: move-window, resize-window, pan-viewport, zoom, center-nearest
+# Mouse actions: move-window, move-snapped-windows, resize-window, pan-viewport, zoom, center-nearest
 # Any keyboard action also works for button triggers: exec, close-window, toggle-fullscreen, etc.
+#
+# move-window drags a single window. move-snapped-windows drags every window
+# connected to the focused one via snap adjacency — i.e. the whole "cluster"
+# of windows you deliberately snapped together.
 
 [mouse.on-window]
 # "alt+left" = "move-window"
+# "alt+shift+left" = "move-snapped-windows"
 # "alt+right" = "resize-window"
 # "alt+middle" = "fit-window"
 # "mod+middle" = "toggle-fullscreen"

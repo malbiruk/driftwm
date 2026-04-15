@@ -341,12 +341,16 @@ impl XwmHandler for DriftWm {
             location: pointer.current_location(),
         };
 
+        // Client-initiated X11 move: same reasoning as xdg_shell —
+        // always single-window.
         let initial_window_location = self.space.element_location(&smithay_window).unwrap();
         let grab = crate::grabs::MoveSurfaceGrab::new(
             start_data,
             smithay_window,
             initial_window_location,
             self.active_output().unwrap(),
+            Vec::new(),
+            std::collections::HashSet::new(),
         );
         let serial = SERIAL_COUNTER.next_serial();
         pointer.set_grab(self, grab, serial, Focus::Clear);

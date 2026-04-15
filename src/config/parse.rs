@@ -139,6 +139,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
 pub fn parse_mouse_action(s: &str) -> Result<MouseAction, String> {
     match s.trim() {
         "move-window" => Ok(MouseAction::MoveWindow),
+        "move-snapped-windows" => Ok(MouseAction::MoveSnappedWindows),
         "resize-window" => Ok(MouseAction::ResizeWindow),
         "pan-viewport" => Ok(MouseAction::PanViewport),
         "zoom" => Ok(MouseAction::Zoom),

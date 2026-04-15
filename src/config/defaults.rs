@@ -325,6 +325,11 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> ContextBindings<MouseBi
         alt: true,
         ..Modifiers::EMPTY
     };
+    let alt_shift = Modifiers {
+        alt: true,
+        shift: true,
+        ..Modifiers::EMPTY
+    };
     let m_ctrl = Modifiers {
         ctrl: true,
         ..m.clone()
@@ -337,6 +342,13 @@ pub(super) fn default_mouse_bindings(mod_key: ModKey) -> ContextBindings<MouseBi
                 trigger: MouseTrigger::Button(BTN_LEFT),
             },
             MouseAction::MoveWindow,
+        ),
+        (
+            MouseBinding {
+                modifiers: alt_shift,
+                trigger: MouseTrigger::Button(BTN_LEFT),
+            },
+            MouseAction::MoveSnappedWindows,
         ),
         (
             MouseBinding {

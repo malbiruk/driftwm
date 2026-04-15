@@ -1,4 +1,5 @@
 use std::cell::RefCell;
+use std::collections::HashSet;
 
 use smithay::{
     desktop::Window,
@@ -130,7 +131,7 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
             && let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned())
         {
             let zoom = output_state(&self.output).zoom;
-            let (others, self_bar) = data.snap_targets(&self_surface);
+            let (others, self_bar) = data.snap_targets(&self_surface, &HashSet::new());
 
             snap_resize_edges(
                 &mut self.snap,

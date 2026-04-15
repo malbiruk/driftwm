@@ -1,19 +1,20 @@
+use std::collections::HashSet;
+
 use smithay::{
     desktop::Window,
     input::{
-        pointer::{
-            ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle,
-        },
         SeatHandler,
+        pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     },
     output::Output,
-    utils::{Logical, Point},
+    reexports::wayland_server::protocol::wl_surface::WlSurface,
+    utils::{IsAlive, Logical, Point},
     wayland::seat::WaylandFocus,
 };
 
+use crate::state::{DriftWm, output_logical_size, output_state};
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use driftwm::snap::{SnapParams, SnapState, update_axis};
-use crate::state::{DriftWm, output_state, output_logical_size};
 
 /// Which output edge is inhibited after a cross-output teleport.
 #[derive(Clone, Copy)]
@@ -33,6 +34,16 @@ pub struct MoveSurfaceGrab {
     pub output: Output,
     /// After teleport, suppress edge-pan on the entry edge until cursor moves inward.
     inhibited_edge: Option<Edge>,
+    /// Other windows in the primary's cluster, with offsets from the primary
+    /// captured at drag start. Offsets are canvas-global and invariant over
+    /// motion, snap, and cross-output teleport. Strong `Window` refs; dropped
+    /// at grab end. `!alive()` guards any `map_element` we'd otherwise make
+    /// on a member that got unmapped mid-drag.
+    cluster_members: Vec<(Window, Point<i32, Logical>)>,
+    /// Exclude set for `snap_targets`, frozen at drag start. Cluster membership
+    /// doesn't change mid-drag, so we pay the `HashSet` build cost once
+    /// instead of rebuilding it every motion tick.
+    cluster_member_surfaces: HashSet<WlSurface>,
 }
 
 impl MoveSurfaceGrab {
@@ -41,6 +52,8 @@ impl MoveSurfaceGrab {
         window: Window,
         initial_window_location: Point<i32, Logical>,
         output: Output,
+        cluster_members: Vec<(Window, Point<i32, Logical>)>,
+        cluster_member_surfaces: HashSet<WlSurface>,
     ) -> Self {
         Self {
             start_data,
@@ -49,6 +62,8 @@ impl MoveSurfaceGrab {
             snap: SnapState::default(),
             output,
             inhibited_edge: None,
+            cluster_members,
+            cluster_member_surfaces,
         }
     }
 
@@ -80,10 +95,18 @@ impl MoveSurfaceGrab {
         // Direction: push away from the nearest edge(s)
         let mut vx = 0.0;
         let mut vy = 0.0;
-        if dist_left < edge_zone { vx -= speed * ((edge_zone - dist_left) / edge_zone); }
-        if dist_right < edge_zone { vx += speed * ((edge_zone - dist_right) / edge_zone); }
-        if dist_top < edge_zone { vy -= speed * ((edge_zone - dist_top) / edge_zone); }
-        if dist_bottom < edge_zone { vy += speed * ((edge_zone - dist_bottom) / edge_zone); }
+        if dist_left < edge_zone {
+            vx -= speed * ((edge_zone - dist_left) / edge_zone);
+        }
+        if dist_right < edge_zone {
+            vx += speed * ((edge_zone - dist_right) / edge_zone);
+        }
+        if dist_top < edge_zone {
+            vy -= speed * ((edge_zone - dist_top) / edge_zone);
+        }
+        if dist_bottom < edge_zone {
+            vy += speed * ((edge_zone - dist_bottom) / edge_zone);
+        }
 
         // Normalize diagonal so it doesn't go √2 faster
         let len = (vx * vx + vy * vy).sqrt();
@@ -148,12 +171,32 @@ impl MoveSurfaceGrab {
     ) -> Option<Point<f64, Logical>> {
         let mut v = velocity?;
         match edge {
-            Edge::Left => { if v.x < 0.0 { v.x = 0.0; } }
-            Edge::Right => { if v.x > 0.0 { v.x = 0.0; } }
-            Edge::Top => { if v.y < 0.0 { v.y = 0.0; } }
-            Edge::Bottom => { if v.y > 0.0 { v.y = 0.0; } }
+            Edge::Left => {
+                if v.x < 0.0 {
+                    v.x = 0.0;
+                }
+            }
+            Edge::Right => {
+                if v.x > 0.0 {
+                    v.x = 0.0;
+                }
+            }
+            Edge::Top => {
+                if v.y < 0.0 {
+                    v.y = 0.0;
+                }
+            }
+            Edge::Bottom => {
+                if v.y > 0.0 {
+                    v.y = 0.0;
+                }
+            }
         }
-        if v.x == 0.0 && v.y == 0.0 { None } else { Some(v) }
+        if v.x == 0.0 && v.y == 0.0 {
+            None
+        } else {
+            Some(v)
+        }
     }
 }
 
@@ -170,7 +213,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
         // Phase 3 input routing already converted event.location to the focused
         // output's canvas space and updated data.focused_output. If that differs
         // from self.output, the pointer crossed an output boundary.
-        if data.focused_output.as_ref().is_some_and(|fo| *fo != self.output) {
+        if data
+            .focused_output
+            .as_ref()
+            .is_some_and(|fo| *fo != self.output)
+        {
             let new_output = data.focused_output.clone().unwrap();
 
             // event.location is already in the new output's canvas space.
@@ -195,13 +242,23 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             self.snap = SnapState::default();
             self.inhibited_edge = Some(entry_edge);
 
-            // Map window at new position immediately.
-            data.space.map_element(
-                self.window.clone(),
-                self.initial_window_location,
-                false,
-            );
+            // Same ordering invariant as the normal-motion branch: map
+            // members first so the primary's `map_element` below lands last
+            // in `Space::elements` and stays on top of its own cluster.
+            // Offsets are canvas-global, so no recomputation — each member
+            // simply re-applies at new_primary_pos + offset.
+            for (member, offset) in &self.cluster_members {
+                if !member.alive() {
+                    continue;
+                }
+                let member_pos = self.initial_window_location + *offset;
+                data.space.map_element(member.clone(), member_pos, false);
+                data.sync_x11_position(member);
+            }
+            data.space
+                .map_element(self.window.clone(), self.initial_window_location, false);
             data.sync_x11_position(&self.window);
+
             handle.motion(data, None, event);
             return;
         }
@@ -222,7 +279,8 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned()) else {
                 return;
             };
-            let (others, self_bar) = data.snap_targets(&self_surface);
+            let (others, self_bar) =
+                data.snap_targets(&self_surface, &self.cluster_member_surfaces);
             let window_size = self.window.geometry().size;
             let extent_x = window_size.w as f64;
             let extent_y = window_size.h as f64 + self_bar as f64;
@@ -235,11 +293,7 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             // natural cursor position can wander into another window's perp
             // range without any visual overlap. Using that for the other axis's
             // candidate search would produce spurious corner snaps.
-            let visual_y_for_perp = self
-                .snap
-                .y
-                .as_ref()
-                .map_or(visual_y, |s| s.snapped_pos);
+            let visual_y_for_perp = self.snap.y.as_ref().map_or(visual_y, |s| s.snapped_pos);
 
             let params_x = SnapParams {
                 extent: extent_x,
@@ -253,16 +307,15 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 same_edge: data.config.snap_same_edge,
             };
             let final_x = update_axis(
-                &mut self.snap.x, &mut self.snap.cooldown_x, natural_x, &params_x,
+                &mut self.snap.x,
+                &mut self.snap.cooldown_x,
+                natural_x,
+                &params_x,
             );
 
             // X was just updated above — self.snap.x now reflects this frame's
             // state (engaged, broken, or untouched).
-            let visual_x_for_perp = self
-                .snap
-                .x
-                .as_ref()
-                .map_or(natural_x, |s| s.snapped_pos);
+            let visual_x_for_perp = self.snap.x.as_ref().map_or(natural_x, |s| s.snapped_pos);
 
             let params_y = SnapParams {
                 extent: extent_y,
@@ -276,7 +329,10 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                 same_edge: data.config.snap_same_edge,
             };
             let final_visual_y = update_axis(
-                &mut self.snap.y, &mut self.snap.cooldown_y, visual_y, &params_y,
+                &mut self.snap.y,
+                &mut self.snap.cooldown_y,
+                visual_y,
+                &params_y,
             );
             let final_y = final_visual_y + self_bar as f64;
 
@@ -284,6 +340,22 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
         };
 
         let new_loc = Point::from((final_x as i32, final_y as i32));
+
+        // smithay's `Space::map_element` re-inserts the element at the end
+        // of the element list (within its z-index bucket) even with
+        // `activate: false`. Map members FIRST so the primary's subsequent
+        // `map_element` lands last and stays on top of its own cluster.
+        // TODO(cluster): raise members above *non-cluster* windows too —
+        // today they keep their original z relative to everything else,
+        // which may surprise users whose members get hidden by outsiders.
+        for (member, offset) in &self.cluster_members {
+            if !member.alive() {
+                continue;
+            }
+            let member_pos = new_loc + *offset;
+            data.space.map_element(member.clone(), member_pos, false);
+            data.sync_x11_position(member);
+        }
         data.space.map_element(self.window.clone(), new_loc, false);
         data.sync_x11_position(&self.window);
         handle.motion(data, None, event);
@@ -309,7 +381,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
 
             let effective_velocity = if let Some(edge) = self.inhibited_edge {
                 if Self::should_clear_inhibition(
-                    edge, screen_pos, size.w as f64, size.h as f64, cfg.edge_zone,
+                    edge,
+                    screen_pos,
+                    size.w as f64,
+                    size.h as f64,
+                    cfg.edge_zone,
                 ) {
                     self.inhibited_edge = None;
                     velocity
