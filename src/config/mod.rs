@@ -93,6 +93,12 @@ pub struct Config {
     pub output_configs: Vec<OutputConfig>,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse: ContextBindings<MouseBinding, MouseAction>,
+    /// When `true`, default resize bindings (mouse + gesture) use
+    /// `resize-window-snapped` and edge-drag propagates to snapped
+    /// neighbors. When `false` (default), they use `resize-window`
+    /// (single window only). Affects both `[mouse]` and `[gestures]`
+    /// contexts via `swap_resize_actions`.
+    pub resize_snapped_default: bool,
     pub gestures: ContextBindings<GestureBinding, GestureConfigEntry>,
     pub num_lock: bool,
     pub caps_lock: bool,
@@ -266,6 +272,7 @@ impl Config {
             }
         }
 
+        let resize_snapped_default = raw.mouse.resize_snapped_default.unwrap_or(false);
         let mut mouse_bindings = default_mouse_bindings(mod_key);
         for (ctx, section) in [
             (BindingContext::OnWindow, raw.mouse.on_window),
@@ -324,6 +331,14 @@ impl Config {
                     }
                 }
             }
+        }
+
+        // When `resize_snapped_default = true`, swap `resize-window` ↔
+        // `resize-window-snapped` globally. Runs after user overrides are
+        // merged, flipping both defaults and user-defined bindings. Applies
+        // to mouse AND gesture contexts so trackpad resize stays in sync.
+        if resize_snapped_default {
+            swap_resize_actions(&mut mouse_bindings, &mut gesture_bindings);
         }
 
         let background = BackgroundConfig {
@@ -490,6 +505,7 @@ impl Config {
             output_configs,
             bindings,
             mouse: mouse_bindings,
+            resize_snapped_default,
             gestures: gesture_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),
             caps_lock: raw.input.keyboard.caps_lock.unwrap_or(false),
@@ -538,6 +554,43 @@ impl Config {
             .as_ref()
             .is_none_or(|pat| Self::glob_matches(pat, title));
         app_ok && title_ok
+    }
+}
+
+/// Swap `ResizeWindow` ↔ `ResizeWindowSnapped` (`resize-window` ↔
+/// `resize-window-snapped`) in every context of the given mouse and
+/// gesture binding maps. Implements `resize_snapped_default = true`.
+fn swap_resize_actions(
+    mouse: &mut ContextBindings<MouseBinding, MouseAction>,
+    gestures: &mut ContextBindings<GestureBinding, GestureConfigEntry>,
+) {
+    for map in [
+        &mut mouse.on_window,
+        &mut mouse.on_canvas,
+        &mut mouse.anywhere,
+    ] {
+        for action in map.values_mut() {
+            match action {
+                MouseAction::ResizeWindow => *action = MouseAction::ResizeWindowSnapped,
+                MouseAction::ResizeWindowSnapped => *action = MouseAction::ResizeWindow,
+                _ => {}
+            }
+        }
+    }
+    for map in [
+        &mut gestures.on_window,
+        &mut gestures.on_canvas,
+        &mut gestures.anywhere,
+    ] {
+        for entry in map.values_mut() {
+            if let GestureConfigEntry::Continuous(ca) = entry {
+                match ca {
+                    ContinuousAction::ResizeWindow => *ca = ContinuousAction::ResizeWindowSnapped,
+                    ContinuousAction::ResizeWindowSnapped => *ca = ContinuousAction::ResizeWindow,
+                    _ => {}
+                }
+            }
+        }
     }
 }
 

@@ -311,6 +311,14 @@ impl XwmHandler for DriftWm {
 
         let output = self.active_output().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
+        // Same as the xdg_shell path: honor the config flag so CSD/X11
+        // border drags behave identically to SSD border drags.
+        let cluster_resize = if self.config.resize_snapped_default {
+            self.cluster_snapshot_for_resize(&smithay_window, xdg_edge)
+        } else {
+            crate::state::ClusterResizeSnapshot::empty()
+        };
+        let constraints = crate::grabs::SizeConstraints::for_window(&smithay_window);
         let grab = crate::grabs::ResizeSurfaceGrab {
             start_data,
             window: smithay_window,
@@ -322,6 +330,8 @@ impl XwmHandler for DriftWm {
             last_clamped_location: pointer.current_location(),
             last_x11_configure: None,
             snap: driftwm::snap::SnapState::default(),
+            constraints,
+            cluster_resize,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

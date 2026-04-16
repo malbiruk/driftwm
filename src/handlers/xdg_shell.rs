@@ -326,6 +326,15 @@ impl XdgShellHandler for DriftWm {
 
         let output = self.active_output().unwrap();
         let last_clamped_location = start_data.location;
+        // CSD windows trigger resize through xdg_toplevel.resize() when
+        // the user drags the client-drawn border. Honor the config flag so
+        // edge-drag propagation behaves identically for SSD and CSD windows.
+        let cluster_resize = if self.config.resize_snapped_default {
+            self.cluster_snapshot_for_resize(&window, edges)
+        } else {
+            crate::state::ClusterResizeSnapshot::empty()
+        };
+        let constraints = crate::grabs::SizeConstraints::for_window(&window);
         let grab = ResizeSurfaceGrab {
             start_data,
             window,
@@ -337,6 +346,8 @@ impl XdgShellHandler for DriftWm {
             last_clamped_location,
             last_x11_configure: None,
             snap: driftwm::snap::SnapState::default(),
+            constraints,
+            cluster_resize,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

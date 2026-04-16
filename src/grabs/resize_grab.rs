@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 
 use smithay::{
     desktop::Window,
@@ -12,14 +11,78 @@ use smithay::{
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, Size},
-    wayland::{compositor::with_states, seat::WaylandFocus},
+    wayland::{
+        compositor::with_states,
+        seat::WaylandFocus,
+        shell::xdg::SurfaceCachedState,
+    },
 };
 
 use smithay::input::pointer::CursorImageStatus;
 
-use crate::state::{DriftWm, output_state};
+use crate::state::{ClusterResizeSnapshot, DriftWm, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::snap::{SnapState, snap_resize_edges};
+
+/// Client-declared size constraints captured once at grab start.
+///
+/// Both fields use smithay's convention: a value of `0` on any axis means
+/// "unconstrained" on that axis. For XDG toplevels, this is read out of
+/// `SurfaceCachedState::{min_size, max_size}`. For X11 we read
+/// `X11Surface::min_size` / `max_size`, which return `Option`; `None` maps
+/// to `(0, 0)` — unconstrained. Non-XDG/non-X11 windows (unreachable in
+/// practice for a resize grab) also fall through to unconstrained.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SizeConstraints {
+    pub min: Size<i32, Logical>,
+    pub max: Size<i32, Logical>,
+}
+
+impl SizeConstraints {
+    /// Snapshot constraints from the window's client at grab start. Cheap
+    /// to clone; consumers should store this and clamp per motion tick
+    /// instead of calling this in the inner loop.
+    pub fn for_window(window: &Window) -> Self {
+        if let Some(toplevel) = window.toplevel() {
+            let surface = toplevel.wl_surface();
+            let cached = with_states(surface, |states| {
+                *states.cached_state.get::<SurfaceCachedState>().current()
+            });
+            return Self {
+                min: cached.min_size,
+                max: cached.max_size,
+            };
+        }
+        if let Some(x11) = window.x11_surface() {
+            return Self {
+                min: x11.min_size().unwrap_or_default(),
+                max: x11.max_size().unwrap_or_default(),
+            };
+        }
+        Self::default()
+    }
+
+    /// Clamp a requested size to `[min, max]` along each axis. Zero values
+    /// on either bound are ignored (unconstrained). Also enforces a 1×1
+    /// floor so clients never see nonsense geometry from a fast drag.
+    pub fn clamp(&self, w: i32, h: i32) -> (i32, i32) {
+        let mut cw = w.max(1);
+        let mut ch = h.max(1);
+        if self.min.w > 0 {
+            cw = cw.max(self.min.w);
+        }
+        if self.min.h > 0 {
+            ch = ch.max(self.min.h);
+        }
+        if self.max.w > 0 {
+            cw = cw.min(self.max.w);
+        }
+        if self.max.h > 0 {
+            ch = ch.min(self.max.h);
+        }
+        (cw, ch)
+    }
+}
 
 /// Tracks the resize lifecycle for a window. Stored in the surface data map
 /// (wrapped in `RefCell`) so that `compositor::commit()` can reposition
@@ -52,6 +115,16 @@ pub struct ResizeSurfaceGrab {
     /// Throttle X11 configures to avoid overwhelming the client (X11 redraws synchronously).
     pub last_x11_configure: Option<std::time::Instant>,
     pub snap: SnapState,
+    /// Client-declared min/max size, read once at grab start. Used to
+    /// clamp `new_w`/`new_h` before snap + propagation — otherwise the
+    /// primary visually freezes at its real minimum while cluster members
+    /// keep sliding in response to `width_delta` that doesn't match
+    /// reality.
+    pub constraints: SizeConstraints,
+    /// Snapshot of the primary's cluster captured at grab start. Empty
+    /// `members` + empty `exclude` for single-window resize (every cluster
+    /// loop becomes a no-op, `snap_targets` behaves as pre-slice-2).
+    pub cluster_resize: ClusterResizeSnapshot,
 }
 
 /// Check if `edges` includes a horizontal/vertical component via raw bit values.
@@ -122,16 +195,23 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
             new_h += delta.y as i32;
         }
 
-        // Clamp to minimum 1×1
-        new_w = new_w.max(1);
-        new_h = new_h.max(1);
+        // Clamp to client-declared min/max (also enforces a 1×1 floor).
+        // Applied before snap and cluster propagation so both see the
+        // same clamped new_w/new_h — otherwise width_delta would keep
+        // growing past the client's real minimum and cluster members
+        // would slide off into empty space while the primary visually
+        // freezes.
+        let (nw, nh) = self.constraints.clamp(new_w, new_h);
+        new_w = nw;
+        new_h = nh;
 
         // Snap active resize edges to nearby windows
         if data.config.snap_enabled
             && let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned())
         {
             let zoom = output_state(&self.output).zoom;
-            let (others, self_bar) = data.snap_targets(&self_surface, &HashSet::new());
+            let (others, self_bar) =
+                data.snap_targets(&self_surface, &self.cluster_resize.exclude);
 
             snap_resize_edges(
                 &mut self.snap,
@@ -147,6 +227,15 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                 data.config.snap_same_edge,
             );
         }
+
+        self.cluster_resize.apply_member_shifts(
+            &mut data.space,
+            &self.window,
+            self.initial_window_size,
+            new_w,
+            new_h,
+            data.config.snap_gap,
+        );
 
         let new_size = Size::from((new_w, new_h));
 

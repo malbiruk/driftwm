@@ -186,6 +186,9 @@ pub(super) struct WindowRuleFile {
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct MouseFileConfig {
+    /// Flip the default resize bindings and edge-drag behavior to propagate
+    /// to snapped neighbors. See [`super::Config::resize_snapped_default`].
+    pub resize_snapped_default: Option<bool>,
     #[serde(rename = "on-window")]
     pub on_window: Option<HashMap<String, String>>,
     #[serde(rename = "on-canvas")]

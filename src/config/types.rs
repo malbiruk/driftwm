@@ -213,6 +213,11 @@ pub enum MouseAction {
     /// a window never implicitly drags neighbors.
     MoveSnappedWindows,
     ResizeWindow,
+    /// Resize the focused window and propagate the delta to every snapped
+    /// neighbor in its cluster. Same opt-in shape as `MoveSnappedWindows`:
+    /// grabbing a window never implicitly resizes neighbors — the user
+    /// must bind this action explicitly or flip `resize_snapped_default`.
+    ResizeWindowSnapped,
     PanViewport,
     Zoom,
     CenterNearest,
@@ -248,6 +253,9 @@ pub enum ContinuousAction {
     Zoom,
     MoveWindow,
     ResizeWindow,
+    /// Same as `ResizeWindow` plus cluster propagation: delta applies to the
+    /// focused window's snap-cluster neighbors. Opt-in via explicit binding.
+    ResizeWindowSnapped,
 }
 
 /// Actions for threshold gesture triggers (fire once after accumulation).

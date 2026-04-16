@@ -19,17 +19,20 @@ use smithay::{
 
 use smithay::wayland::seat::WaylandFocus;
 
-use smithay::reexports::wayland_server::Resource;
+use crate::decorations::DecorationHit;
+use crate::grabs::{MoveSurfaceGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab};
+use crate::state::{ClusterResizeSnapshot, DriftWm, FocusTarget, PendingMiddleClick};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{self, Action, BindingContext, MouseAction};
 use driftwm::window_ext::WindowExt;
-use crate::decorations::DecorationHit;
-use crate::grabs::{MoveSurfaceGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::{DriftWm, FocusTarget, PendingMiddleClick};
+use smithay::reexports::wayland_server::Resource;
 
 impl DriftWm {
     /// Determine the binding context for the current pointer position.
-    pub(super) fn pointer_context(&self, pos: Point<f64, smithay::utils::Logical>) -> BindingContext {
+    pub(super) fn pointer_context(
+        &self,
+        pos: Point<f64, smithay::utils::Logical>,
+    ) -> BindingContext {
         let over_window = self.space.element_under(pos).is_some();
         if over_window || self.canvas_layer_under(pos).is_some() {
             BindingContext::OnWindow
@@ -94,13 +97,13 @@ impl DriftWm {
             // Buffer it — if a 3-finger swipe follows within 300ms, suppress
             // the click and enter window-move mode. Otherwise flush to client (paste).
             // Skip buffering when a modifier binding matches (e.g. alt+middle → fullscreen).
-            if button == config::BTN_MIDDLE
-                && {
-                    let kb = self.seat.get_keyboard().unwrap();
-                    let ctx = self.pointer_context(pointer.current_location());
-                    self.config.mouse_button_lookup_ctx(&kb.modifier_state(), button, ctx).is_none()
-                }
-            {
+            if button == config::BTN_MIDDLE && {
+                let kb = self.seat.get_keyboard().unwrap();
+                let ctx = self.pointer_context(pointer.current_location());
+                self.config
+                    .mouse_button_lookup_ctx(&kb.modifier_state(), button, ctx)
+                    .is_none()
+            } {
                 // Cancel any existing pending click first
                 if let Some(old) = self.pending_middle_click.take() {
                     self.loop_handle.remove(old.timer_token);
@@ -109,10 +112,13 @@ impl DriftWm {
                 let timer = Timer::from_duration(Duration::from_millis(
                     super::gestures::DOUBLE_TAP_WINDOW_MS,
                 ));
-                if let Ok(token) = self.loop_handle.insert_source(timer, |_, _, data: &mut DriftWm| {
-                    data.flush_pending_middle_click();
-                    TimeoutAction::Drop
-                }) {
+                if let Ok(token) =
+                    self.loop_handle
+                        .insert_source(timer, |_, _, data: &mut DriftWm| {
+                            data.flush_pending_middle_click();
+                            TimeoutAction::Drop
+                        })
+                {
                     self.pending_middle_click = Some(PendingMiddleClick {
                         press_time: Event::time_msec(&event),
                         release_time: None,
@@ -130,8 +136,15 @@ impl DriftWm {
             // ToggleFullscreen is special — exiting IS the action, so return immediately.
             if self.is_fullscreen() {
                 // In fullscreen the window fills the screen — treat as OnWindow
-                let fs_lookup = self.config.mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow);
-                if matches!(fs_lookup, Some(MouseAction::Action(Action::ToggleFullscreen | Action::FitWindow))) {
+                let fs_lookup =
+                    self.config
+                        .mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow);
+                if matches!(
+                    fs_lookup,
+                    Some(MouseAction::Action(
+                        Action::ToggleFullscreen | Action::FitWindow
+                    ))
+                ) {
                     self.exit_fullscreen_remap_pointer(pos);
                     return;
                 } else if fs_lookup.is_some() {
@@ -178,80 +191,91 @@ impl DriftWm {
                 {
                     // Occluded decoration hit; continue normal dispatch.
                 } else {
-                let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
-                let is_widget = config::applied_rule(&wl_surface)
-                    .is_some_and(|r| r.widget);
+                    let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
+                        return;
+                    };
+                    let is_widget = config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
 
-                if button == config::BTN_LEFT {
-                    match hit {
-                        DecorationHit::CloseButton => {
-                            window.send_close();
-                            return;
-                        }
-                        DecorationHit::TitleBar if !is_widget => {
-                            // Double-click → toggle fit
-                            let now = std::time::Instant::now();
-                            let surface_id = wl_surface.id();
-                            if let Some((prev_time, prev_id)) = self.last_titlebar_click.take()
-                                && prev_id == surface_id
-                                && now.duration_since(prev_time) < Duration::from_millis(300)
-                            {
-                                self.raise_and_focus(&window, serial);
-                                self.toggle_fit_window(&window);
+                    if button == config::BTN_LEFT {
+                        match hit {
+                            DecorationHit::CloseButton => {
+                                window.send_close();
                                 return;
                             }
-                            self.last_titlebar_click = Some((now, surface_id));
+                            DecorationHit::TitleBar if !is_widget => {
+                                // Double-click → toggle fit
+                                let now = std::time::Instant::now();
+                                let surface_id = wl_surface.id();
+                                if let Some((prev_time, prev_id)) = self.last_titlebar_click.take()
+                                    && prev_id == surface_id
+                                    && now.duration_since(prev_time) < Duration::from_millis(300)
+                                {
+                                    self.raise_and_focus(&window, serial);
+                                    self.toggle_fit_window(&window);
+                                    return;
+                                }
+                                self.last_titlebar_click = Some((now, surface_id));
 
-                            // Focus + raise (with modal redirect) + start move grab.
-                            // Alt+drag on the titlebar moves a single window;
-                            // cluster drag is a separate explicit action
-                            // (`MoveSnappedWindows`, default Alt+Shift+Left).
-                            self.raise_and_focus(&window, serial);
-                            let initial_window_location =
-                                self.space.element_location(&window).unwrap();
-                            let start_data = GrabStartData {
-                                focus: None,
-                                button,
-                                location: pos,
-                            };
-                            let grab = MoveSurfaceGrab::new(
-                                start_data,
-                                window,
-                                initial_window_location,
-                                self.active_output().unwrap(),
-                                Vec::new(),
-                                HashSet::new(),
-                            );
-                            pointer.set_grab(self, grab, serial, Focus::Clear);
-                            return;
-                        }
-                        DecorationHit::ResizeBorder(edge) if !is_widget => {
-                            self.raise_and_focus(&window, serial);
-                            self.start_compositor_resize_with_edge(
-                                &pointer, &window, pos, button, serial, Some(edge),
-                            );
-                            return;
-                        }
-                        _ => {
-                            // Widget title bar or other — just focus
-                            keyboard.set_focus(
-                                self,
-                                Some(FocusTarget(wl_surface)),
-                                serial,
-                            );
+                                // Focus + raise (with modal redirect) + start move grab.
+                                // Alt+drag on the titlebar moves a single window;
+                                // cluster drag is a separate explicit action
+                                // (`MoveSnappedWindows`, default Alt+Shift+Left).
+                                self.raise_and_focus(&window, serial);
+                                let initial_window_location =
+                                    self.space.element_location(&window).unwrap();
+                                let start_data = GrabStartData {
+                                    focus: None,
+                                    button,
+                                    location: pos,
+                                };
+                                let grab = MoveSurfaceGrab::new(
+                                    start_data,
+                                    window,
+                                    initial_window_location,
+                                    self.active_output().unwrap(),
+                                    Vec::new(),
+                                    HashSet::new(),
+                                );
+                                pointer.set_grab(self, grab, serial, Focus::Clear);
+                                return;
+                            }
+                            DecorationHit::ResizeBorder(edge) if !is_widget => {
+                                self.raise_and_focus(&window, serial);
+                                // Edge-drag on the SSD border reads the config
+                                // flag directly — there's no modifier context for
+                                // the user to opt in/out on this path, so it
+                                // follows whatever the user chose as the default.
+                                let want_cluster = self.config.resize_snapped_default;
+                                self.start_compositor_resize_with_edge(
+                                    &pointer,
+                                    &window,
+                                    pos,
+                                    button,
+                                    serial,
+                                    Some(edge),
+                                    want_cluster,
+                                );
+                                return;
+                            }
+                            _ => {
+                                // Widget title bar or other — just focus
+                                keyboard.set_focus(self, Some(FocusTarget(wl_surface)), serial);
+                            }
                         }
                     }
-                }
                 }
             }
 
             // Check configured mouse bindings (context-aware)
             let context = self.pointer_context(pos);
-            if let Some(action) = self.config.mouse_button_lookup_ctx(&mods, button, context).cloned() {
+            if let Some(action) = self
+                .config
+                .mouse_button_lookup_ctx(&mods, button, context)
+                .cloned()
+            {
                 match action {
                     MouseAction::MoveWindow | MouseAction::MoveSnappedWindows => {
-                        let want_cluster =
-                            matches!(action, MouseAction::MoveSnappedWindows);
+                        let want_cluster = matches!(action, MouseAction::MoveSnappedWindows);
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
                             && let Some(surface) = window.wl_surface()
@@ -286,17 +310,28 @@ impl DriftWm {
                         }
                         // No window or pinned — fall through to normal click
                     }
-                    MouseAction::ResizeWindow => {
+                    MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped => {
+                        // Opt-in cluster propagation: only
+                        // `ResizeWindowSnapped` captures the cluster; plain
+                        // `ResizeWindow` builds an empty snapshot so the
+                        // grab behaves like pre-slice-2 single-window resize.
+                        let want_cluster = matches!(action, MouseAction::ResizeWindowSnapped);
                         if let Some((window, _)) =
                             self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
-                            && !window.wl_surface()
+                            && !window
+                                .wl_surface()
                                 .and_then(|s| config::applied_rule(&s))
                                 .is_some_and(|r| r.widget)
                         {
                             self.raise_and_focus(&window, serial);
 
                             self.start_compositor_resize(
-                                &pointer, &window, pos, button, serial,
+                                &pointer,
+                                &window,
+                                pos,
+                                button,
+                                serial,
+                                want_cluster,
                             );
                             return;
                         }
@@ -310,13 +345,18 @@ impl DriftWm {
                         return;
                     }
                     MouseAction::CenterNearest => {
-                        let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
+                        let screen_pos =
+                            canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
                         let start_data = GrabStartData {
                             focus: None,
                             button,
                             location: pos,
                         };
-                        let grab = NavigateGrab::new(start_data, screen_pos, self.active_output().unwrap());
+                        let grab = NavigateGrab::new(
+                            start_data,
+                            screen_pos,
+                            self.active_output().unwrap(),
+                        );
                         pointer.set_grab(self, grab, serial, Focus::Clear);
                         return;
                     }
@@ -334,13 +374,11 @@ impl DriftWm {
             }
 
             // Hardcoded fallbacks: click-to-focus, empty-canvas-pan
-            let element_under = self
-                .space
-                .element_under(pos)
-                .map(|(w, _)| w.clone());
+            let element_under = self.space.element_under(pos).map(|(w, _)| w.clone());
 
             if let Some(ref window) = element_under {
-                let is_widget = window.wl_surface()
+                let is_widget = window
+                    .wl_surface()
                     .and_then(|s| config::applied_rule(&s))
                     .is_some_and(|r| r.widget);
                 if !is_widget {
@@ -376,6 +414,11 @@ impl DriftWm {
 
     /// Start a compositor-side resize grab. If `explicit_edge` is provided, use it;
     /// otherwise infer edges from pointer position within the window.
+    ///
+    /// `want_cluster = true` snapshots the focused window's snap cluster so
+    /// neighbors are translated along with the resize (opt-in). `false` keeps
+    /// resize strictly single-window — the grab still runs the cluster code
+    /// path, but over an empty snapshot that short-circuits to no-op.
     pub(super) fn start_compositor_resize(
         &mut self,
         pointer: &smithay::input::pointer::PointerHandle<DriftWm>,
@@ -383,10 +426,20 @@ impl DriftWm {
         pos: Point<f64, smithay::utils::Logical>,
         button: u32,
         serial: smithay::utils::Serial,
+        want_cluster: bool,
     ) {
-        self.start_compositor_resize_with_edge(pointer, window, pos, button, serial, None);
+        self.start_compositor_resize_with_edge(
+            pointer,
+            window,
+            pos,
+            button,
+            serial,
+            None,
+            want_cluster,
+        );
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn start_compositor_resize_with_edge(
         &mut self,
         pointer: &smithay::input::pointer::PointerHandle<DriftWm>,
@@ -395,15 +448,19 @@ impl DriftWm {
         button: u32,
         serial: smithay::utils::Serial,
         explicit_edge: Option<xdg_toplevel::ResizeEdge>,
+        want_cluster: bool,
     ) {
         let initial_window_location = self.space.element_location(window).unwrap();
         let initial_window_size = window.geometry().size;
 
-        let edges = explicit_edge
-            .unwrap_or_else(|| edges_from_position(pos, initial_window_location, initial_window_size));
+        let edges = explicit_edge.unwrap_or_else(|| {
+            edges_from_position(pos, initial_window_location, initial_window_size)
+        });
 
         // Store resize state for commit() repositioning
-        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else { return; };
+        let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
 
         // Clear fit state — user took manual control
         crate::state::fit::clear_fit_state(&wl_surface);
@@ -434,6 +491,17 @@ impl DriftWm {
             location: pos,
         };
         let output = self.active_output().unwrap();
+        // Only snapshot the cluster when the caller opted in. For
+        // single-window resize (`want_cluster = false`) we hand the grab an
+        // empty snapshot so `cluster_resize.members.is_empty()` short-circuits
+        // the motion-time cascade and `snap_targets` sees no exclusions —
+        // exactly the pre-slice-2 behavior.
+        let cluster_resize = if want_cluster {
+            self.cluster_snapshot_for_resize(window, edges)
+        } else {
+            ClusterResizeSnapshot::empty()
+        };
+        let constraints = crate::grabs::SizeConstraints::for_window(window);
         let grab = ResizeSurfaceGrab {
             start_data,
             window: window.clone(),
@@ -445,6 +513,8 @@ impl DriftWm {
             last_clamped_location: pos,
             last_x11_configure: None,
             snap: driftwm::snap::SnapState::default(),
+            constraints,
+            cluster_resize,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
@@ -467,7 +537,11 @@ impl DriftWm {
 
         // During fullscreen: bound scroll exits fullscreen first; plain scroll forwards.
         if self.is_fullscreen() {
-            if self.config.mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow).is_some() {
+            if self
+                .config
+                .mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow)
+                .is_some()
+            {
                 self.exit_fullscreen_remap_pointer(pos);
                 // Fall through to dispatch below
             } else {
@@ -480,9 +554,9 @@ impl DriftWm {
 
         // Compute context — recent_pan stickiness forces OnCanvas to prevent
         // jitter when a window slides under the pointer during a pan gesture.
-        let recent_pan = self
-            .last_scroll_pan()
-            .is_some_and(|t: std::time::Instant| t.elapsed() < std::time::Duration::from_millis(150));
+        let recent_pan = self.last_scroll_pan().is_some_and(|t: std::time::Instant| {
+            t.elapsed() < std::time::Duration::from_millis(150)
+        });
         let context = if recent_pan {
             BindingContext::OnCanvas
         } else {
@@ -490,7 +564,11 @@ impl DriftWm {
         };
 
         // Single lookup: context-aware
-        if let Some(action) = self.config.mouse_scroll_lookup_ctx(&mods, source, context).cloned() {
+        if let Some(action) = self
+            .config
+            .mouse_scroll_lookup_ctx(&mods, source, context)
+            .cloned()
+        {
             match action {
                 MouseAction::PanViewport => {
                     let h = event.amount(Axis::Horizontal).unwrap_or(0.0);
@@ -500,10 +578,8 @@ impl DriftWm {
                             self.set_last_scroll_pan(Some(std::time::Instant::now()));
                         }
                         let s = self.config.trackpad_speed;
-                        let canvas_delta: Point<f64, smithay::utils::Logical> = Point::from((
-                            h * s / self.zoom(),
-                            v * s / self.zoom(),
-                        ));
+                        let canvas_delta: Point<f64, smithay::utils::Logical> =
+                            Point::from((h * s / self.zoom(), v * s / self.zoom()));
                         self.drift_pan(canvas_delta);
                         let new_pos = pos + canvas_delta;
                         let serial = SERIAL_COUNTER.next_serial();
@@ -523,7 +599,8 @@ impl DriftWm {
                     }
                 }
                 MouseAction::Zoom => {
-                    let v = event.amount(Axis::Vertical)
+                    let v = event
+                        .amount(Axis::Vertical)
                         .or_else(|| event.amount_v120(Axis::Vertical).map(|v| v * 15.0 / 120.0))
                         .unwrap_or(0.0);
                     if v != 0.0 {
@@ -533,9 +610,8 @@ impl DriftWm {
                         let new_zoom = (cur_zoom * factor).clamp(self.min_zoom(), canvas::MAX_ZOOM);
 
                         if new_zoom != cur_zoom {
-                            let screen_pos = canvas_to_screen(
-                                CanvasPos(pos), self.camera(), cur_zoom,
-                            ).0;
+                            let screen_pos =
+                                canvas_to_screen(CanvasPos(pos), self.camera(), cur_zoom).0;
                             let new_camera = canvas::zoom_anchor_camera(pos, screen_pos, new_zoom);
                             self.with_output_state(|os| {
                                 os.camera = new_camera;

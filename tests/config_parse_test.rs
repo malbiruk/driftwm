@@ -1,11 +1,11 @@
 use driftwm::config::{
-    Action, BindingContext, Config, ContinuousAction, Direction, GestureConfigEntry, ModKey,
-    MouseAction, MouseTrigger, ThresholdAction, BTN_LEFT, BTN_RIGHT,
-    parse_action, parse_direction, parse_gesture_binding, parse_gesture_config_entry,
-    parse_gesture_trigger, parse_key_combo, parse_mouse_action, parse_mouse_binding,
+    Action, BTN_LEFT, BTN_RIGHT, BindingContext, Config, ContinuousAction, Direction,
+    GestureConfigEntry, ModKey, MouseAction, MouseTrigger, ThresholdAction, parse_action,
+    parse_direction, parse_gesture_binding, parse_gesture_config_entry, parse_gesture_trigger,
+    parse_key_combo, parse_mouse_action, parse_mouse_binding,
 };
 use smithay::backend::input::AxisSource;
-use smithay::input::keyboard::{keysyms, Keysym, ModifiersState};
+use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
 
 // ── Modifier helpers ─────────────────────────────────────────────────────
 
@@ -28,7 +28,10 @@ fn logo() -> ModifiersState {
 #[test]
 fn parse_key_combo_mod_expands_to_logo_with_super() {
     let combo = parse_key_combo("Mod+Return", ModKey::Super).unwrap();
-    assert!(combo.modifiers.logo, "Mod should expand to logo with ModKey::Super");
+    assert!(
+        combo.modifiers.logo,
+        "Mod should expand to logo with ModKey::Super"
+    );
     assert!(!combo.modifiers.alt);
     assert_eq!(combo.sym, Keysym::from(keysyms::KEY_Return));
 }
@@ -36,7 +39,10 @@ fn parse_key_combo_mod_expands_to_logo_with_super() {
 #[test]
 fn parse_key_combo_mod_expands_to_alt_with_alt_modkey() {
     let combo = parse_key_combo("Mod+Return", ModKey::Alt).unwrap();
-    assert!(combo.modifiers.alt, "Mod should expand to alt with ModKey::Alt");
+    assert!(
+        combo.modifiers.alt,
+        "Mod should expand to alt with ModKey::Alt"
+    );
     assert!(!combo.modifiers.logo);
     assert_eq!(combo.sym, Keysym::from(keysyms::KEY_Return));
 }
@@ -44,7 +50,10 @@ fn parse_key_combo_mod_expands_to_alt_with_alt_modkey() {
 #[test]
 fn parse_key_combo_literal_alt_is_always_alt() {
     let combo = parse_key_combo("Alt+Tab", ModKey::Super).unwrap();
-    assert!(combo.modifiers.alt, "literal Alt should set alt regardless of mod_key");
+    assert!(
+        combo.modifiers.alt,
+        "literal Alt should set alt regardless of mod_key"
+    );
     assert!(!combo.modifiers.logo);
     assert_eq!(combo.sym, Keysym::from(keysyms::KEY_Tab));
 }
@@ -63,7 +72,10 @@ fn parse_key_combo_ctrl_shift_combination() {
 fn parse_key_combo_keysym_is_case_insensitive() {
     let lower = parse_key_combo("Mod+Return", ModKey::Super).unwrap();
     let upper = parse_key_combo("Mod+RETURN", ModKey::Super).unwrap();
-    assert_eq!(lower.sym, upper.sym, "keysym lookup should be case insensitive");
+    assert_eq!(
+        lower.sym, upper.sym,
+        "keysym lookup should be case insensitive"
+    );
 }
 
 #[test]
@@ -193,6 +205,18 @@ fn parse_mouse_action_move_snapped_windows() {
 }
 
 #[test]
+fn parse_mouse_action_resize_window() {
+    let result = parse_mouse_action("resize-window").unwrap();
+    assert!(matches!(result, MouseAction::ResizeWindow));
+}
+
+#[test]
+fn parse_mouse_action_resize_window_snapped() {
+    let result = parse_mouse_action("resize-window-snapped").unwrap();
+    assert!(matches!(result, MouseAction::ResizeWindowSnapped));
+}
+
+#[test]
 fn parse_mouse_action_zoom() {
     let result = parse_mouse_action("zoom").unwrap();
     assert!(matches!(result, MouseAction::Zoom));
@@ -245,8 +269,7 @@ fn default_mouse_bindings_move_window_on_alt_left() {
 fn default_mouse_bindings_move_snapped_windows_on_alt_shift_left() {
     let config = Config::default();
     let alt_shift = mods(true, false, true, false);
-    let result =
-        config.mouse_button_lookup_ctx(&alt_shift, BTN_LEFT, BindingContext::OnWindow);
+    let result = config.mouse_button_lookup_ctx(&alt_shift, BTN_LEFT, BindingContext::OnWindow);
     assert!(result.is_some(), "Alt+Shift+Left on window should be bound");
     assert!(
         matches!(result.unwrap(), MouseAction::MoveSnappedWindows),
@@ -262,7 +285,152 @@ fn default_mouse_bindings_resize_window_on_alt_right() {
     assert!(result.is_some(), "Alt+Right on window should be bound");
     assert!(
         matches!(result.unwrap(), MouseAction::ResizeWindow),
-        "Alt+Right on window should resolve to ResizeWindow"
+        "Alt+Right on window should resolve to ResizeWindow by default (flag false)"
+    );
+}
+
+#[test]
+fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
+    // Modifier slot: Alt+Shift+Right → ResizeWindowSnapped with the flag off.
+    let config = Config::default();
+    let alt_shift = mods(true, false, true, false);
+    let result = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
+    assert!(
+        result.is_some(),
+        "Alt+Shift+Right on window should be bound"
+    );
+    assert!(
+        matches!(result.unwrap(), MouseAction::ResizeWindowSnapped),
+        "Alt+Shift+Right on window should resolve to ResizeWindowSnapped"
+    );
+}
+
+#[test]
+fn default_mouse_bindings_flipped_when_resize_snapped_default_true() {
+    // With the flag on, primary and modifier swap: Alt+Right becomes
+    // `resize-snapped` and Alt+Shift+Right becomes single-window `resize`.
+    let toml_str = r#"
+        [mouse]
+        resize_snapped_default = true
+    "#;
+    let config = Config::from_toml(toml_str).unwrap();
+
+    let alt = mods(true, false, false, false);
+    let alt_shift = mods(true, false, true, false);
+
+    let primary = config.mouse_button_lookup_ctx(&alt, BTN_RIGHT, BindingContext::OnWindow);
+    assert!(
+        matches!(primary, Some(MouseAction::ResizeWindowSnapped)),
+        "flag=true: Alt+Right should be ResizeWindowSnapped"
+    );
+
+    let modifier = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
+    assert!(
+        matches!(modifier, Some(MouseAction::ResizeWindow)),
+        "flag=true: Alt+Shift+Right should be ResizeWindow"
+    );
+}
+
+#[test]
+fn resize_snapped_default_exposed_on_config() {
+    let default_config = Config::default();
+    assert!(!default_config.resize_snapped_default);
+
+    let flipped = Config::from_toml("[mouse]\nresize_snapped_default = true").unwrap();
+    assert!(flipped.resize_snapped_default);
+}
+
+#[test]
+fn resize_snapped_default_flips_user_defined_mouse_binding() {
+    // The swap applies *after* user overrides merge. A user who explicitly
+    // binds `"alt+right" = "resize-window"` gets the snapped variant when
+    // the flag is on — the token meanings invert globally, not just defaults.
+    let toml_str = r#"
+        [mouse]
+        resize_snapped_default = true
+
+        [mouse.on-window]
+        "alt+right" = "resize-window"
+        "alt+shift+right" = "resize-window-snapped"
+    "#;
+    let config = Config::from_toml(toml_str).unwrap();
+    let alt = mods(true, false, false, false);
+    let alt_shift = mods(true, false, true, false);
+
+    let primary = config.mouse_button_lookup_ctx(&alt, BTN_RIGHT, BindingContext::OnWindow);
+    assert!(
+        matches!(primary, Some(MouseAction::ResizeWindowSnapped)),
+        "user-defined 'resize-window' on Alt+Right should become ResizeWindowSnapped with flag=true"
+    );
+    let modifier = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
+    assert!(
+        matches!(modifier, Some(MouseAction::ResizeWindow)),
+        "user-defined 'resize-window-snapped' on Alt+Shift+Right should become ResizeWindow with flag=true"
+    );
+}
+
+#[test]
+fn resize_snapped_default_flips_gesture_bindings() {
+    use driftwm::config::GestureTrigger;
+
+    // Off: Alt+3-finger-swipe = plain, Alt+Shift+3-finger-swipe = snapped.
+    let off = Config::default();
+    let alt = mods(true, false, false, false);
+    let alt_shift = mods(true, false, true, false);
+    assert!(
+        matches!(
+            off.gesture_lookup(
+                &alt,
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::OnWindow
+            ),
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::ResizeWindow
+            ))
+        ),
+        "flag=false: Alt+3-finger-swipe on window should be ResizeWindow"
+    );
+    assert!(
+        matches!(
+            off.gesture_lookup(
+                &alt_shift,
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::OnWindow,
+            ),
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::ResizeWindowSnapped
+            ))
+        ),
+        "flag=false: Alt+Shift+3-finger-swipe on window should be ResizeWindowSnapped"
+    );
+
+    // On: the two gesture bindings swap meaning.
+    let on = Config::from_toml("[mouse]\nresize_snapped_default = true").unwrap();
+    assert!(
+        matches!(
+            on.gesture_lookup(
+                &alt,
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::OnWindow
+            ),
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::ResizeWindowSnapped
+            ))
+        ),
+        "flag=true: Alt+3-finger-swipe should flip to ResizeWindowSnapped"
+    );
+    assert!(
+        matches!(
+            on.gesture_lookup(
+                &alt_shift,
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::OnWindow,
+            ),
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::ResizeWindow
+            ))
+        ),
+        "flag=true: Alt+Shift+3-finger-swipe should flip to ResizeWindow"
     );
 }
 
@@ -280,7 +448,8 @@ fn default_mouse_bindings_pan_viewport_on_super_left_anywhere() {
 #[test]
 fn default_mouse_bindings_zoom_on_super_wheel_scroll() {
     let config = Config::default();
-    let result = config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Wheel, BindingContext::Anywhere);
+    let result =
+        config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Wheel, BindingContext::Anywhere);
     assert!(result.is_some(), "Super+WheelScroll should be bound");
     assert!(
         matches!(result.unwrap(), MouseAction::Zoom),
@@ -291,7 +460,8 @@ fn default_mouse_bindings_zoom_on_super_wheel_scroll() {
 #[test]
 fn default_mouse_bindings_pan_on_super_trackpad_scroll() {
     let config = Config::default();
-    let result = config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Finger, BindingContext::Anywhere);
+    let result =
+        config.mouse_scroll_lookup_ctx(&logo(), AxisSource::Finger, BindingContext::Anywhere);
     assert!(result.is_some(), "Super+TrackpadScroll should be bound");
     assert!(
         matches!(result.unwrap(), MouseAction::PanViewport),
@@ -303,7 +473,9 @@ fn default_mouse_bindings_pan_on_super_trackpad_scroll() {
 fn default_mouse_bindings_empty_canvas_left_click_pans() {
     let config = Config::default();
     let result = config.mouse_button_lookup_ctx(
-        &mods(false, false, false, false), BTN_LEFT, BindingContext::OnCanvas,
+        &mods(false, false, false, false),
+        BTN_LEFT,
+        BindingContext::OnCanvas,
     );
     assert!(
         matches!(result, Some(MouseAction::PanViewport)),
@@ -383,7 +555,10 @@ fn gesture_swipe_continuous_action_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Swipe { fingers: 3 };
     let entry = parse_gesture_config_entry(&trigger, "pan-viewport").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Continuous(ContinuousAction::PanViewport)));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Continuous(ContinuousAction::PanViewport)
+    ));
 }
 
 #[test]
@@ -391,7 +566,10 @@ fn gesture_swipe_threshold_action_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Swipe { fingers: 4 };
     let entry = parse_gesture_config_entry(&trigger, "center-nearest").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Threshold(ThresholdAction::CenterNearest)));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Threshold(ThresholdAction::CenterNearest)
+    ));
 }
 
 #[test]
@@ -399,7 +577,10 @@ fn gesture_pinch_continuous_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Pinch { fingers: 3 };
     let entry = parse_gesture_config_entry(&trigger, "zoom").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Continuous(ContinuousAction::Zoom)));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Continuous(ContinuousAction::Zoom)
+    ));
 }
 
 #[test]
@@ -407,7 +588,10 @@ fn gesture_pinch_threshold_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Pinch { fingers: 3 };
     let result = parse_gesture_config_entry(&trigger, "zoom-to-fit");
-    assert!(result.is_err(), "pinch + threshold action should be rejected");
+    assert!(
+        result.is_err(),
+        "pinch + threshold action should be rejected"
+    );
     assert!(
         result.unwrap_err().contains("pinch-in or pinch-out"),
         "error message should suggest pinch-in/pinch-out"
@@ -419,7 +603,10 @@ fn gesture_pinch_in_threshold_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::PinchIn { fingers: 4 };
     let entry = parse_gesture_config_entry(&trigger, "zoom-to-fit").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))
+    ));
 }
 
 #[test]
@@ -427,7 +614,10 @@ fn gesture_pinch_in_continuous_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::PinchIn { fingers: 4 };
     let result = parse_gesture_config_entry(&trigger, "zoom");
-    assert!(result.is_err(), "pinch-in + continuous action should be rejected");
+    assert!(
+        result.is_err(),
+        "pinch-in + continuous action should be rejected"
+    );
 }
 
 #[test]
@@ -435,7 +625,10 @@ fn gesture_swipe_up_continuous_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::SwipeUp { fingers: 4 };
     let result = parse_gesture_config_entry(&trigger, "pan-viewport");
-    assert!(result.is_err(), "swipe-up + continuous action should be rejected");
+    assert!(
+        result.is_err(),
+        "swipe-up + continuous action should be rejected"
+    );
 }
 
 #[test]
@@ -443,7 +636,10 @@ fn gesture_swipe_up_threshold_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::SwipeUp { fingers: 4 };
     let entry = parse_gesture_config_entry(&trigger, "exec notify-send hi").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))
+    ));
 }
 
 #[test]
@@ -451,7 +647,10 @@ fn gesture_hold_continuous_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Hold { fingers: 4 };
     let result = parse_gesture_config_entry(&trigger, "zoom");
-    assert!(result.is_err(), "hold + continuous action should be rejected");
+    assert!(
+        result.is_err(),
+        "hold + continuous action should be rejected"
+    );
 }
 
 #[test]
@@ -459,7 +658,10 @@ fn gesture_hold_threshold_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::Hold { fingers: 4 };
     let entry = parse_gesture_config_entry(&trigger, "center-window").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Threshold(ThresholdAction::Fixed(_))
+    ));
 }
 
 // ── Gesture validation edge cases ─────────────────────────────────────────
@@ -467,7 +669,10 @@ fn gesture_hold_threshold_is_valid() {
 #[test]
 fn gesture_binding_invalid_modifier_is_error() {
     let result = parse_gesture_binding("typo+3-finger-swipe", ModKey::Super);
-    assert!(result.is_err(), "unknown modifier in gesture binding should be rejected");
+    assert!(
+        result.is_err(),
+        "unknown modifier in gesture binding should be rejected"
+    );
 }
 
 #[test]
@@ -495,7 +700,10 @@ fn gesture_center_nearest_on_pinch_in_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::PinchIn { fingers: 4 };
     let result = parse_gesture_config_entry(&trigger, "center-nearest");
-    assert!(result.is_err(), "center-nearest on pinch-in should be rejected");
+    assert!(
+        result.is_err(),
+        "center-nearest on pinch-in should be rejected"
+    );
 }
 
 #[test]
@@ -503,7 +711,10 @@ fn gesture_doubletap_swipe_move_is_valid() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::DoubletapSwipe { fingers: 3 };
     let entry = parse_gesture_config_entry(&trigger, "move-window").unwrap();
-    assert!(matches!(entry, GestureConfigEntry::Continuous(ContinuousAction::MoveWindow)));
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Continuous(ContinuousAction::MoveWindow)
+    ));
 }
 
 #[test]
@@ -511,10 +722,48 @@ fn gesture_doubletap_swipe_pan_is_error() {
     use driftwm::config::GestureTrigger;
     let trigger = GestureTrigger::DoubletapSwipe { fingers: 3 };
     let result = parse_gesture_config_entry(&trigger, "pan-viewport");
-    assert!(result.is_err(), "doubletap-swipe + pan-viewport should be rejected");
     assert!(
-        result.unwrap_err().contains("move-window and resize-window"),
-        "error message should mention supported actions"
+        result.is_err(),
+        "doubletap-swipe + pan-viewport should be rejected"
+    );
+    let err = result.unwrap_err();
+    assert!(
+        err.contains("move-window")
+            && err.contains("resize-window")
+            && err.contains("resize-window-snapped"),
+        "error message should mention all supported actions, got: {err}"
+    );
+}
+
+#[test]
+fn gesture_doubletap_swipe_resize_snapped_is_valid() {
+    use driftwm::config::GestureTrigger;
+    let trigger = GestureTrigger::DoubletapSwipe { fingers: 3 };
+    let entry = parse_gesture_config_entry(&trigger, "resize-window-snapped").unwrap();
+    assert!(matches!(
+        entry,
+        GestureConfigEntry::Continuous(ContinuousAction::ResizeWindowSnapped)
+    ));
+}
+
+#[test]
+fn gesture_alt_shift_3_finger_swipe_defaults_to_resize_snapped() {
+    use driftwm::config::GestureTrigger;
+    let config = Config::default();
+    let alt_shift = mods(true, false, true, false);
+    let result = config.gesture_lookup(
+        &alt_shift,
+        &GestureTrigger::Swipe { fingers: 3 },
+        BindingContext::OnWindow,
+    );
+    assert!(
+        matches!(
+            result,
+            Some(GestureConfigEntry::Continuous(
+                ContinuousAction::ResizeWindowSnapped
+            ))
+        ),
+        "default Alt+Shift+3-finger-swipe on window should resolve to resize-snapped, got: {result:?}"
     );
 }
 

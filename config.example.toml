@@ -1,6 +1,6 @@
 # driftwm configuration
 # Copy to ~/.config/driftwm/config.toml and uncomment what you want to change.
-# Missing fields use built-in defaults. Invalid entries are logged and skipped.
+# Missing fields use built-in defaults.
 # Run `driftwm --check-config` to validate without starting the compositor.
 
 # Window manager modifier key: "super" (default) or "alt"
@@ -223,17 +223,34 @@
 # Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll
 # Merges with defaults. Use "none" to unbind.
 #
-# Mouse actions: move-window, move-snapped-windows, resize-window, pan-viewport, zoom, center-nearest
+# Mouse actions: move-window, move-snapped-windows, resize-window,
+# resize-window-snapped, pan-viewport, zoom, center-nearest
 # Any keyboard action also works for button triggers: exec, close-window, toggle-fullscreen, etc.
 #
-# move-window drags a single window. move-snapped-windows drags every window
-# connected to the focused one via snap adjacency — i.e. the whole "cluster"
-# of windows you deliberately snapped together.
+# move-window / resize-window act on the focused window only.
+# move-snapped-windows / resize-window-snapped also translate every window
+# connected to the focused one via snap adjacency
+
+[mouse]
+# Controls which resize action is the default, affecting both mouse bindings,
+# gesture bindings, and edge-drag resizing (any context that uses resize-window
+# or resize-window-snapped has its default flipped).
+#
+# When false (default): the default resize action is `resize-window`, which
+# resizes only the focused window. Bind `resize-window-snapped` explicitly
+# (e.g. on Alt+Shift+Right) to propagate resize to snapped neighbors.
+# Edge-drag resizes only the window you grabbed.
+#
+# When true: the default resize action is `resize-window-snapped`, which
+# propagates to every snapped neighbor. Use `resize-window` to resize a
+# single window. Edge-drag propagates to snapped neighbors.
+# resize_snapped_default = false
 
 [mouse.on-window]
 # "alt+left" = "move-window"
 # "alt+shift+left" = "move-snapped-windows"
 # "alt+right" = "resize-window"
+# "alt+shift+right" = "resize-window-snapped"
 # "alt+middle" = "fit-window"
 # "mod+middle" = "toggle-fullscreen"
 
@@ -261,7 +278,7 @@
 #   N-finger-pinch-in/out     — threshold only
 #   N-finger-hold             — threshold only (fires on release)
 #
-# Continuous actions: pan-viewport, zoom, move-window, resize-window
+# Continuous actions: pan-viewport, zoom, move-window, resize-window, resize-window-snapped
 # Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, fit-window, exec <cmd>, etc.
 
 # Gesture thresholds — tune for your touchpad size.
@@ -272,6 +289,7 @@
 
 [gestures.on-window]
 # "alt+3-finger-swipe" = "resize-window"
+# "alt+shift+3-finger-swipe" = "resize-window-snapped"
 # "3-finger-doubletap-swipe" = "move-window"
 # "alt+2-finger-pinch-in" = "fit-window"
 # "alt+2-finger-pinch-out" = "fit-window"

@@ -1,4 +1,5 @@
 /// Bounding rectangle of a window in canvas coordinates, used for edge snap detection.
+#[derive(Clone, Copy, Debug)]
 pub struct SnapRect {
     pub x_low: f64,
     pub x_high: f64,
