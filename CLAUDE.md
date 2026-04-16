@@ -58,14 +58,15 @@ Current source layout:
 
 - `main.rs` — entry point (CLI args, backend selection), `lib.rs` — crate root (module declarations)
 - `backend/` — `mod.rs` (Backend enum: Winit/Udev + renderer accessor), `winit.rs` (winit backend init + ~60fps timer render loop), `udev.rs` (udev/DRM backend init + VBlank-driven render loop, libseat session, libinput, hotplug)
-- `state/` — `mod.rs` (DriftWm struct, FullscreenState, ClientState), `animation.rs` (camera/zoom/momentum/edge-pan animation, key repeat), `navigation.rs` (navigate_to_window, focus history, MRU cycle), `fullscreen.rs` (enter/exit fullscreen, pointer remap), `fit.rs` (per-window fit-to-viewport toggle, pre-fit size restore)
+- `state/` — `mod.rs` (DriftWm struct, FullscreenState, ClientState), `animation.rs` (camera/zoom/momentum/edge-pan animation, key repeat), `navigation.rs` (navigate_to_window, focus history, MRU cycle), `fullscreen.rs` (enter/exit fullscreen, pointer remap), `fit.rs` (per-window fit-to-viewport toggle, pre-fit size restore), `cursor.rs` (cursor state), `render_cache.rs` (cached render state)
 - `config/` — `mod.rs` (Config struct, load/parse, context-aware lookup methods), `types.rs` (Action, Direction, Modifiers, KeyCombo, MouseBinding/MouseTrigger/MouseAction, GestureBinding/GestureTrigger, ContinuousAction/ThresholdAction, ContextBindings, BindingContext), `parse.rs` (string→type parsers for combos/actions/gestures), `defaults.rs` (default key/mouse/gesture bindings per context, terminal/launcher detection), `toml.rs` (serde structs, config path)
 - `canvas.rs` — coordinate transforms (ScreenPos/CanvasPos), camera math, cone search, zoom helpers (zoom_to_fit, zoom_anchor_camera, snap_zoom, dynamic_min_zoom)
 - `focus.rs` — FocusTarget(WlSurface) newtype with KeyboardTarget/PointerTarget/TouchTarget impls
 - `decorations.rs` — per-window SSD state, CPU-rendered title bar, hit-testing helpers
-- `render.rs` — OutputRenderElements, compose_frame(), post_render(), update_background_element(), tile/cursor/layer rendering helpers
+- `render/` — `mod.rs` (compose_frame, post_render, OutputRenderElements), `elements.rs` (tile/cursor/layer rendering helpers), `blur.rs` (blur pipeline helpers), `capture.rs` (screencopy/capture helpers)
 - `shaders/` — GLSL shader source files (dot_grid, shadow, blur_down/blur_up/blur_mask, corner_clip, tile_bg)
 - `snap.rs` — window snapping (magnetic edge alignment during drag)
+- `cluster.rs` — window clustering; BFS over snap-adjacency graph to find connected components of the focused window (computed on-demand, not stored)
 - `window_ext.rs` — `WindowExt` trait for Wayland/X11 window polymorphism
 - `input/` — `mod.rs` (keyboard handling, pointer motion absolute+relative, surface_under hit-testing), `actions.rs` (execute_action dispatch for all keybindings), `pointer.rs` (context-aware mouse dispatch, button/axis handling, compositor resize/pan grabs), `gestures.rs` (table-driven gesture dispatch from config, continuous/threshold state machine, libinput device config, client forwarding)
 - `grabs/` — `mod.rs`, `move_grab.rs` (MoveSurfaceGrab), `resize_grab.rs` (ResizeSurfaceGrab, ResizeState), `pan_grab.rs` (PanGrab for viewport panning), `navigate_grab.rs` (NavigateGrab for directional window navigation)

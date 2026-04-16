@@ -314,8 +314,6 @@ See [`config.example.toml`](config.example.toml) for all options: input
 settings, scroll/momentum tuning, snap behavior, decorations, effects,
 per-output config, gesture bindings, mouse bindings, and window rules.
 
-See [docs/DESIGN.md](docs/DESIGN.md) for the full compositor design specification.
-
 ## Example setup
 
 driftwm is just a compositor — everything else is standard Wayland tooling.
