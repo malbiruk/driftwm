@@ -16,6 +16,9 @@ pub struct WindowDecoration {
     pub cached_shadow: Option<PixelShaderElement>,
     /// Window content size the cached shadow was built for.
     pub shadow_content_size: (i32, i32),
+    /// Last post-zoom physical (body, shadow) rect pair used to build the
+    /// shadow uniforms — used to skip uniform refreshes on fully static frames.
+    pub last_shadow_phys_key: Option<crate::render::ShadowPhysKey>,
 }
 
 /// What the pointer is over in SSD decoration space.
@@ -36,6 +39,7 @@ impl WindowDecoration {
             close_hovered: false,
             cached_shadow: None,
             shadow_content_size: (0, 0),
+            last_shadow_phys_key: None,
         }
     }
 

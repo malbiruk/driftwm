@@ -155,13 +155,164 @@ impl RenderElement<GlesRenderer> for TileShaderElement {
     }
 }
 
+/// Corner-rounding helper: scales a pre-zoom physical rect into a post-zoom
+/// physical rect by rounding the TWO CORNERS independently (not loc+size).
+///
+/// Smithay's `Rectangle::to_i32_round()` rounds `loc` and `size` independently,
+/// so for non-integer `scale` the resulting `right = round(loc*s) + round(size*s)`
+/// can differ from `round((loc+size)*s)` by ±1 physical pixel. That off-by-one
+/// is the source of black seams on window bodies at fractional zoom levels.
+/// Corner rounding is pixel-consistent: adjacent elements sharing a pre-zoom
+/// coordinate always meet at the same post-zoom pixel.
+pub fn corner_round_rect(
+    rect: Rectangle<f64, Physical>,
+    scale: Scale<f64>,
+) -> Rectangle<i32, Physical> {
+    let x0 = (rect.loc.x * scale.x).round() as i32;
+    let y0 = (rect.loc.y * scale.y).round() as i32;
+    let x1 = ((rect.loc.x + rect.size.w) * scale.x).round() as i32;
+    let y1 = ((rect.loc.y + rect.size.h) * scale.y).round() as i32;
+    Rectangle::new(
+        Point::from((x0, y0)),
+        Size::from(((x1 - x0).max(0), (y1 - y0).max(0))),
+    )
+}
+
+/// Drop-in replacement for `smithay::backend::renderer::element::utils::RescaleRenderElement`
+/// that uses pixel-snapped corner rounding (see [`corner_round_rect`]).
+///
+/// Used only for window surface elements — shadows and decorations keep smithay's
+/// default wrapper because their rasterized edges are either soft (shadow) or
+/// small bitmaps where the ±1 pixel isn't visible (title bars).
+#[derive(Debug)]
+pub struct PixelSnapRescaleElement<E> {
+    element: E,
+    origin: Point<i32, Physical>,
+    scale: Scale<f64>,
+}
+
+impl<E: Element> PixelSnapRescaleElement<E> {
+    pub fn from_element(
+        element: E,
+        origin: Point<i32, Physical>,
+        scale: impl Into<Scale<f64>>,
+    ) -> Self {
+        Self {
+            element,
+            origin,
+            scale: scale.into(),
+        }
+    }
+}
+
+impl<E: Element> Element for PixelSnapRescaleElement<E> {
+    fn id(&self) -> &smithay::backend::renderer::element::Id {
+        self.element.id()
+    }
+
+    fn current_commit(&self) -> CommitCounter {
+        self.element.current_commit()
+    }
+
+    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
+        self.element.src()
+    }
+
+    fn transform(&self) -> Transform {
+        self.element.transform()
+    }
+
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        let mut geo = self.element.geometry(scale);
+        geo.loc -= self.origin;
+        let mut out = corner_round_rect(geo.to_f64(), self.scale);
+        out.loc += self.origin;
+        out
+    }
+
+    fn damage_since(
+        &self,
+        scale: Scale<f64>,
+        commit: Option<CommitCounter>,
+    ) -> DamageSet<i32, Physical> {
+        // Conservative damage: over-expand rather than under-expand so repaints
+        // never miss pixels. Matches smithay's RescaleRenderElement behavior.
+        self.element
+            .damage_since(scale, commit)
+            .into_iter()
+            .map(|rect| rect.to_f64().upscale(self.scale).to_i32_up())
+            .collect()
+    }
+
+    fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // Opaque regions must be conservative in the OTHER direction: never
+        // claim a pixel is opaque unless it fully is. Shrink inward so the
+        // fringe isn't mistakenly marked opaque.
+        self.element
+            .opaque_regions(scale)
+            .into_iter()
+            .map(|rect| {
+                let x0 = ((rect.loc.x as f64) * self.scale.x).ceil() as i32;
+                let y0 = ((rect.loc.y as f64) * self.scale.y).ceil() as i32;
+                let x1 = (((rect.loc.x + rect.size.w) as f64) * self.scale.x).floor() as i32;
+                let y1 = (((rect.loc.y + rect.size.h) as f64) * self.scale.y).floor() as i32;
+                Rectangle::new(
+                    Point::from((x0, y0)),
+                    Size::from(((x1 - x0).max(0), (y1 - y0).max(0))),
+                )
+            })
+            .collect()
+    }
+
+    fn alpha(&self) -> f32 {
+        self.element.alpha()
+    }
+
+    fn kind(&self) -> Kind {
+        self.element.kind()
+    }
+
+    fn is_framebuffer_effect(&self) -> bool {
+        self.element.is_framebuffer_effect()
+    }
+}
+
+impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for PixelSnapRescaleElement<E> {
+    fn draw(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), GlesError> {
+        self.element.draw(frame, src, dst, damage, opaque_regions, cache)
+    }
+
+    #[inline]
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.element.underlying_storage(renderer)
+    }
+
+    fn capture_framebuffer(
+        &self,
+        frame: &mut GlesFrame<'_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &smithay::utils::user_data::UserDataMap,
+    ) -> Result<(), GlesError> {
+        self.element.capture_framebuffer(frame, src, dst, cache)
+    }
+}
+
 render_elements! {
     pub OutputRenderElements<=GlesRenderer>;
     Background=RescaleRenderElement<PixelShaderElement>,
     TileBg=RescaleRenderElement<TileShaderElement>,
-    Decoration=RescaleRenderElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
-    Window=RescaleRenderElement<WaylandSurfaceRenderElement<GlesRenderer>>,
-    CsdWindow=RescaleRenderElement<RoundedCornerElement>,
+    Decoration=PixelSnapRescaleElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
+    Window=PixelSnapRescaleElement<WaylandSurfaceRenderElement<GlesRenderer>>,
+    CsdWindow=PixelSnapRescaleElement<RoundedCornerElement>,
     Layer=WaylandSurfaceRenderElement<GlesRenderer>,
     Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
     CursorSurface=smithay::backend::renderer::element::Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,
@@ -214,27 +365,88 @@ pub fn compile_shadow_shader(renderer: &mut GlesRenderer) -> Option<smithay::bac
     }
 }
 
-fn shadow_uniforms(
-    shadow_padding: i32,
-    content_w: i32,
-    content_h: i32,
+/// Key that fully determines the precise shadow uniforms.
+/// `[body_x0, body_y0, body_x1, body_y1, shadow_x, shadow_y, shadow_w, shadow_h]`
+/// in post-zoom physical pixels. Comparing consecutive keys tells us whether the
+/// shadow element needs its uniforms refreshed (avoiding spurious commit bumps
+/// during fully static frames).
+pub type ShadowPhysKey = [i32; 8];
+
+/// Compute both the uniforms and the phys key for a shadow element.
+///
+/// * `body_pre_zoom` — the body's pre-zoom physical rect, computed via
+///   `to_physical_precise_round(output_scale)` at the call site. For SSD
+///   this includes the title-bar strip; for CSD it's the content rect.
+/// * `shadow_area` — logical rect of the shadow PixelShaderElement (body ± padding).
+/// * `output_scale` — the output's fractional scale.
+/// * `zoom` — current viewport zoom.
+/// * `shadow_radius` — Gaussian blur extent passed through unchanged.
+/// * `corner_radius_phys` — corner radius in post-zoom physical pixels.
+///
+/// The body's post-zoom rect is obtained via `corner_round_rect` (same chain
+/// as `PixelSnapRescaleElement`); the shadow's post-zoom rect via
+/// `upscale(zoom).to_i32_round()` (same chain as `RescaleRenderElement`).
+/// Both go through `to_physical_precise_round` for the output-scale step first,
+/// so this stays correct at fractional HiDPI — not just fractional zoom.
+fn shadow_uniforms_precise(
+    body_pre_zoom: Rectangle<i32, Physical>,
+    shadow_area: Rectangle<i32, Logical>,
+    output_scale: Scale<f64>,
+    zoom: f64,
     shadow_radius: f32,
-    corner_radius: f32,
-) -> Vec<Uniform<'static>> {
+    corner_radius_phys: f32,
+) -> (Vec<Uniform<'static>>, ShadowPhysKey) {
     use driftwm::config::DecorationConfig;
     let sc = DecorationConfig::SHADOW_COLOR;
-    vec![
+    let zoom_scale = Scale::from(zoom);
+
+    // Body post-zoom: corner rounding (matches PixelSnapRescaleElement).
+    let body_post = corner_round_rect(body_pre_zoom.to_f64(), zoom_scale);
+
+    // Shadow post-zoom: independent loc/size rounding (matches RescaleRenderElement
+    // wrapping PixelShaderElement whose inner geometry = shadow_area.to_physical_precise_round).
+    let shadow_pre: Rectangle<i32, Physical> = shadow_area.to_physical_precise_round(output_scale);
+    let shadow_post: Rectangle<i32, Physical> = shadow_pre.to_f64().upscale(zoom_scale).to_i32_round();
+
+    // Linear map: shader-logical pixels → post-zoom physical pixels.
+    let phys_w = shadow_post.size.w.max(1) as f64;
+    let phys_h = shadow_post.size.h.max(1) as f64;
+    let logical_w = shadow_area.size.w.max(1) as f64;
+    let logical_h = shadow_area.size.h.max(1) as f64;
+    let px = phys_w / logical_w;
+    let py = phys_h / logical_h;
+
+    // Hole rect in shader-logical space — after interpolation the boundary
+    // rasterizes at exactly the body's physical pixel edges.
+    let hole_x = (body_post.loc.x - shadow_post.loc.x) as f64 / px;
+    let hole_y = (body_post.loc.y - shadow_post.loc.y) as f64 / py;
+    let hole_w = body_post.size.w as f64 / px;
+    let hole_h = body_post.size.h as f64 / py;
+
+    // Corner radius: from post-zoom physical back into shader-logical.
+    let corner_logical = corner_radius_phys as f64 / px;
+
+    let uniforms = vec![
         Uniform::new("u_window_rect", (
-            shadow_padding as f32, shadow_padding as f32,
-            content_w as f32, content_h as f32,
+            hole_x as f32, hole_y as f32,
+            hole_w as f32, hole_h as f32,
         )),
         Uniform::new("u_radius", shadow_radius),
         Uniform::new("u_color", (
             sc[0] as f32 / 255.0, sc[1] as f32 / 255.0,
             sc[2] as f32 / 255.0, sc[3] as f32 / 255.0,
         )),
-        Uniform::new("u_corner_radius", corner_radius),
-    ]
+        Uniform::new("u_corner_radius", corner_logical as f32),
+    ];
+
+    let key: ShadowPhysKey = [
+        body_post.loc.x, body_post.loc.y,
+        body_post.loc.x + body_post.size.w, body_post.loc.y + body_post.size.h,
+        shadow_post.loc.x, shadow_post.loc.y,
+        shadow_post.size.w, shadow_post.size.h,
+    ];
+
+    (uniforms, key)
 }
 
 const CORNER_CLIP_SRC: &str = include_str!("shaders/corner_clip.glsl");
@@ -553,7 +765,7 @@ fn build_override_redirect_elements(
                 Kind::Unspecified,
             );
         elements.extend(elems.into_iter().map(|elem| {
-            OutputRenderElements::Window(RescaleRenderElement::from_element(
+            OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                 elem,
                 Point::<i32, Physical>::from((0, 0)),
                 zoom,
@@ -593,7 +805,7 @@ pub fn build_canvas_layer_elements(
                 1.0,
             );
         elements.extend(surface_elements.into_iter().map(|elem| {
-            OutputRenderElements::Window(RescaleRenderElement::from_element(
+            OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                 elem,
                 Point::<i32, Physical>::from((0, 0)),
                 zoom,
@@ -941,7 +1153,7 @@ pub fn compose_frame(
                     Kind::Unspecified,
                 ) {
                     target.push(OutputRenderElements::Decoration(
-                        RescaleRenderElement::from_element(
+                        PixelSnapRescaleElement::from_element(
                             bar_elem,
                             Point::<i32, Physical>::from((0, 0)),
                             zoom,
@@ -966,13 +1178,13 @@ pub fn compose_frame(
                                 Uniform::new("u_clip_top", 0.0f32),
                                 Uniform::new("u_clip_shadow", 0.0f32),
                             ];
-                            target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
+                            target.push(OutputRenderElements::CsdWindow(PixelSnapRescaleElement::from_element(
                                 RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, false),
                                 Point::<i32, Physical>::from((0, 0)),
                                 zoom,
                             )));
                         } else {
-                            target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
+                            target.push(OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                                 elem,
                                 Point::<i32, Physical>::from((0, 0)),
                                 zoom,
@@ -981,7 +1193,7 @@ pub fn compose_frame(
                     }
                 } else {
                     target.extend(elems.into_iter().map(|elem| {
-                        OutputRenderElements::Window(RescaleRenderElement::from_element(
+                        OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                             elem,
                             Point::<i32, Physical>::from((0, 0)),
                             zoom,
@@ -990,7 +1202,7 @@ pub fn compose_frame(
                 }
             } else {
                 target.extend(elems.into_iter().map(|elem| {
-                    OutputRenderElements::Window(RescaleRenderElement::from_element(
+                    OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                         elem,
                         Point::<i32, Physical>::from((0, 0)),
                         zoom,
@@ -1017,24 +1229,40 @@ pub fn compose_frame(
                     let content_size = (geom_size.w, geom_size.h);
                     if deco.cached_shadow.as_ref().is_some_and(|s| (s.alpha() - opacity as f32).abs() > f32::EPSILON) {
                         deco.cached_shadow = None;
+                        deco.last_shadow_phys_key = None;
                     }
+                    // Body pre-zoom physical rect (title + content combined),
+                    // via to_physical_precise_round — same chain as inner element.
+                    let body_logical: Rectangle<f64, Logical> = Rectangle::new(
+                        (render_loc.x, render_loc.y - bar_height as f64).into(),
+                        (geom_size.w as f64, (geom_size.h + bar_height) as f64).into(),
+                    );
+                    let body_pre_zoom: Rectangle<i32, Physical> =
+                        body_logical.to_physical_precise_round(scale);
+                    let corner_r_phys = corner_r * scale.x as f32 * zoom as f32;
+                    let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
+                        body_pre_zoom, shadow_area, scale, zoom, radius, corner_r_phys,
+                    );
+
                     let shadow_elem = if let Some(shadow) = &mut deco.cached_shadow {
-                        if deco.shadow_content_size != content_size {
+                        if deco.shadow_content_size != content_size
+                            || deco.last_shadow_phys_key != Some(fresh_key)
+                        {
                             deco.shadow_content_size = content_size;
-                            shadow.update_uniforms(shadow_uniforms(
-                                r, geom_size.w, geom_size.h + bar_height, radius, corner_r,
-                            ));
+                            deco.last_shadow_phys_key = Some(fresh_key);
+                            shadow.update_uniforms(fresh_uniforms);
                         }
                         shadow.resize(shadow_area, None);
                         shadow.clone()
                     } else {
                         deco.shadow_content_size = content_size;
+                        deco.last_shadow_phys_key = Some(fresh_key);
                         let elem = PixelShaderElement::new(
                             shader.clone(),
                             shadow_area,
                             None,
                             opacity as f32,
-                            shadow_uniforms(r, geom_size.w, geom_size.h + bar_height, radius, corner_r),
+                            fresh_uniforms,
                             Kind::Unspecified,
                         );
                         deco.cached_shadow = Some(elem.clone());
@@ -1074,13 +1302,13 @@ pub fn compose_frame(
                                 Uniform::new("u_clip_top", 1.0f32),
                                 Uniform::new("u_clip_shadow", 1.0f32),
                             ];
-                            target.push(OutputRenderElements::CsdWindow(RescaleRenderElement::from_element(
+                            target.push(OutputRenderElements::CsdWindow(PixelSnapRescaleElement::from_element(
                                 RoundedCornerElement::new(elem, shader.clone(), uniforms, radius as f64, true),
                                 Point::<i32, Physical>::from((0, 0)),
                                 zoom,
                             )));
                         } else {
-                            target.push(OutputRenderElements::Window(RescaleRenderElement::from_element(
+                            target.push(OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                                 elem,
                                 Point::<i32, Physical>::from((0, 0)),
                                 zoom,
@@ -1089,7 +1317,7 @@ pub fn compose_frame(
                     }
                 } else {
                     target.extend(elems.into_iter().map(|elem| {
-                        OutputRenderElements::Window(RescaleRenderElement::from_element(
+                        OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                             elem,
                             Point::<i32, Physical>::from((0, 0)),
                             zoom,
@@ -1113,24 +1341,36 @@ pub fn compose_frame(
                     let content_size = (geom_size.w, geom_size.h);
                     let corner_r = state.config.decorations.corner_radius as f32;
 
+                    // Body pre-zoom physical rect (content area),
+                    // via to_physical_precise_round — same chain as inner element.
+                    let body_logical: Rectangle<f64, Logical> = Rectangle::new(
+                        (render_loc.x + geo.loc.x as f64, render_loc.y + geo.loc.y as f64).into(),
+                        (geom_size.w as f64, geom_size.h as f64).into(),
+                    );
+                    let body_pre_zoom: Rectangle<i32, Physical> =
+                        body_logical.to_physical_precise_round(scale);
+                    let corner_r_phys = corner_r * scale.x as f32 * zoom as f32;
+                    let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
+                        body_pre_zoom, shadow_area, scale, zoom, shadow_radius, corner_r_phys,
+                    );
+
                     let shadow_entry = state.render.csd_shadows.entry(wl_surface.id());
-                    let (shadow_elem, cached_size) = shadow_entry.or_insert_with(|| {
+                    let (shadow_elem, cached_size, cached_key) = shadow_entry.or_insert_with(|| {
                         let elem = PixelShaderElement::new(
                             shadow_shader.clone(),
                             shadow_area,
                             None,
                             opacity as f32,
-                            shadow_uniforms(sr, geom_size.w, geom_size.h, shadow_radius, corner_r),
+                            fresh_uniforms.clone(),
                             Kind::Unspecified,
                         );
-                        (elem, content_size)
+                        (elem, content_size, Some(fresh_key))
                     });
 
-                    if *cached_size != content_size {
+                    if *cached_size != content_size || *cached_key != Some(fresh_key) {
                         *cached_size = content_size;
-                        shadow_elem.update_uniforms(shadow_uniforms(
-                            sr, geom_size.w, geom_size.h, shadow_radius, corner_r,
-                        ));
+                        *cached_key = Some(fresh_key);
+                        shadow_elem.update_uniforms(fresh_uniforms);
                     }
                     shadow_elem.resize(shadow_area, None);
                     target.push(OutputRenderElements::Background(
@@ -1144,7 +1384,7 @@ pub fn compose_frame(
                 }
             } else {
                 target.extend(elems.into_iter().map(|elem| {
-                    OutputRenderElements::Window(RescaleRenderElement::from_element(
+                    OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                         elem,
                         Point::<i32, Physical>::from((0, 0)),
                         zoom,
@@ -1153,7 +1393,7 @@ pub fn compose_frame(
             }
         } else {
             target.extend(elems.into_iter().map(|elem| {
-                OutputRenderElements::Window(RescaleRenderElement::from_element(
+                OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
                     elem,
                     Point::<i32, Physical>::from((0, 0)),
                     zoom,
@@ -1697,7 +1937,7 @@ fn build_output_outline_elements(
                 renderer, loc, &buf, Some(opacity), None, None, Kind::Unspecified,
             ) {
                 elements.push(OutputRenderElements::Decoration(
-                    RescaleRenderElement::from_element(
+                    PixelSnapRescaleElement::from_element(
                         elem,
                         Point::<i32, Physical>::from((0, 0)),
                         1.0,
