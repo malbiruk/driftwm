@@ -1,5 +1,4 @@
 # driftwm — personal config (symlink to ~/.config/driftwm/config.toml)
-# ln -sf ~/Documents/work/scripts/driftwm/extras/config.toml ~/.config/driftwm/config.toml
 
 autostart = [
     "eval $(gnome-keyring-daemon --start --components=secrets,ssh) && systemctl --user import-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL && dbus-update-activation-environment SSH_AUTH_SOCK GNOME_KEYRING_CONTROL",
