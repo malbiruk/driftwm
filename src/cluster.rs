@@ -96,10 +96,13 @@ pub struct ResizeClassification {
 ///    (A→B before B→C). No direction guard — bonded members follow
 ///    unconditionally, including on drag reversal and past their initial
 ///    position.
-/// 3. **Push cascade** — for every pair `(M, N)` where `M` has a
-///    non-zero shift, compute encroachment of `M` on `N`. If positive,
-///    `N` is pushed by exactly the encroachment, and a new bond
-///    `(M, N)` is recorded. Looped until stable.
+/// 3. **Push cascade** — looped until stable. At the top of each
+///    iteration, check every member against the primary's current rect
+///    (if `primary` is `Some`) and push any that have been dragged into
+///    it by bonds or prior cascade steps. Then check every shifted
+///    member against every other member and push encroached members,
+///    recording new bonds. The primary check runs each iteration so
+///    members pulled into static primary edges mid-cascade get corrected.
 ///
 /// Returns `(shifts, newly_formed_bonds)`. The caller persists
 /// `newly_formed_bonds` into its snapshot so the next frame's phase 2
@@ -115,6 +118,7 @@ pub fn resolve_cluster_shifts(
     height_delta: i32,
     gap: f64,
     existing_bonds: &[(usize, usize)],
+    primary: Option<(SnapRect, SnapRect)>,
 ) -> ShiftsAndBonds {
     let mut shifts: HashMap<usize, (i32, i32)> = HashMap::new();
     let empty_bonds = Vec::new();
@@ -150,17 +154,21 @@ pub fn resolve_cluster_shifts(
         let n_init = &members[n_idx].initial_rect;
         let (ndx, ndy) = shifts.get(&n_idx).copied().unwrap_or((0, 0));
 
+        let n_cur = translate_rect(n_init, ndx, ndy);
+
         let mut new_ndx = ndx;
         let mut new_ndy = ndy;
 
-        if n_init.x_low >= m_init.x_high {
+        // X-axis tracking: only if the pair still has y-overlap.
+        if n_init.x_low >= m_init.x_high && y_overlap(&m_cur, &n_cur) {
             new_ndx = (m_cur.x_high + gap - n_init.x_low).ceil() as i32;
-        } else if n_init.x_high <= m_init.x_low {
+        } else if n_init.x_high <= m_init.x_low && y_overlap(&m_cur, &n_cur) {
             new_ndx = (m_cur.x_low - gap - n_init.x_high).floor() as i32;
         }
-        if n_init.y_low >= m_init.y_high {
+        // Y-axis tracking: only if the pair still has x-overlap.
+        if n_init.y_low >= m_init.y_high && x_overlap(&m_cur, &n_cur) {
             new_ndy = (m_cur.y_high + gap - n_init.y_low).ceil() as i32;
-        } else if n_init.y_high <= m_init.y_low {
+        } else if n_init.y_high <= m_init.y_low && x_overlap(&m_cur, &n_cur) {
             new_ndy = (m_cur.y_low - gap - n_init.y_high).floor() as i32;
         }
 
@@ -169,16 +177,36 @@ pub fn resolve_cluster_shifts(
         }
     }
 
-    if shifts.is_empty() {
+    // Only skip the cascade if there is nothing to propagate AND no primary
+    // to check encroachment against (primary push runs inside the cascade).
+    if shifts.is_empty() && primary.is_none() {
         return (shifts, empty_bonds);
     }
 
-    // Phase 3: push cascade with bond recording.
+    // Phase 3: push cascade with bond recording. Primary-vs-member push runs
+    // at the top of every iteration so members dragged into the primary by
+    // bond or cascade shifts get pushed back out before the member-vs-member
+    // inner loop runs.
     let mut new_bonds: Vec<(usize, usize)> = Vec::new();
     let mut new_bonds_set: HashSet<(usize, usize)> = HashSet::new();
 
     for _ in 0..(members.len() * 2) {
         let mut changed = false;
+
+        if let Some((ref p_init, ref p_cur)) = primary {
+            for (j, n_entry) in members.iter().enumerate() {
+                let (jdx, jdy) = shifts.get(&j).copied().unwrap_or((0, 0));
+                let n_cur = translate_rect(&n_entry.initial_rect, jdx, jdy);
+                let push = compute_push_from_primary(p_init, p_cur, &n_entry.initial_rect, &n_cur, gap);
+                if push != (0, 0) {
+                    let new = (jdx + push.0, jdy + push.1);
+                    if new != (jdx, jdy) {
+                        shifts.insert(j, new);
+                        changed = true;
+                    }
+                }
+            }
+        }
 
         for (i, m_entry) in members.iter().enumerate() {
             let Some(&(idx, idy)) = shifts.get(&i) else {
@@ -294,6 +322,55 @@ fn compute_push(
         && x_overlap(m_cur, n_cur)
     {
         let encroach = m_cur.y_low - gap - n_cur.y_high;
+        if encroach < 0.0 {
+            push.1 = encroach.floor() as i32;
+        }
+    }
+
+    push
+}
+
+/// How far should member `N` be pushed to maintain `gap` from the primary's
+/// current rect?
+///
+/// Checks all four sides independently (no direction guard): the primary's
+/// static edges must also block members that bond-driven or cascade shifts
+/// have dragged into them. `n_init` determines which side the member was
+/// originally on (position guard), so a member that started above the
+/// primary is only pushed up, never down.
+fn compute_push_from_primary(
+    p_init: &SnapRect,
+    p_cur: &SnapRect,
+    n_init: &SnapRect,
+    n_cur: &SnapRect,
+    gap: f64,
+) -> (i32, i32) {
+    let mut push = (0i32, 0i32);
+
+    // Member was originally to the right: keep n_cur.x_low past p_cur.x_high.
+    if n_init.x_low >= p_init.x_high && y_overlap(p_cur, n_cur) {
+        let encroach = p_cur.x_high + gap - n_cur.x_low;
+        if encroach > 0.0 {
+            push.0 = encroach.ceil() as i32;
+        }
+    }
+    // Member was originally to the left: keep n_cur.x_high past p_cur.x_low.
+    if n_init.x_high <= p_init.x_low && y_overlap(p_cur, n_cur) {
+        let encroach = p_cur.x_low - gap - n_cur.x_high;
+        if encroach < 0.0 {
+            push.0 = encroach.floor() as i32;
+        }
+    }
+    // Member was originally below: keep n_cur.y_low past p_cur.y_high.
+    if n_init.y_low >= p_init.y_high && x_overlap(p_cur, n_cur) {
+        let encroach = p_cur.y_high + gap - n_cur.y_low;
+        if encroach > 0.0 {
+            push.1 = encroach.ceil() as i32;
+        }
+    }
+    // Member was originally above: keep n_cur.y_high past p_cur.y_low.
+    if n_init.y_high <= p_init.y_low && x_overlap(p_cur, n_cur) {
+        let encroach = p_cur.y_low - gap - n_cur.y_high;
         if encroach < 0.0 {
             push.1 = encroach.floor() as i32;
         }
@@ -491,7 +568,7 @@ mod tests {
             classify(Some(Side::Right), None, rect(104.0, 0.0, 100.0, 100.0)),
             classify(Some(Side::Right), None, rect(208.0, 0.0, 100.0, 100.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,30, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,30, 0, 4.0, &[], None);
         assert_eq!(shifts.len(), 2);
         assert_eq!(shifts[&0], (30, 0));
         assert_eq!(shifts[&1], (30, 0));
@@ -502,7 +579,7 @@ mod tests {
         let members = vec![
             classify(Some(Side::Left), None, rect(-104.0, 0.0, 100.0, 100.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[], None);
         assert_eq!(shifts[&0], (-20, 0));
     }
 
@@ -512,7 +589,7 @@ mod tests {
             classify(Some(Side::Right), None, rect(104.0, 0.0, 100.0, 100.0)),
             classify(None, None, rect(0.0, 104.0, 100.0, 100.0)),
         ];
-        assert!(resolve_cluster_shifts(&members, 0, 0, 4.0, &[]).0.is_empty());
+        assert!(resolve_cluster_shifts(&members, 0, 0, 4.0, &[], None).0.is_empty());
     }
 
     #[test]
@@ -525,7 +602,7 @@ mod tests {
             classify(None, None, rect(0.0, 0.0, 100.0, 100.0)),
             classify(Some(Side::Right), None, rect(104.0, 0.0, 100.0, 100.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,-30, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,-30, 0, 4.0, &[], None);
         assert_eq!(shifts[&1], (-30, 0), "E gets the static shift");
         assert_eq!(
             shifts[&0],
@@ -547,7 +624,7 @@ mod tests {
             classify(None, None, rect(44.0, 0.0, 40.0, 40.0)),
             classify(Some(Side::Right), None, rect(88.0, 0.0, 40.0, 40.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,-50, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,-50, 0, 4.0, &[], None);
         assert_eq!(shifts.len(), 3);
         assert_eq!(shifts[&0], (-50, 0));
         assert_eq!(shifts[&1], (-50, 0));
@@ -563,7 +640,7 @@ mod tests {
             classify(Some(Side::Right), None, rect(104.0, 0.0, 100.0, 100.0)),
             classify(None, None, rect(0.0, 500.0, 100.0, 100.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[], None);
         assert_eq!(shifts.len(), 1);
         assert_eq!(shifts[&0], (20, 0));
         assert!(!shifts.contains_key(&1));
@@ -578,7 +655,7 @@ mod tests {
                 rect(104.0, 104.0, 100.0, 100.0),
             ),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,25, 15, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,25, 15, 4.0, &[], None);
         assert_eq!(shifts[&0], (25, 15));
     }
 
@@ -596,7 +673,7 @@ mod tests {
             classify(None, None, rect(258.0, 0.0, 100.0, 100.0)),
         ];
 
-        let (shifts, _) = resolve_cluster_shifts(&members,50, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,50, 0, 4.0, &[], None);
         assert_eq!(shifts[&0], (50, 0));
         assert!(
             shifts.get(&1).is_none_or(|s| *s == (0, 0)),
@@ -604,7 +681,7 @@ mod tests {
             shifts.get(&1),
         );
 
-        let (shifts, _) = resolve_cluster_shifts(&members,51, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,51, 0, 4.0, &[], None);
         assert_eq!(shifts[&0], (51, 0));
         assert_eq!(
             shifts[&1],
@@ -628,7 +705,7 @@ mod tests {
             classify(None, None, rect(0.0, 104.0, 100.0, 100.0)),
             classify(Some(Side::Right), None, rect(104.0, 104.0, 100.0, 100.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,20, 0, 4.0, &[], None);
         assert_eq!(shifts[&0], (20, 0), "B shifts right");
         assert!(
             shifts.get(&1).is_none_or(|s| *s == (0, 0)),
@@ -657,7 +734,7 @@ mod tests {
             classify(Some(Side::Left), None, rect(0.0, 0.0, 100.0, 200.0)),
             classify(None, Some(Side::Bottom), rect(104.0, 104.0, 100.0, 96.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,-20, -20, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,-20, -20, 4.0, &[], None);
         assert_eq!(shifts[&0], (20, 0), "A gets Left-chain static shift");
         assert_eq!(
             shifts[&1],
@@ -686,7 +763,7 @@ mod tests {
             classify(Some(Side::Left), None, rect(0.0, 0.0, 100.0, 400.0)),
             classify(None, Some(Side::Bottom), rect(104.0, 200.0, 100.0, 200.0)),
         ];
-        let (shifts, _) = resolve_cluster_shifts(&members,-30, -50, 4.0, &[]);
+        let (shifts, _) = resolve_cluster_shifts(&members,-30, -50, 4.0, &[], None);
         assert_eq!(shifts[&0], (30, 0), "A shifts right (Left chain)");
         assert_eq!(
             shifts[&1],
@@ -706,14 +783,14 @@ mod tests {
             classify(None, None, rect(154.0, 0.0, 100.0, 100.0)),
         ];
         let mut bonds = Vec::new();
-        let (shifts, new_bonds) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds);
+        let (shifts, new_bonds) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds, None);
         assert_eq!(shifts[&0], (60, 0));
         assert_eq!(shifts[&1], (10, 0));
         assert!(!new_bonds.is_empty(), "bond should form on first push");
         bonds.extend(new_bonds);
 
         // Same delta again — bond-driven, same result
-        let (shifts2, _) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds);
+        let (shifts2, _) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds, None);
         assert_eq!(shifts2[&1], (10, 0));
     }
 
@@ -727,11 +804,11 @@ mod tests {
             classify(None, None, rect(154.0, 0.0, 100.0, 100.0)),
         ];
         let mut bonds = Vec::new();
-        let (_, new_bonds) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds);
+        let (_, new_bonds) = resolve_cluster_shifts(&members, 60, 0, 4.0, &bonds, None);
         bonds.extend(new_bonds);
 
         // Reverse drag: width_delta = -20 (primary shrank past initial)
-        let (shifts, _) = resolve_cluster_shifts(&members, -20, 0, 4.0, &bonds);
+        let (shifts, _) = resolve_cluster_shifts(&members, -20, 0, 4.0, &bonds, None);
         // M.x_high = 100 + (-20) = 80. N flush: N.x_low = 80 + 4 = 84.
         // N.shift = 84 - 154 = -70.
         assert_eq!(shifts[&0], (-20, 0));
@@ -748,16 +825,128 @@ mod tests {
             classify(None, None, rect(88.0, 0.0, 40.0, 40.0)),
         ];
         let mut bonds = Vec::new();
-        let (_, new_bonds) = resolve_cluster_shifts(&members, 50, 0, 4.0, &bonds);
+        let (_, new_bonds) = resolve_cluster_shifts(&members, 50, 0, 4.0, &bonds, None);
         bonds.extend(new_bonds);
         assert!(bonds.len() >= 2, "both bonds should form");
 
         // Reverse: width_delta = -10.
-        let (shifts, _) = resolve_cluster_shifts(&members, -10, 0, 4.0, &bonds);
+        let (shifts, _) = resolve_cluster_shifts(&members, -10, 0, 4.0, &bonds, None);
         // M0.x_high = 40+(-10)=30. M1 flush at 34. M2 flush at 78.
         assert_eq!(shifts[&0], (-10, 0));
         assert_eq!(shifts[&1], (34 - 44, 0)); // = (-10, 0)
         assert_eq!(shifts[&2], (78 - 88, 0)); // = (-10, 0)
+    }
+
+    #[test]
+    fn push_respects_primary_rect() {
+        // Primary at (0,0)-(100,100), member A at (104,0)-(204,100). Right resize
+        // by 50: primary grows to (0,0)-(150,100). A should be pushed right so
+        // its left edge stays at primary.x_high + gap = 154.
+        let members = vec![
+            classify(None, None, rect(104.0, 0.0, 100.0, 100.0)),
+        ];
+        let p_init = rect(0.0, 0.0, 100.0, 100.0);
+        let p_cur = rect(0.0, 0.0, 150.0, 100.0);
+        let (shifts, _) = resolve_cluster_shifts(&members, 0, 0, 4.0, &[], Some((p_init, p_cur)));
+        assert_eq!(shifts[&0], (50, 0), "A pushed by 50 to stay flush with grown primary");
+    }
+
+    #[test]
+    fn primary_push_cascades_to_downstream() {
+        // Primary grows right, A is directly to its right, B is to A's right.
+        // Primary push at start of cascade loop pushes A; member-vs-member then cascades to B.
+        let members = vec![
+            classify(None, None, rect(104.0, 0.0, 40.0, 40.0)),  // A
+            classify(None, None, rect(148.0, 0.0, 40.0, 40.0)),  // B (gap=4 past A)
+        ];
+        let p_init = rect(0.0, 0.0, 100.0, 40.0);
+        let p_cur = rect(0.0, 0.0, 150.0, 40.0);
+        // Primary encroaches on A by 50 → A pushed to 154. A then encroaches on B:
+        // A_cur.x_high = 154+40=194, B.x_low=148 → encroach = 194+4-148 = 50 → B also pushed 50.
+        let (shifts, _) = resolve_cluster_shifts(&members, 0, 0, 4.0, &[], Some((p_init, p_cur)));
+        assert_eq!(shifts[&0], (50, 0), "A pushed by primary");
+        assert_eq!(shifts[&1], (50, 0), "B cascades from A");
+    }
+
+    #[test]
+    fn primary_static_edge_blocks_cascade() {
+        // Regression: a member pulled into a primary's NON-active edge by a bond.
+        //
+        // Layout (gap=4):
+        //   Primary C at x=[104,204], y=[0,100]
+        //   A at x=[104,204], y=[-104,-4] — directly above C (same x range)
+        //   D at x=[104,204], y=[104,204] — directly below C
+        //
+        // Scenario: in a previous frame, C's bottom edge was dragged upward,
+        // which caused D to shift up and bond to A (D pulled A up). Now the
+        // drag reverses: C's bottom edge moves down by 200. D has axis_y=Bottom
+        // so it shifts +200. Via the D→A bond, the bond-driven phase wants to
+        // pull A down to flush with D's new position — which would drag A
+        // through C's static top edge. The primary push must block this.
+        //
+        // Bond (D→A): D shifts +200, D_cur.y=[304,404]. Bond formula:
+        //   A.y_high(-4) <= D.y_low_init(104) → A is above D.
+        //   new_A_dy = D_cur.y_low - gap - A.y_high_init = 304-4-(-4) = 304.
+        // Without fix: A_cur.y_high = -4+304 = 300 > C.y_low-gap = -4 → overlap.
+        // With fix: primary push sets A back to dy=0 (A.y_high = -4 ≤ 0-4=-4).
+        let members = vec![
+            classify(None, None, rect(104.0, -104.0, 100.0, 100.0)), // A (idx 0)
+            classify(None, Some(Side::Bottom), rect(104.0, 104.0, 100.0, 100.0)), // D (idx 1)
+        ];
+        let p_init = rect(104.0, 0.0, 100.0, 100.0);
+        let p_cur  = rect(104.0, 0.0, 100.0, 300.0); // bottom grew by 200
+
+        // Bond (1=D, 0=A): D previously pushed A upward, forming this bond.
+        let bonds = vec![(1, 0)];
+
+        let (shifts, _) = resolve_cluster_shifts(&members, 0, 200, 4.0, &bonds, Some((p_init, p_cur)));
+
+        // D gets static shift +200.
+        assert_eq!(shifts[&1], (0, 200), "D shifts down with C's bottom edge");
+
+        // A must not be pulled through C's static top edge. Its shifted y_high
+        // must stay ≤ p_cur.y_low - gap = 0 - 4 = -4 (i.e., A.dy must be 0).
+        let a_dy = shifts.get(&0).map_or(0, |s| s.1);
+        let a_y_high_shifted = -4.0 + a_dy as f64;
+        assert!(
+            a_y_high_shifted <= p_cur.y_low - 4.0,
+            "A must not overlap the primary's top edge (got a_y_high={a_y_high_shifted}, p_cur.y_low={})",
+            p_cur.y_low,
+        );
+    }
+
+    #[test]
+    fn bond_expires_when_perpendicular_overlap_lost() {
+        // Layout: M at (0,0)-(100,100) [axis_x: Left, shifts left with width_delta].
+        //         N at (0,104)-(100,204) [axis_y: Bottom, shifts down with height_delta].
+        //
+        // Frame 1: width_delta=0, height_delta=-60.
+        //   N shifts up by 60 → N_cur.y_low=44, encroaches on M → bond (N→M) forms.
+        //   M gets pushed up by 60 too.
+        //
+        // Frame 2: width_delta=200, height_delta=-60.
+        //   M shifts left by -200 → M_cur x=[-200,-100]. N shifts up by -60.
+        //   M_cur and N_cur have no x-overlap (M: x_high=-100, N: x_low=0).
+        //   Bond (N,M) is a Y-axis bond → requires x_overlap → must NOT fire.
+        //   M should have shift (-200, 0) — no vertical component from stale bond.
+        let members = vec![
+            classify(Some(Side::Left), None, rect(0.0, 0.0, 100.0, 100.0)), // M, idx 0
+            classify(None, Some(Side::Bottom), rect(0.0, 104.0, 100.0, 100.0)), // N, idx 1
+        ];
+        let mut bonds = Vec::new();
+
+        // Frame 1: N shifts up, pushes M, bond forms.
+        let (shifts1, new_bonds) = resolve_cluster_shifts(&members, 0, -60, 4.0, &bonds, None);
+        assert_eq!(shifts1[&1], (0, -60), "N shifts up");
+        assert!(shifts1.get(&0).is_some_and(|s| s.1 < 0), "M pushed up by N");
+        assert!(!new_bonds.is_empty(), "bond should form when N pushes M");
+        bonds.extend(new_bonds);
+
+        // Frame 2: M drifts far left, losing x-overlap with N.
+        let (shifts2, _) = resolve_cluster_shifts(&members, 200, -60, 4.0, &bonds, None);
+        let m_shift = shifts2.get(&0).copied().unwrap_or((0, 0));
+        assert_eq!(m_shift.0, -200, "M shifts left by -200");
+        assert_eq!(m_shift.1, 0, "M should have no vertical shift — stale bond must not fire");
     }
 
     #[test]
@@ -769,12 +958,12 @@ mod tests {
             classify(None, None, rect(500.0, 0.0, 100.0, 100.0)),
         ];
         let mut bonds = Vec::new();
-        let (shifts, new_bonds) = resolve_cluster_shifts(&members, 30, 0, 4.0, &bonds);
+        let (shifts, new_bonds) = resolve_cluster_shifts(&members, 30, 0, 4.0, &bonds, None);
         assert!(!shifts.contains_key(&1), "N not pushed (too far)");
         assert!(new_bonds.is_empty());
         bonds.extend(new_bonds);
 
-        let (shifts2, _) = resolve_cluster_shifts(&members, -10, 0, 4.0, &bonds);
+        let (shifts2, _) = resolve_cluster_shifts(&members, -10, 0, 4.0, &bonds, None);
         assert!(!shifts2.contains_key(&1), "N still at initial, no bond");
     }
 }
