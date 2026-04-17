@@ -193,7 +193,16 @@ impl XdgShellHandler for DriftWm {
                 .is_some_and(|f| f.0 == wl_surface)
             {
                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                keyboard.set_focus(self, parent_focus, serial);
+                // Standalone toplevels have no parent — fall back to the most
+                // recent previous window so focus does not vanish (important
+                // with focus_follows_mouse when the pointer is over empty canvas).
+                let fallback = parent_focus.or_else(|| {
+                    self.focus_history
+                        .iter()
+                        .find(|w| w != &window)
+                        .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())))
+                });
+                keyboard.set_focus(self, fallback, serial);
             }
             // If the destroyed window was fullscreen, restore viewport
             let fs_output = self.fullscreen.iter()
