@@ -23,7 +23,7 @@ def _short_layout(name: str) -> str:
     for key, short in LAYOUT_SHORT.items():
         if key in name:
             return short
-    return name[:2].upper() if name else "—"
+    return name[:2].upper() if name else "en"
 
 
 WIDTH = 6
