@@ -90,8 +90,16 @@ impl XwmHandler for DriftWm {
             // Account for SSD title bar so the visual center matches viewport center.
             // navigate_to_window uses camera_to_center_window which offsets by bar/2;
             // the spawn position must be the exact inverse so cascade detects collisions.
-            let will_have_ssd = smithay_window.wants_ssd()
-                || rule.as_ref().is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
+            let effective = driftwm::config::effective_decoration_mode(
+                rule.as_ref().and_then(|r| r.decoration.as_ref()),
+                &self.config.decorations.default_mode,
+            );
+            let will_have_ssd = match effective {
+                driftwm::config::DecorationMode::Server => true,
+                driftwm::config::DecorationMode::Borderless | driftwm::config::DecorationMode::None => false,
+                // Client mode: defer to the X11 MOTIF hint
+                driftwm::config::DecorationMode::Client => smithay_window.wants_ssd(),
+            };
             let bar = if will_have_ssd { driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64 } else { 0.0 };
             let vc = self.usable_center_screen();
             let centered = self.active_output()
@@ -405,14 +413,19 @@ impl XWaylandShellHandler for DriftWm {
             });
         }
 
-        // SSD decorations: check MOTIF hints + window rule overrides
-        let wants_ssd = smithay_window.wants_ssd();
-        let rule_forces_ssd = rule.as_ref()
-            .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::Server);
-        let rule_forces_none = rule.as_ref()
-            .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::None);
+        // SSD decorations: title bar widget is created only for `Server` mode.
+        // For Client mode we still respect MOTIF hints (existing X11 fallback).
+        let effective = driftwm::config::effective_decoration_mode(
+            rule.as_ref().and_then(|r| r.decoration.as_ref()),
+            &self.config.decorations.default_mode,
+        );
+        let wants_titlebar = match effective {
+            driftwm::config::DecorationMode::Server => true,
+            driftwm::config::DecorationMode::Borderless | driftwm::config::DecorationMode::None => false,
+            driftwm::config::DecorationMode::Client => smithay_window.wants_ssd(),
+        };
 
-        if (wants_ssd || rule_forces_ssd) && !rule_forces_none {
+        if wants_titlebar {
             let geo = smithay_window.geometry();
             if geo.size.w > 0 && !self.decorations.contains_key(&wl_surface.id()) {
                 let deco = crate::decorations::WindowDecoration::new(

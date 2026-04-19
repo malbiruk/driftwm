@@ -426,12 +426,56 @@ use smithay::delegate_xdg_decoration;
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 
+/// Convert a `DecorationMode` to the wire-protocol mode we advertise to clients.
+/// Anything non-Client means SSD on the wire.
+pub fn decoration_mode_to_wire(
+    mode: &driftwm::config::DecorationMode,
+) -> smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode {
+    use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+    match mode {
+        driftwm::config::DecorationMode::Client => Mode::ClientSide,
+        _ => Mode::ServerSide,
+    }
+}
+
+/// Set all four Tiled states on the toplevel's pending state. niri trick:
+/// GTK and other toolkits read Tiled as "drop your shadow + rounded corners"
+/// even if they ignore xdg-decoration. driftwm draws uniform shadow + corners
+/// on every window, so client chrome would just collide with ours.
+///
+/// Caveat: Tiled also affects how some clients pick a default size — terminals
+/// like Alacritty interpret it as "fill the tile" and ignore `--dimensions`.
+/// So we skip it for windows where the user wants to be left alone (widget
+/// rules; effective mode `None`).
+pub fn set_tiled_states(toplevel: &ToplevelSurface) {
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+    toplevel.with_pending_state(|state| {
+        state.states.set(xdg_toplevel::State::TiledLeft);
+        state.states.set(xdg_toplevel::State::TiledRight);
+        state.states.set(xdg_toplevel::State::TiledTop);
+        state.states.set(xdg_toplevel::State::TiledBottom);
+    });
+}
+
+/// Inverse of `set_tiled_states` — used when a rule (widget, decoration=none)
+/// indicates the client should not be told it's tiled.
+pub fn unset_tiled_states(toplevel: &ToplevelSurface) {
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+    toplevel.with_pending_state(|state| {
+        state.states.unset(xdg_toplevel::State::TiledLeft);
+        state.states.unset(xdg_toplevel::State::TiledRight);
+        state.states.unset(xdg_toplevel::State::TiledTop);
+        state.states.unset(xdg_toplevel::State::TiledBottom);
+    });
+}
+
 impl XdgDecorationHandler for DriftWm {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
-        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-        // CSD-first: tell client to draw its own decorations
+        // Advertise the global default mode. Per-window rules override this in the
+        // commit handler once app_id is known.
+        let mode = decoration_mode_to_wire(&self.config.decorations.default_mode);
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(Mode::ClientSide);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
     }
@@ -443,26 +487,33 @@ impl XdgDecorationHandler for DriftWm {
     ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
-        let wl_surface = toplevel.wl_surface().clone();
-
-        // If a window rule forces decoration mode, override the client's request
-        let effective_mode = if let Some(rule) = driftwm::config::applied_rule(&wl_surface)
-            && rule.decoration != driftwm::config::DecorationMode::Client
-        {
-            Mode::ServerSide
-        } else {
-            mode
-        };
-
+        // Always honor the client's wire-mode request — niri does the same
+        // (SDL2 has a bug where overriding leaves windows hidden).
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(effective_mode);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
 
-        if effective_mode == Mode::ServerSide {
+        // Decide whether this client gets a driftwm title bar:
+        //   - Explicit rule decoration → only `Server` gets a bar.
+        //   - No explicit rule → defer to default_mode, but fall back to
+        //     creating a bar when default is `Client` and the client itself
+        //     asked for SSD (Alacritty / no-CSD apps need *some* chrome).
+        let wl_surface = toplevel.wl_surface().clone();
+        let applied = driftwm::config::applied_rule(&wl_surface);
+        let rule_explicit = applied.as_ref().and_then(|a| a.decoration.as_ref()).cloned();
+        let create_titlebar = match rule_explicit {
+            Some(driftwm::config::DecorationMode::Server) => true,
+            Some(_) => false,
+            None => matches!(
+                (&mode, &self.config.decorations.default_mode),
+                (Mode::ServerSide, driftwm::config::DecorationMode::Client)
+                    | (_, driftwm::config::DecorationMode::Server)
+            ),
+        };
+
+        if create_titlebar {
             self.pending_ssd.insert(wl_surface.id());
-            // If the window is already mapped (request_mode came after first commit),
-            // create the SSD decoration immediately.
             let window = self
                 .space
                 .elements()
@@ -479,7 +530,8 @@ impl XdgDecorationHandler for DriftWm {
                     self.decorations.insert(wl_surface.id(), deco);
                 }
             }
-        } else {
+        } else if mode == Mode::ClientSide {
+            // Client switching back to CSD: drop any stale SSD chrome.
             self.pending_ssd.remove(&wl_surface.id());
             self.decorations.remove(&wl_surface.id());
             self.render.csd_shadows.remove(&wl_surface.id());
@@ -487,9 +539,9 @@ impl XdgDecorationHandler for DriftWm {
     }
 
     fn unset_mode(&mut self, toplevel: ToplevelSurface) {
-        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+        let mode = decoration_mode_to_wire(&self.config.decorations.default_mode);
         toplevel.with_pending_state(|state| {
-            state.decoration_mode = Some(Mode::ClientSide);
+            state.decoration_mode = Some(mode);
         });
         toplevel.send_configure();
     }

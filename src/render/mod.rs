@@ -183,6 +183,7 @@ pub const CORNER_CLIP_UNIFORMS: &[UniformName<'static>] = &[
     UniformName { name: Cow::Borrowed("u_size"), type_: UniformType::_2f },
     UniformName { name: Cow::Borrowed("u_geo"), type_: UniformType::_4f },
     UniformName { name: Cow::Borrowed("u_radius"), type_: UniformType::_1f },
+    UniformName { name: Cow::Borrowed("u_scale"), type_: UniformType::_1f },
     UniformName { name: Cow::Borrowed("u_clip_top"), type_: UniformType::_1f },
     UniformName { name: Cow::Borrowed("u_clip_shadow"), type_: UniformType::_1f },
 ];
@@ -543,8 +544,10 @@ fn push_corner_clipped_elements(
     clip_shadow: f32,
     clip_all_corners: bool,
     zoom: f64,
+    output_scale: f64,
 ) {
     let toplevel_id = smithay::backend::renderer::element::Id::from_wayland_resource(wl_surface);
+    let effective_scale = (output_scale * zoom) as f32;
     for elem in elems {
         if *elem.id() == toplevel_id {
             let buf = elem.buffer_size();
@@ -556,6 +559,7 @@ fn push_corner_clipped_elements(
                 Uniform::new("u_size", (buf.w as f32, buf.h as f32)),
                 Uniform::new("u_geo", (gx, gy, gw, gh)),
                 Uniform::new("u_radius", radius),
+                Uniform::new("u_scale", effective_scale),
                 Uniform::new("u_clip_top", clip_top),
                 Uniform::new("u_clip_shadow", clip_shadow),
             ];
@@ -721,7 +725,7 @@ pub fn compose_frame(
                     // SSD: buffer = content, only bottom corners clipped
                     push_corner_clipped_elements(
                         target, elems, &wl_surface, shader,
-                        None, radius, 0.0, 0.0, false, zoom,
+                        None, radius, 0.0, 0.0, false, zoom, output_scale,
                     );
                 } else {
                     push_plain_elements(target, elems, zoom);
@@ -802,16 +806,21 @@ pub fn compose_frame(
             let geo = window.geometry();
             let radius = state.config.decorations.corner_radius as f32;
 
-            let rule_forced = applied.as_ref().is_some_and(|r| {
-                r.decoration != driftwm::config::DecorationMode::Client
-            });
+            // Only `None` mode opts out of shadow + corner clipping.
+            // Client (CSD), Borderless, and untagged windows all get the chrome —
+            // any `Server` window would have taken the `has_ssd` branch above.
+            let effective = driftwm::config::effective_decoration_mode(
+                applied.as_ref().and_then(|r| r.decoration.as_ref()),
+                &state.config.decorations.default_mode,
+            );
+            let bare = matches!(effective, driftwm::config::DecorationMode::None);
 
-            if !rule_forced && !is_fullscreen {
+            if !bare && !is_fullscreen {
                 if radius > 0.0 {
                     // CSD: use window geometry (content may be offset within buffer)
                     push_corner_clipped_elements(
                         target, elems, &wl_surface, shader,
-                        Some(geo), radius, 1.0, 1.0, true, zoom,
+                        Some(geo), radius, 1.0, 1.0, true, zoom, output_scale,
                     );
                 } else {
                     push_plain_elements(target, elems, zoom);

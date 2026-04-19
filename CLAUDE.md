@@ -74,7 +74,7 @@ Current source layout:
 
 ## Key Design Decisions
 
-- **CSD-first**: compositor advertises only `close` and `fullscreen` capabilities (no maximize/minimize). SSD fallback: 25px title bar (rounded corners, radius 8), × close button, Gaussian shadow shader (radius 14), invisible resize borders (8px). Configurable `bg_color`/`fg_color` via `[decorations]`.
+- **CSD-first**: compositor advertises only `close` and `fullscreen` capabilities (no maximize/minimize). SSD fallback: 25px title bar (rounded corners, radius 10), × close button, Gaussian shadow shader (radius 14), invisible resize borders (8px). Configurable `bg_color`/`fg_color` via `[decorations]`.
 - **Gesture-driven**: configurable gesture and mouse bindings with context-awareness (on-window/on-canvas/anywhere). Defaults: 2-finger pinch for viewport zoom, 3-finger swipe for pan, 4-finger for navigation. Mouse equivalents use Mod+click modifiers. Unbound gestures forward to apps.
 - **Canvas background**: scrolls with viewport (not fixed to screen). Default is a GLSL dot-grid shader; static shaders are cached and only re-render on viewport changes.
 - **Widgets**: layer-shell surfaces or xdg-toplevel windows placed at canvas positions via window rules (`app_id` glob matching, `position` field). Canvas layers bypass the layer map and render at fixed canvas coordinates.

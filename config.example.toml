@@ -89,7 +89,17 @@
 [decorations]
 # bg_color = "#303030"           # title bar background (default: dark gray)
 # fg_color = "#FFFFFF"           # close button × color (default: white)
-# corner_radius = 8              # clip window corners to this radius (no effect if client rounds more)
+# corner_radius = 10             # clip window corners to this radius
+# default_mode = "client"        # decoration mode for windows without a rule.
+                                 # "client":     CSD — client draws its own titlebar (default)
+                                 # "server":     SSD — driftwm draws a titlebar with close button
+                                 # "borderless": SSD — no titlebar, just shadow + corners
+                                 # "none":       SSD — bare client surface, no chrome
+                                 #
+                                 # Note: "server" works best with apps that honor xdg-decoration
+                                 # (terminals, mpv, native Qt). Many GTK apps ignore the SSD hint
+                                 # and keep drawing their own titlebar — you'll get a misaligned
+                                 # double titlebar. For those, use "borderless" instead.
 
 [effects]
 # blur_radius = 2                # number of Kawase down+up passes (default: 2)
@@ -311,7 +321,12 @@
 #   position   — [x, y] canvas coordinates to place the window
 #   size       — [width, height] to force window dimensions
 #   widget      — true: pinned (immovable), below normal windows, excluded from navigation (default: false)
-#   decoration  — "client" (default), "server", or "none" (borderless)
+#   decoration  — overrides [decorations] default_mode for matched windows.
+#                 Omit to inherit default_mode. Values:
+#                 client:     CSD — client's own titlebar
+#                 server:     SSD — driftwm's titlebar
+#                 borderless: SSD — no titlebar, but driftwm's shadow + corner clip
+#                 none:       SSD — completely bare, no chrome at all
 #   blur        — true: blur background behind this window (default: false)
 #   opacity     — 0.0–1.0: window transparency (default: 1.0, fully opaque)
 #

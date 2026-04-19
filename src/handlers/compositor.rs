@@ -267,15 +267,36 @@ impl CompositorHandler for DriftWm {
                         self.space.map_element(window.clone(), pos, activate);
                     }
 
-                    // Decoration override: always re-apply (idempotent, needed on tray reopen)
-                    if let Some(ref rule) = rule && rule.decoration != driftwm::config::DecorationMode::Client {
-                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                        if let Some(toplevel) = window.toplevel() {
-                            toplevel.with_pending_state(|state| {
-                                state.decoration_mode = Some(Mode::ServerSide);
-                            });
-                            toplevel.send_configure();
+                    // Resolve effective decoration mode: explicit rule wins, else
+                    // global default_mode. Always re-apply (idempotent — needed on
+                    // tray reopen and as the canonical late-app_id override).
+                    let effective = driftwm::config::effective_decoration_mode(
+                        rule.as_ref().and_then(|r| r.decoration.as_ref()),
+                        &self.config.decorations.default_mode,
+                    ).clone();
+
+                    if let Some(toplevel) = window.toplevel() {
+                        let wire = crate::handlers::decoration_mode_to_wire(&effective);
+                        toplevel.with_pending_state(|state| {
+                            state.decoration_mode = Some(wire);
+                        });
+
+                        // Sync Tiled hint to the resolved intent. Skip Tiled when
+                        // the user wants the client left alone: widget rules
+                        // (explicit position/size) and `None` mode (truly bare).
+                        // Otherwise Tiled tells GTK et al. to drop their shadow
+                        // and rounded corners since we draw uniform chrome.
+                        let skip_tiled = rule.as_ref().is_some_and(|r| r.widget)
+                            || matches!(effective, driftwm::config::DecorationMode::None);
+                        if skip_tiled {
+                            crate::handlers::unset_tiled_states(toplevel);
+                        } else {
+                            crate::handlers::set_tiled_states(toplevel);
                         }
+
+                        toplevel.send_configure();
+                    }
+                    if effective != driftwm::config::DecorationMode::Client {
                         self.pending_ssd.insert(root.id());
                     }
 
@@ -303,23 +324,18 @@ impl CompositorHandler for DriftWm {
                             self.navigate_to_window(&window, reset);
                         }
 
-                        // Create SSD decorations if the window wants ServerSide mode
-                        // (from window rule OR xdg-decoration protocol negotiation)
-                        // and the window rule isn't DecorationMode::None.
-                        // Use pending_ssd (sideband set) rather than with_pending_state,
-                        // since the double-buffer state may have been consumed by configure/ack.
+                        // Create the title bar widget only for `Server` mode.
+                        // Borderless still gets shadow + corner clip via the
+                        // render path; None gets nothing; Client never has a widget.
+                        if effective == driftwm::config::DecorationMode::Server
+                            && !self.decorations.contains_key(&root.id())
                         {
-                            let is_server_side = self.pending_ssd.contains(&root.id());
-                            let is_none_mode = rule.as_ref()
-                                .is_some_and(|r| r.decoration == driftwm::config::DecorationMode::None);
-                            if is_server_side && !is_none_mode && !self.decorations.contains_key(&root.id()) {
-                                let deco = crate::decorations::WindowDecoration::new(
-                                    geo.size.w,
-                                    true,
-                                    &self.config.decorations,
-                                );
-                                self.decorations.insert(root.id(), deco);
-                            }
+                            let deco = crate::decorations::WindowDecoration::new(
+                                geo.size.w,
+                                true,
+                                &self.config.decorations,
+                            );
+                            self.decorations.insert(root.id(), deco);
                         }
 
                         // New window arrived — clear loading cursor

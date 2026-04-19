@@ -166,6 +166,7 @@ pub(super) struct DecorationFileConfig {
     pub bg_color: Option<String>,
     pub fg_color: Option<String>,
     pub corner_radius: Option<i32>,
+    pub default_mode: Option<String>,
 }
 
 #[derive(Deserialize)]

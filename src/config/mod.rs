@@ -590,10 +590,22 @@ fn parse_decoration_config(raw: DecorationFileConfig) -> DecorationConfig {
         }
     };
 
+    let default_mode = match raw.default_mode.as_deref() {
+        Some("client") | None => DecorationMode::Client,
+        Some("server") => DecorationMode::Server,
+        Some("borderless") => DecorationMode::Borderless,
+        Some("none") => DecorationMode::None,
+        Some(other) => {
+            tracing::warn!("Unknown default_mode '{other}', using client");
+            DecorationMode::Client
+        }
+    };
+
     DecorationConfig {
         bg_color: resolve(raw.bg_color, defaults.bg_color, "bg_color"),
         fg_color: resolve(raw.fg_color, defaults.fg_color, "fg_color"),
         corner_radius: raw.corner_radius.unwrap_or(defaults.corner_radius).max(0),
+        default_mode,
     }
 }
 
@@ -602,13 +614,17 @@ fn parse_window_rule(r: WindowRuleFile) -> Option<WindowRule> {
         tracing::warn!("Window rule has neither app_id nor title, skipping");
         return None;
     }
+    // None = "field not set" → window inherits [decorations] default_mode.
+    // Some(_) = explicit user choice that overrides the default.
     let decoration = match r.decoration.as_deref() {
-        Some("none") => DecorationMode::None,
-        Some("server") => DecorationMode::Server,
-        Some("client") | None => DecorationMode::Client,
+        None => None,
+        Some("none") => Some(DecorationMode::None),
+        Some("borderless") => Some(DecorationMode::Borderless),
+        Some("server") => Some(DecorationMode::Server),
+        Some("client") => Some(DecorationMode::Client),
         Some(other) => {
-            tracing::warn!("Unknown decoration mode '{other}', using client");
-            DecorationMode::Client
+            tracing::warn!("Unknown decoration mode '{other}', falling through to default_mode");
+            None
         }
     };
     Some(WindowRule {

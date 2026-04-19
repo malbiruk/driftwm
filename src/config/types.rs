@@ -373,15 +373,18 @@ pub struct KeyboardLayout {
     pub model: String,
 }
 
-/// Decoration mode applied by a window rule.
+/// Decoration mode for a window. Drives both the xdg-decoration hint we send
+/// the client and what the compositor renders on top.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub enum DecorationMode {
-    /// Client-side decorations (default — compositor advertises CSD-first).
+    /// CSD: client draws its own decorations. Compositor still draws shadow + corner clip.
     #[default]
     Client,
-    /// Server-side decorations (compositor draws frame — currently renders nothing = borderless).
+    /// SSD: compositor draws a title bar with close button, plus shadow + corner clip.
     Server,
-    /// No decorations at all: force SSD mode but draw nothing.
+    /// SSD: no title bar, but compositor still draws shadow + corner clip.
+    Borderless,
+    /// SSD: nothing at all — bare client surface, no shadow, no corner clip.
     None,
 }
 
@@ -395,7 +398,9 @@ pub struct WindowRule {
     /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
     /// and always stacked below normal windows.
     pub widget: bool,
-    pub decoration: DecorationMode,
+    /// `None` means "inherit `[decorations] default_mode`". Explicit
+    /// `decoration = "client"` resolves to `Some(Client)` and overrides default.
+    pub decoration: Option<DecorationMode>,
     pub blur: bool,
     pub opacity: Option<f64>,
 }
@@ -404,7 +409,7 @@ pub struct WindowRule {
 #[derive(Clone, Debug)]
 pub struct AppliedWindowRule {
     pub widget: bool,
-    pub decoration: DecorationMode,
+    pub decoration: Option<DecorationMode>,
     pub blur: bool,
     pub opacity: Option<f64>,
 }
@@ -418,6 +423,17 @@ impl From<&WindowRule> for AppliedWindowRule {
             opacity: rule.opacity,
         }
     }
+}
+
+/// Resolve the effective decoration mode for a window: rule-specified mode wins;
+/// otherwise fall back to the global `default_mode` from `[decorations]`.
+/// Accepts the decoration field directly (works with both `WindowRule` and
+/// `AppliedWindowRule`).
+pub fn effective_decoration_mode<'a>(
+    rule_decoration: Option<&'a DecorationMode>,
+    default_mode: &'a DecorationMode,
+) -> &'a DecorationMode {
+    rule_decoration.unwrap_or(default_mode)
 }
 
 #[derive(Clone, Debug, PartialEq, Default)]
@@ -461,6 +477,8 @@ pub struct DecorationConfig {
     pub bg_color: [u8; 4],
     pub fg_color: [u8; 4],
     pub corner_radius: i32,
+    /// Default decoration mode for windows without a matching rule.
+    pub default_mode: DecorationMode,
 }
 
 impl Default for DecorationConfig {
@@ -468,7 +486,8 @@ impl Default for DecorationConfig {
         Self {
             bg_color: [0x30, 0x30, 0x30, 0xFF],
             fg_color: [0xFF, 0xFF, 0xFF, 0xFF],
-            corner_radius: 8,
+            corner_radius: 10,
+            default_mode: DecorationMode::Client,
         }
     }
 }

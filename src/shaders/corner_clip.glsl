@@ -6,6 +6,7 @@ uniform float alpha;
 uniform vec2 u_size;
 uniform vec4 u_geo;
 uniform float u_radius;
+uniform float u_scale;        // output_scale * canvas_zoom — keeps AA band ~1 output px wide
 uniform float u_clip_top;     // 1.0 = clip top corners, 0.0 = bottom only
 uniform float u_clip_shadow;  // 1.0 = clip everything outside geometry
 
@@ -51,7 +52,8 @@ void main() {
             corner = vec2(u_radius, geo_size.y - u_radius);
         }
         float dist = length(geo_pos - corner) - u_radius;
-        clip = 1.0 - smoothstep(-0.5, 0.5, dist);
+        float t = clamp(dist * u_scale + 0.5, 0.0, 1.0);
+        clip = 1.0 - t * t * (3.0 - 2.0 * t);
     }
 
     gl_FragColor = color * alpha * clip;

@@ -362,7 +362,7 @@ only `close` and `fullscreen` capabilities via `xdg-toplevel` — no maximize,
 no minimize. GTK/Qt apps hide those buttons automatically.
 
 All CSD and SSD windows get consistent compositor-applied treatment:
-- **Corner rounding**: compositor clips windows to `corner_radius` (default 8).
+- **Corner rounding**: compositor clips windows to `corner_radius` (default 10).
   Overrides client-drawn corners for consistency (some GTK3 apps render square
   or mismatched corners).
 - **Shadow**: compositor strips client shadows and renders its own Gaussian drop
