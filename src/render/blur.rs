@@ -1,16 +1,42 @@
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::element::texture::TextureRenderElement;
-use smithay::backend::renderer::element::Kind;
+use smithay::backend::renderer::element::{Element, Kind};
 use smithay::backend::renderer::gles::{
     GlesError, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformName, UniformType,
 };
 use smithay::output::Output;
 use smithay::utils::{Physical, Rectangle, Size, Transform};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 use super::OutputRenderElements;
 
 static BLUR_DOWN_SRC: &str = include_str!("../shaders/blur_down.glsl");
 static BLUR_UP_SRC: &str = include_str!("../shaders/blur_up.glsl");
+
+/// Compute a hash of render elements behind a window for blur cache invalidation.
+/// This allows per-window background tracking instead of global scene generation.
+fn hash_background_elements(elements: &[OutputRenderElements], window_rect: Rectangle<i32, Physical>) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    
+    // Hash count of elements (cheap check for scene changes)
+    elements.len().hash(&mut hasher);
+    
+    // Hash IDs and geometry of elements that overlap with window rect
+    for elem in elements {
+        // Get element geometry (this is a simplified approach - in reality we'd need
+        // to check actual element bounds, but this gives us a good approximation)
+        elem.id().hash(&mut hasher);
+    }
+    
+    // Hash window rect itself (position changes should invalidate)
+    window_rect.loc.x.hash(&mut hasher);
+    window_rect.loc.y.hash(&mut hasher);
+    window_rect.size.w.hash(&mut hasher);
+    window_rect.size.h.hash(&mut hasher);
+    
+    hasher.finish()
+}
 
 /// Per-window cached textures for Kawase blur ping-pong passes.
 pub struct BlurCache {
@@ -22,6 +48,8 @@ pub struct BlurCache {
     pub last_scene_generation: u64,
     pub last_geometry_generation: u64,
     pub last_camera_generation: u64,
+    /// Hash of elements behind this window (for per-window background tracking)
+    pub last_background_hash: u64,
 }
 
 impl BlurCache {
@@ -35,6 +63,7 @@ impl BlurCache {
             texture: t1, scratch: t2, mask: t3, size,
             dirty: true, last_scene_generation: 0,
             last_geometry_generation: 0, last_camera_generation: 0,
+            last_background_hash: 0,
         })
     }
 
@@ -268,6 +297,54 @@ pub(crate) fn process_blur_requests(
         };
         (prefix + req.elem_start + req.elem_count).min(all_elements.len())
     }).collect();
+
+    // Check if each window needs recompute based on per-window background changes
+    let mut needs_recompute = Vec::with_capacity(blur_requests.len());
+    for (i, req) in blur_requests.iter().enumerate() {
+        let win_size = req.screen_rect.size;
+        if win_size.w <= 0 || win_size.h <= 0 {
+            needs_recompute.push(false);
+            continue;
+        }
+        if !state.render.blur_cache.contains_key(&req.surface_id) {
+            if let Some(cache) = BlurCache::new(renderer, win_size) {
+                state.render.blur_cache.insert(req.surface_id.clone(), cache);
+            } else {
+                needs_recompute.push(false);
+                continue;
+            }
+        }
+        let cache = state.render.blur_cache.get_mut(&req.surface_id).unwrap();
+        if cache.size != win_size {
+            cache.resize(renderer, win_size);
+        }
+
+        // Compute hash of elements behind this window
+        let behind = behind_starts[i];
+        let elements_behind = &all_elements[behind..];
+        let bg_hash = hash_background_elements(elements_behind, req.screen_rect);
+        
+        let background_changed = cache.last_background_hash != bg_hash;
+        let geom_changed = cache.last_geometry_generation != geom_gen;
+        // Layer surfaces are screen-fixed — camera pans scroll the canvas behind them
+        let camera_dirty = matches!(req.layer, BlurLayer::Overlay | BlurLayer::Top)
+            && cache.last_camera_generation != camera_gen;
+
+        if background_changed || geom_changed || camera_dirty {
+            tracing::debug!(
+                "Blur invalidated: bg={}, geom={}, cam={}, hash: {} -> {}",
+                background_changed, geom_changed, camera_dirty, 
+                cache.last_background_hash, bg_hash
+            );
+            cache.dirty = true;
+        }
+        cache.last_background_hash = bg_hash;
+        cache.last_scene_generation = scene_gen;
+        cache.last_geometry_generation = geom_gen;
+        cache.last_camera_generation = camera_gen;
+
+        needs_recompute.push(cache.dirty);
+    }
 
     let mask_shader = state.render.blur_mask_shader.clone();
 
