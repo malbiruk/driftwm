@@ -50,8 +50,10 @@ use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::pointer_gestures::PointerGesturesState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
+use smithay::wayland::security_context::SecurityContextState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
 use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
@@ -312,6 +314,10 @@ pub struct DriftWm {
     #[allow(dead_code)]
     pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     #[allow(dead_code)]
+    pub virtual_keyboard_state: VirtualKeyboardManagerState,
+    #[allow(dead_code)]
+    pub security_context_state: SecurityContextState,
+    #[allow(dead_code)]
     pub idle_inhibit_state: IdleInhibitManagerState,
     pub idle_notifier_state: IdleNotifierState<DriftWm>,
     #[allow(dead_code)]
@@ -424,6 +430,9 @@ pub struct DriftWm {
 #[derive(Default)]
 pub struct ClientState {
     pub compositor_state: CompositorClientState,
+    /// Clients connected via a security-context listener are restricted from
+    /// privileged protocols (virtual keyboard, etc.). See SecurityContextHandler.
+    pub restricted: bool,
 }
 
 impl ClientData for ClientState {
@@ -462,6 +471,22 @@ impl DriftWm {
         let relative_pointer_state = RelativePointerManagerState::new::<Self>(&dh);
         let _pointer_gestures_state = PointerGesturesState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        // Restricted clients (those connecting through a security-context listener)
+        // are denied access to privileged protocols such as virtual keyboard.
+        // Clients without a ClientState (e.g. XWayland's internal client, whose
+        // setup callback doesn't attach one) are treated as unrestricted since
+        // they are spawned by the compositor itself.
+        fn client_is_unrestricted(
+            client: &smithay::reexports::wayland_server::Client,
+        ) -> bool {
+            client
+                .get_data::<ClientState>()
+                .map_or(true, |d| !d.restricted)
+        }
+        let security_context_state =
+            SecurityContextState::new::<Self, _>(&dh, client_is_unrestricted);
+        let virtual_keyboard_state =
+            VirtualKeyboardManagerState::new::<Self, _>(&dh, client_is_unrestricted);
         let idle_inhibit_state = IdleInhibitManagerState::new::<Self>(&dh);
         let idle_notifier_state = IdleNotifierState::new(&dh, loop_handle.clone());
         let presentation_state = PresentationState::new::<Self>(&dh, 1); // CLOCK_MONOTONIC
@@ -559,6 +584,8 @@ impl DriftWm {
             pointer_constraints_state,
             relative_pointer_state,
             keyboard_shortcuts_inhibit_state,
+            virtual_keyboard_state,
+            security_context_state,
             idle_inhibit_state,
             idle_notifier_state,
             presentation_state,

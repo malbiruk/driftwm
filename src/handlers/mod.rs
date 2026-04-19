@@ -13,7 +13,8 @@ use smithay::{
     delegate_fractional_scale, delegate_idle_inhibit, delegate_keyboard_shortcuts_inhibit,
     delegate_output, delegate_pointer_constraints, delegate_pointer_gestures,
     delegate_presentation, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
-    delegate_single_pixel_buffer, delegate_viewporter, delegate_xdg_activation,
+    delegate_security_context, delegate_single_pixel_buffer, delegate_viewporter,
+    delegate_virtual_keyboard_manager, delegate_xdg_activation,
     input::{
         Seat, SeatHandler, SeatState, keyboard,
         dnd::{self, DnDGrab},
@@ -33,6 +34,9 @@ use smithay::{
         keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitor},
         output::OutputHandler,
         pointer_constraints::PointerConstraintsHandler,
+        security_context::{
+            SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
+        },
         selection::{
             SelectionHandler, SelectionSource, SelectionTarget,
             data_device::{
@@ -340,6 +344,32 @@ impl KeyboardShortcutsInhibitHandler for DriftWm {
 }
 
 delegate_keyboard_shortcuts_inhibit!(DriftWm);
+
+impl SecurityContextHandler for DriftWm {
+    fn context_created(
+        &mut self,
+        source: SecurityContextListenerSource,
+        context: SecurityContext,
+    ) {
+        let result = self
+            .loop_handle
+            .insert_source(source, move |client, _, state| {
+                tracing::debug!("inserting restricted client from security context: {context:?}");
+                let data = std::sync::Arc::new(crate::state::ClientState {
+                    compositor_state: Default::default(),
+                    restricted: true,
+                });
+                if let Err(err) = state.display_handle.insert_client(client, data) {
+                    tracing::warn!("failed to insert restricted client: {err}");
+                }
+            });
+        if let Err(err) = result {
+            tracing::warn!("failed to register security context listener: {err}");
+        }
+    }
+}
+delegate_security_context!(DriftWm);
+delegate_virtual_keyboard_manager!(DriftWm);
 
 impl IdleInhibitHandler for DriftWm {
     fn inhibit(&mut self, _surface: WlSurface) {}

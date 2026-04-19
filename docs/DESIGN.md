@@ -44,6 +44,8 @@ trackpad gestures. No workspaces, no tiling — just drift.
   - `xwayland-shell` — X11 app support via Xwayland
   - `ext-idle-notify` — idle detection (swayidle, hypridle)
   - `wp_single_pixel_buffer` — 1x1 solid color buffers (GTK4 backgrounds/separators)
+  - `zwp_virtual_keyboard_v1` — synthesized key events (wtype, clipboard auto-paste). Gated behind `wp_security_context_v1`.
+  - `wp_security_context_v1` — sandbox attribution for clients; restricts access to privileged protocols
 
 ## Core concept: infinite canvas
 
@@ -779,5 +781,5 @@ requiring real hardware (udev/TTY). Milestones 1–8 work entirely in winit.
 14. **XWayland** — X11 app support via Xwayland, WindowExt trait for polymorphism _(done)_
 15. **Blur** — multi-pass Kawase blur, per-window via window rules, opacity support _(done)_
 16. **Pinned-to-screen** — `pinned_to_screen` window rule: window stays always on top, position in viewport (screen) coordinates instead of canvas coordinates
-17. **Text input / IME** — `text-input` v3, `input-method` v2, `virtual-keyboard` v1. Required for CJK input (Chinese/Japanese/Korean) and on-screen keyboards. Input method popup positioning on the canvas.
+17. **Text input / IME** — `text-input` v3, `input-method` v2, `virtual-keyboard` v1 _(done, gated by `wp_security_context_v1`)_. Text-input and input-method still required for CJK input (Chinese/Japanese/Korean) and on-screen keyboards. Input method popup positioning on the canvas.
 18. **Input polish** — NumLock-on-startup config option (`[input.keyboard] numlock = true`), virtual pointer protocol (`zwp-virtual-pointer-v1`) for remote desktop tools (wayvnc, GNOME Remote Desktop)
