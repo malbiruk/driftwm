@@ -223,6 +223,50 @@ impl CompositorHandler for DriftWm {
                         });
                     }
 
+                    // Resolve effective decoration mode. Priority:
+                    //   1. Explicit window rule wins — we override whatever the
+                    //      client negotiated.
+                    //   2. Otherwise, honor what xdg-decoration negotiation
+                    //      already produced (state.decoration_mode).
+                    //   3. If the client never bound xdg-decoration (pending
+                    //      mode is None), fall back to default_mode.
+                    //
+                    // Resolved BEFORE positioning so the centering math can
+                    // account for the SSD title bar that will be drawn above
+                    // the client content (self.decorations isn't populated
+                    // yet — that happens later in this same commit).
+                    //
+                    // The previous logic unconditionally forced `rule OR default_mode`
+                    // onto the wire, which clobbered a client's request_mode(Server)
+                    // any time default_mode was Client (the default). That caused
+                    // Qt apps to CSD and Alacritty to fall back to SCTK chrome.
+                    let rule_explicit = rule
+                        .as_ref()
+                        .and_then(|r| r.decoration.as_ref())
+                        .cloned();
+
+                    let effective = if let Some(ref m) = rule_explicit {
+                        m.clone()
+                    } else if let Some(toplevel) = window.toplevel() {
+                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+                        let negotiated = toplevel.with_pending_state(|s| s.decoration_mode);
+                        let default = &self.config.decorations.default_mode;
+                        let default_wire = crate::handlers::decoration_mode_to_wire(default);
+                        // If the client accepted what we advertised, keep the
+                        // full DecorationMode (preserves Borderless / None,
+                        // which both map to ServerSide on the wire and would
+                        // otherwise be lost in a round-trip).
+                        match negotiated {
+                            None => default.clone(),
+                            Some(w) if w == default_wire => default.clone(),
+                            Some(Mode::ServerSide) => driftwm::config::DecorationMode::Server,
+                            Some(Mode::ClientSide) => driftwm::config::DecorationMode::Client,
+                            _ => default.clone(),
+                        }
+                    } else {
+                        self.config.decorations.default_mode.clone()
+                    };
+
                     // Force size on first commit: send a configure with the
                     // rule's size, re-insert into pending_center, and wait for
                     // the client to re-render at the new dimensions.
@@ -262,10 +306,18 @@ impl CompositorHandler for DriftWm {
                                 output.and_then(|o| self.space.output_geometry(&o))
                             };
                             let centered = if output_geo.is_some() {
+                                // SSD title bar is drawn above client content, so
+                                // shift the client down by bar/2 to center the
+                                // visible frame (titlebar + content) on-screen.
+                                let bar_px = if matches!(effective, driftwm::config::DecorationMode::Server) {
+                                    driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT as f64
+                                } else {
+                                    0.0
+                                };
                                 let vc = self.usable_center_screen();
                                 let cam = self.camera(); let z = self.zoom();
                                 let cx = (cam.x + vc.x / z).round() as i32 - geo.size.w / 2;
-                                let cy = (cam.y + vc.y / z).round() as i32 - geo.size.h / 2;
+                                let cy = (cam.y + bar_px / 2.0 + vc.y / z).round() as i32 - geo.size.h / 2;
                                 (cx, cy)
                             } else {
                                 (0, 0)
@@ -275,45 +327,6 @@ impl CompositorHandler for DriftWm {
                         let activate = rule.as_ref().is_none_or(|r| !r.widget);
                         self.space.map_element(window.clone(), pos, activate);
                     }
-
-                    // Resolve effective decoration mode. Priority:
-                    //   1. Explicit window rule wins — we override whatever the
-                    //      client negotiated.
-                    //   2. Otherwise, honor what xdg-decoration negotiation
-                    //      already produced (state.decoration_mode).
-                    //   3. If the client never bound xdg-decoration (pending
-                    //      mode is None), fall back to default_mode.
-                    //
-                    // The previous logic unconditionally forced `rule OR default_mode`
-                    // onto the wire, which clobbered a client's request_mode(Server)
-                    // any time default_mode was Client (the default). That caused
-                    // Qt apps to CSD and Alacritty to fall back to SCTK chrome.
-                    let rule_explicit = rule
-                        .as_ref()
-                        .and_then(|r| r.decoration.as_ref())
-                        .cloned();
-
-                    let effective = if let Some(ref m) = rule_explicit {
-                        m.clone()
-                    } else if let Some(toplevel) = window.toplevel() {
-                        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
-                        let negotiated = toplevel.with_pending_state(|s| s.decoration_mode);
-                        let default = &self.config.decorations.default_mode;
-                        let default_wire = crate::handlers::decoration_mode_to_wire(default);
-                        // If the client accepted what we advertised, keep the
-                        // full DecorationMode (preserves Borderless / None,
-                        // which both map to ServerSide on the wire and would
-                        // otherwise be lost in a round-trip).
-                        match negotiated {
-                            None => default.clone(),
-                            Some(w) if w == default_wire => default.clone(),
-                            Some(Mode::ServerSide) => driftwm::config::DecorationMode::Server,
-                            Some(Mode::ClientSide) => driftwm::config::DecorationMode::Client,
-                            _ => default.clone(),
-                        }
-                    } else {
-                        self.config.decorations.default_mode.clone()
-                    };
 
                     if let Some(toplevel) = window.toplevel() {
                         // Only overwrite the wire mode when a rule is forcing
@@ -362,15 +375,12 @@ impl CompositorHandler for DriftWm {
                     }
 
                     if has_size {
-                        let is_widget = rule.as_ref().is_some_and(|r| r.widget);
-                        if !is_widget {
-                            let reset = self.config.zoom_reset_on_new_window;
-                            self.navigate_to_window(&window, reset);
-                        }
-
-                        // Create the title bar widget only for `Server` mode.
-                        // Borderless still gets shadow + corner clip via the
-                        // render path; None gets nothing; Client never has a widget.
+                        // Create the title bar widget BEFORE navigate_to_window so
+                        // window_ssd_bar() returns the correct height. Otherwise
+                        // the camera target centers the client body (ignoring the
+                        // titlebar drawn above it) and drifts by bar/2.
+                        // Borderless still gets shadow + corner clip via the render
+                        // path; None gets nothing; Client never has a widget.
                         if effective == driftwm::config::DecorationMode::Server
                             && !self.decorations.contains_key(&root.id())
                         {
@@ -380,6 +390,12 @@ impl CompositorHandler for DriftWm {
                                 &self.config.decorations,
                             );
                             self.decorations.insert(root.id(), deco);
+                        }
+
+                        let is_widget = rule.as_ref().is_some_and(|r| r.widget);
+                        if !is_widget {
+                            let reset = self.config.zoom_reset_on_new_window;
+                            self.navigate_to_window(&window, reset);
                         }
 
                         // New window arrived — clear loading cursor
