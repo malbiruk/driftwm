@@ -817,15 +817,15 @@ pub fn compose_frame(
             let bare = matches!(effective, driftwm::config::DecorationMode::None);
 
             if !bare && !is_fullscreen {
-                if radius > 0.0 {
-                    // CSD: use window geometry (content may be offset within buffer)
-                    push_corner_clipped_elements(
-                        target, elems, &wl_surface, shader,
-                        Some(geo), radius, 1.0, 1.0, true, zoom, output_scale,
-                    );
-                } else {
-                    push_plain_elements(target, elems, zoom);
-                }
+                // Always run the clip shader — even at radius=0 we need
+                // clip_shadow=1 to zero out the CSD shadow padding, otherwise
+                // the client's shadow stacks under our compositor shadow and
+                // looks twice as dark. The corner-clip branch is inert at
+                // radius=0, so this is safe.
+                push_corner_clipped_elements(
+                    target, elems, &wl_surface, shader,
+                    Some(geo), radius, 1.0, 1.0, true, zoom, output_scale,
+                );
 
                 // Compositor shadow behind CSD windows
                 if let Some(ref shadow_shader) = state.render.shadow_shader {
