@@ -82,7 +82,7 @@ impl CursorState {
                 }
                 let buffer = MemoryRenderBuffer::from_slice(
                     &img.pixels_rgba,
-                    Fourcc::Abgr8888,
+                    Fourcc::Argb8888,
                     (img.width as i32, img.height as i32),
                     1,
                     Transform::Normal,
