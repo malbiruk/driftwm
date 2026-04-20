@@ -41,7 +41,7 @@ use smithay::backend::renderer::damage::OutputDamageTracker;
 use smithay::backend::renderer::gles::GlesTexture;
 use smithay::utils::Physical;
 use smithay::wayland::content_type::ContentTypeState;
-use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
+use smithay::wayland::dmabuf::{DmabufFeedback, DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
 use smithay::wayland::idle_notify::IdleNotifierState;
@@ -291,6 +291,7 @@ pub struct DriftWm {
 
     // -- global: backend --
     pub backend: Option<Backend>,
+    pub force_full_redraws: bool,
     // -- global: SSD decorations --
     pub decorations: HashMap<
         smithay::reexports::wayland_server::backend::ObjectId,
@@ -303,6 +304,7 @@ pub struct DriftWm {
     // -- global: protocol state (held for smithay delegate macros) --
     pub dmabuf_state: DmabufState,
     pub dmabuf_global: Option<DmabufGlobal>,
+    pub xwayland_dmabuf_feedback: Option<DmabufFeedback>,
     #[allow(dead_code)]
     pub cursor_shape_state: CursorShapeManagerState,
     #[allow(dead_code)]
@@ -592,11 +594,13 @@ impl DriftWm {
             seat,
             cursor: CursorState::new(),
             backend: None,
+            force_full_redraws: false,
             decorations: HashMap::new(),
             pending_ssd: HashSet::new(),
             render: RenderCache::new(),
             dmabuf_state: DmabufState::new(),
             dmabuf_global: None,
+            xwayland_dmabuf_feedback: None,
             cursor_shape_state,
             viewporter_state,
             fractional_scale_state,

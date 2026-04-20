@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use smithay::{
@@ -68,6 +68,26 @@ struct SurfaceData {
     make: String,
     model: String,
     serial_number: String,
+}
+
+fn is_nvidia_gpu_path(path: &Path) -> bool {
+    let Some(card_name) = path.file_name().and_then(|n| n.to_str()) else {
+        return false;
+    };
+    let vendor_path = PathBuf::from("/sys/class/drm")
+        .join(card_name)
+        .join("device/vendor");
+    std::fs::read_to_string(vendor_path)
+        .map(|s| s.trim().eq_ignore_ascii_case("0x10de"))
+        .unwrap_or(false)
+}
+
+fn implicit_modifier_formats(formats: &[Format]) -> Vec<Format> {
+    formats
+        .iter()
+        .copied()
+        .filter(|f| f.modifier == Modifier::Invalid)
+        .collect()
 }
 
 /// Opaque handle to udev backend device data. Returned by init_udev,
@@ -173,7 +193,7 @@ pub fn init_udev(
     // 3. Try each GPU until one has connected displays
     let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
 
-    let (mut drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd) = 'found: {
+    let (mut drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd, nvidia_gpu) = 'found: {
         for path in &gpu_paths {
             let node = match DrmNode::from_path(path) {
                 Ok(n) => n,
@@ -186,6 +206,7 @@ pub fn init_udev(
                 tracing::debug!("{}: not a primary node, skipping", path.display());
                 continue;
             }
+            let nvidia_gpu = is_nvidia_gpu_path(path);
 
             let fd = match session.open(path, open_flags) {
                 Ok(fd) => fd,
@@ -282,28 +303,68 @@ pub fn init_udev(
                 .unwrap_or(node);
 
             tracing::info!("Using GPU: {}", path.display());
-            break 'found (drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd);
+            break 'found (drm, drm_notifier, gbm, renderer, render_formats, render_node, device_fd, nvidia_gpu);
         }
         return Err("No GPU with connected displays found (are you running from a TTY?)".into());
     };
 
     // 4. Store renderer on state + create DMA-BUF global
     data.backend = Some(Backend::Udev(Box::new(renderer)));
-    let formats = data.backend.as_mut().unwrap().renderer().dmabuf_formats();
-    let default_feedback = DmabufFeedbackBuilder::new(render_node.dev_id(), formats)
+    let dmabuf_formats: Vec<Format> = data
+        .backend
+        .as_mut()
+        .unwrap()
+        .renderer()
+        .dmabuf_formats()
+        .iter()
+        .copied()
+        .collect();
+    data.force_full_redraws = nvidia_gpu && !drm.is_atomic();
+    if nvidia_gpu {
+        if data.force_full_redraws {
+            tracing::info!(
+                "NVIDIA safe mode: legacy DRM detected, forcing full redraws and disabling buffer-age reuse"
+            );
+        }
+        let implicit_only = implicit_modifier_formats(&dmabuf_formats);
+        if !implicit_only.is_empty() {
+            tracing::info!(
+                "NVIDIA safe mode: keeping full dmabuf feedback for Wayland clients, constraining Xwayland surfaces to {}/{} implicit-only formats",
+                implicit_only.len(),
+                dmabuf_formats.len()
+            );
+            data.xwayland_dmabuf_feedback = Some(
+                DmabufFeedbackBuilder::new(render_node.dev_id(), implicit_only)
+                    .build()
+                    .expect("failed to build xwayland dmabuf feedback"),
+            );
+        } else {
+            tracing::warn!(
+                "NVIDIA safe mode: no implicit dmabuf formats for Xwayland surfaces, keeping shared feedback unchanged"
+            );
+            data.xwayland_dmabuf_feedback = None;
+        }
+    } else {
+        data.xwayland_dmabuf_feedback = None;
+    }
+    let default_feedback = DmabufFeedbackBuilder::new(render_node.dev_id(), dmabuf_formats)
         .build()
         .expect("failed to build dmabuf feedback");
     let dmabuf_global = data
         .dmabuf_state
-        .create_global_with_default_feedback::<DriftWm>(
-            &data.display_handle,
-            &default_feedback,
-        );
+        .create_global_with_default_feedback::<DriftWm>(&data.display_handle, &default_feedback);
     data.dmabuf_global = Some(dmabuf_global);
-    data.drm_syncobj_state = Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
-        &data.display_handle,
-        device_fd.clone(),
-    ));
+    if drm.is_atomic() {
+        data.drm_syncobj_state = Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
+            &data.display_handle,
+            device_fd.clone(),
+        ));
+    } else {
+        tracing::info!(
+            "Legacy DRM active: disabling linux-drm-syncobj-v1 advertisement and falling back to implicit synchronization"
+        );
+        data.drm_syncobj_state = None;
+    }
 
     // 5. Set up libinput
     let libinput_session = LibinputSessionInterface::from(session.clone());
@@ -968,6 +1029,13 @@ fn render_frame(
         compositor.reset_buffer_ages();
     }
 
+    // Mutter keeps landing NVIDIA-specific fixes around damage tracking,
+    // sharable surfaces, and explicit sync. On our legacy/GBM path the safer
+    // tradeoff is to avoid buffer-age reuse entirely and redraw everything.
+    if data.force_full_redraws {
+        compositor.reset_buffer_ages();
+    }
+
     // Take renderer out to split borrow from state
     let mut backend = data.backend.take().unwrap();
     let renderer = backend.renderer();
@@ -1010,11 +1078,13 @@ fn render_frame(
     }
 
     match render_result {
-        Ok(_render_result) => {
-            if let Err(e) = compositor.queue_frame(()) {
-                tracing::warn!("Failed to queue frame: {e:?}");
-            } else {
-                data.frames_pending.insert(crtc);
+        Ok(render_result) => {
+            if !render_result.is_empty {
+                if let Err(e) = compositor.queue_frame(()) {
+                    tracing::warn!("Failed to queue frame: {e:?}");
+                } else {
+                    data.frames_pending.insert(crtc);
+                }
             }
         }
         Err(e) => {

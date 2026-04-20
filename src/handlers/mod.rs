@@ -28,7 +28,7 @@ use smithay::{
     },
     utils::{Logical, Point},
     wayland::{
-        dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
+        dmabuf::{DmabufFeedback, DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::FractionalScaleHandler,
         idle_inhibit::IdleInhibitHandler,
         keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitor},
@@ -54,6 +54,7 @@ use smithay::{
         },
     },
 };
+use smithay::xwayland::XWaylandClientData;
 
 impl SeatHandler for DriftWm {
     type KeyboardFocus = FocusTarget;
@@ -179,6 +180,17 @@ impl DmabufHandler for DriftWm {
         &mut self.dmabuf_state
     }
 
+    fn new_surface_feedback(
+        &mut self,
+        surface: &WlSurface,
+        _global: &DmabufGlobal,
+    ) -> Option<DmabufFeedback> {
+        surface
+            .client()
+            .filter(|client| client.get_data::<XWaylandClientData>().is_some())
+            .and(self.xwayland_dmabuf_feedback.clone())
+    }
+
     fn dmabuf_imported(
         &mut self,
         _global: &DmabufGlobal,
@@ -192,6 +204,13 @@ impl DmabufHandler for DriftWm {
         if backend.renderer().import_dmabuf(&dmabuf, None).is_ok() {
             let _ = notifier.successful::<DriftWm>();
         } else {
+            let format = dmabuf.format();
+            tracing::warn!(
+                "Rejected dmabuf import: format={:?} modifier={:?} planes={}",
+                format.code,
+                format.modifier,
+                dmabuf.num_planes()
+            );
             notifier.failed();
         }
     }
