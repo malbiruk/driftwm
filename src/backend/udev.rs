@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
 use smithay::{
     backend::{
@@ -11,7 +12,7 @@ use smithay::{
         },
         drm::{
             DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
-            compositor::{DrmCompositor, FrameFlags, PrimaryPlaneElement},
+            compositor::{DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
         egl::{EGLContext, EGLDisplay},
@@ -22,7 +23,7 @@ use smithay::{
     },
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
-        calloop::{Dispatcher, EventLoop},
+        calloop::{Dispatcher, EventLoop, timer::{TimeoutAction, Timer}},
         drm::control::{self, connector, crtc},
         input::Libinput,
         rustix::fs::OFlags,
@@ -421,6 +422,10 @@ pub fn init_udev(
                     tracing::warn!("frame_submitted error: {e:?}");
                 }
                 data.frames_pending.remove(&crtc);
+                // Real VBlank beat any estimated-VBlank timer we might have armed.
+                if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
+                    data.loop_handle.remove(token);
+                }
                 if data.redraws_needed.contains(&crtc) {
                     render_frame(data, &mut surface.compositor, &surface.output, crtc);
                 }
@@ -440,6 +445,9 @@ pub fn init_udev(
                 tracing::info!("Session paused (VT switch away)");
                 dev.libinput.suspend();
                 dev.drm.pause();
+                for (_, token) in data.estimated_vblank_timers.drain() {
+                    data.loop_handle.remove(token);
+                }
             }
             SessionEvent::ActivateSession => {
                 tracing::info!("Session resumed (VT switch back)");
@@ -452,6 +460,9 @@ pub fn init_udev(
                 }
                 // VBlanks for pre-switch frames never arrive
                 data.frames_pending.clear();
+                for (_, token) in data.estimated_vblank_timers.drain() {
+                    data.loop_handle.remove(token);
+                }
                 for (&crtc, surface) in dev.surfaces.iter_mut() {
                     if let Err(e) = surface.compositor.reset_state() {
                         tracing::warn!("Failed to reset DRM surface state: {e}");
@@ -605,6 +616,9 @@ pub fn init_udev(
                                 data.active_crtcs.remove(&crtc);
                                 data.frames_pending.remove(&crtc);
                                 data.redraws_needed.remove(&crtc);
+                                if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
+                                    data.loop_handle.remove(token);
+                                }
                             }
                             _ => {}
                         }
@@ -1010,13 +1024,20 @@ fn render_frame(
     }
 
     match render_result {
-        Ok(_render_result) => {
-            if let Err(e) = compositor.queue_frame(()) {
-                tracing::warn!("Failed to queue frame: {e:?}");
-            } else {
+        Ok(_render_result) => match compositor.queue_frame(()) {
+            Ok(()) => {
                 data.frames_pending.insert(crtc);
             }
-        }
+            Err(FrameError::EmptyFrame) => {
+                // No page flip → no VBlank. Arm a wake if animations still need ticking.
+                if data.has_active_animations() || data.render.background_is_animated {
+                    queue_estimated_vblank_timer(data, output, crtc);
+                }
+            }
+            Err(e) => {
+                tracing::warn!("Failed to queue frame: {e:?}");
+            }
+        },
         Err(e) => {
             tracing::warn!("Render frame error: {e:?}");
         }
@@ -1043,6 +1064,36 @@ fn render_frame(
     // Post-render
     crate::render::post_render(data, output);
     data.display_handle.flush_clients().ok();
+}
+
+/// Wake the VBlank-driven loop at ~one refresh period when queue_frame returned
+/// EmptyFrame, so ongoing animations keep ticking. Idempotent per CRTC.
+fn queue_estimated_vblank_timer(
+    data: &mut DriftWm,
+    output: &Output,
+    crtc: crtc::Handle,
+) {
+    if data.estimated_vblank_timers.contains_key(&crtc) {
+        return;
+    }
+    // Clamp refresh mHz before the cast: negative i32 would wrap to a huge u64 and
+    // produce a near-zero-duration timer, spinning the loop.
+    let duration = output
+        .current_mode()
+        .map(|m| m.refresh.max(1_000) as u64)
+        .map(|mhz| Duration::from_nanos(1_000_000_000_000 / mhz))
+        .unwrap_or_else(|| Duration::from_micros(16_667));
+
+    let timer = Timer::from_duration(duration);
+    match data.loop_handle.insert_source(timer, move |_, _, data: &mut DriftWm| {
+        data.estimated_vblank_timers.remove(&crtc);
+        TimeoutAction::Drop
+    }) {
+        Ok(tok) => {
+            data.estimated_vblank_timers.insert(crtc, tok);
+        }
+        Err(e) => tracing::warn!("Failed to insert estimated VBlank timer: {e:?}"),
+    }
 }
 
 use driftwm::protocols::output_management::{OutputHeadState, ModeInfo};

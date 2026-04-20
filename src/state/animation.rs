@@ -219,6 +219,9 @@ impl DriftWm {
             self.cursor.exec_cursor_show_at = None;
             self.cursor.exec_cursor_deadline = None;
             self.cursor.cursor_status = CursorImageStatus::default_named();
+            // The Wait cursor was what kept the loop spinning; without a dirty mark
+            // the last animated frame would stay on screen until another wake.
+            self.mark_all_dirty();
         } else if let Some(show_at) = self.cursor.exec_cursor_show_at
             && now >= show_at
         {

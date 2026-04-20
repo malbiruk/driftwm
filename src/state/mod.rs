@@ -400,6 +400,9 @@ pub struct DriftWm {
     pub active_crtcs: HashSet<crtc::Handle>,
     pub redraws_needed: HashSet<crtc::Handle>,
     pub frames_pending: HashSet<crtc::Handle>,
+    /// One-shot timers armed when queue_frame returned EmptyFrame so the loop
+    /// still wakes at ~refresh rate to advance animations (e.g. xcursor frames).
+    pub estimated_vblank_timers: HashMap<crtc::Handle, RegistrationToken>,
 
     // -- global: config hot-reload --
     pub config_file_mtime: Option<std::time::SystemTime>,
@@ -666,6 +669,7 @@ impl DriftWm {
             active_crtcs: HashSet::new(),
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
+            estimated_vblank_timers: HashMap::new(),
             config_file_mtime: None,
             last_animation_tick: Instant::now(),
             focused_output: None,
