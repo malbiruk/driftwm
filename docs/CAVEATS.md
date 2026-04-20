@@ -38,6 +38,14 @@ This is a deliberate semantic misuse of the protocol. The debt it incurs:
 
 cosmic-comp makes the exact same bet (`clip_floating_windows` default-on in `AppearanceConfig`, `src/shell/element/window.rs:204`) and has carried the same complexity for years. This is a settled hack in Wayland-land, not a novel misstep — but it's still a hack. If a future protocol extension exposes "suppress client chrome" as a first-class signal, migrate to it and delete all of the above.
 
+## xcursor `pixels_rgba` is actually BGRA
+
+The `xcursor` crate's `Image::pixels_rgba` field is misleadingly named. The bytes come straight from the XCursor file, which stores pixels as `uint32` ARGB little-endian — i.e. `[B, G, R, A]` in memory. Interpreted as RGBA, the channels are wrong.
+
+The matching DRM fourcc for that byte order is `Fourcc::Argb8888` (which smithay maps to GL `BGRA_EXT`), **not** `Fourcc::Abgr8888`. Using `Abgr8888` swaps R and B on screen — a yellow cursor renders mint-blue, a red cursor renders violet, etc.
+
+niri gets this right in `src/cursor.rs` (`MemoryRenderBuffer::from_slice(&frame.pixels_rgba, Fourcc::Argb8888, ...)`). Do the same here.
+
 ## What to unit test
 
 Smithay glue code (handlers, delegates) is not worth testing — it's framework boilerplate. Write tests for **your** logic:
