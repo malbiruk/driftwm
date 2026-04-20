@@ -372,6 +372,12 @@ impl XwmHandler for DriftWm {
         }
     }
 
+    fn unmaximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
+        if let Some(w) = self.find_x11_window(&window) {
+            self.unfit_window(&w);
+        }
+    }
+
     fn unfullscreen_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(smithay_window) = self.find_x11_window(&window)
             && let Some(wl_surface) = smithay_window.wl_surface()
