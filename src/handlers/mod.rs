@@ -10,10 +10,11 @@ use std::os::fd::OwnedFd;
 use smithay::{
     backend::renderer::ImportDma,
     delegate_cursor_shape, delegate_data_control, delegate_data_device, delegate_dmabuf,
-    delegate_fractional_scale, delegate_idle_inhibit, delegate_keyboard_shortcuts_inhibit,
-    delegate_output, delegate_pointer_constraints, delegate_pointer_gestures,
-    delegate_presentation, delegate_primary_selection, delegate_relative_pointer, delegate_seat,
-    delegate_security_context, delegate_single_pixel_buffer, delegate_viewporter,
+    delegate_fractional_scale, delegate_idle_inhibit, delegate_input_method_manager,
+    delegate_keyboard_shortcuts_inhibit, delegate_output, delegate_pointer_constraints,
+    delegate_pointer_gestures, delegate_presentation, delegate_primary_selection,
+    delegate_relative_pointer, delegate_seat, delegate_security_context,
+    delegate_single_pixel_buffer, delegate_text_input_manager, delegate_viewporter,
     delegate_virtual_keyboard_manager, delegate_xdg_activation,
     input::{
         Seat, SeatHandler, SeatState, keyboard,
@@ -31,6 +32,7 @@ use smithay::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
         fractional_scale::FractionalScaleHandler,
         idle_inhibit::IdleInhibitHandler,
+        input_method::{InputMethodHandler, PopupSurface},
         keyboard_shortcuts_inhibit::{KeyboardShortcutsInhibitHandler, KeyboardShortcutsInhibitor},
         output::OutputHandler,
         pointer_constraints::PointerConstraintsHandler,
@@ -111,6 +113,7 @@ impl SeatHandler for DriftWm {
 }
 
 delegate_seat!(DriftWm);
+delegate_text_input_manager!(DriftWm);
 
 impl SelectionHandler for DriftWm {
     type SelectionUserData = ();
@@ -382,6 +385,39 @@ impl SecurityContextHandler for DriftWm {
 }
 delegate_security_context!(DriftWm);
 delegate_virtual_keyboard_manager!(DriftWm);
+
+impl InputMethodHandler for DriftWm {
+    fn new_popup(&mut self, surface: PopupSurface) {
+        if let Err(err) = self
+            .popups
+            .track_popup(smithay::desktop::PopupKind::from(surface))
+        {
+            tracing::warn!("Failed to track input-method popup: {err}");
+        }
+    }
+
+    fn dismiss_popup(&mut self, surface: PopupSurface) {
+        if let Some(parent) = surface.get_parent().map(|parent| parent.surface.clone()) {
+            let _ = smithay::desktop::PopupManager::dismiss_popup(
+                &parent,
+                &smithay::desktop::PopupKind::from(surface),
+            );
+        }
+    }
+
+    fn popup_repositioned(&mut self, _surface: PopupSurface) {}
+
+    fn parent_geometry(&self, parent: &WlSurface) -> smithay::utils::Rectangle<i32, Logical> {
+        self.space
+            .elements()
+            .find_map(|window| {
+                (window.wl_surface().as_deref() == Some(parent)).then(|| window.geometry())
+            })
+            .unwrap_or_default()
+    }
+}
+
+delegate_input_method_manager!(DriftWm);
 
 impl IdleInhibitHandler for DriftWm {
     fn inhibit(&mut self, _surface: WlSurface) {}

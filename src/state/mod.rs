@@ -45,6 +45,7 @@ use smithay::wayland::dmabuf::{DmabufGlobal, DmabufState};
 use smithay::wayland::fractional_scale::FractionalScaleManagerState;
 use smithay::wayland::idle_inhibit::IdleInhibitManagerState;
 use smithay::wayland::idle_notify::IdleNotifierState;
+use smithay::wayland::input_method::InputMethodManagerState;
 use smithay::wayland::keyboard_shortcuts_inhibit::KeyboardShortcutsInhibitState;
 use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::pointer_gestures::PointerGesturesState;
@@ -53,12 +54,13 @@ use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::security_context::SecurityContextState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
-use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
 use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::single_pixel_buffer::SinglePixelBufferState;
+use smithay::wayland::text_input::TextInputManagerState;
 use smithay::wayland::viewporter::ViewporterState;
+use smithay::wayland::virtual_keyboard::VirtualKeyboardManagerState;
 use smithay::wayland::xdg_activation::XdgActivationState;
 use smithay::wayland::xdg_foreign::XdgForeignState;
 
@@ -500,6 +502,8 @@ impl DriftWm {
         let relative_pointer_state = RelativePointerManagerState::new::<Self>(&dh);
         let _pointer_gestures_state = PointerGesturesState::new::<Self>(&dh);
         let keyboard_shortcuts_inhibit_state = KeyboardShortcutsInhibitState::new::<Self>(&dh);
+        TextInputManagerState::new::<Self>(&dh);
+        InputMethodManagerState::new::<Self, _>(&dh, client_is_unrestricted);
         let security_context_state =
             SecurityContextState::new::<Self, _>(&dh, client_is_unrestricted);
         let virtual_keyboard_state =
