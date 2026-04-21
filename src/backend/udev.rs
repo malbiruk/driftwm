@@ -29,7 +29,7 @@ use smithay::{
         rustix::fs::OFlags,
     },
     utils::{DeviceFd, Transform},
-    wayland::dmabuf::DmabufFeedbackBuilder,
+    wayland::{dmabuf::DmabufFeedbackBuilder, drm_syncobj::supports_syncobj_eventfd},
 };
 
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
@@ -301,7 +301,7 @@ pub fn init_udev(
             &default_feedback,
         );
     data.dmabuf_global = Some(dmabuf_global);
-    if drm.is_atomic() {
+    if supports_syncobj_eventfd(&device_fd) {
         data.drm_syncobj_state =
             Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
                 &data.display_handle,
@@ -309,7 +309,7 @@ pub fn init_udev(
             ));
     } else {
         tracing::info!(
-            "Legacy DRM active: disabling linux-drm-syncobj-v1 advertisement and falling back to implicit synchronization"
+            "DRM device lacks syncobj eventfd support: disabling linux-drm-syncobj-v1 advertisement and falling back to implicit synchronization"
         );
         data.drm_syncobj_state = None;
     }
