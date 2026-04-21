@@ -300,10 +300,18 @@ pub fn init_udev(
             &default_feedback,
         );
     data.dmabuf_global = Some(dmabuf_global);
-    data.drm_syncobj_state = Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
-        &data.display_handle,
-        device_fd.clone(),
-    ));
+    if drm.is_atomic() {
+        data.drm_syncobj_state =
+            Some(smithay::wayland::drm_syncobj::DrmSyncobjState::new::<DriftWm>(
+                &data.display_handle,
+                device_fd.clone(),
+            ));
+    } else {
+        tracing::info!(
+            "Legacy DRM active: disabling linux-drm-syncobj-v1 advertisement and falling back to implicit synchronization"
+        );
+        data.drm_syncobj_state = None;
+    }
 
     // 5. Set up libinput
     let libinput_session = LibinputSessionInterface::from(session.clone());
