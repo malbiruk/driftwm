@@ -237,7 +237,14 @@
 # or X11 border) propagates to every window connected to it via snap adjacency.
 # Keybinding/gesture resize is unaffected — bind `resize-window-snapped`
 # explicitly if you want cluster-aware resize there too.
-# edge_resize_snapped = false
+# decoration_resize_snapped = false
+
+# When true, maximize/unmaximize initiated via window decoration (CSD maximize
+# button, SSD title-bar double-click, or xdg/X11/foreign-toplevel set_maximized)
+# propagates to every window connected via snap adjacency.
+# Keybinding/gesture fit is unaffected — bind `fit-window-snapped` explicitly
+# if you want cluster-aware fit there too.
+# decoration_fit_snapped = false
 
 [mouse.on-window]
 # "alt+left" = "move-window"

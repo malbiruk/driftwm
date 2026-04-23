@@ -101,7 +101,13 @@ pub struct Config {
     /// CSD border, or X11 border) propagates to every window connected
     /// to it via snap adjacency. Keybinding and gesture resize are
     /// unaffected — bind `resize-window-snapped` explicitly for those.
-    pub edge_resize_snapped: bool,
+    pub decoration_resize_snapped: bool,
+    /// When `true`, maximize/unmaximize initiated via window decoration
+    /// (CSD maximize button, SSD title-bar double-click, xdg/X11/foreign-toplevel
+    /// set_maximized) propagates to every window connected via snap adjacency.
+    /// Keybinding and gesture fit are unaffected — bind `fit-window-snapped`
+    /// explicitly for those.
+    pub decoration_fit_snapped: bool,
     pub gestures: ContextBindings<GestureBinding, GestureConfigEntry>,
     pub num_lock: bool,
     pub caps_lock: bool,
@@ -275,7 +281,8 @@ impl Config {
             }
         }
 
-        let edge_resize_snapped = raw.mouse.edge_resize_snapped.unwrap_or(false);
+        let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
+        let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
         let mut mouse_bindings = default_mouse_bindings(mod_key);
         for (ctx, section) in [
             (BindingContext::OnWindow, raw.mouse.on_window),
@@ -500,7 +507,8 @@ impl Config {
             output_configs,
             bindings,
             mouse: mouse_bindings,
-            edge_resize_snapped,
+            decoration_resize_snapped,
+            decoration_fit_snapped,
             gestures: gesture_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),
             caps_lock: raw.input.keyboard.caps_lock.unwrap_or(false),

@@ -313,7 +313,7 @@ impl XwmHandler for DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         // Same as the xdg_shell path: honor the config flag so CSD/X11
         // border drags behave identically to SSD border drags.
-        let cluster_resize = if self.config.edge_resize_snapped {
+        let cluster_resize = if self.config.decoration_resize_snapped {
             self.cluster_snapshot_for_resize(&smithay_window, xdg_edge)
         } else {
             crate::state::ClusterResizeSnapshot::empty()
@@ -422,13 +422,13 @@ impl XwmHandler for DriftWm {
 
     fn maximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(w) = self.find_x11_window(&window) {
-            self.toggle_fit_window(&w);
+            self.decoration_toggle_fit(&w);
         }
     }
 
     fn unmaximize_request(&mut self, _xwm: XwmId, window: X11Surface) {
         if let Some(w) = self.find_x11_window(&window) {
-            self.unfit_window(&w);
+            self.decoration_unfit(&w);
         }
     }
 

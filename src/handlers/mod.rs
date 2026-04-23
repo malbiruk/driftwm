@@ -615,7 +615,7 @@ impl ForeignToplevelHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.toggle_fit_window(&window);
+            self.decoration_toggle_fit(&window);
         }
     }
 
@@ -626,7 +626,7 @@ impl ForeignToplevelHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.unfit_window(&window);
+            self.decoration_unfit(&window);
         }
     }
 }
