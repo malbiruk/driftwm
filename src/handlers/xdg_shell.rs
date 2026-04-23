@@ -152,7 +152,7 @@ impl XdgShellHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.toggle_fit_window(&window);
+            self.decoration_toggle_fit(&window);
         }
     }
 
@@ -164,7 +164,7 @@ impl XdgShellHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.unfit_window(&window);
+            self.decoration_unfit(&window);
         }
     }
 
@@ -329,7 +329,7 @@ impl XdgShellHandler for DriftWm {
         // CSD windows trigger resize through xdg_toplevel.resize() when
         // the user drags the client-drawn border. Honor the config flag so
         // edge-drag propagation behaves identically for SSD and CSD windows.
-        let cluster_resize = if self.config.edge_resize_snapped {
+        let cluster_resize = if self.config.decoration_resize_snapped {
             self.cluster_snapshot_for_resize(&window, edges)
         } else {
             crate::state::ClusterResizeSnapshot::empty()

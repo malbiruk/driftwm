@@ -305,12 +305,21 @@ fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
 }
 
 #[test]
-fn edge_resize_snapped_exposed_on_config() {
+fn decoration_resize_snapped_exposed_on_config() {
     let default_config = Config::default();
-    assert!(!default_config.edge_resize_snapped);
+    assert!(!default_config.decoration_resize_snapped);
 
-    let flipped = Config::from_toml("[mouse]\nedge_resize_snapped = true").unwrap();
-    assert!(flipped.edge_resize_snapped);
+    let flipped = Config::from_toml("[mouse]\ndecoration_resize_snapped = true").unwrap();
+    assert!(flipped.decoration_resize_snapped);
+}
+
+#[test]
+fn decoration_fit_snapped_exposed_on_config() {
+    let default_config = Config::default();
+    assert!(!default_config.decoration_fit_snapped);
+
+    let flipped = Config::from_toml("[mouse]\ndecoration_fit_snapped = true").unwrap();
+    assert!(flipped.decoration_fit_snapped);
 }
 
 #[test]

@@ -333,4 +333,20 @@ impl DriftWm {
             self.fit_window_snapped(window);
         }
     }
+
+    pub fn decoration_toggle_fit(&mut self, window: &Window) {
+        if self.config.decoration_fit_snapped {
+            self.toggle_fit_window_snapped(window);
+        } else {
+            self.toggle_fit_window(window);
+        }
+    }
+
+    pub fn decoration_unfit(&mut self, window: &Window) {
+        if self.config.decoration_fit_snapped {
+            self.unfit_window_snapped(window);
+        } else {
+            self.unfit_window(window);
+        }
+    }
 }

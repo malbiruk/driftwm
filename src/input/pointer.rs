@@ -211,7 +211,7 @@ impl DriftWm {
                                     && now.duration_since(prev_time) < Duration::from_millis(300)
                                 {
                                     self.raise_and_focus(&window, serial);
-                                    self.toggle_fit_window(&window);
+                                    self.decoration_toggle_fit(&window);
                                     return;
                                 }
                                 self.last_titlebar_click = Some((now, surface_id));
@@ -243,7 +243,7 @@ impl DriftWm {
                                 self.raise_and_focus(&window, serial);
                                 // Edge-drag on the SSD border has no modifier
                                 // context, so it follows the config flag.
-                                let want_cluster = self.config.edge_resize_snapped;
+                                let want_cluster = self.config.decoration_resize_snapped;
                                 self.start_compositor_resize_with_edge(
                                     &pointer,
                                     &window,
