@@ -63,7 +63,8 @@ pub struct Config {
     pub cycle_modifier: CycleModifier,
     /// Zoom step multiplier per keypress. 1.1 = 10% per press.
     pub zoom_step: f64,
-    /// Padding (canvas pixels) around the bounding box for ZoomToFit.
+    /// Padding (viewport/screen pixels) around the bounding box for ZoomToFit.
+    /// Screen-space so the gutter is consistent regardless of the resulting zoom.
     pub zoom_fit_padding: f64,
     /// Animate zoom back to 1.0 when a new window is mapped (true) or preserve current zoom (false).
     pub zoom_reset_on_new_window: bool,
@@ -472,7 +473,7 @@ impl Config {
             animation_speed: raw.navigation.animation_speed.unwrap_or(0.3),
             cycle_modifier,
             zoom_step: raw.zoom.step.unwrap_or(1.1),
-            zoom_fit_padding: raw.zoom.fit_padding.unwrap_or(100.0),
+            zoom_fit_padding: raw.zoom.fit_padding.unwrap_or(80.0),
             zoom_reset_on_new_window: raw.zoom.reset_on_new_window.unwrap_or(true),
             zoom_reset_on_activation: raw.zoom.reset_on_activation.unwrap_or(true),
             snap_enabled: raw.snap.enabled.unwrap_or(true),

@@ -72,7 +72,7 @@
 
 [zoom]
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
-# fit_padding = 100.0         # canvas px padding for zoom-to-fit
+# fit_padding = 80.0          # viewport px padding for zoom-to-fit (screen space)
 # reset_on_new_window = true  # animate zoom to 1.0 when a new window is mapped
 #                             # (false = keep current zoom, pan only)
 # reset_on_activation = true  # animate zoom to 1.0 when an off-screen window
@@ -161,6 +161,7 @@
 #   zoom-reset              — zoom to 1.0
 #   go-to <x> <y>           — jump camera to canvas position (bookmarks, Y-up)
 #   zoom-to-fit             — fit all windows in viewport
+#   zoom-to-fit-snapped     — fit only the focused window's snap cluster
 #   toggle-fullscreen       — toggle focused window fullscreen
 #   fit-window              — toggle maximize: centers + resets zoom + fills viewport; restore only resizes back
 #   reload-config           — hot-reload config file
@@ -199,6 +200,7 @@
 # "mod+0" = "zoom-reset"
 # "mod+z" = "zoom-reset"
 # "mod+w" = "zoom-to-fit"
+# "mod+shift+w" = "zoom-to-fit-snapped"
 # "mod+1" = "go-to -1750 1750"     # top-left bookmark
 # "mod+2" = "go-to 1750 1750"      # top-right bookmark
 # "mod+3" = "go-to 1750 -1750"     # bottom-right bookmark
@@ -280,7 +282,7 @@
 #   N-finger-hold             — threshold only (fires on release)
 #
 # Continuous actions: pan-viewport, zoom, move-window, resize-window, resize-window-snapped
-# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, fit-window, fit-window-snapped, exec <cmd>, etc.
+# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, zoom-to-fit-snapped, fit-window, fit-window-snapped, exec <cmd>, etc.
 
 # Gesture thresholds — tune for your touchpad size.
 [gestures]
@@ -312,6 +314,7 @@
 # "mod+2-finger-pinch" = "zoom"             # mod overrides app forwarding
 # "3-finger-pinch" = "zoom"                 # continuous
 # "4-finger-pinch-in" = "zoom-to-fit"       # threshold
+# "mod+4-finger-pinch-in" = "zoom-to-fit-snapped"
 # "4-finger-pinch-out" = "home-toggle"      # threshold
 # "mod+3-finger-pinch-in" = "zoom-to-fit"
 # "mod+3-finger-pinch-out" = "home-toggle"

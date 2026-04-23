@@ -140,9 +140,9 @@ fn snap_zoom_exactly_at_boundary() {
 
 #[test]
 fn zoom_to_fit_single_small_window() {
-    // 200x200 window in 1920x1080 viewport, padding 100
-    // padded = 400x400 → zoom_x = 1920/400 = 4.8, zoom_y = 1080/400 = 2.7
-    // min = 2.7, clamped to MAX_ZOOM (1.0)
+    // 200x200 window in 1920x1080 viewport, 100 viewport-px padding
+    // avail = 1720x880 → zoom_x = 1720/200 = 8.6, zoom_y = 880/200 = 4.4
+    // min = 4.4, clamped to MAX_ZOOM (1.0)
     let bbox = Rectangle::new((0, 0).into(), (200, 200).into());
     let viewport = Size::<i32, Logical>::from((1920, 1080));
     assert_eq!(zoom_to_fit(bbox, viewport, 100.0), 1.0);
@@ -150,13 +150,13 @@ fn zoom_to_fit_single_small_window() {
 
 #[test]
 fn zoom_to_fit_windows_wider_than_viewport() {
-    // 4000x200 bbox in 1920x1080, padding 100
-    // padded = 4200x400 → zoom_x = 1920/4200 ≈ 0.457, zoom_y = 1080/400 = 2.7
-    // min = 0.457
+    // 4000x200 bbox in 1920x1080, 100 viewport-px padding
+    // avail = 1720x880 → zoom_x = 1720/4000 = 0.43, zoom_y = 880/200 = 4.4
+    // min = 0.43
     let bbox = Rectangle::new((0, 0).into(), (4000, 200).into());
     let viewport = Size::<i32, Logical>::from((1920, 1080));
     let z = zoom_to_fit(bbox, viewport, 100.0);
-    assert!((z - 1920.0 / 4200.0).abs() < 1e-10);
+    assert!((z - 1720.0 / 4000.0).abs() < 1e-10);
 }
 
 #[test]
@@ -165,20 +165,41 @@ fn zoom_to_fit_clamps_to_min_zoom() {
     let bbox = Rectangle::new((0, 0).into(), (100000, 100000).into());
     let viewport = Size::<i32, Logical>::from((1920, 1080));
     let z = zoom_to_fit(bbox, viewport, 100.0);
-    // 1080 / 100200 ≈ 0.01078
+    // 880 / 100000 ≈ 0.0088
     assert!(z > MIN_ZOOM_FLOOR);
     assert!(z < 0.02);
 }
 
 #[test]
 fn zoom_to_fit_spread_windows() {
-    // 3000x2000 bbox in 1920x1080, padding 100
-    // padded = 3200x2200 → zoom_x = 0.6, zoom_y ≈ 0.49
+    // 3000x2000 bbox in 1920x1080, 100 viewport-px padding
+    // avail = 1720x880 → zoom_x ≈ 0.573, zoom_y = 0.44
     let bbox = Rectangle::new((-500, -500).into(), (3000, 2000).into());
     let viewport = Size::<i32, Logical>::from((1920, 1080));
     let z = zoom_to_fit(bbox, viewport, 100.0);
-    let expected = (1080.0 / 2200.0_f64).min(1920.0 / 3200.0);
+    let expected = (880.0 / 2000.0_f64).min(1720.0 / 3000.0);
     assert!((z - expected).abs() < 1e-10);
+}
+
+#[test]
+fn zoom_to_fit_padding_is_viewport_px_not_canvas_px() {
+    // Same bbox in two viewports with proportional padding produces the SAME
+    // zoom scaling behavior only when padding is screen-space. At zoom=0.5, a
+    // viewport-px padding of 100 leaves 100 screen px on each side — not 50
+    // (which is what the old canvas-px semantics would give).
+    //
+    // Bbox 4000x4000, viewport 1000x1000, padding 100 (viewport px).
+    // avail = 800x800 → zoom = 800/4000 = 0.2.
+    // After zoom, bbox renders at 800 screen px, leaving exactly 100 screen
+    // px of gutter on each side — invariant over bbox size.
+    let bbox = Rectangle::new((0, 0).into(), (4000, 4000).into());
+    let viewport = Size::<i32, Logical>::from((1000, 1000));
+    let z = zoom_to_fit(bbox, viewport, 100.0);
+    assert!((z - 0.2).abs() < 1e-10);
+    // Verify the gutter is exactly 100 screen px.
+    let rendered = bbox.size.w as f64 * z;
+    let gutter = (viewport.w as f64 - rendered) / 2.0;
+    assert!((gutter - 100.0).abs() < 1e-9);
 }
 
 // --- visible_canvas_rect tests ---

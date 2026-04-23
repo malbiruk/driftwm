@@ -303,21 +303,9 @@ impl DriftWm {
                 self.zoom_to_anchored(1.0);
             }
             Action::ZoomToFit => {
-                let overview_ret = self.overview_return();
-                self.set_overview_return(None);
-                if let Some((saved_camera, saved_zoom)) = overview_ret {
-                    // Toggle back from overview
-                    let vc = self.usable_center_screen();
-                    self.set_zoom_animation_center(Some(Point::from((
-                        saved_camera.x + vc.x / saved_zoom,
-                        saved_camera.y + vc.y / saved_zoom,
-                    ))));
-                    self.set_camera_target(Some(saved_camera));
-                    self.set_zoom_target(Some(saved_zoom));
+                if self.try_restore_overview() {
+                    // toggled back
                 } else {
-                    // Compute bounding box of all windows
-                    let usable = self.get_usable_area();
-                    let vc = self.usable_center_screen();
                     let windows = self.space.elements().filter(|w| !w.is_widget()).map(|w| {
                         let loc = self.space.element_location(w).unwrap_or_default();
                         let size = w.geometry().size;
@@ -326,21 +314,31 @@ impl DriftWm {
                     let anchors = self.config.nav_anchors.iter().map(|p| {
                         (Point::from((p.x as i32, p.y as i32)), Size::from((0, 0)))
                     });
-                    let bbox = canvas::all_windows_bbox(windows.chain(anchors));
-                    if let Some(bbox) = bbox {
-                        let fit_zoom = canvas::zoom_to_fit(
-                            bbox, usable.size, self.config.zoom_fit_padding,
-                        );
-                        let bbox_cx = bbox.loc.x as f64 + bbox.size.w as f64 / 2.0;
-                        let bbox_cy = bbox.loc.y as f64 + bbox.size.h as f64 / 2.0;
-                        let new_camera: Point<f64, smithay::utils::Logical> = Point::from((
-                            bbox_cx - vc.x / fit_zoom,
-                            bbox_cy - vc.y / fit_zoom,
-                        ));
-                        self.set_overview_return(Some((self.camera(), self.zoom())));
-                        self.set_zoom_animation_center(Some(Point::from((bbox_cx, bbox_cy))));
-                        self.set_camera_target(Some(new_camera));
-                        self.set_zoom_target(Some(fit_zoom));
+                    if let Some(bbox) = canvas::all_windows_bbox(windows.chain(anchors)) {
+                        self.fit_to_bbox(bbox);
+                    }
+                }
+            }
+            Action::ZoomToFitSnapped => {
+                if self.try_restore_overview() {
+                    // toggled back
+                } else if let Some(focused) = self.focused_window().filter(|w| !w.is_widget()) {
+                    let rects = self.all_windows_with_snap_rects();
+                    // Window's Hash/Eq are Arc pointer identity — stable despite
+                    // interior mutability. Same allow as cluster_snapshot.rs.
+                    #[allow(clippy::mutable_key_type)]
+                    let cluster = crate::cluster::cluster_of(
+                        &focused, &rects, self.config.snap_gap,
+                    );
+                    let members = self.space.elements()
+                        .filter(|w| cluster.contains(w))
+                        .map(|w| {
+                            let loc = self.space.element_location(w).unwrap_or_default();
+                            let size = w.geometry().size;
+                            (loc, size)
+                        });
+                    if let Some(bbox) = canvas::all_windows_bbox(members) {
+                        self.fit_to_bbox(bbox);
                     }
                 }
             }
@@ -395,6 +393,43 @@ impl DriftWm {
                 self.loop_signal.stop();
             }
         }
+    }
+
+    /// If an overview-return is pending, animate back to it and return true.
+    fn try_restore_overview(&mut self) -> bool {
+        let Some((saved_camera, saved_zoom)) = self.overview_return() else {
+            return false;
+        };
+        self.set_overview_return(None);
+        let vc = self.usable_center_screen();
+        self.set_zoom_animation_center(Some(Point::from((
+            saved_camera.x + vc.x / saved_zoom,
+            saved_camera.y + vc.y / saved_zoom,
+        ))));
+        self.set_camera_target(Some(saved_camera));
+        self.set_zoom_target(Some(saved_zoom));
+        true
+    }
+
+    /// Animate zoom + camera to fit `bbox` inside the viewport. Saves the
+    /// current camera/zoom into `overview_return` so the next zoom-to-fit
+    /// press toggles back.
+    fn fit_to_bbox(&mut self, bbox: smithay::utils::Rectangle<i32, smithay::utils::Logical>) {
+        let usable = self.get_usable_area();
+        let vc = self.usable_center_screen();
+        let fit_zoom = canvas::zoom_to_fit(
+            bbox, usable.size, self.config.zoom_fit_padding,
+        );
+        let bbox_cx = bbox.loc.x as f64 + bbox.size.w as f64 / 2.0;
+        let bbox_cy = bbox.loc.y as f64 + bbox.size.h as f64 / 2.0;
+        let new_camera: Point<f64, smithay::utils::Logical> = Point::from((
+            bbox_cx - vc.x / fit_zoom,
+            bbox_cy - vc.y / fit_zoom,
+        ));
+        self.set_overview_return(Some((self.camera(), self.zoom())));
+        self.set_zoom_animation_center(Some(Point::from((bbox_cx, bbox_cy))));
+        self.set_camera_target(Some(new_camera));
+        self.set_zoom_target(Some(fit_zoom));
     }
 
     /// Animate zoom to `target_zoom`, anchored on viewport center (for keyboard actions).

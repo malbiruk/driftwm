@@ -127,6 +127,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "zoom-out" => Ok(Action::ZoomOut),
         "zoom-reset" => Ok(Action::ZoomReset),
         "zoom-to-fit" => Ok(Action::ZoomToFit),
+        "zoom-to-fit-snapped" => Ok(Action::ZoomToFitSnapped),
         "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
         "fit-window" => Ok(Action::FitWindow),
         "fit-window-snapped" => Ok(Action::FitWindowSnapped),
@@ -257,7 +258,8 @@ fn parse_continuous_action(s: &str) -> Option<ContinuousAction> {
 fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
     match s {
         "center-nearest" => Ok(Some(ThresholdAction::CenterNearest)),
-        "center-window" | "focus-center" | "home-toggle" | "zoom-to-fit" | "zoom-in"
+        "center-window" | "focus-center" | "home-toggle" | "zoom-to-fit"
+        | "zoom-to-fit-snapped" | "zoom-in"
         | "zoom-out" | "zoom-reset" | "toggle-fullscreen" | "fit-window"
         | "fit-window-snapped" | "reload-config" | "quit" | "close-window" => {
             let action = parse_action(s)?;

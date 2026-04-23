@@ -232,6 +232,13 @@ pub(super) fn default_bindings(
         ),
         (
             KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_w),
+            },
+            Action::ZoomToFitSnapped,
+        ),
+        (
+            KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_f),
             },
@@ -634,6 +641,13 @@ pub(super) fn default_gesture_bindings(
                 trigger: GestureTrigger::PinchOut { fingers: 4 },
             },
             GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::HomeToggle)),
+        ),
+        (
+            GestureBinding {
+                modifiers: m.clone(),
+                trigger: GestureTrigger::PinchIn { fingers: 4 },
+            },
+            GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::ZoomToFitSnapped)),
         ),
         (
             GestureBinding {
