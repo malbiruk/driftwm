@@ -216,7 +216,7 @@ pub enum MouseAction {
     /// Resize the focused window and propagate the delta to every snapped
     /// neighbor in its cluster. Same opt-in shape as `MoveSnappedWindows`:
     /// grabbing a window never implicitly resizes neighbors — the user
-    /// must bind this action explicitly or flip `resize_snapped_default`.
+    /// must bind this action explicitly.
     ResizeWindowSnapped,
     PanViewport,
     Zoom,

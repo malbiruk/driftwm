@@ -241,11 +241,9 @@ impl DriftWm {
                             }
                             DecorationHit::ResizeBorder(edge) if !is_widget => {
                                 self.raise_and_focus(&window, serial);
-                                // Edge-drag on the SSD border reads the config
-                                // flag directly — there's no modifier context for
-                                // the user to opt in/out on this path, so it
-                                // follows whatever the user chose as the default.
-                                let want_cluster = self.config.resize_snapped_default;
+                                // Edge-drag on the SSD border has no modifier
+                                // context, so it follows the config flag.
+                                let want_cluster = self.config.edge_resize_snapped;
                                 self.start_compositor_resize_with_edge(
                                     &pointer,
                                     &window,

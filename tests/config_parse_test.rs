@@ -291,7 +291,6 @@ fn default_mouse_bindings_resize_window_on_alt_right() {
 
 #[test]
 fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
-    // Modifier slot: Alt+Shift+Right → ResizeWindowSnapped with the flag off.
     let config = Config::default();
     let alt_shift = mods(true, false, true, false);
     let result = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
@@ -306,132 +305,12 @@ fn default_mouse_bindings_resize_snapped_on_alt_shift_right() {
 }
 
 #[test]
-fn default_mouse_bindings_flipped_when_resize_snapped_default_true() {
-    // With the flag on, primary and modifier swap: Alt+Right becomes
-    // `resize-snapped` and Alt+Shift+Right becomes single-window `resize`.
-    let toml_str = r#"
-        [mouse]
-        resize_snapped_default = true
-    "#;
-    let config = Config::from_toml(toml_str).unwrap();
-
-    let alt = mods(true, false, false, false);
-    let alt_shift = mods(true, false, true, false);
-
-    let primary = config.mouse_button_lookup_ctx(&alt, BTN_RIGHT, BindingContext::OnWindow);
-    assert!(
-        matches!(primary, Some(MouseAction::ResizeWindowSnapped)),
-        "flag=true: Alt+Right should be ResizeWindowSnapped"
-    );
-
-    let modifier = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
-    assert!(
-        matches!(modifier, Some(MouseAction::ResizeWindow)),
-        "flag=true: Alt+Shift+Right should be ResizeWindow"
-    );
-}
-
-#[test]
-fn resize_snapped_default_exposed_on_config() {
+fn edge_resize_snapped_exposed_on_config() {
     let default_config = Config::default();
-    assert!(!default_config.resize_snapped_default);
+    assert!(!default_config.edge_resize_snapped);
 
-    let flipped = Config::from_toml("[mouse]\nresize_snapped_default = true").unwrap();
-    assert!(flipped.resize_snapped_default);
-}
-
-#[test]
-fn resize_snapped_default_flips_user_defined_mouse_binding() {
-    // The swap applies *after* user overrides merge. A user who explicitly
-    // binds `"alt+right" = "resize-window"` gets the snapped variant when
-    // the flag is on — the token meanings invert globally, not just defaults.
-    let toml_str = r#"
-        [mouse]
-        resize_snapped_default = true
-
-        [mouse.on-window]
-        "alt+right" = "resize-window"
-        "alt+shift+right" = "resize-window-snapped"
-    "#;
-    let config = Config::from_toml(toml_str).unwrap();
-    let alt = mods(true, false, false, false);
-    let alt_shift = mods(true, false, true, false);
-
-    let primary = config.mouse_button_lookup_ctx(&alt, BTN_RIGHT, BindingContext::OnWindow);
-    assert!(
-        matches!(primary, Some(MouseAction::ResizeWindowSnapped)),
-        "user-defined 'resize-window' on Alt+Right should become ResizeWindowSnapped with flag=true"
-    );
-    let modifier = config.mouse_button_lookup_ctx(&alt_shift, BTN_RIGHT, BindingContext::OnWindow);
-    assert!(
-        matches!(modifier, Some(MouseAction::ResizeWindow)),
-        "user-defined 'resize-window-snapped' on Alt+Shift+Right should become ResizeWindow with flag=true"
-    );
-}
-
-#[test]
-fn resize_snapped_default_flips_gesture_bindings() {
-    use driftwm::config::GestureTrigger;
-
-    // Off: Alt+3-finger-swipe = plain, Alt+Shift+3-finger-swipe = snapped.
-    let off = Config::default();
-    let alt = mods(true, false, false, false);
-    let alt_shift = mods(true, false, true, false);
-    assert!(
-        matches!(
-            off.gesture_lookup(
-                &alt,
-                &GestureTrigger::Swipe { fingers: 3 },
-                BindingContext::OnWindow
-            ),
-            Some(GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindow
-            ))
-        ),
-        "flag=false: Alt+3-finger-swipe on window should be ResizeWindow"
-    );
-    assert!(
-        matches!(
-            off.gesture_lookup(
-                &alt_shift,
-                &GestureTrigger::Swipe { fingers: 3 },
-                BindingContext::OnWindow,
-            ),
-            Some(GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindowSnapped
-            ))
-        ),
-        "flag=false: Alt+Shift+3-finger-swipe on window should be ResizeWindowSnapped"
-    );
-
-    // On: the two gesture bindings swap meaning.
-    let on = Config::from_toml("[mouse]\nresize_snapped_default = true").unwrap();
-    assert!(
-        matches!(
-            on.gesture_lookup(
-                &alt,
-                &GestureTrigger::Swipe { fingers: 3 },
-                BindingContext::OnWindow
-            ),
-            Some(GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindowSnapped
-            ))
-        ),
-        "flag=true: Alt+3-finger-swipe should flip to ResizeWindowSnapped"
-    );
-    assert!(
-        matches!(
-            on.gesture_lookup(
-                &alt_shift,
-                &GestureTrigger::Swipe { fingers: 3 },
-                BindingContext::OnWindow,
-            ),
-            Some(GestureConfigEntry::Continuous(
-                ContinuousAction::ResizeWindow
-            ))
-        ),
-        "flag=true: Alt+Shift+3-finger-swipe should flip to ResizeWindow"
-    );
+    let flipped = Config::from_toml("[mouse]\nedge_resize_snapped = true").unwrap();
+    assert!(flipped.edge_resize_snapped);
 }
 
 #[test]

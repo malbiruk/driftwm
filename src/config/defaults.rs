@@ -379,9 +379,6 @@ pub(super) fn default_mouse_bindings(
         ..m.clone()
     };
 
-    // Defaults use the canonical action names; `resize_snapped_default` is
-    // applied as a post-parse swap in `Config::from_raw` so that it also
-    // flips user-defined bindings, not just these defaults.
     let on_window = HashMap::from([
         (
             MouseBinding {
