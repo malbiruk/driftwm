@@ -410,7 +410,7 @@ pub(super) fn default_mouse_bindings(
         ),
         (
             MouseBinding {
-                modifiers: alt_shift,
+                modifiers: alt_shift.clone(),
                 trigger: MouseTrigger::Button(BTN_RIGHT),
             },
             MouseAction::ResizeWindowSnapped,
@@ -421,6 +421,13 @@ pub(super) fn default_mouse_bindings(
                 trigger: MouseTrigger::Button(BTN_MIDDLE),
             },
             MouseAction::Action(Action::FitWindow),
+        ),
+        (
+            MouseBinding {
+                modifiers: alt_shift,
+                trigger: MouseTrigger::Button(BTN_MIDDLE),
+            },
+            MouseAction::Action(Action::FitWindowSnapped),
         ),
         (
             MouseBinding {
@@ -518,7 +525,7 @@ pub(super) fn default_gesture_bindings(
         ),
         (
             GestureBinding {
-                modifiers: alt_shift,
+                modifiers: alt_shift.clone(),
                 trigger: GestureTrigger::Swipe { fingers: 3 },
             },
             GestureConfigEntry::Continuous(ContinuousAction::ResizeWindowSnapped),
@@ -543,6 +550,20 @@ pub(super) fn default_gesture_bindings(
                 trigger: GestureTrigger::PinchOut { fingers: 2 },
             },
             GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::FitWindow)),
+        ),
+        (
+            GestureBinding {
+                modifiers: alt_shift.clone(),
+                trigger: GestureTrigger::PinchIn { fingers: 2 },
+            },
+            GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::FitWindowSnapped)),
+        ),
+        (
+            GestureBinding {
+                modifiers: alt_shift,
+                trigger: GestureTrigger::PinchOut { fingers: 2 },
+            },
+            GestureConfigEntry::Threshold(ThresholdAction::Fixed(Action::FitWindowSnapped)),
         ),
         (
             GestureBinding {

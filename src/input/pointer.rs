@@ -142,7 +142,7 @@ impl DriftWm {
                 if matches!(
                     fs_lookup,
                     Some(MouseAction::Action(
-                        Action::ToggleFullscreen | Action::FitWindow
+                        Action::ToggleFullscreen | Action::FitWindow | Action::FitWindowSnapped
                     ))
                 ) {
                     self.exit_fullscreen_remap_pointer(pos);
