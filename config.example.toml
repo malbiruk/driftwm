@@ -176,6 +176,7 @@
 # "mod+q" = "close-window"
 # "mod+f" = "toggle-fullscreen"
 # "mod+m" = "fit-window"
+# "mod+shift+m" = "fit-window-snapped"
 # "mod+c" = "center-window"
 # "mod+x" = "focus-center"
 # "mod+a" = "home-toggle"
@@ -244,6 +245,7 @@
 # "alt+right" = "resize-window"
 # "alt+shift+right" = "resize-window-snapped"
 # "alt+middle" = "fit-window"
+# "alt+shift+middle" = "fit-window-snapped"
 # "mod+middle" = "toggle-fullscreen"
 
 [mouse.on-canvas]
@@ -271,7 +273,7 @@
 #   N-finger-hold             — threshold only (fires on release)
 #
 # Continuous actions: pan-viewport, zoom, move-window, resize-window, resize-window-snapped
-# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, fit-window, exec <cmd>, etc.
+# Threshold actions: center-nearest, center-window, home-toggle, zoom-to-fit, fit-window, fit-window-snapped, exec <cmd>, etc.
 
 # Gesture thresholds — tune for your touchpad size.
 [gestures]
@@ -285,6 +287,8 @@
 # "3-finger-doubletap-swipe" = "move-window"
 # "alt+2-finger-pinch-in" = "fit-window"
 # "alt+2-finger-pinch-out" = "fit-window"
+# "alt+shift+2-finger-pinch-in" = "fit-window-snapped"
+# "alt+shift+2-finger-pinch-out" = "fit-window-snapped"
 # "alt+3-finger-pinch-in" = "toggle-fullscreen"
 # "alt+3-finger-pinch-out" = "toggle-fullscreen"
 
