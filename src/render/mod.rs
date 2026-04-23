@@ -338,7 +338,7 @@ fn build_layer_elements(
 
         if let Some((config, blur_enabled, layer_tag)) = blur_config
             && blur_enabled
-            && config.match_window_rule(surface.namespace(), "").is_some_and(|r| r.blur)
+            && config.resolve_window_rules(surface.namespace(), "", "", "").is_some_and(|r| r.blur)
         {
             let elem_count = elements.len() - elem_start;
             let screen_rect = geo.to_physical_precise_round(output_scale);

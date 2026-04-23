@@ -199,10 +199,12 @@ impl CompositorHandler for DriftWm {
                             .unwrap_or_default()
                     });
 
-                    let rule = self.config.match_window_rule(
+                    let applied = self.config.resolve_window_rules(
                         app_id.as_deref().unwrap_or(""),
                         title.as_deref().unwrap_or(""),
-                    ).cloned();
+                        "",  // xclass — Wayland-native windows have no X11 class
+                        "",  // xinstance
+                    );
 
                     // Check if rule side-effects were already applied on a
                     // previous commit (happens when the first commit had zero
@@ -211,15 +213,15 @@ impl CompositorHandler for DriftWm {
                         states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>().is_some()
                     });
 
-                    if let Some(ref rule) = rule {
-                        // Store applied rule in surface data_map
-                        let applied = driftwm::config::AppliedWindowRule::from(rule);
+                    if let Some(ref a) = applied {
+                        // Store merged applied rule in surface data_map
+                        let stored = a.clone();
                         with_states(&root, |states| {
                             states.data_map.insert_if_missing_threadsafe(|| {
-                                std::sync::Mutex::new(applied.clone())
+                                std::sync::Mutex::new(stored.clone())
                             });
                             *states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                                .unwrap().lock().unwrap() = applied;
+                                .unwrap().lock().unwrap() = stored;
                         });
                     }
 
@@ -240,9 +242,9 @@ impl CompositorHandler for DriftWm {
                     // onto the wire, which clobbered a client's request_mode(Server)
                     // any time default_mode was Client (the default). That caused
                     // Qt apps to CSD and Alacritty to fall back to SCTK chrome.
-                    let rule_explicit = rule
+                    let rule_explicit = applied
                         .as_ref()
-                        .and_then(|r| r.decoration.as_ref())
+                        .and_then(|a| a.decoration.as_ref())
                         .cloned();
 
                     let effective = if let Some(ref m) = rule_explicit {
@@ -270,8 +272,8 @@ impl CompositorHandler for DriftWm {
                     // Force size on first commit: send a configure with the
                     // rule's size, re-insert into pending_center, and wait for
                     // the client to re-render at the new dimensions.
-                    if let Some(ref rule) = rule
-                        && let Some((w, h)) = rule.size
+                    if let Some(ref applied) = applied
+                        && let Some((w, h)) = applied.size
                         && self.pending_size.insert(root.clone())
                     {
                         if let Some(toplevel) = window.toplevel() {
@@ -286,8 +288,8 @@ impl CompositorHandler for DriftWm {
                     } else if has_size {
                         // Position: rule coords are window-center with Y-up convention
                         // (positive = above origin). Negate Y for internal canvas coords.
-                        let pos = if let Some(ref rule) = rule
-                            && let Some((x, y)) = rule.position
+                        let pos = if let Some(ref applied) = applied
+                            && let Some((x, y)) = applied.position
                         {
                             (x - geo.size.w / 2, -y - geo.size.h / 2)
                         } else if let Some(parent_surface) = window.parent_surface()
@@ -324,7 +326,7 @@ impl CompositorHandler for DriftWm {
                             };
                             self.cascade_position(centered, &window)
                         };
-                        let activate = rule.as_ref().is_none_or(|r| !r.widget);
+                        let activate = applied.as_ref().is_none_or(|a| !a.widget);
                         self.space.map_element(window.clone(), pos, activate);
                         self.sync_x11_position(&window);
                     }
@@ -344,7 +346,7 @@ impl CompositorHandler for DriftWm {
                         // (explicit position/size) and `None` mode (truly bare).
                         // Otherwise Tiled tells GTK et al. to drop their shadow
                         // and rounded corners since we draw uniform chrome.
-                        let skip_tiled = rule.as_ref().is_some_and(|r| r.widget)
+                        let skip_tiled = applied.as_ref().is_some_and(|a| a.widget)
                             || matches!(effective, driftwm::config::DecorationMode::None);
                         if skip_tiled {
                             crate::handlers::unset_tiled_states(toplevel);
@@ -377,12 +379,12 @@ impl CompositorHandler for DriftWm {
                     }
 
                     // Widget side-effects: only on first apply
-                    if let Some(ref rule) = rule && !already_applied {
-                        if rule.widget {
+                    if let Some(ref applied) = applied && !already_applied {
+                        if applied.widget {
                             self.enforce_below_windows();
                         }
 
-                        if rule.widget {
+                        if applied.widget {
                             self.focus_history.retain(|w| w != &window);
                             if let Some(prev) = self.focus_history.first().cloned() {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -411,7 +413,7 @@ impl CompositorHandler for DriftWm {
                             self.decorations.insert(root.id(), deco);
                         }
 
-                        let is_widget = rule.as_ref().is_some_and(|r| r.widget);
+                        let is_widget = applied.as_ref().is_some_and(|a| a.widget);
                         if !is_widget {
                             let reset = self.config.zoom_reset_on_new_window;
                             self.navigate_to_window(&window, reset);

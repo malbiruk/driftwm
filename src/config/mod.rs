@@ -501,11 +501,14 @@ impl Config {
         }
     }
 
-    /// Find the first matching window rule for the given `app_id` and `title`.
+    /// Find the first matching window rule for `app_id` and `title`.
+    /// Kept for backward-compat callers that need a `&WindowRule` reference
+    /// (layer shell position, render blur check).
+    /// For building `AppliedWindowRule` use `resolve_window_rules` instead.
     pub fn match_window_rule(&self, app_id: &str, title: &str) -> Option<&WindowRule> {
         self.window_rules
             .iter()
-            .find(|rule| Self::rule_matches(rule, app_id, title))
+            .find(|rule| rule.matches(app_id, title, "", ""))
     }
 
     /// Find the Nth matching window rule (with position) for the given `app_id` and `title`.
@@ -519,30 +522,37 @@ impl Config {
     ) -> Option<&WindowRule> {
         self.window_rules
             .iter()
-            .filter(|rule| rule.position.is_some() && Self::rule_matches(rule, app_id, title))
+            .filter(|rule| rule.position.is_some() && rule.matches(app_id, title, "", ""))
             .nth(n)
     }
 
-    fn glob_matches(pattern: &str, value: &str) -> bool {
-        if let Some((prefix, suffix)) = pattern.split_once('*') {
-            value.len() >= prefix.len() + suffix.len()
-                && value.starts_with(prefix)
-                && value[prefix.len()..].ends_with(suffix)
-        } else {
-            pattern == value
+    /// Merge ALL matching window rules and return the combined `AppliedWindowRule`.
+    ///
+    /// Rules are applied in config order; later rules override earlier ones for
+    /// scalar fields (decoration, opacity, position, size). Boolean flags
+    /// (widget, blur, pass_keys) are sticky-on.
+    ///
+    /// - `app_id`    — Wayland app_id (also used for X11 WM_CLASS for backward compat)
+    /// - `title`     — window title
+    /// - `xclass`    — X11 WM_CLASS class component (empty for Wayland-native windows)
+    /// - `xinstance` — X11 WM_CLASS instance component (empty for Wayland-native windows)
+    pub fn resolve_window_rules(
+        &self,
+        app_id: &str,
+        title: &str,
+        xclass: &str,
+        xinstance: &str,
+    ) -> Option<AppliedWindowRule> {
+        let mut result: Option<AppliedWindowRule> = None;
+        for rule in &self.window_rules {
+            if rule.matches(app_id, title, xclass, xinstance) {
+                match &mut result {
+                    None    => result = Some(AppliedWindowRule::from(rule)),
+                    Some(r) => r.merge_from(rule),
+                }
+            }
         }
-    }
-
-    fn rule_matches(rule: &WindowRule, app_id: &str, title: &str) -> bool {
-        let app_ok = rule
-            .app_id
-            .as_ref()
-            .is_none_or(|pat| Self::glob_matches(pat, app_id));
-        let title_ok = rule
-            .title
-            .as_ref()
-            .is_none_or(|pat| Self::glob_matches(pat, title));
-        app_ok && title_ok
+        result
     }
 }
 
@@ -624,9 +634,22 @@ fn parse_decoration_config(raw: DecorationFileConfig) -> DecorationConfig {
     }
 }
 
+fn parse_pattern(s: String) -> Pattern {
+    // Strings wrapped in `/…/` are treated as regular expressions.
+    // Everything else is a glob pattern (`*` = any sequence of chars).
+    if s.len() >= 2 && s.starts_with('/') && s.ends_with('/') {
+        let inner = &s[1..s.len() - 1];
+        match regex::Regex::new(inner) {
+            Ok(re)  => return Pattern::Regex(re),
+            Err(e)  => tracing::warn!("Invalid regex '/{inner}/': {e}, treating as literal glob"),
+        }
+    }
+    Pattern::Glob(s)
+}
+
 fn parse_window_rule(r: WindowRuleFile) -> Option<WindowRule> {
-    if r.app_id.is_none() && r.title.is_none() {
-        tracing::warn!("Window rule has neither app_id nor title, skipping");
+    if r.app_id.is_none() && r.title.is_none() && r.xclass.is_none() && r.xinstance.is_none() {
+        tracing::warn!("Window rule has no match criteria (app_id/title/xclass/xinstance), skipping");
         return None;
     }
     // None = "field not set" → window inherits [decorations] default_mode.
@@ -643,8 +666,10 @@ fn parse_window_rule(r: WindowRuleFile) -> Option<WindowRule> {
         }
     };
     Some(WindowRule {
-        app_id: r.app_id,
-        title: r.title,
+        app_id:    r.app_id.map(parse_pattern),
+        title:     r.title.map(parse_pattern),
+        xclass:    r.xclass.map(parse_pattern),
+        xinstance: r.xinstance.map(parse_pattern),
         position: r.position.map(|[x, y]| (x, y)),
         size: r.size.and_then(|[w, h]| {
             if w > 0 && h > 0 {

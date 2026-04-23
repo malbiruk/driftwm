@@ -203,12 +203,15 @@ impl DriftWm {
                     // pass_keys: focused window opted out of global shortcuts.
                     // Forward all keys to the app (game-friendly). VT-switching
                     // above is still handled regardless.
+                    // Uses live config so config-reload takes effect immediately.
                     let pass_keys = state.focused_window().is_some_and(|w| {
-                        let app_id = w.app_id_or_class().unwrap_or_default();
-                        let title = w.window_title().unwrap_or_default();
+                        let app_id   = w.app_id_or_class().unwrap_or_default();
+                        let title    = w.window_title().unwrap_or_default();
+                        let xclass   = w.x11_surface().map(|x| x.class()).unwrap_or_default();
+                        let xinstance = w.x11_surface().map(|x| x.instance()).unwrap_or_default();
                         state
                             .config
-                            .match_window_rule(&app_id, &title)
+                            .resolve_window_rules(&app_id, &title, &xclass, &xinstance)
                             .is_some_and(|r| r.pass_keys)
                     });
                     if pass_keys {

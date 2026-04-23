@@ -1,10 +1,10 @@
 # driftwm TEST config — nested session için
 # Canlı config'e dokunmadan özellikleri test etmek için kullan
 
-mod_key = "super"
+mod_key = "alt"   # nested'da super host compositor tarafından kapılır, alt kullan
 focus_follows_mouse = true
 
-autostart = []   # nested'da autostart kapalı — elle uygulama açılır
+autostart = ["kitty"]   # nested session başlar başlamaz kitty aç
 
 [background]
 shader_path = "/home/laa/.config/driftwm/fast_smoke.glsl"
@@ -23,13 +23,30 @@ animation_speed = 0.3
 "mod+shift+q"      = "close-window"
 "mod+ctrl+shift+q" = "quit"
 "mod+f"            = "toggle-fullscreen"
-
-# --- pass_keys testi ---
-# [[window_rules]]
-# app_id    = "kitty"
-# pass_keys = true
+"mod+shift+return" = "exec kitty"   # yedek: alt+shift+enter
 
 # --- opacity testi (transparent glitch fix) ---
 [[window_rules]]
 app_id  = "kitty"
 opacity = 0.85
+
+# --- Window Rules v2 örnekleri ---
+
+# Regex pattern: /pattern/ sözdizimi
+# [[window_rules]]
+# app_id  = "/^steam_app_\\d+$/"  # Steam oyunları
+# pass_keys = true
+
+# xclass ile X11 uygulama eşleştirme
+# [[window_rules]]
+# xclass    = "steam"
+# pass_keys = true
+
+# Birden fazla kural aynı pencereye uygulanır — sonraki override eder:
+# [[window_rules]]
+# app_id  = "kitty"
+# blur    = true
+#
+# [[window_rules]]
+# app_id  = "kitty"
+# opacity = 0.9     # bu kural blur=true'yu koruyor, sadece opacity override eder

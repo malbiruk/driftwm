@@ -67,13 +67,15 @@ impl XwmHandler for DriftWm {
 
         // X11 size is known upfront — center accounting for window size.
         // Check window rules for explicit positioning.
-        let class = window.class();
-        let title = window.title();
-        let rule = self.config.match_window_rule(&class, &title).cloned();
+        let class    = window.class();
+        let instance = window.instance();
+        let title    = window.title();
+        // For X11 windows `app_id` == class for backward compat; also pass as xclass.
+        let applied = self.config.resolve_window_rules(&class, &title, &class, &instance);
 
         // Force size if window rule specifies it (X11 configure is synchronous)
-        if let Some(ref rule) = rule
-            && let Some((w, h)) = rule.size
+        if let Some(ref applied) = applied
+            && let Some((w, h)) = applied.size
         {
             let mut rect = window.geometry();
             rect.size = smithay::utils::Size::from((w, h));
@@ -81,8 +83,8 @@ impl XwmHandler for DriftWm {
         }
         let geo = window.geometry();
 
-        let pos = if let Some(ref rule) = rule
-            && let Some((x, y)) = rule.position
+        let pos = if let Some(ref applied) = applied
+            && let Some((x, y)) = applied.position
         {
             // Rule coords: window-center, Y-up. Convert to canvas: top-left, Y-down.
             (x - geo.size.w / 2, -y - geo.size.h / 2)
@@ -91,7 +93,7 @@ impl XwmHandler for DriftWm {
             // navigate_to_window uses camera_to_center_window which offsets by bar/2;
             // the spawn position must be the exact inverse so cascade detects collisions.
             let effective = driftwm::config::effective_decoration_mode(
-                rule.as_ref().and_then(|r| r.decoration.as_ref()),
+                applied.as_ref().and_then(|a| a.decoration.as_ref()),
                 &self.config.decorations.default_mode,
             );
             let will_have_ssd = match effective {
@@ -116,7 +118,7 @@ impl XwmHandler for DriftWm {
             self.cascade_position(centered, &smithay_window)
         };
 
-        let activate = rule.as_ref().is_none_or(|r| !r.widget);
+        let activate = applied.as_ref().is_none_or(|a| !a.widget);
         self.space.map_element(smithay_window.clone(), pos, activate);
         self.space.raise_element(&smithay_window, true);
         self.enforce_below_windows();
@@ -447,24 +449,25 @@ impl XWaylandShellHandler for DriftWm {
         };
 
         // Apply window rules — store in wl_surface data_map (now available)
-        let class = surface.class();
-        let title = surface.title();
-        let rule = self.config.match_window_rule(&class, &title).cloned();
-        if let Some(ref rule) = rule {
-            let applied = driftwm::config::AppliedWindowRule::from(rule);
+        let class    = surface.class();
+        let instance = surface.instance();
+        let title    = surface.title();
+        let applied = self.config.resolve_window_rules(&class, &title, &class, &instance);
+        if let Some(ref a) = applied {
+            let stored = a.clone();
             with_states(&wl_surface, |states| {
                 states.data_map.insert_if_missing_threadsafe(|| {
-                    std::sync::Mutex::new(applied.clone())
+                    std::sync::Mutex::new(stored.clone())
                 });
                 *states.data_map.get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                    .unwrap().lock().unwrap() = applied;
+                    .unwrap().lock().unwrap() = stored;
             });
         }
 
         // SSD decorations: title bar widget is created only for `Server` mode.
         // For Client mode we still respect MOTIF hints (existing X11 fallback).
         let effective = driftwm::config::effective_decoration_mode(
-            rule.as_ref().and_then(|r| r.decoration.as_ref()),
+            applied.as_ref().and_then(|a| a.decoration.as_ref()),
             &self.config.decorations.default_mode,
         );
         let wants_titlebar = match effective {
@@ -487,7 +490,7 @@ impl XWaylandShellHandler for DriftWm {
         // Focus + navigate — skip for widgets and child/utility X11 windows
         let is_child = surface.is_transient_for().is_some()
             || !matches!(surface.window_type(), None | Some(WmWindowType::Normal));
-        let should_focus = !is_child && rule.as_ref().is_none_or(|r| !r.widget);
+        let should_focus = !is_child && applied.as_ref().is_none_or(|a| !a.widget);
         if should_focus {
             let reset = self.config.zoom_reset_on_new_window;
             self.navigate_to_window(&smithay_window, reset);

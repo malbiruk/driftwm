@@ -174,6 +174,10 @@ pub(super) struct DecorationFileConfig {
 pub(super) struct WindowRuleFile {
     pub app_id: Option<String>,
     pub title: Option<String>,
+    /// X11 WM_CLASS (class component). Matches only X11/XWayland windows.
+    pub xclass: Option<String>,
+    /// X11 WM_CLASS instance component. Matches only X11/XWayland windows.
+    pub xinstance: Option<String>,
     pub position: Option<[i32; 2]>,
     pub size: Option<[i32; 2]>,
     #[serde(default)]

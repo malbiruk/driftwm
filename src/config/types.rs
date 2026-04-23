@@ -388,11 +388,73 @@ pub enum DecorationMode {
     None,
 }
 
+// ── Window-rule pattern matching ────────────────────────────────────
+
+/// A match pattern for a window rule field.
+/// - `Glob`: simple wildcard matching (`*` matches any sequence of chars).
+/// - `Regex`: full regular expression (wrap in `/…/` in config).
+#[derive(Clone, Debug)]
+pub enum Pattern {
+    Glob(String),
+    Regex(regex::Regex),
+}
+
+impl Pattern {
+    /// Returns true if `value` matches this pattern.
+    pub fn matches(&self, value: &str) -> bool {
+        match self {
+            Pattern::Glob(pat) => glob_matches(pat, value),
+            Pattern::Regex(re)  => re.is_match(value),
+        }
+    }
+}
+
+/// Simple glob match — `*` matches any sequence of characters (including empty).
+/// Multiple `*` wildcards are supported. Case-sensitive.
+pub fn glob_matches(pat: &str, val: &str) -> bool {
+    let parts: Vec<&str> = pat.split('*').collect();
+    if parts.len() == 1 {
+        return pat == val;
+    }
+    let mut remaining = val;
+    for (i, part) in parts.iter().enumerate() {
+        if part.is_empty() {
+            continue;
+        }
+        if i == 0 {
+            // first segment must be an exact prefix
+            if !remaining.starts_with(part) {
+                return false;
+            }
+            remaining = &remaining[part.len()..];
+        } else if i == parts.len() - 1 {
+            // last segment must be an exact suffix
+            return remaining.ends_with(part);
+        } else {
+            // middle segments: find anywhere in the remaining string
+            if let Some(pos) = remaining.find(part) {
+                remaining = &remaining[pos + part.len()..];
+            } else {
+                return false;
+            }
+        }
+    }
+    true
+}
+
 /// Parsed window rule from config.
 #[derive(Clone, Debug)]
 pub struct WindowRule {
-    pub app_id: Option<String>,
-    pub title: Option<String>,
+    // ── Match criteria (all that are Some must match) ─────────────────
+    /// Wayland `app_id`. For X11 windows this also matches WM_CLASS.
+    pub app_id:    Option<Pattern>,
+    /// Window title.
+    pub title:     Option<Pattern>,
+    /// X11 WM_CLASS (the class component). Wayland windows never match.
+    pub xclass:    Option<Pattern>,
+    /// X11 WM_CLASS instance component. Wayland windows never match.
+    pub xinstance: Option<Pattern>,
+    // ── One-time placement effects ────────────────────────────────────
     pub position: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
     /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
@@ -408,7 +470,30 @@ pub struct WindowRule {
     pub pass_keys: bool,
 }
 
+impl WindowRule {
+    /// Returns true if this rule matches all of the supplied window identifiers.
+    /// Fields that are `None` are treated as wildcards (match anything).
+    pub fn matches(&self, app_id: &str, title: &str, xclass: &str, xinstance: &str) -> bool {
+        let app_ok  = self.app_id   .as_ref().map_or(true, |p| p.matches(app_id));
+        let ttl_ok  = self.title    .as_ref().map_or(true, |p| p.matches(title));
+        let cls_ok  = self.xclass   .as_ref().map_or(true, |p| p.matches(xclass));
+        let inst_ok = self.xinstance.as_ref().map_or(true, |p| p.matches(xinstance));
+        app_ok && ttl_ok && cls_ok && inst_ok
+    }
+
+    /// True if at least one match criterion is set (rules with no criteria are rejected).
+    pub fn has_criteria(&self) -> bool {
+        self.app_id.is_some()
+            || self.title.is_some()
+            || self.xclass.is_some()
+            || self.xinstance.is_some()
+    }
+}
+
 /// Runtime rule state stored in a surface's data_map after matching.
+/// Built by merging ALL matching `WindowRule`s in config order
+/// (later rules override earlier ones for scalar fields; boolean flags
+/// are sticky-on).
 #[derive(Clone, Debug)]
 pub struct AppliedWindowRule {
     pub widget: bool,
@@ -416,16 +501,39 @@ pub struct AppliedWindowRule {
     pub blur: bool,
     pub opacity: Option<f64>,
     pub pass_keys: bool,
+    /// Explicit window position requested by the matching rule(s).
+    pub position: Option<(i32, i32)>,
+    /// Explicit window size requested by the matching rule(s).
+    pub size: Option<(i32, i32)>,
+}
+
+impl AppliedWindowRule {
+    /// Overlay `rule`'s effects on top of `self`.
+    /// Boolean flags (widget, blur, pass_keys) are sticky-on.
+    /// Scalar fields (decoration, opacity, position, size) use last-wins.
+    pub fn merge_from(&mut self, rule: &WindowRule) {
+        if rule.widget    { self.widget    = true; }
+        if rule.blur      { self.blur      = true; }
+        if rule.pass_keys { self.pass_keys = true; }
+        if rule.decoration.is_some() {
+            self.decoration = rule.decoration.clone();
+        }
+        if let Some(op)  = rule.opacity  { self.opacity   = Some(op);  }
+        if let Some(pos) = rule.position { self.position  = Some(pos); }
+        if let Some(sz)  = rule.size     { self.size       = Some(sz);  }
+    }
 }
 
 impl From<&WindowRule> for AppliedWindowRule {
     fn from(rule: &WindowRule) -> Self {
         Self {
-            widget: rule.widget,
+            widget:     rule.widget,
             decoration: rule.decoration.clone(),
-            blur: rule.blur,
-            opacity: rule.opacity,
-            pass_keys: rule.pass_keys,
+            blur:       rule.blur,
+            opacity:    rule.opacity,
+            pass_keys:  rule.pass_keys,
+            position:   rule.position,
+            size:       rule.size,
         }
     }
 }

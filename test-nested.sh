@@ -34,4 +34,4 @@ fi
 echo "[config] $TEST_CONFIG"
 echo ""
 
-exec DRIFTWM_CONFIG="$TEST_CONFIG" "$BINARY" 2>&1 | tee /tmp/driftwm-test.log
+exec env DRIFTWM_CONFIG="$TEST_CONFIG" "$BINARY" 2>&1 | tee /tmp/driftwm-test.log
