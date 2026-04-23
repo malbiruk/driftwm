@@ -129,6 +129,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "zoom-to-fit" => Ok(Action::ZoomToFit),
         "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
         "fit-window" => Ok(Action::FitWindow),
+        "fit-window-snapped" => Ok(Action::FitWindowSnapped),
         "send-to-output" => {
             let dir = parse_direction(arg.ok_or("send-to-output requires a direction")?)?;
             Ok(Action::SendToOutput(dir))

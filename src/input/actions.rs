@@ -358,6 +358,11 @@ impl DriftWm {
                     self.toggle_fit_window(&window);
                 }
             }
+            Action::FitWindowSnapped => {
+                if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
+                    self.toggle_fit_window_snapped(&window);
+                }
+            }
             Action::SendToOutput(dir) => {
                 if let Some(window) = self.focused_window().filter(|w| !w.is_widget())
                     && let Some(from_output) = self.output_for_window(&window)

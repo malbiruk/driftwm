@@ -44,6 +44,11 @@ impl Side {
 /// the perpendicular extents strictly overlap. Strict overlap rejects both
 /// corner-touches (zero shared length) and diagonal corner snaps where the
 /// two windows are flush-with-gap on both axes simultaneously.
+///
+/// `EPS` is inclusive (`<= EPS`): positions are always integer-valued in
+/// production (cast from `i32`), so whole-pixel drift introduced by
+/// rounding in fit/unfit, centering, etc. gets absorbed without losing
+/// cluster membership.
 pub fn adjacent_side(a: &SnapRect, b: &SnapRect, gap: f64) -> Option<Side> {
     const EPS: f64 = 1.0;
 
@@ -51,18 +56,18 @@ pub fn adjacent_side(a: &SnapRect, b: &SnapRect, gap: f64) -> Option<Side> {
     let x_overlap = a.x_low < b.x_high && b.x_low < a.x_high;
 
     if y_overlap {
-        if ((a.x_high + gap) - b.x_low).abs() < EPS {
+        if ((a.x_high + gap) - b.x_low).abs() <= EPS {
             return Some(Side::Right);
         }
-        if (a.x_low - (b.x_high + gap)).abs() < EPS {
+        if (a.x_low - (b.x_high + gap)).abs() <= EPS {
             return Some(Side::Left);
         }
     }
     if x_overlap {
-        if ((a.y_high + gap) - b.y_low).abs() < EPS {
+        if ((a.y_high + gap) - b.y_low).abs() <= EPS {
             return Some(Side::Bottom);
         }
-        if (a.y_low - (b.y_high + gap)).abs() < EPS {
+        if (a.y_low - (b.y_high + gap)).abs() <= EPS {
             return Some(Side::Top);
         }
     }
@@ -484,6 +489,24 @@ mod tests {
         let a = rect(0.0, 0.0, 100.0, 100.0);
         let b = rect(104.4, 20.0, 50.0, 50.0);
         assert_eq!(adjacent_side(&a, &b, 4.0), Some(Side::Right));
+    }
+
+    #[test]
+    fn one_pixel_integer_drift_tolerated() {
+        // Rounding in fit/unfit centering can leave a neighbor one pixel off
+        // the expected gap. Inclusive EPS=1.0 keeps it in the cluster.
+        let a = rect(0.0, 0.0, 100.0, 100.0);
+        let b = rect(105.0, 20.0, 50.0, 50.0);
+        assert_eq!(adjacent_side(&a, &b, 4.0), Some(Side::Right));
+        let c = rect(103.0, 20.0, 50.0, 50.0);
+        assert_eq!(adjacent_side(&a, &c, 4.0), Some(Side::Right));
+    }
+
+    #[test]
+    fn two_pixel_drift_rejected() {
+        let a = rect(0.0, 0.0, 100.0, 100.0);
+        let b = rect(106.0, 20.0, 50.0, 50.0);
+        assert_eq!(adjacent_side(&a, &b, 4.0), None);
     }
 
     #[test]

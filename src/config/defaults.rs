@@ -246,6 +246,13 @@ pub(super) fn default_bindings(
         ),
         (
             KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_m),
+            },
+            Action::FitWindowSnapped,
+        ),
+        (
+            KeyCombo {
                 modifiers: Modifiers {
                     ctrl: true,
                     shift: true,

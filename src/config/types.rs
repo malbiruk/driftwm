@@ -55,6 +55,7 @@ pub enum Action {
     ZoomToFit,
     ToggleFullscreen,
     FitWindow,
+    FitWindowSnapped,
     SendToOutput(Direction),
     FocusCenter,
     ReloadConfig,
