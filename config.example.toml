@@ -232,19 +232,11 @@
 # connected to the focused one via snap adjacency
 
 [mouse]
-# Controls which resize action is the default, affecting both mouse bindings,
-# gesture bindings, and edge-drag resizing (any context that uses resize-window
-# or resize-window-snapped has its default flipped).
-#
-# When false (default): the default resize action is `resize-window`, which
-# resizes only the focused window. Bind `resize-window-snapped` explicitly
-# (e.g. on Alt+Shift+Right) to propagate resize to snapped neighbors.
-# Edge-drag resizes only the window you grabbed.
-#
-# When true: the default resize action is `resize-window-snapped`, which
-# propagates to every snapped neighbor. Use `resize-window` to resize a
-# single window. Edge-drag propagates to snapped neighbors.
-# resize_snapped_default = false
+# When true, resizing a window by dragging its edge (SSD border, CSD border,
+# or X11 border) propagates to every window connected to it via snap adjacency.
+# Keybinding/gesture resize is unaffected — bind `resize-window-snapped`
+# explicitly if you want cluster-aware resize there too.
+# edge_resize_snapped = false
 
 [mouse.on-window]
 # "alt+left" = "move-window"
