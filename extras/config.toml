@@ -64,60 +64,51 @@ transform = "90"
 
 # Dashboard widgets — positioned around origin for home view (1920x1080)
 
+# Shared defaults for all drift-* widgets (sticky-on flags, last-wins scalars)
+[[window_rules]]
+app_id = "drift-*"
+widget = true
+decoration = "none"
+
 [[window_rules]]
 app_id = "drift-clock"
 position = [-93, 205]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-stats"
 position = [-93, 0]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-canvas"
 position = [-129, -185]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-layout"
 position = [42, -185]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-calendar"
 position = [186, 0]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-weather"
 position = [186, 205]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-notif"
 position = [190, -185]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-power"
 position = [274, -259]
-widget = true
-decoration = "none"
 
 [[window_rules]]
 app_id = "drift-power-menu"
 position = [274, -370]
-widget = true
 decoration = "server"
 
+# Waybar: layer-shell uses match_window_rule_nth (Nth instance → Nth rule
+# with `position`), so these must stay as separate fully-specified rules.
 [[window_rules]]
 app_id = "waybar"
 position = [-289, 21]
