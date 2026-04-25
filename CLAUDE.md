@@ -71,7 +71,7 @@ Current source layout:
 - `input/` — `mod.rs` (keyboard handling, pointer motion absolute+relative, surface_under hit-testing), `actions.rs` (execute_action dispatch for all keybindings), `pointer.rs` (context-aware mouse dispatch, button/axis handling, compositor resize/pan grabs), `gestures.rs` (table-driven gesture dispatch from config, continuous/threshold state machine, libinput device config, client forwarding)
 - `grabs/` — `mod.rs`, `move_grab.rs` (MoveSurfaceGrab), `resize_grab.rs` (ResizeSurfaceGrab, ResizeState), `pan_grab.rs` (PanGrab for viewport panning), `navigate_grab.rs` (NavigateGrab for directional window navigation)
 - `handlers/` — `compositor.rs` (commit, resize repositioning, dmabuf, layer commit), `layer_shell.rs` (wlr-layer-shell handler), `xdg_shell.rs` (CSD move/resize, window centering, fullscreen, popup grabs), `xwayland.rs` (X11 window management), `mod.rs` (seat, data device, output, cursor_shape, foreign toplevel, session lock, xdg-decoration, output management, protocol delegates)
-- `protocols/` — `mod.rs`, `foreign_toplevel.rs` (zwlr-foreign-toplevel-management-v1), `output_management.rs` (zwlr-output-management-v1), `screencopy.rs` (wlr-screencopy), `image_copy_capture.rs` (ext-image-copy-capture-v1), `image_capture_source.rs` (ext-image-capture-source-v1)
+- `protocols/` — `mod.rs`, `foreign_toplevel.rs` (zwlr-foreign-toplevel-management-v1), `output_management.rs` (zwlr-output-management-v1), `screencopy.rs` (wlr-screencopy), `image_copy_capture.rs` (ext-image-copy-capture-v1), `image_capture_source.rs` (ext-image-capture-source-v1), `hyprland_toplevel_export.rs` (hyprland-toplevel-export-v1 — per-window capture for xdg-desktop-portal-hyprland)
 
 ## Key Design Decisions
 

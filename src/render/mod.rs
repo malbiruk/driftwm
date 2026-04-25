@@ -4,7 +4,7 @@ mod elements;
 
 pub use blur::BlurCache;
 pub(crate) use blur::compile_blur_shaders;
-pub use capture::{render_screencopy, render_capture_frames};
+pub use capture::{render_screencopy, render_capture_frames, render_hyprland_toplevel_exports};
 pub use elements::{
     OutputRenderElements, PixelSnapRescaleElement, RoundedCornerElement,
     TileShaderElement, corner_round_rect,
@@ -338,17 +338,24 @@ fn build_layer_elements(
 
         if let Some((config, blur_enabled, layer_tag)) = blur_config
             && blur_enabled
-            && config.resolve_window_rules(surface.namespace(), "", "", "").is_some_and(|r| r.blur)
         {
-            let elem_count = elements.len() - elem_start;
-            let screen_rect = geo.to_physical_precise_round(output_scale);
-            blur_requests.push(BlurRequestData {
-                surface_id: surface.wl_surface().id(),
-                screen_rect,
-                elem_start,
-                elem_count,
-                layer: layer_tag,
-            });
+            if let Some(rule) = config.resolve_window_rules(surface.namespace(), "", "", "")
+                && rule.blur
+            {
+                let elem_count = elements.len() - elem_start;
+                let screen_rect = geo.to_physical_precise_round(output_scale);
+                let passes = rule.blur_passes.unwrap_or(config.effects.blur_radius) as usize;
+                let strength = rule.blur_strength.unwrap_or(config.effects.blur_strength) as f32;
+                blur_requests.push(BlurRequestData {
+                    surface_id: surface.wl_surface().id(),
+                    screen_rect,
+                    elem_start,
+                    elem_count,
+                    layer: layer_tag,
+                    passes,
+                    strength,
+                });
+            }
         }
     }
 
@@ -976,12 +983,18 @@ pub fn compose_frame(
                 },
                 screen_size,
             ).to_physical_precise_round(output_scale);
+            let win_blur_passes = applied.as_ref().and_then(|r| r.blur_passes)
+                .unwrap_or(state.config.effects.blur_radius) as usize;
+            let win_blur_strength = applied.as_ref().and_then(|r| r.blur_strength)
+                .unwrap_or(state.config.effects.blur_strength) as f32;
             blur_requests.push(BlurRequestData {
                 surface_id: wl_surface.id(),
                 screen_rect,
                 elem_start,
                 elem_count,
                 layer: if is_widget { BlurLayer::Widget } else { BlurLayer::Normal },
+                passes: win_blur_passes,
+                strength: win_blur_strength,
             });
         }
     }

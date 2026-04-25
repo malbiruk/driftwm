@@ -121,6 +121,11 @@ impl DriftWm {
                 &dh,
                 client_is_unrestricted,
             );
+        let hyprland_toplevel_export_state =
+            driftwm::protocols::hyprland_toplevel_export::HyprlandToplevelExportState::new::<Self, _>(
+                &dh,
+                client_is_unrestricted,
+            );
         let output_management_state =
             driftwm::protocols::output_management::OutputManagementState::new::<Self, _>(
                 &dh,
@@ -211,6 +216,8 @@ impl DriftWm {
             image_capture_source_state,
             image_copy_capture_state,
             pending_captures: Vec::new(),
+            hyprland_toplevel_export_state,
+            pending_hyprland_exports: Vec::new(),
             xdg_foreign_state,
             session_lock_manager_state,
             session_lock: SessionLock::Unlocked,
