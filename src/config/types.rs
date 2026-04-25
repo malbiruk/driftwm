@@ -532,6 +532,10 @@ pub struct WindowRule {
     /// `decoration = "client"` resolves to `Some(Client)` and overrides default.
     pub decoration: Option<DecorationMode>,
     pub blur: bool,
+    /// Per-window Kawase pass count override. `None` = use `[effects] blur_radius`.
+    pub blur_passes: Option<u32>,
+    /// Per-window sample offset override. `None` = use `[effects] blur_strength`.
+    pub blur_strength: Option<f64>,
     pub opacity: Option<f64>,
     pub pass_keys: PassKeys,
 }
@@ -565,6 +569,10 @@ pub struct AppliedWindowRule {
     pub widget: bool,
     pub decoration: Option<DecorationMode>,
     pub blur: bool,
+    /// Per-window Kawase pass count override. `None` = use `[effects] blur_radius`.
+    pub blur_passes: Option<u32>,
+    /// Per-window sample offset override. `None` = use `[effects] blur_strength`.
+    pub blur_strength: Option<f64>,
     pub opacity: Option<f64>,
     pub pass_keys: PassKeys,
     /// Explicit window position requested by the matching rule(s).
@@ -585,7 +593,9 @@ impl AppliedWindowRule {
         if rule.decoration.is_some() {
             self.decoration = rule.decoration.clone();
         }
-        if let Some(op)  = rule.opacity  { self.opacity   = Some(op);  }
+        if let Some(op)  = rule.opacity    { self.opacity     = Some(op);  }
+        if let Some(p)   = rule.blur_passes   { self.blur_passes  = Some(p);  }
+        if let Some(s)   = rule.blur_strength { self.blur_strength = Some(s); }
         if let Some(pos) = rule.position { self.position  = Some(pos); }
         if let Some(sz)  = rule.size     { self.size       = Some(sz);  }
     }
@@ -594,13 +604,15 @@ impl AppliedWindowRule {
 impl From<&WindowRule> for AppliedWindowRule {
     fn from(rule: &WindowRule) -> Self {
         Self {
-            widget:     rule.widget,
-            decoration: rule.decoration.clone(),
-            blur:       rule.blur,
-            opacity:    rule.opacity,
-            pass_keys:  rule.pass_keys.clone(),
-            position:   rule.position,
-            size:       rule.size,
+            widget:       rule.widget,
+            decoration:   rule.decoration.clone(),
+            blur:         rule.blur,
+            blur_passes:  rule.blur_passes,
+            blur_strength: rule.blur_strength,
+            opacity:      rule.opacity,
+            pass_keys:    rule.pass_keys.clone(),
+            position:     rule.position,
+            size:         rule.size,
         }
     }
 }
@@ -626,6 +638,9 @@ pub struct BackendConfig {
 pub struct EffectsConfig {
     pub blur_radius: u32,
     pub blur_strength: f64,
+    /// When true, blur textures are recomputed every frame for animated backgrounds.
+    /// Disabled by default to prevent stutter with GLSL wallpaper shaders.
+    pub animated_blur: bool,
 }
 
 impl Default for EffectsConfig {
@@ -633,6 +648,7 @@ impl Default for EffectsConfig {
         Self {
             blur_radius: 2,
             blur_strength: 1.1,
+            animated_blur: false,
         }
     }
 }

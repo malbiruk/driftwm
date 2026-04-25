@@ -338,24 +338,22 @@ fn build_layer_elements(
 
         if let Some((config, blur_enabled, layer_tag)) = blur_config
             && blur_enabled
+            && let Some(rule) = config.resolve_window_rules(surface.namespace(), "", "", "")
+            && rule.blur
         {
-            if let Some(rule) = config.resolve_window_rules(surface.namespace(), "", "", "")
-                && rule.blur
-            {
-                let elem_count = elements.len() - elem_start;
-                let screen_rect = geo.to_physical_precise_round(output_scale);
-                let passes = rule.blur_passes.unwrap_or(config.effects.blur_radius) as usize;
-                let strength = rule.blur_strength.unwrap_or(config.effects.blur_strength) as f32;
-                blur_requests.push(BlurRequestData {
-                    surface_id: surface.wl_surface().id(),
-                    screen_rect,
-                    elem_start,
-                    elem_count,
-                    layer: layer_tag,
-                    passes,
-                    strength,
-                });
-            }
+            let elem_count = elements.len() - elem_start;
+            let screen_rect = geo.to_physical_precise_round(output_scale);
+            let passes = rule.blur_passes.unwrap_or(config.effects.blur_radius) as usize;
+            let strength = rule.blur_strength.unwrap_or(config.effects.blur_strength) as f32;
+            blur_requests.push(BlurRequestData {
+                surface_id: surface.wl_surface().id(),
+                screen_rect,
+                elem_start,
+                elem_count,
+                layer: layer_tag,
+                passes,
+                strength,
+            });
         }
     }
 
