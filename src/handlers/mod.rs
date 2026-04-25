@@ -665,6 +665,32 @@ impl ImageCopyCaptureHandler for DriftWm {
 
 driftwm::delegate_image_copy_capture!(DriftWm);
 
+use driftwm::protocols::hyprland_toplevel_export::{
+    HyprlandToplevelExportHandler,
+    PendingToplevelExport,
+};
+use smithay::reexports::wayland_server::backend::ObjectId;
+
+impl HyprlandToplevelExportHandler for DriftWm {
+    fn window_for_toplevel_handle(&self, handle_id: &ObjectId) -> Option<smithay::desktop::Window> {
+        let surface = self
+            .foreign_toplevel_state
+            .surface_for_handle_id(handle_id)?;
+        self.space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&surface))
+            .cloned()
+    }
+
+    fn export_frame_ready(&mut self, export: PendingToplevelExport) {
+        self.pending_hyprland_exports.push(export);
+        // Wake the render loop so the pending export is fulfilled on the next frame
+        self.mark_all_dirty();
+    }
+}
+
+driftwm::delegate_hyprland_toplevel_export!(DriftWm);
+
 use driftwm::protocols::output_management::{
     OutputManagementHandler, OutputManagementState, RequestedHeadConfig,
 };

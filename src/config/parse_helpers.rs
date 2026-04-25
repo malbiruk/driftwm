@@ -166,6 +166,15 @@ pub(super) fn parse_window_rule(r: WindowRuleFile, mod_key: ModKey) -> Option<Wi
         widget: r.widget,
         decoration,
         blur: r.blur.unwrap_or(false),
+        blur_passes: r.blur_passes.map(|p| p.clamp(1, 8)),
+        blur_strength: r.blur_strength.map(|s| {
+            if s <= 0.0 {
+                tracing::warn!("Window rule blur_strength {s} must be > 0, clamping to 0.1");
+                0.1_f64
+            } else {
+                s
+            }
+        }),
         opacity: r.opacity.map(|v| {
             if !(0.0..=1.0).contains(&v) {
                 tracing::warn!("Window rule opacity {v} out of range, clamping to 0.0–1.0");
@@ -182,6 +191,7 @@ pub(super) fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
     EffectsConfig {
         blur_radius: raw.blur_radius.unwrap_or(2),
         blur_strength: raw.blur_strength.unwrap_or(1.1),
+        animated_blur: raw.animated_blur.unwrap_or(false),
     }
 }
 

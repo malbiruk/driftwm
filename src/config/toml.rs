@@ -40,6 +40,10 @@ pub(super) struct BackendFileConfig {
 pub(super) struct EffectsFileConfig {
     pub blur_radius: Option<u32>,
     pub blur_strength: Option<f64>,
+    /// Recompute blur every frame when the background shader is animated.
+    /// Disabled by default: blur stays cached until the window or camera moves.
+    /// Enabling this is expensive at high frame rates.
+    pub animated_blur: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]
@@ -198,6 +202,12 @@ pub(super) struct WindowRuleFile {
     pub widget: bool,
     pub decoration: Option<String>,
     pub blur: Option<bool>,
+    /// Override the global `[effects] blur_radius` (Kawase pass count) for this window.
+    /// Only meaningful when `blur = true`. Range: 1–8.
+    pub blur_passes: Option<u32>,
+    /// Override the global `[effects] blur_strength` (sample offset) for this window.
+    /// Only meaningful when `blur = true`. Typical range: 0.5–3.0.
+    pub blur_strength: Option<f64>,
     pub opacity: Option<f64>,
     /// `true` — forward all keys to the app (game-friendly).
     /// `["mod+q", "ctrl+q"]` — forward only those combos; all others stay active.

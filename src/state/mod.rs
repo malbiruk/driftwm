@@ -340,6 +340,9 @@ pub struct DriftWm {
         driftwm::protocols::image_capture_source::ImageCaptureSourceState,
     pub image_copy_capture_state: driftwm::protocols::image_copy_capture::ImageCopyCaptureState,
     pub pending_captures: Vec<driftwm::protocols::image_copy_capture::PendingCapture>,
+    #[allow(dead_code)]
+    pub hyprland_toplevel_export_state: driftwm::protocols::hyprland_toplevel_export::HyprlandToplevelExportState,
+    pub pending_hyprland_exports: Vec<driftwm::protocols::hyprland_toplevel_export::PendingToplevelExport>,
     pub xdg_foreign_state: XdgForeignState,
     pub session_lock_manager_state: SessionLockManagerState,
     pub session_lock: SessionLock,

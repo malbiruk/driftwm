@@ -112,6 +112,43 @@ do_install() {
         bold "Keeping existing $SYSCONFDIR/driftwm/config.toml"
     fi
 
+    # ── xdg-desktop-portal-wlr screen chooser config ──────────────────────────
+    # Install a per-user xdpw config that fixes screen/window capture for OBS,
+    # Discord, and other apps that use the XDG ScreenCast portal.
+    #
+    # Without -f %o slurp returns coordinates; xdpw expects an output name and
+    # crashes with "no output found". The -o flag renders output overlays instead
+    # of a freeform region selector, which is the correct UX for monitor selection.
+    #
+    # This writes to the invoking user's config dir (sudo -u $SUDO_USER or $USER).
+    # We never overwrite an existing file so user customisations are preserved.
+    TARGET_USER="${SUDO_USER:-$USER}"
+    TARGET_HOME=$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)
+    if [ -z "$TARGET_HOME" ]; then
+        TARGET_HOME="$HOME"
+    fi
+    XDPW_DIR="$TARGET_HOME/.config/xdg-desktop-portal-wlr"
+    XDPW_CFG="$XDPW_DIR/config"
+    if [ ! -f "$XDPW_CFG" ]; then
+        mkdir -p "$XDPW_DIR"
+        cat > "$XDPW_CFG" <<'EOF'
+[screencast]
+# slurp -f %o -o returns the output name (e.g. HDMI-A-1) rather than raw
+# screen coordinates. xdg-desktop-portal-wlr requires an output name to
+# locate the screencopy target; without this flag it crashes on selection.
+chooser_type=simple
+chooser_cmd=slurp -f %o -o
+
+[screenshot]
+chooser_type=simple
+chooser_cmd=slurp -f %o -o
+EOF
+        chown "$TARGET_USER" "$XDPW_CFG" "$XDPW_DIR" 2>/dev/null || true
+        bold "Wrote xdg-desktop-portal-wlr config to $XDPW_CFG"
+    else
+        bold "Keeping existing $XDPW_CFG"
+    fi
+
     for f in "$SRCDIR"/wallpapers/*.glsl; do
         [ -f "$f" ] && install -Dm644 "$f" "$DATADIR/driftwm/wallpapers/$(basename "$f")"
     done
@@ -122,6 +159,7 @@ do_install() {
     echo "  Session:    $BINDIR/driftwm-session"
     echo "  Config:     $SYSCONFDIR/driftwm/config.toml"
     echo "  Wallpapers: $DATADIR/driftwm/wallpapers/"
+    echo "  Portal:     $XDPW_CFG"
     echo ""
     echo "Select 'driftwm' from your display manager, or run 'driftwm' from a TTY."
 }

@@ -29,3 +29,7 @@ regex = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2.182"
+wayland-server = "0.31"
+wayland-scanner = "0.31"
+wayland-backend = "0.3"
+bitflags = "2"

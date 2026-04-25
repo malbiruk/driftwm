@@ -463,6 +463,25 @@ fn to_state_vec(
     rv
 }
 
+impl ForeignToplevelManagerState {
+    /// Look up the `WlSurface` associated with a raw `ZwlrForeignToplevelHandleV1`
+    /// `ObjectId`.  Used by the hyprland-toplevel-export protocol to resolve a
+    /// handle to the underlying window.
+    pub fn surface_for_handle_id(
+        &self,
+        handle_id: &smithay::reexports::wayland_server::backend::ObjectId,
+    ) -> Option<WlSurface> {
+        self.toplevels
+            .iter()
+            .find(|(_, data)| {
+                data.instances
+                    .keys()
+                    .any(|h| &h.id() == handle_id)
+            })
+            .map(|(surface, _)| surface.clone())
+    }
+}
+
 #[macro_export]
 macro_rules! delegate_foreign_toplevel {
     ($(@<$( $lt:tt $( : $clt:tt $(+ $dlt:tt )* )? ),+>)? $ty: ty) => {

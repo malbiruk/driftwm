@@ -397,3 +397,136 @@ pub fn render_capture_frames(
         }
     }
 }
+
+/// Fulfill pending `hyprland-toplevel-export-v1` copy requests by rendering
+/// each window into the client-provided SHM or DMA-BUF buffer.
+/// Fulfill pending `hyprland-toplevel-export-v1` frames by rendering the requested window
+/// into the client-provided buffer (DMA-BUF preferred, SHM fallback).
+///
+/// Called once per render loop iteration from both the udev and winit backends.
+pub fn render_hyprland_toplevel_exports(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+) {
+    use smithay::backend::renderer::element::AsRenderElements;
+    use smithay::backend::renderer::{ExportMem, Renderer};
+    use smithay::utils::Point;
+    use smithay::wayland::shm;
+    use std::ptr;
+
+    use driftwm::protocols::hyprland_toplevel_export::proto::hyprland_toplevel_export_frame_v1::Flags as ToplevelExportFlags;
+    use super::OutputRenderElements;
+
+    let pending = std::mem::take(&mut state.pending_hyprland_exports);
+    if pending.is_empty() {
+        return;
+    }
+
+    let timestamp = state.start_time.elapsed();
+
+    for export in pending {
+        let frame = export.frame;
+        let window = export.window;
+        let size = export.buffer_size;
+        let buffer = export.buffer;
+
+        // Sanity-check the size; the frame Dispatch should already reject (0,0)
+        if size.w <= 0 || size.h <= 0 {
+            frame.failed();
+            continue;
+        }
+
+        // Render the window surfaces at the physical origin
+        let raw_elements = window
+            .render_elements::<smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement<GlesRenderer>>(
+                renderer,
+                Point::from((0, 0)),
+                Scale::from(1.0),
+                1.0,
+            );
+
+        let elements: Vec<OutputRenderElements> =
+            raw_elements.into_iter().map(OutputRenderElements::Layer).collect();
+        let element_refs: Vec<&OutputRenderElements> = elements.iter().collect();
+
+        // Try DMA-BUF path first
+        if let Ok(dmabuf) = smithay::wayland::dmabuf::get_dmabuf(&buffer) {
+            let mut dmabuf = dmabuf.clone();
+            match render_to_dmabuf(
+                renderer,
+                &mut dmabuf,
+                size,
+                Scale::from(1.0),
+                Transform::Normal,
+                &element_refs,
+                None,
+            ) {
+                Ok(sync) => {
+                    if let Err(e) = renderer.wait(&sync) {
+                        tracing::warn!("toplevel export: dmabuf sync failed: {e:?}");
+                        frame.failed();
+                    } else {
+                        let secs = timestamp.as_secs();
+                        frame.flags(ToplevelExportFlags::empty());
+                        frame.ready(
+                            (secs >> 32) as u32,
+                            (secs & 0xffffffff) as u32,
+                            timestamp.subsec_nanos(),
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("toplevel export: dmabuf render failed: {e:?}");
+                    frame.failed();
+                }
+            }
+            continue;
+        }
+
+        // SHM path
+        let result = render_to_offscreen(
+            renderer,
+            size,
+            Scale::from(1.0),
+            Transform::Normal,
+            &element_refs,
+            None,
+        );
+
+        match result {
+            Ok(mapping) => {
+                let copy_ok = shm::with_buffer_contents_mut(&buffer, |shm_buf, shm_len, _| {
+                    let bytes = match renderer.map_texture(&mapping) {
+                        Ok(b) => b,
+                        Err(e) => {
+                            tracing::warn!("toplevel export: map_texture failed: {e:?}");
+                            return false;
+                        }
+                    };
+                    let copy_len = shm_len.min(bytes.len());
+                    unsafe {
+                        ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
+                    }
+                    true
+                });
+
+                if matches!(copy_ok, Ok(true)) {
+                    let secs = timestamp.as_secs();
+                    frame.flags(ToplevelExportFlags::empty());
+                    frame.ready(
+                        (secs >> 32) as u32,
+                        (secs & 0xffffffff) as u32,
+                        timestamp.subsec_nanos(),
+                    );
+                } else {
+                    tracing::warn!("toplevel export: SHM copy failed");
+                    frame.failed();
+                }
+            }
+            Err(e) => {
+                tracing::warn!("toplevel export: offscreen render failed: {e:?}");
+                frame.failed();
+            }
+        }
+    }
+}

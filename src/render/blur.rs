@@ -200,6 +200,10 @@ pub(crate) struct BlurRequestData {
     pub elem_start: usize,
     pub elem_count: usize,
     pub layer: BlurLayer,
+    /// Kawase pass count for this window. Derived from per-window rule or global `[effects]`.
+    pub passes: usize,
+    /// Sample offset multiplier for this window. Derived from per-window rule or global `[effects]`.
+    pub strength: f32,
 }
 
 /// Process blur requests: for each blurred window, render behind-content to FBO,
@@ -237,14 +241,14 @@ pub(crate) fn process_blur_requests(
 
     let down_shader = state.render.blur_down_shader.clone().unwrap();
     let up_shader = state.render.blur_up_shader.clone().unwrap();
-    let blur_passes = state.config.effects.blur_radius as usize;
-    let blur_strength = state.config.effects.blur_strength as f32;
+    // Per-request passes and strength are carried on BlurRequestData; global values are the fallback.
     let context_id = renderer.context_id();
     let geom_gen = state.render.blur_geometry_generation;
     let camera_gen = state.render.blur_camera_generation;
-    // Animated background shaders update per frame but the element Id is stable,
-    // so the bg_hash optimisation can't detect the change — force recompute each frame.
-    let animated_bg = state.render.background_is_animated;
+    // Only force per-frame blur recomputation for animated backgrounds when the user
+    // explicitly opts in. Default behaviour: blur stays cached until the window or
+    // camera actually moves, preventing stutter with GLSL wallpaper shaders.
+    let animated_bg = state.render.background_is_animated && state.config.effects.animated_blur;
 
     // Precompute per-request behind depth (index into all_elements where "below this window" begins)
     let behind_starts: Vec<usize> = blur_requests.iter().map(|req| {
@@ -349,7 +353,7 @@ pub(crate) fn process_blur_requests(
         }
 
         // Run Kawase blur passes
-        let offset = blur_strength * output_scale as f32;
+        let offset = req.strength * output_scale as f32;
         let _ = render_blur(
             renderer,
             &down_shader,
@@ -357,7 +361,7 @@ pub(crate) fn process_blur_requests(
             &mut cache.texture,
             &mut cache.scratch,
             offset,
-            blur_passes,
+            req.passes,
         );
     }
 

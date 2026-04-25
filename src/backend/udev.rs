@@ -83,6 +83,7 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
         && !data.has_active_animations()
         && !data.render.background_is_animated
         && !data.output_config_dirty
+        && data.pending_hyprland_exports.is_empty()
     {
         return;
     }
@@ -106,6 +107,7 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
         || data.cursor.exec_cursor_deadline.is_some()
         || data.cursor_is_animated()
         || data.render.background_is_animated
+        || !data.pending_hyprland_exports.is_empty()
     {
         data.mark_all_dirty();
     }
@@ -1077,6 +1079,9 @@ fn render_frame(
 
     let renderer = backend.renderer();
     crate::render::render_capture_frames(data, renderer, output, &elements);
+
+    let renderer = backend.renderer();
+    crate::render::render_hyprland_toplevel_exports(data, renderer);
 
     // Put backend back
     data.backend = Some(backend);
