@@ -21,3 +21,7 @@ Include:
 - Steps to reproduce
 - Distro, GPU, nested vs TTY, driftwm version
 - `RUST_LOG=debug` logs if relevant
+
+## Contributing without GitHub
+
+If you'd rather not use GitHub, email patches to `2601074@gmail.com`. Generate them with `git format-patch` (one file per commit) and either attach them to a regular email or send via `git send-email`. They'll be applied with `git am`, preserving your authorship.
