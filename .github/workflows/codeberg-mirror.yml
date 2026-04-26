@@ -11,11 +11,7 @@ jobs:
   mirror:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-
-      - name: Push to Codeberg
+      - name: Setup SSH
         env:
           SSH_KEY: ${{ secrets.CODEBERG_SSH_KEY }}
         run: |
@@ -23,4 +19,11 @@ jobs:
           printf '%s\n' "$SSH_KEY" > ~/.ssh/id_ed25519
           chmod 600 ~/.ssh/id_ed25519
           ssh-keyscan codeberg.org >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Mirror to Codeberg
+        run: |
+          git clone --mirror https://github.com/malbiruk/driftwm.git repo
+          cd repo
+          # Strip GitHub-only refs (PR heads/merges) before pushing — Codeberg rejects them as hidden refs.
+          git for-each-ref --format='delete %(refname)' refs/pull/ | git update-ref --stdin
           git push --mirror git@codeberg.org:malbiruk/driftwm.git
