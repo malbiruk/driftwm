@@ -87,21 +87,18 @@
       <arg name="stride" type="uint" summary="buffer stride in bytes"/>
     </event>
 
-    <event name="linux_dmabuf">
-      <description summary="DMA-BUF buffer parameters">
-        Sent once after frame creation (alongside buffer). Describes an
-        alternative DMA-BUF format the client may use.
+    <!-- opcode 1: damage — must appear before flags/ready/failed/linux_dmabuf/buffer_done
+         to match the upstream hyprland-protocols opcode assignment xdph is compiled against -->
+    <event name="damage">
+      <description summary="damage region hint">
+        May be sent zero or more times before ready when ignore_damage was not
+        set in the copy request. Reports a bounding box of changed pixels since
+        the last successful capture. For advisory use only.
       </description>
-      <arg name="format" type="uint" summary="DRM FourCC pixel format code"/>
-      <arg name="width"  type="uint" summary="buffer width in pixels"/>
-      <arg name="height" type="uint" summary="buffer height in pixels"/>
-    </event>
-
-    <event name="buffer_done">
-      <description summary="all buffer format events sent">
-        Sent after all buffer / linux_dmabuf events. The client may now
-        create a buffer and call copy().
-      </description>
+      <arg name="x"      type="uint" summary="damaged region x origin"/>
+      <arg name="y"      type="uint" summary="damaged region y origin"/>
+      <arg name="width"  type="uint" summary="damaged region width"/>
+      <arg name="height" type="uint" summary="damaged region height"/>
     </event>
 
     <event name="flags">
@@ -128,16 +125,21 @@
       </description>
     </event>
 
-    <event name="damage">
-      <description summary="damage region hint">
-        May be sent zero or more times before ready when ignore_damage was not
-        set in the copy request. Reports a bounding box of changed pixels since
-        the last successful capture. For advisory use only.
+    <event name="linux_dmabuf">
+      <description summary="DMA-BUF buffer parameters">
+        Sent once after frame creation (alongside buffer). Describes an
+        alternative DMA-BUF format the client may use.
       </description>
-      <arg name="x"      type="uint" summary="damaged region x origin"/>
-      <arg name="y"      type="uint" summary="damaged region y origin"/>
-      <arg name="width"  type="uint" summary="damaged region width"/>
-      <arg name="height" type="uint" summary="damaged region height"/>
+      <arg name="format" type="uint" summary="DRM FourCC pixel format code"/>
+      <arg name="width"  type="uint" summary="buffer width in pixels"/>
+      <arg name="height" type="uint" summary="buffer height in pixels"/>
+    </event>
+
+    <event name="buffer_done">
+      <description summary="all buffer format events sent">
+        Sent after all buffer / linux_dmabuf events. The client may now
+        create a buffer and call copy().
+      </description>
     </event>
 
     <request name="copy">
