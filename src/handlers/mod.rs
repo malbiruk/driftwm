@@ -569,6 +569,14 @@ impl ForeignToplevelHandler for DriftWm {
         self.space.outputs().cloned().collect()
     }
 
+    fn foreign_toplevel_windows(&self) -> Vec<smithay::desktop::Window> {
+        self.space.elements().cloned().collect()
+    }
+
+    fn foreign_toplevel_focused_surface(&self) -> Option<WlSurface> {
+        self.seat.get_keyboard().and_then(|kb| kb.current_focus()).map(|f| f.0)
+    }
+
     fn activate(&mut self, wl_surface: WlSurface) {
         let window = self
             .space

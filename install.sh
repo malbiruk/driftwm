@@ -61,6 +61,40 @@ check_runtime_deps() {
     fi
 }
 
+check_portal_deps() {
+    missing=""
+
+    if ! command -v xdg-desktop-portal >/dev/null 2>&1; then
+        missing="$missing xdg-desktop-portal"
+    fi
+
+    if ! command -v xdg-desktop-portal-hyprland >/dev/null 2>&1 \
+        && [ ! -x /usr/lib/xdg-desktop-portal-hyprland ] \
+        && [ ! -f /usr/share/xdg-desktop-portal/portals/hyprland.portal ]; then
+        missing="$missing xdg-desktop-portal-hyprland"
+    fi
+
+    if [ -n "$missing" ]; then
+        red "Missing recommended portal packages for screensharing:$missing"
+        echo ""
+        distro=$(detect_distro)
+        case "$distro" in
+            fedora|rhel|centos)
+                bold "Install with: sudo dnf install xdg-desktop-portal xdg-desktop-portal-hyprland pipewire wireplumber" ;;
+            ubuntu|debian|linuxmint|pop)
+                bold "Install with: sudo apt install xdg-desktop-portal pipewire wireplumber" ;;
+            arch|manjaro|endeavouros)
+                bold "Install with: sudo pacman -S xdg-desktop-portal xdg-desktop-portal-hyprland pipewire wireplumber" ;;
+            *)
+                bold "Install packages providing:$missing" ;;
+        esac
+        echo ""
+        bold "driftwm is installed, but per-window screen sharing may not work until these are installed."
+    else
+        green "Portal dependencies found."
+    fi
+}
+
 do_install() {
     check_root
 
@@ -112,46 +146,12 @@ do_install() {
         bold "Keeping existing $SYSCONFDIR/driftwm/config.toml"
     fi
 
-    # ── xdg-desktop-portal-wlr screen chooser config ──────────────────────────
-    # Install a per-user xdpw config that fixes screen/window capture for OBS,
-    # Discord, and other apps that use the XDG ScreenCast portal.
-    #
-    # Without -f %o slurp returns coordinates; xdpw expects an output name and
-    # crashes with "no output found". The -o flag renders output overlays instead
-    # of a freeform region selector, which is the correct UX for monitor selection.
-    #
-    # This writes to the invoking user's config dir (sudo -u $SUDO_USER or $USER).
-    # We never overwrite an existing file so user customisations are preserved.
-    TARGET_USER="${SUDO_USER:-$USER}"
-    TARGET_HOME=$(getent passwd "$TARGET_USER" 2>/dev/null | cut -d: -f6)
-    if [ -z "$TARGET_HOME" ]; then
-        TARGET_HOME="$HOME"
-    fi
-    XDPW_DIR="$TARGET_HOME/.config/xdg-desktop-portal-wlr"
-    XDPW_CFG="$XDPW_DIR/config"
-    if [ ! -f "$XDPW_CFG" ]; then
-        mkdir -p "$XDPW_DIR"
-        cat > "$XDPW_CFG" <<'EOF'
-[screencast]
-# slurp -f %o -o returns the output name (e.g. HDMI-A-1) rather than raw
-# screen coordinates. xdg-desktop-portal-wlr requires an output name to
-# locate the screencopy target; without this flag it crashes on selection.
-chooser_type=simple
-chooser_cmd=slurp -f %o -o
-
-[screenshot]
-chooser_type=simple
-chooser_cmd=slurp -f %o -o
-EOF
-        chown "$TARGET_USER" "$XDPW_CFG" "$XDPW_DIR" 2>/dev/null || true
-        bold "Wrote xdg-desktop-portal-wlr config to $XDPW_CFG"
-    else
-        bold "Keeping existing $XDPW_CFG"
-    fi
-
     for f in "$SRCDIR"/wallpapers/*.glsl; do
         [ -f "$f" ] && install -Dm644 "$f" "$DATADIR/driftwm/wallpapers/$(basename "$f")"
     done
+
+    bold "Checking portal dependencies..."
+    check_portal_deps
 
     green "driftwm installed successfully!"
     echo ""
@@ -159,7 +159,7 @@ EOF
     echo "  Session:    $BINDIR/driftwm-session"
     echo "  Config:     $SYSCONFDIR/driftwm/config.toml"
     echo "  Wallpapers: $DATADIR/driftwm/wallpapers/"
-    echo "  Portal:     $XDPW_CFG"
+    echo "  Portal map: $DATADIR/xdg-desktop-portal/driftwm-portals.conf"
     echo ""
     echo "Select 'driftwm' from your display manager, or run 'driftwm' from a TTY."
 }

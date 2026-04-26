@@ -251,6 +251,20 @@ sudo apt install libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm
 sudo pacman -S libdisplay-info libinput seatd mesa libxkbcommon
 ```
 
+For full ScreenCast support (including per-window sharing in apps like OBS/Discord),
+install portal and media-session services too:
+
+```bash
+# Arch
+sudo pacman -S xdg-desktop-portal xdg-desktop-portal-hyprland pipewire wireplumber
+
+# Fedora
+sudo dnf install xdg-desktop-portal xdg-desktop-portal-hyprland pipewire wireplumber
+
+# Debian/Ubuntu
+sudo apt install xdg-desktop-portal pipewire wireplumber
+```
+
 > **Note:** Ubuntu 24.04 ships Rust 1.75 which is too old. Install via
 > [rustup](https://rustup.rs/) instead of `apt install rustc`.
 

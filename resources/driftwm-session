@@ -18,47 +18,18 @@ systemctl --user import-environment
 hash dbus-update-activation-environment 2>/dev/null && \
     dbus-update-activation-environment --all
 
-# ── xdg-desktop-portal-wlr config ──────────────────────────────────────────
-# Write xdpw's screen chooser config on first run.
-#
-# Without this, slurp returns coordinates ("x,y WxH") but xdpw expects an
-# output name — causing "chooser slurp selected unknown target" / "no output
-# found" crashes whenever Discord, OBS, or any app requests screen capture.
-#
-# We use `slurp -f %o -o` which renders output overlays and returns the
-# output name (e.g. "HDMI-A-1") that xdpw can map to a screencopy target.
-XDPW_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/xdg-desktop-portal-wlr"
-XDPW_CFG="$XDPW_CFG_DIR/config"
-if [ ! -f "$XDPW_CFG" ]; then
-    mkdir -p "$XDPW_CFG_DIR"
-    cat > "$XDPW_CFG" <<'EOF'
-[screencast]
-# Output chooser: slurp with -f %o -o returns the output name, not coordinates.
-# Without -f %o xdpw receives coordinates and fails to find a matching output.
-chooser_type=simple
-chooser_cmd=slurp -f %o -o
-
-[screenshot]
-chooser_type=simple
-chooser_cmd=slurp -f %o -o
-EOF
-fi
-
 # Notify systemd that the graphical session is starting, then active.
 # Services with PartOf=graphical-session.target (waybar, portals, etc.)
 # will auto-start and auto-stop with the compositor.
 systemctl --user start graphical-session-pre.target
 systemctl --user start graphical-session.target
 
-# ── xdg-desktop-portal-hyprland ────────────────────────────────────────────
-# Start xdph for per-window screen sharing (Discord, OBS, etc.).
-# The portal daemon is not in $PATH; use the absolute path.
-XDPH=/usr/lib/xdg-desktop-portal-hyprland
-if [ -x "$XDPH" ]; then
-    # Kill any leftover instance from a previous session, then start fresh.
-    pkill -f xdg-desktop-portal-hyprland 2>/dev/null || true
-    "$XDPH" &
-fi
+# xdg-desktop-portal-hyprland is D-Bus / systemd activated automatically
+# via its .service unit (ConditionEnvironment=WAYLAND_DISPLAY, After=graphical-session.target).
+# driftwm exports WAYLAND_DISPLAY to systemd with import-environment immediately
+# after creating its socket, so xdph will start with the correct socket when
+# first needed. Do NOT start it here: WAYLAND_DISPLAY is not set yet at this
+# point and a premature launch would connect to nothing and exit silently.
 
 # Run driftwm with logs captured for debugging.
 DRIFTWM_LOG="${XDG_RUNTIME_DIR:-/tmp}/driftwm.log"

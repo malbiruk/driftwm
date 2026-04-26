@@ -36,6 +36,8 @@ pub struct ForeignToplevelManagerState {
 pub trait ForeignToplevelHandler {
     fn foreign_toplevel_manager_state(&mut self) -> &mut ForeignToplevelManagerState;
     fn foreign_toplevel_outputs(&self) -> Vec<Output>;
+    fn foreign_toplevel_windows(&self) -> Vec<Window>;
+    fn foreign_toplevel_focused_surface(&self) -> Option<WlSurface>;
     fn activate(&mut self, wl_surface: WlSurface);
     fn close(&mut self, wl_surface: WlSurface);
     fn set_fullscreen(&mut self, wl_surface: WlSurface, wl_output: Option<WlOutput>);
@@ -90,9 +92,21 @@ pub fn refresh<D>(
 ) where
     D: Dispatch<ZwlrForeignToplevelHandleV1, ()> + 'static,
 {
+    let windows: Vec<Window> = space.elements().cloned().collect();
+    refresh_from_windows::<D>(ft_state, &windows, focused_surface, outputs);
+}
+
+fn refresh_from_windows<D>(
+    ft_state: &mut ForeignToplevelManagerState,
+    windows: &[Window],
+    focused_surface: Option<&WlSurface>,
+    outputs: &[Output],
+) where
+    D: Dispatch<ZwlrForeignToplevelHandleV1, ()> + 'static,
+{
     // 1. Remove closed or widget windows
     ft_state.toplevels.retain(|surface, data| {
-        let alive = space.elements().any(|w| {
+        let alive = windows.iter().any(|w| {
             w.wl_surface().as_deref() == Some(surface)
                 && !crate::config::applied_rule(surface).is_some_and(|r| r.widget)
         });
@@ -106,7 +120,7 @@ pub fn refresh<D>(
 
     // 2. Refresh non-focused windows first (deactivate-before-activate ordering)
     let mut focused_entry = None;
-    for window in space.elements() {
+    for window in windows {
         let Some(wl_surface) = window.wl_surface() else { continue; };
         if crate::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             continue;
@@ -321,8 +335,8 @@ where
 {
     fn bind(
         state: &mut D,
-        handle: &DisplayHandle,
-        client: &Client,
+        _handle: &DisplayHandle,
+        _client: &Client,
         resource: New<ZwlrForeignToplevelManagerV1>,
         _global_data: &ForeignToplevelGlobalData,
         data_init: &mut DataInit<'_, D>,
@@ -330,13 +344,12 @@ where
         let manager = data_init.init(resource, ());
 
         let outputs = state.foreign_toplevel_outputs();
+        let windows = state.foreign_toplevel_windows();
+        let focused = state.foreign_toplevel_focused_surface();
         let ft_state = state.foreign_toplevel_manager_state();
 
-        for data in ft_state.toplevels.values_mut() {
-            data.add_instance::<D>(handle, client, &manager, &outputs);
-        }
-
         ft_state.instances.push(manager);
+        refresh_from_windows::<D>(ft_state, &windows, focused.as_ref(), &outputs);
     }
 
     fn can_view(client: Client, global_data: &ForeignToplevelGlobalData) -> bool {
