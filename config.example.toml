@@ -116,7 +116,10 @@
 #   export __GL_VRR_ALLOWED=0
 #   export __GL_MaxFramesAllowed=1
 #   export NVD_BACKEND=direct
-# wait_for_frame_completion = false  # Wait for GPU fences before page flip
+# wait_for_frame_completion = false  # Force GPU-fence wait before every page flip
+                                     # (already done automatically when smithay reports
+                                     # needs_sync — typical case on NVIDIA. Set true
+                                     # only if you still see flicker after defaults.)
 # disable_direct_scanout = false     # Force EGL composition (disable direct scanout)
 
 [output]

@@ -1043,13 +1043,18 @@ fn render_frame(
         frame_flags,
     );
 
-    // Opt-in fence wait for NVIDIA/explicit-sync hardware that page-flips
-    // before the GPU has actually finished rendering.
-    if data.config.backend.wait_for_frame_completion
-        && let Ok(ref rr) = render_result
-        && rr.needs_sync()
+    // CPU-wait on the GPU fence when KMS can't gate the flip on it
+    // (typical on NVIDIA — EGL fence isn't exportable as IN_FENCE_FD).
+    // Config flag forces the wait even when smithay says it's not needed.
+    if let Ok(ref rr) = render_result
+        && (rr.needs_sync() || data.config.backend.wait_for_frame_completion)
         && let PrimaryPlaneElement::Swapchain(ref element) = rr.primary_element
     {
+        tracing::debug!(
+            "Fence wait: needs_sync={}, force={}",
+            rr.needs_sync(),
+            data.config.backend.wait_for_frame_completion,
+        );
         let _ = element.sync.wait();
     }
 
