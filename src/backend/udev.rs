@@ -142,6 +142,11 @@ pub fn init_udev(
         .map_err(|e| format!("Failed to create session (are you running from a TTY?): {e}"))?;
     let seat_name = session.seat();
     tracing::info!("Session created on seat: {seat_name}");
+    tracing::info!(
+        "Backend config: wait_for_frame_completion={}, disable_direct_scanout={}",
+        data.config.backend.wait_for_frame_completion,
+        data.config.backend.disable_direct_scanout,
+    );
 
     // 2. Enumerate GPUs — UdevBackend gives us all DRM devices (also used for hotplug later)
     let udev_backend = UdevBackend::new(&seat_name)?;
