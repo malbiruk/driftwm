@@ -394,16 +394,24 @@ impl DriftWm {
             .elements()
             .find(|w| w.wl_surface().as_deref() == Some(&root))
         {
-            // Parent is an xdg window — target is the output rect in window-relative coords
+            // Parent is an xdg window — target is the *visible canvas area* in
+            // window-relative coords. We must use visible_canvas_rect (not raw
+            // output_geo) because the screen is a (camera, zoom) viewport onto
+            // the canvas: when zoomed/panned, output_geo translated by window_loc
+            // describes a phantom screen far from the popup's anchor, and the
+            // positioner mis-flips the popup to "fit" it.
             let window_loc = self.space.element_location(window).unwrap_or_default();
-            let output_geo = active_output.as_ref()
+            let viewport_size = active_output.as_ref()
                 .and_then(|o| self.space.output_geometry(o))
+                .map(|g| g.size)
                 .unwrap_or_default();
 
-            let mut target = output_geo;
-            // Translate output rect into window-relative coordinates
+            let mut target = driftwm::canvas::visible_canvas_rect(
+                self.camera().to_i32_round(),
+                viewport_size,
+                self.zoom(),
+            );
             target.loc -= window_loc;
-            // Account for nested popups
             target.loc -= get_popup_toplevel_coords(popup);
             target
         } else if let Some(cl) = self
