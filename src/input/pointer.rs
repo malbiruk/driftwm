@@ -64,35 +64,6 @@ impl DriftWm {
             self.set_last_scroll_pan(None);
             self.with_output_state(|os| os.momentum.stop());
 
-            // X11 popup outside-click dismissal: when a popup-menu OR
-            // (jgmenu, dmenu, xmenu) is alive and the click lands outside
-            // any OR, synthesize an Esc to the topmost OR's wl_surface.
-            // jgmenu's X11 keyboard grab catches the Esc and dismisses the
-            // menu naturally. Routing pointer events directly to the OR
-            // with out-of-bounds coords doesn't work — XWayland drops
-            // motion whose focus surface isn't really under the cursor.
-            // Skip Tooltip/Notification/Splash window types: those don't
-            // dismiss on Esc and we'd just steal focus pointlessly.
-            let pos = pointer.current_location();
-            if self.override_redirect_under(pos).is_none()
-                && let Some(or) = self
-                    .x11_override_redirect
-                    .iter()
-                    .rev()
-                    .find(|x| {
-                        use smithay::xwayland::xwm::WmWindowType;
-                        !matches!(
-                            x.window_type(),
-                            Some(WmWindowType::Tooltip
-                                | WmWindowType::Notification
-                                | WmWindowType::Splash)
-                        )
-                    })
-                && let Some(or_wl) = or.wl_surface()
-            {
-                self.synth_esc_to_or(or_wl);
-            }
-
             // A 3-finger tap (LRM button map) generates BTN_MIDDLE.
             // Buffer it — if a 3-finger swipe follows within 300ms, suppress
             // the click and enter window-move mode. Otherwise flush to client (paste).
@@ -509,7 +480,6 @@ impl DriftWm {
             last_window_size: initial_window_size,
             output,
             last_clamped_location: pos,
-            last_x11_configure: None,
             snap: driftwm::snap::SnapState::default(),
             constraints,
             cluster_resize,

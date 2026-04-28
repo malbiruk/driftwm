@@ -8,7 +8,6 @@ mod navigation;
 mod persistence;
 mod reload;
 mod render_cache;
-mod xwayland;
 pub use cluster_snapshot::ClusterResizeSnapshot;
 pub(crate) use cluster_snapshot::snap_targets_impl;
 pub use cursor::{CursorFrames, CursorState};
@@ -65,9 +64,6 @@ use smithay::wayland::xdg_foreign::XdgForeignState;
 
 use smithay::backend::session::libseat::LibSeatSession;
 use smithay::wayland::seat::WaylandFocus;
-use smithay::wayland::xwayland_shell::XWaylandShellState;
-use smithay::xwayland::X11Surface;
-use smithay::xwayland::xwm::X11Wm;
 
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::drm::control::crtc;
@@ -430,31 +426,8 @@ pub struct DriftWm {
     /// should re-collect output state and notify clients.
     pub output_config_dirty: bool,
 
-    // -- global: XWayland --
-    pub xwayland_shell_state: XWaylandShellState,
-    pub x11_wm: Option<X11Wm>,
-    /// Override-redirect X11 windows (menus, tooltips) — rendered manually, not in Space.
-    pub x11_override_redirect: Vec<X11Surface>,
-    pub x11_display: Option<u32>,
-    /// XWayland client handle, stored for reconnect/cleanup.
-    pub xwayland_client: Option<smithay::reexports::wayland_server::Client>,
-    /// Last X11 surface that received `set_activated(true)`. Used by
-    /// `focus_changed` to deactivate the previously-focused X11 window
-    /// regardless of which code path issued the focus change.
-    pub last_x11_focused: Option<X11Surface>,
-    /// Last X11 surface raised in XWayland's internal stack on hover.
-    /// XWayland routes pointer events (motion/enter/leave) using its X
-    /// server stacking, not the compositor's visual stacking. Without
-    /// raising on hover, hover indicators appear on the wrong X11 client
-    /// when overlapping windows on the canvas.
-    pub last_x11_hover_raised: Option<X11Surface>,
-    /// Canvas position corresponding to X11 root (0, 0) for OR-only X11
-    /// apps (e.g. jgmenu) where no managed X11 window in `space` provides
-    /// an anchor. Pinned to the cursor when the first OR maps and held
-    /// stable for the rest of the OR session so submenus keep their
-    /// relative offsets to the parent menu. Cleared when the last OR
-    /// unmaps.
-    pub or_root_anchor: Option<Point<i32, Logical>>,
+    // -- global: xwayland-satellite (on-demand X11 socket integration) --
+    pub satellite: Option<crate::xwayland::Satellite>,
 
     // -- global: SSD title bar double-click --
     pub last_titlebar_click: Option<(
@@ -480,9 +453,7 @@ impl ClientData for ClientState {
 
 /// Restricted clients (those connecting through a security-context listener)
 /// are denied access to privileged protocols. Clients without a ClientState
-/// (e.g. XWayland's internal client, whose setup callback doesn't attach
-/// one) are treated as unrestricted since they are spawned by the
-/// compositor itself.
+/// are treated as unrestricted.
 pub(crate) fn client_is_unrestricted(
     client: &smithay::reexports::wayland_server::Client,
 ) -> bool {
@@ -530,8 +501,6 @@ impl DriftWm {
         for fs in self.fullscreen.values() {
             self.space.raise_element(&fs.window, false);
         }
-
-        self.update_x11_stacking_order();
     }
 
     /// Find the Window in space whose wl_surface matches the given one.
@@ -571,8 +540,6 @@ impl DriftWm {
 
     /// Raise a window and set keyboard focus, with modal focus redirect.
     /// If the window has a modal child, focus goes to that child instead.
-    /// X11 `_NET_WM_STATE_FOCUSED` is synced via `SeatHandler::focus_changed`,
-    /// which fires from `keyboard.set_focus` regardless of caller.
     pub fn raise_and_focus(&mut self, window: &Window, serial: smithay::utils::Serial) {
         self.space.raise_element(window, true);
         self.enforce_below_windows();
@@ -878,9 +845,6 @@ impl DriftWm {
         }
         if changed {
             self.render.blur_camera_generation += 1;
-            // Re-anchor X11 root positions so cursor events stay unclamped
-            // for windows larger than the X11 root after the camera moves.
-            self.sync_all_x11_positions();
         }
     }
 

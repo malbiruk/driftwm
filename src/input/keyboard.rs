@@ -93,11 +93,9 @@ impl DriftWm {
                     let focused_pass_keys = state.focused_window().and_then(|w| {
                         let app_id = w.app_id_or_class().unwrap_or_default();
                         let title = w.window_title().unwrap_or_default();
-                        let xclass = w.x11_surface().map(|x| x.class()).unwrap_or_default();
-                        let xinstance = w.x11_surface().map(|x| x.instance()).unwrap_or_default();
                         state
                             .config
-                            .resolve_window_rules(&app_id, &title, &xclass, &xinstance)
+                            .resolve_window_rules(&app_id, &title)
                             .map(|r| r.pass_keys)
                     });
                     if focused_pass_keys

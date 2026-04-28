@@ -55,7 +55,6 @@ impl DriftWm {
                     );
                     let new_loc = loc + Point::from(offset);
                     self.space.map_element(window.clone(), new_loc, false);
-                    self.sync_x11_position(&window);
                 }
             }
             Action::PanViewport(dir) => {
@@ -380,7 +379,6 @@ impl DriftWm {
                         (center_y - geo.size.h as f64 / 2.0) as i32,
                     ));
                     self.space.map_element(window.clone(), new_loc, true);
-                    self.sync_x11_position(&window);
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     self.raise_and_focus(&window, serial);
                 }

@@ -108,8 +108,8 @@ fn parse_pattern(s: String) -> Pattern {
 }
 
 pub(super) fn parse_window_rule(r: WindowRuleFile, mod_key: ModKey) -> Option<WindowRule> {
-    if r.app_id.is_none() && r.title.is_none() && r.xclass.is_none() && r.xinstance.is_none() {
-        tracing::warn!("Window rule has no match criteria (app_id/title/xclass/xinstance), skipping");
+    if r.app_id.is_none() && r.title.is_none() {
+        tracing::warn!("Window rule has no match criteria (app_id/title), skipping");
         return None;
     }
     // None = "field not set" → window inherits [decorations] default_mode.
@@ -152,8 +152,6 @@ pub(super) fn parse_window_rule(r: WindowRuleFile, mod_key: ModKey) -> Option<Wi
     Some(WindowRule {
         app_id: r.app_id.map(parse_pattern),
         title: r.title.map(parse_pattern),
-        xclass: r.xclass.map(parse_pattern),
-        xinstance: r.xinstance.map(parse_pattern),
         position: r.position.map(|[x, y]| (x, y)),
         size: r.size.and_then(|[w, h]| {
             if w > 0 && h > 0 {

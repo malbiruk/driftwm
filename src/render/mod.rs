@@ -306,54 +306,6 @@ pub fn compile_wallpaper_bg_shader(renderer: &mut GlesRenderer) -> Option<GlesTe
     }
 }
 
-/// Build render elements for X11 override-redirect windows (menus, tooltips, splashes).
-/// Same camera/zoom math as managed windows.
-fn build_override_redirect_elements(
-    state: &crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
-    output: &Output,
-    camera: Point<f64, Logical>,
-    zoom: f64,
-) -> Vec<OutputRenderElements> {
-    let output_scale = output.current_scale().fractional_scale();
-    let scale = Scale::from(output_scale);
-    let viewport_size = crate::state::output_logical_size(output);
-    let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom);
-
-    let mut elements = Vec::new();
-    // Reverse: newest OR window = topmost
-    for or_surface in state.x11_override_redirect.iter().rev() {
-        let Some(wl_surface) = or_surface.wl_surface() else { continue };
-        let canvas_pos = state.or_canvas_position(or_surface);
-        let or_size = or_surface.geometry().size;
-        let or_rect = Rectangle::new(canvas_pos, or_size);
-        if !visible_rect.overlaps(or_rect) { continue }
-
-        let render_loc: Point<f64, Logical> = Point::from((
-            canvas_pos.x as f64 - camera.x,
-            canvas_pos.y as f64 - camera.y,
-        ));
-        let physical_loc: Point<f64, Physical> = render_loc.to_physical_precise_round(scale);
-        let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-            smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
-                renderer,
-                &wl_surface,
-                physical_loc.to_i32_round(),
-                scale,
-                1.0,
-                Kind::Unspecified,
-            );
-        elements.extend(elems.into_iter().map(|elem| {
-            OutputRenderElements::Window(PixelSnapRescaleElement::from_element(
-                elem,
-                Point::<i32, Physical>::from((0, 0)),
-                zoom,
-            ))
-        }));
-    }
-    elements
-}
-
 /// Build render elements for canvas-positioned layer surfaces (zoomed like windows).
 /// Mirrors the window pipeline: position relative to camera, then RescaleRenderElement for zoom.
 pub fn build_canvas_layer_elements(
@@ -430,7 +382,7 @@ fn build_layer_elements(
 
         if let Some((config, blur_enabled, layer_tag)) = blur_config
             && blur_enabled
-            && config.resolve_window_rules(surface.namespace(), "", "", "").is_some_and(|r| r.blur)
+            && config.resolve_window_rules(surface.namespace(), "").is_some_and(|r| r.blur)
         {
             let elem_count = elements.len() - elem_start;
             let screen_rect = geo.to_physical_precise_round(output_scale);
@@ -806,9 +758,7 @@ pub fn compose_frame(
             }
             (top, popups)
         } else {
-            // X11: no PopupManager-tracked popups. Override-redirect menus
-            // come through as separate windows in state.space and get their
-            // own loop iteration.
+            // No toplevel — render the window's surface tree directly.
             let elems = window.render_elements::<WaylandSurfaceRenderElement<GlesRenderer>>(
                 renderer, loc_phys, scale, opacity as f32,
             );
@@ -1005,8 +955,6 @@ pub fn compose_frame(
 
     let canvas_layer_elements = build_canvas_layer_elements(state, renderer, output, camera, zoom);
 
-    let or_elements = build_override_redirect_elements(state, renderer, output, camera, zoom);
-
     let outline_elements = build_output_outline_elements(
         state, renderer, output, camera, zoom, viewport_size,
     );
@@ -1056,7 +1004,7 @@ pub fn compose_frame(
     let (background_layer_elements, _) = build_layer_elements(output, renderer, WlrLayer::Background, None);
 
     // Compute prefix offsets so we know where each group lands in all_elements
-    let overlay_prefix = cursor_elements.len() + or_elements.len();
+    let overlay_prefix = cursor_elements.len();
     let top_prefix = overlay_prefix + overlay_elements.len();
     let normal_prefix = top_prefix + top_elements.len();
     let widget_prefix = normal_prefix
@@ -1071,7 +1019,6 @@ pub fn compose_frame(
 
     let mut all_elements: Vec<OutputRenderElements> = Vec::with_capacity(
         cursor_elements.len()
-            + or_elements.len()
             + overlay_elements.len()
             + top_elements.len()
             + zoomed_normal.len()
@@ -1083,7 +1030,6 @@ pub fn compose_frame(
             + background_layer_elements.len(),
     );
     all_elements.extend(cursor_elements);
-    all_elements.extend(or_elements);
     all_elements.extend(overlay_elements);
     all_elements.extend(top_elements);
     all_elements.extend(zoomed_normal);
@@ -1447,16 +1393,6 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
         cl.surface.send_frame(output, time, Some(Duration::ZERO), |_, _| {
             Some(output.clone())
         });
-    }
-
-    // Override-redirect X11 surface frame callbacks
-    for or_surface in &state.x11_override_redirect {
-        if let Some(wl_surface) = or_surface.wl_surface() {
-            smithay::desktop::utils::send_frames_surface_tree(
-                &wl_surface, output, time, Some(Duration::ZERO),
-                |_, _| Some(output.clone()),
-            );
-        }
     }
 
     // Cursor surface frame callbacks (animated cursors need these to advance)

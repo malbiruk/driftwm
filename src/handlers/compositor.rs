@@ -5,7 +5,6 @@ use crate::handlers::layer_shell::LayerDestroyedMarker;
 use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter};
 use driftwm::window_ext::WindowExt;
 use smithay::utils::Rectangle;
-use smithay::xwayland::XWaylandClientData;
 use smithay::desktop::layer_map_for_output;
 use smithay::wayland::shell::wlr_layer::{
     Anchor, KeyboardInteractivity, LayerSurfaceData, LayerSurfaceCachedState,
@@ -36,13 +35,10 @@ impl CompositorHandler for DriftWm {
     }
 
     fn client_compositor_state<'a>(&self, client: &'a Client) -> &'a CompositorClientState {
-        if let Some(state) = client.get_data::<ClientState>() {
-            &state.compositor_state
-        } else if let Some(state) = client.get_data::<XWaylandClientData>() {
-            &state.compositor_state
-        } else {
-            panic!("Unknown client type: no ClientState or XWaylandClientData");
-        }
+        &client
+            .get_data::<ClientState>()
+            .expect("client has no ClientState")
+            .compositor_state
     }
 
     fn new_surface(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
@@ -202,8 +198,6 @@ impl CompositorHandler for DriftWm {
                     let applied = self.config.resolve_window_rules(
                         app_id.as_deref().unwrap_or(""),
                         title.as_deref().unwrap_or(""),
-                        "",  // xclass — Wayland-native windows have no X11 class
-                        "",  // xinstance
                     );
 
                     // Check if rule side-effects were already applied on a
@@ -328,7 +322,6 @@ impl CompositorHandler for DriftWm {
                         };
                         let activate = applied.as_ref().is_none_or(|a| !a.widget);
                         self.space.map_element(window.clone(), pos, activate);
-                        self.sync_x11_position(&window);
                     }
 
                     if let Some(toplevel) = window.toplevel() {
@@ -452,7 +445,6 @@ impl CompositorHandler for DriftWm {
                             (target_center.y - total_h as f64 / 2.0) as i32 + bar,
                         ));
                         self.space.map_element(window.clone(), new_loc, false);
-                        self.sync_x11_position(&window);
                         self.pending_recenter.remove(&root.id());
                     }
                 }
@@ -490,7 +482,7 @@ fn ensure_initial_configure(
         .find(|w| w.wl_surface().as_deref() == Some(surface))
     {
         let Some(toplevel) = window.toplevel() else {
-            return; // X11 windows don't have xdg toplevels
+            return;
         };
         let initial_configure_sent = smithay::wayland::compositor::with_states(
             toplevel.wl_surface(),
@@ -682,7 +674,6 @@ impl DriftWm {
         }
 
         self.space.map_element(window.clone(), new_loc, false);
-        self.sync_x11_position(window);
 
         // If we're waiting for the final commit, go idle
         if matches!(resize_state, ResizeState::WaitingForLastCommit { .. }) {

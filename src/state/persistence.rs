@@ -94,15 +94,14 @@ impl DriftWm {
             }
         }
 
-        // Window list: app_id of each toplevel (focused window first)
-        // Falls back to X11 class for XWayland windows.
+        // Window list: app_id of each toplevel (focused window first).
         let focused_surface = self.seat.get_keyboard().and_then(|kb| kb.current_focus());
         let mut app_ids: Vec<String> = Vec::new();
         for window in self.space.elements() {
             let Some(surface) = window.wl_surface() else {
                 continue;
             };
-            let mut app_id = smithay::wayland::compositor::with_states(&surface, |states| {
+            let app_id = smithay::wayland::compositor::with_states(&surface, |states| {
                 states
                     .data_map
                     .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
@@ -110,11 +109,6 @@ impl DriftWm {
                     .and_then(|guard| guard.app_id.clone())
             })
             .unwrap_or_default();
-            if app_id.is_empty()
-                && let Some(x11) = window.x11_surface()
-            {
-                app_id = x11.class();
-            }
             if !app_id.is_empty() {
                 let is_focused = focused_surface.as_ref().is_some_and(|f| f.0 == *surface);
                 if is_focused {

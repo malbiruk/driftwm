@@ -153,7 +153,6 @@ impl DriftWm {
 
         window.enter_fit_configure(target_size);
         self.space.map_element(window.clone(), new_loc, false);
-        self.sync_x11_position(window);
 
         // Raise, focus, animate camera + zoom to 1.0
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -203,7 +202,6 @@ impl DriftWm {
 
         window.exit_fit_configure(saved_size);
         self.space.map_element(window.clone(), new_loc, false);
-        self.sync_x11_position(window);
 
         self.pending_recenter.insert(
             wl_surface.id(),

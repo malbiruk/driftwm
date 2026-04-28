@@ -242,14 +242,14 @@
 # connected to the focused one via snap adjacency
 
 [mouse]
-# When true, resizing a window by dragging its edge (SSD border, CSD border,
-# or X11 border) propagates to every window connected to it via snap adjacency.
+# When true, resizing a window by dragging its edge (SSD or CSD border)
+# propagates to every window connected to it via snap adjacency.
 # Keybinding/gesture resize is unaffected — bind `resize-window-snapped`
 # explicitly if you want cluster-aware resize there too.
 # decoration_resize_snapped = false
 
 # When true, maximize/unmaximize initiated via window decoration (CSD maximize
-# button, SSD title-bar double-click, or xdg/X11/foreign-toplevel set_maximized)
+# button, SSD title-bar double-click, or xdg/foreign-toplevel set_maximized)
 # propagates to every window connected via snap adjacency.
 # Keybinding/gesture fit is unaffected — bind `fit-window-snapped` explicitly
 # if you want cluster-aware fit there too.
@@ -328,6 +328,15 @@
 # "4-finger-hold" = "center-window"         # fires on release
 # "mod+3-finger-hold" = "center-window"
 
+# X11 support via xwayland-satellite. driftwm spawns satellite eagerly at
+# startup, exports DISPLAY=:N, and X11 apps connect transparently. If the
+# binary isn't found, X11 support is disabled with a warning; everything
+# else still runs.
+#
+# [xwayland_satellite]
+# enabled = true                  # default: true
+# path    = "xwayland-satellite"  # absolute path or $PATH lookup; ~ expands
+
 # Per-output configuration. Each [[outputs]] entry matches by connector name.
 # Find connector names with wlr-randr or check driftwm logs at startup.
 # Outputs without a matching entry default to scale 1.0.
@@ -352,10 +361,9 @@
 # rules — e.g. one rule sets blur=true, a later one adds opacity=0.85.
 #
 # Match criteria (at least one required; all specified must match):
-#   app_id     — Wayland app_id. For X11 windows also matches WM_CLASS.
+#   app_id     — Wayland app_id. X11 apps proxied via xwayland-satellite arrive
+#                with app_id set from WM_CLASS instance (typically lowercase).
 #   title      — window title
-#   xclass     — X11 WM_CLASS class component  (XWayland windows only)
-#   xinstance  — X11 WM_CLASS instance component (XWayland windows only)
 #
 # Pattern syntax (applies to all match fields):
 #   Plain string  — exact match: "kitty"
@@ -364,7 +372,6 @@
 #
 # To find a window's identifiers, run while the window is open:
 #   cat $XDG_RUNTIME_DIR/driftwm/state   (see the "windows=" line)
-# For X11/XWayland windows: xprop WM_CLASS
 #
 # Effect fields:
 #   position   — [x, y] canvas coordinates to place the window (window center, Y-up)
@@ -408,7 +415,7 @@
 #
 # # Game: only let ctrl+q through, keep everything else (mod+q still closes)
 # [[window_rules]]
-# xclass    = "factorio"
+# app_id    = "factorio"
 # pass_keys = ["ctrl+q"]
 #
 # # Regex match: any Steam game app

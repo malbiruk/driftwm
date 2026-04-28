@@ -28,7 +28,6 @@ pub enum GestureState {
         initial_size: Size<i32, Logical>,
         last_size: Size<i32, Logical>,
         cumulative: Point<f64, Logical>,
-        last_x11_configure: Option<std::time::Instant>,
         snap: SnapState,
         constraints: crate::grabs::SizeConstraints,
         cluster_resize: crate::state::ClusterResizeSnapshot,

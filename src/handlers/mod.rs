@@ -1,12 +1,10 @@
 pub mod compositor;
 pub mod layer_shell;
 pub mod xdg_shell;
-pub mod xwayland;
 
 use crate::state::{DriftWm, FocusTarget};
 use driftwm::window_ext::WindowExt;
 use smithay::wayland::seat::WaylandFocus;
-use std::os::fd::OwnedFd;
 use smithay::{
     backend::renderer::ImportDma,
     delegate_cursor_shape, delegate_data_control, delegate_data_device, delegate_dmabuf,
@@ -40,7 +38,7 @@ use smithay::{
             SecurityContext, SecurityContextHandler, SecurityContextListenerSource,
         },
         selection::{
-            SelectionHandler, SelectionSource, SelectionTarget,
+            SelectionHandler,
             data_device::{
                 DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
                 set_data_device_focus,
@@ -103,8 +101,6 @@ impl SeatHandler for DriftWm {
         set_data_device_focus(dh, seat, client.clone());
         set_primary_focus(dh, seat, client);
 
-        self.sync_x11_activated(focused.map(|f| &f.0));
-
         // Update focus history (skip during Alt-Tab cycling — history is frozen)
         if self.cycle_state.is_none()
             && let Some(focus) = focused
@@ -119,20 +115,6 @@ delegate_text_input_manager!(DriftWm);
 
 impl SelectionHandler for DriftWm {
     type SelectionUserData = ();
-
-    fn new_selection(&mut self, ty: SelectionTarget, source: Option<SelectionSource>, _seat: Seat<Self>) {
-        // Wayland client claimed a selection — forward MIME types to X11 so it can paste.
-        if let Some(wm) = self.x11_wm.as_mut() {
-            wm.new_selection(ty, source.map(|s| s.mime_types())).ok();
-        }
-    }
-
-    fn send_selection(&mut self, ty: SelectionTarget, mime_type: String, fd: OwnedFd, _seat: Seat<Self>, _: &()) {
-        // X11 wants to read a compositor-set (i.e. originally-X11) selection.
-        if let Some(wm) = self.x11_wm.as_mut() {
-            wm.send_selection(ty, mime_type, fd).ok();
-        }
-    }
 }
 
 impl DataDeviceHandler for DriftWm {

@@ -27,11 +27,8 @@ use driftwm::snap::{SnapState, snap_resize_edges};
 /// Client-declared size constraints captured once at grab start.
 ///
 /// Both fields use smithay's convention: a value of `0` on any axis means
-/// "unconstrained" on that axis. For XDG toplevels, this is read out of
-/// `SurfaceCachedState::{min_size, max_size}`. For X11 we read
-/// `X11Surface::min_size` / `max_size`, which return `Option`; `None` maps
-/// to `(0, 0)` — unconstrained. Non-XDG/non-X11 windows (unreachable in
-/// practice for a resize grab) also fall through to unconstrained.
+/// "unconstrained" on that axis. Read from `SurfaceCachedState::{min_size,
+/// max_size}` on the xdg-toplevel.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct SizeConstraints {
     pub min: Size<i32, Logical>,
@@ -43,23 +40,16 @@ impl SizeConstraints {
     /// to clone; consumers should store this and clamp per motion tick
     /// instead of calling this in the inner loop.
     pub fn for_window(window: &Window) -> Self {
-        if let Some(toplevel) = window.toplevel() {
-            let surface = toplevel.wl_surface();
-            let cached = with_states(surface, |states| {
-                *states.cached_state.get::<SurfaceCachedState>().current()
-            });
-            return Self {
-                min: cached.min_size,
-                max: cached.max_size,
-            };
+        let Some(toplevel) = window.toplevel() else {
+            return Self::default();
+        };
+        let cached = with_states(toplevel.wl_surface(), |states| {
+            *states.cached_state.get::<SurfaceCachedState>().current()
+        });
+        Self {
+            min: cached.min_size,
+            max: cached.max_size,
         }
-        if let Some(x11) = window.x11_surface() {
-            return Self {
-                min: x11.min_size().unwrap_or_default(),
-                max: x11.max_size().unwrap_or_default(),
-            };
-        }
-        Self::default()
     }
 
     /// Clamp a requested size to `[min, max]` along each axis. Zero values
@@ -112,8 +102,6 @@ pub struct ResizeSurfaceGrab {
     pub last_window_size: Size<i32, Logical>,
     pub output: Output,
     pub last_clamped_location: Point<f64, Logical>,
-    /// Throttle X11 configures to avoid overwhelming the client (X11 redraws synchronously).
-    pub last_x11_configure: Option<std::time::Instant>,
     pub snap: SnapState,
     /// Client-declared min/max size, read once at grab start. Used to
     /// clamp `new_w`/`new_h` before snap + propagation — otherwise the
@@ -249,18 +237,6 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                     state.states.set(xdg_toplevel::State::Resizing);
                 });
                 toplevel.send_pending_configure();
-            } else if let Some(x11) = self.window.x11_surface() {
-                // Throttle X11 configures to ~60fps — X11 apps redraw synchronously
-                let now = std::time::Instant::now();
-                let throttle_ok = self.last_x11_configure.is_none_or(|t| {
-                    now.duration_since(t) >= std::time::Duration::from_millis(16)
-                });
-                if throttle_ok {
-                    self.last_x11_configure = Some(now);
-                    let mut geo = x11.geometry();
-                    geo.size = new_size;
-                    x11.configure(geo).ok();
-                }
             }
         }
 
@@ -288,10 +264,6 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                     state.states.unset(xdg_toplevel::State::Resizing);
                 });
                 toplevel.send_pending_configure();
-            } else if let Some(x11) = self.window.x11_surface() {
-                let mut geo = x11.geometry();
-                geo.size = self.last_window_size;
-                x11.configure(geo).ok();
             }
 
             let Some(surface) = self.window.wl_surface().map(|s| s.into_owned()) else {

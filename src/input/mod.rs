@@ -137,14 +137,6 @@ impl DriftWm {
         serial: smithay::utils::Serial,
         time: u32,
     ) {
-        // Override-redirect X11 windows (popups, menus) — above everything
-        if let Some(hit) = self.override_redirect_under(canvas_pos) {
-            self.pointer_over_layer = false;
-            pointer.motion(self, Some(hit), &MotionEvent { location: canvas_pos, serial, time });
-            pointer.frame(self);
-            return;
-        }
-
         // Check Overlay and Top layers at screen coords
         if let Some(hit) = self.layer_surface_under(screen_pos, canvas_pos, &[WlrLayer::Overlay, WlrLayer::Top]) {
             self.pointer_over_layer = true;
@@ -155,10 +147,8 @@ impl DriftWm {
 
         // Non-widget canvas windows (visually above canvas layers)
         let under = self.surface_under(canvas_pos, Some(false));
-        if let Some((ref focus, _)) = under {
+        if under.is_some() {
             self.pointer_over_layer = false;
-            self.raise_x11_for_hover(&focus.0);
-            self.nudge_x11_root_for_cursor(&focus.0, canvas_pos);
             pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
             pointer.frame(self);
             self.update_decoration_cursor(canvas_pos);
@@ -175,10 +165,8 @@ impl DriftWm {
 
         // Widget canvas windows (visually below canvas layers)
         let under = self.surface_under(canvas_pos, Some(true));
-        if let Some((ref focus, _)) = under {
+        if under.is_some() {
             self.pointer_over_layer = false;
-            self.raise_x11_for_hover(&focus.0);
-            self.nudge_x11_root_for_cursor(&focus.0, canvas_pos);
             pointer.motion(self, under, &MotionEvent { location: canvas_pos, serial, time });
             pointer.frame(self);
             self.update_decoration_cursor(canvas_pos);
@@ -698,27 +686,6 @@ impl DriftWm {
                 .is_some()
             {
                 return None;
-            }
-        }
-        None
-    }
-
-    /// Find an override-redirect X11 surface under the given canvas position.
-    pub(crate) fn override_redirect_under(
-        &self,
-        canvas_pos: Point<f64, smithay::utils::Logical>,
-    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
-        for or_surface in self.x11_override_redirect.iter().rev() {
-            let Some(wl_surface) = or_surface.wl_surface() else { continue };
-            let pos = self.or_canvas_position(or_surface);
-            let surface_local = canvas_pos - pos.to_f64();
-            if let Some((hit_surface, sub_loc)) =
-                smithay::desktop::utils::under_from_surface_tree(
-                    &wl_surface, surface_local, (0, 0), WindowSurfaceType::ALL,
-                )
-            {
-                let loc = (sub_loc + pos).to_f64();
-                return Some((FocusTarget(hit_surface), loc));
             }
         }
         None

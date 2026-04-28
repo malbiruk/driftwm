@@ -93,18 +93,19 @@ pub struct Config {
     pub backend: BackendConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
-    pub xwayland_enabled: bool,
+    pub xwayland_satellite_enabled: bool,
+    pub xwayland_satellite_path: String,
     pub env: HashMap<String, String>,
     pub output_configs: Vec<OutputConfig>,
     bindings: HashMap<KeyCombo, Action>,
     pub mouse: ContextBindings<MouseBinding, MouseAction>,
-    /// When `true`, resizing a window by dragging its edge (SSD border,
-    /// CSD border, or X11 border) propagates to every window connected
-    /// to it via snap adjacency. Keybinding and gesture resize are
-    /// unaffected — bind `resize-window-snapped` explicitly for those.
+    /// When `true`, resizing a window by dragging its edge (SSD or CSD
+    /// border) propagates to every window connected to it via snap
+    /// adjacency. Keybinding and gesture resize are unaffected — bind
+    /// `resize-window-snapped` explicitly for those.
     pub decoration_resize_snapped: bool,
     /// When `true`, maximize/unmaximize initiated via window decoration
-    /// (CSD maximize button, SSD title-bar double-click, xdg/X11/foreign-toplevel
+    /// (CSD maximize button, SSD title-bar double-click, xdg/foreign-toplevel
     /// set_maximized) propagates to every window connected via snap adjacency.
     /// Keybinding and gesture fit are unaffected — bind `fit-window-snapped`
     /// explicitly for those.
@@ -508,7 +509,8 @@ impl Config {
             autostart: raw.autostart.unwrap_or_default(),
             env: raw.env,
             window_rules,
-            xwayland_enabled: raw.xwayland.enabled,
+            xwayland_satellite_enabled: raw.xwayland_satellite.enabled,
+            xwayland_satellite_path: expand_tilde(&raw.xwayland_satellite.path),
             output_configs,
             bindings,
             mouse: mouse_bindings,
@@ -527,7 +529,7 @@ impl Config {
     pub fn match_window_rule(&self, app_id: &str, title: &str) -> Option<&WindowRule> {
         self.window_rules
             .iter()
-            .find(|rule| rule.matches(app_id, title, "", ""))
+            .find(|rule| rule.matches(app_id, title))
     }
 
     /// Find the Nth matching window rule (with position) for the given `app_id` and `title`.
@@ -541,7 +543,7 @@ impl Config {
     ) -> Option<&WindowRule> {
         self.window_rules
             .iter()
-            .filter(|rule| rule.position.is_some() && rule.matches(app_id, title, "", ""))
+            .filter(|rule| rule.position.is_some() && rule.matches(app_id, title))
             .nth(n)
     }
 
@@ -550,21 +552,14 @@ impl Config {
     /// Rules are applied in config order; later rules override earlier ones for
     /// scalar fields (decoration, opacity, position, size). Boolean flags
     /// (widget, blur, pass_keys) are sticky-on.
-    ///
-    /// - `app_id`    — Wayland app_id (also used for X11 WM_CLASS for backward compat)
-    /// - `title`     — window title
-    /// - `xclass`    — X11 WM_CLASS class component (empty for Wayland-native windows)
-    /// - `xinstance` — X11 WM_CLASS instance component (empty for Wayland-native windows)
     pub fn resolve_window_rules(
         &self,
         app_id: &str,
         title: &str,
-        xclass: &str,
-        xinstance: &str,
     ) -> Option<AppliedWindowRule> {
         let mut result: Option<AppliedWindowRule> = None;
         for rule in &self.window_rules {
-            if rule.matches(app_id, title, xclass, xinstance) {
+            if rule.matches(app_id, title) {
                 match &mut result {
                     None    => result = Some(AppliedWindowRule::from(rule)),
                     Some(r) => r.merge_from(rule),

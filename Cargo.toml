@@ -17,7 +17,6 @@ smithay = { git = "https://github.com/Smithay/smithay.git", default-features = f
     "renderer_gl",
     "wayland_frontend",
     "desktop",
-    "xwayland",
 ] }
 smithay-drm-extras = { git = "https://github.com/Smithay/smithay.git" }
 libdisplay-info = "0.3.0"

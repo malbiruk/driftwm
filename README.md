@@ -171,7 +171,7 @@ window-search script that lets you search and jump to any open window.
 
 ### Everything else
 
-- XWayland for X11 apps (Steam, Wine, JetBrains, etc.)
+- X11 apps via [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) (Steam, Wine, JetBrains, etc. — requires `xwayland-satellite` >= 0.7 in `$PATH`)
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screencasting (OBS, Firefox, Discord — requires `xdg-desktop-portal` + `xdg-desktop-portal-wlr`)
 - Screenshots (grim + slurp)
@@ -257,6 +257,22 @@ cd driftwm
 cargo build --release
 sudo make install
 ```
+
+### X11 support (optional)
+
+X11 apps run through [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite)
+(>= 0.7). driftwm spawns it at startup and exports `DISPLAY=:N` so X11 clients
+connect transparently. No extra config needed beyond having the binary in
+`$PATH`.
+
+- **Arch:** `sudo pacman -S xwayland-satellite`
+- **Fedora:** `sudo dnf install xwayland-satellite`
+- **NixOS:** `pkgs.xwayland-satellite`
+- **Debian/Ubuntu:** not yet packaged — `cargo install --locked xwayland-satellite`
+
+If satellite isn't found at startup, driftwm logs a warning and continues without
+X11 support. You can override the binary path or disable the integration in
+[`config.example.toml`](config.example.toml) under `[xwayland_satellite]`.
 
 ### Running
 

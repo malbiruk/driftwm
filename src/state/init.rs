@@ -43,7 +43,6 @@ use smithay::{
         virtual_keyboard::VirtualKeyboardManagerState,
         xdg_activation::XdgActivationState,
         xdg_foreign::XdgForeignState,
-        xwayland_shell::XWaylandShellState,
     },
 };
 use std::collections::{HashMap, HashSet};
@@ -128,16 +127,11 @@ impl DriftWm {
             );
         let session_lock_manager_state =
             SessionLockManagerState::new::<Self, _>(&dh, client_is_unrestricted);
-        let xwayland_shell_state = XWaylandShellState::new::<Self>(&dh);
         let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
         smithay::wayland::content_type::ContentTypeState::new::<Self>(&dh);
         {
             use smithay::wayland::shell::xdg::dialog::XdgDialogState;
             XdgDialogState::new::<Self>(&dh);
-        }
-        {
-            use smithay::wayland::xwayland_keyboard_grab::XWaylandKeyboardGrabState;
-            XWaylandKeyboardGrabState::new::<Self>(&dh);
         }
 
         let config = Config::load();
@@ -248,14 +242,7 @@ impl DriftWm {
             gesture_exited_fullscreen: None,
             disconnected_outputs: HashSet::new(),
             output_config_dirty: false,
-            xwayland_shell_state,
-            x11_wm: None,
-            x11_override_redirect: Vec::new(),
-            x11_display: None,
-            xwayland_client: None,
-            last_x11_focused: None,
-            last_x11_hover_raised: None,
-            or_root_anchor: None,
+            satellite: None,
             last_titlebar_click: None,
         }
     }

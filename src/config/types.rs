@@ -514,14 +514,11 @@ impl PassKeys {
 #[derive(Clone, Debug)]
 pub struct WindowRule {
     // ── Match criteria (all that are Some must match) ─────────────────
-    /// Wayland `app_id`. For X11 windows this also matches WM_CLASS.
-    pub app_id:    Option<Pattern>,
+    /// Wayland `app_id`. X11 apps proxied via xwayland-satellite arrive
+    /// with `app_id` set from `WM_CLASS` instance (typically lowercase).
+    pub app_id: Option<Pattern>,
     /// Window title.
-    pub title:     Option<Pattern>,
-    /// X11 WM_CLASS (the class component). Wayland windows never match.
-    pub xclass:    Option<Pattern>,
-    /// X11 WM_CLASS instance component. Wayland windows never match.
-    pub xinstance: Option<Pattern>,
+    pub title: Option<Pattern>,
     // ── One-time placement effects ────────────────────────────────────
     pub position: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
@@ -539,20 +536,15 @@ pub struct WindowRule {
 impl WindowRule {
     /// Returns true if this rule matches all of the supplied window identifiers.
     /// Fields that are `None` are treated as wildcards (match anything).
-    pub fn matches(&self, app_id: &str, title: &str, xclass: &str, xinstance: &str) -> bool {
-        let app_ok  = self.app_id   .as_ref().is_none_or(|p| p.matches(app_id));
-        let ttl_ok  = self.title    .as_ref().is_none_or(|p| p.matches(title));
-        let cls_ok  = self.xclass   .as_ref().is_none_or(|p| p.matches(xclass));
-        let inst_ok = self.xinstance.as_ref().is_none_or(|p| p.matches(xinstance));
-        app_ok && ttl_ok && cls_ok && inst_ok
+    pub fn matches(&self, app_id: &str, title: &str) -> bool {
+        let app_ok = self.app_id.as_ref().is_none_or(|p| p.matches(app_id));
+        let ttl_ok = self.title.as_ref().is_none_or(|p| p.matches(title));
+        app_ok && ttl_ok
     }
 
     /// True if at least one match criterion is set (rules with no criteria are rejected).
     pub fn has_criteria(&self) -> bool {
-        self.app_id.is_some()
-            || self.title.is_some()
-            || self.xclass.is_some()
-            || self.xinstance.is_some()
+        self.app_id.is_some() || self.title.is_some()
     }
 }
 

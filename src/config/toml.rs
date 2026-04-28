@@ -23,7 +23,7 @@ pub(super) struct ConfigFile {
     pub mouse: MouseFileConfig,
     pub gestures: GestureFileConfig,
     pub env: HashMap<String, String>,
-    pub xwayland: XWaylandConfig,
+    pub xwayland_satellite: XwaylandSatelliteConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
 }
@@ -191,10 +191,6 @@ pub(super) enum PassKeysFile {
 pub(super) struct WindowRuleFile {
     pub app_id: Option<String>,
     pub title: Option<String>,
-    /// X11 WM_CLASS (class component). Matches only X11/XWayland windows.
-    pub xclass: Option<String>,
-    /// X11 WM_CLASS instance component. Matches only X11/XWayland windows.
-    pub xinstance: Option<String>,
     pub position: Option<[i32; 2]>,
     pub size: Option<[i32; 2]>,
     #[serde(default)]
@@ -249,13 +245,17 @@ pub(super) struct OutputRuleFile {
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub(super) struct XWaylandConfig {
+pub(super) struct XwaylandSatelliteConfig {
     pub enabled: bool,
+    pub path: String,
 }
 
-impl Default for XWaylandConfig {
+impl Default for XwaylandSatelliteConfig {
     fn default() -> Self {
-        Self { enabled: true }
+        Self {
+            enabled: true,
+            path: "xwayland-satellite".to_string(),
+        }
     }
 }
 
@@ -271,7 +271,7 @@ pub fn config_path() -> std::path::PathBuf {
     std::path::PathBuf::from(config_dir).join("driftwm/config.toml")
 }
 
-pub(super) fn expand_tilde(path: &str) -> String {
+pub fn expand_tilde(path: &str) -> String {
     if let Some(rest) = path.strip_prefix("~/")
         && let Ok(home) = std::env::var("HOME")
     {

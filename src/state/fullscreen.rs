@@ -68,7 +68,6 @@ impl DriftWm {
         self.space.map_element(window.clone(), camera_i32, true);
         self.space.raise_element(window, true);
         self.enforce_below_windows();
-        self.sync_x11_position(window);
         self.update_output_from_camera();
 
         // Ensure keyboard AND pointer focus are on the fullscreen window.
@@ -124,14 +123,12 @@ impl DriftWm {
         fs.window.exit_fullscreen_configure(fs.saved_size);
 
         // Restore window position, camera, zoom on the specific output
-        let restored = fs.window.clone();
         self.space.map_element(fs.window, fs.saved_location, false);
         {
             let mut os = super::output_state(output);
             os.camera = fs.saved_camera;
             os.zoom = fs.saved_zoom;
         }
-        self.sync_x11_position(&restored);
         self.update_output_from_camera();
     }
 

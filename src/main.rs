@@ -8,6 +8,7 @@ mod input;
 mod render;
 mod signals;
 mod state;
+mod xwayland;
 
 use state::{ClientState, DriftWm};
 use std::sync::Arc;
@@ -182,10 +183,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
     }
 
-    // Spawn XWayland (after WAYLAND_DISPLAY is set so it can connect as a client)
-    if data.config.xwayland_enabled {
-        backend::spawn_xwayland(&data.display_handle, &event_loop.handle());
-    }
+    // Spawn xwayland-satellite on demand (after WAYLAND_DISPLAY is set so
+    // it can connect as a regular Wayland client).
+    xwayland::setup(&mut data);
 
     // Auto-reap child processes — prevents zombies from exec/autostart commands.
     // Must be after backend init: libseat uses waitpid() during session setup.

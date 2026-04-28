@@ -181,7 +181,7 @@ fn refresh_toplevel<D>(
 ) where
     D: Dispatch<ZwlrForeignToplevelHandleV1, ()> + 'static,
 {
-    // Read title/app_id via WindowExt (works for both Wayland and X11)
+    // Read title/app_id via WindowExt
     let title = window.window_title();
     let app_id = window.app_id_or_class();
     let xdg_states = with_states(wl_surface, |states| {

@@ -35,22 +35,18 @@ At least one criterion is required. All specified criteria must match.
 
 | Field        | Matches                                              |
 |--------------|------------------------------------------------------|
-| `app_id`     | Wayland app_id; also matches X11 WM_CLASS            |
+| `app_id`     | Wayland app_id (X11 apps via xwayland-satellite arrive with `app_id` set from `WM_CLASS` instance, typically lowercase) |
 | `title`      | Window title                                         |
-| `xclass`     | X11 WM_CLASS class component (XWayland windows only) |
-| `xinstance`  | X11 WM_CLASS instance component (XWayland only)      |
 
 ### Finding a window's identifiers
 
-**Wayland-native windows:**
 ```sh
 cat $XDG_RUNTIME_DIR/driftwm/state   # look for the "windows=" line
 ```
 
-**X11/XWayland windows:**
-```sh
-xprop WM_CLASS   # then click the window; prints instance and class
-```
+For X11 apps run through xwayland-satellite, the `app_id` matches the X11
+`WM_CLASS` instance (lowercase). For example, Steam appears as `steam`, not
+`Steam`.
 
 ## Pattern syntax
 
@@ -143,17 +139,8 @@ Keep `mod+q` and other compositor shortcuts active, but pass `ctrl+q` to the gam
 
 ```toml
 [[window_rules]]
-xclass    = "factorio"
+app_id    = "factorio"
 pass_keys = ["ctrl+q", "ctrl+s"]
-```
-
-### Game: pass all keys through (X11/XWayland)
-
-```toml
-# Match by WM_CLASS (run `xprop WM_CLASS` and click the window to find it)
-[[window_rules]]
-xclass    = "factorio"
-pass_keys = true
 ```
 
 ### Match any Steam game by regex
@@ -219,5 +206,5 @@ widget = true
 Enable debug logging to see which rules matched a window at map time:
 
 ```sh
-RUST_LOG=debug driftwm 2>&1 | grep -i "window rule\|app_id\|xclass"
+RUST_LOG=debug driftwm 2>&1 | grep -i "window rule\|app_id"
 ```
