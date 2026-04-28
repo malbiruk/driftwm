@@ -1028,10 +1028,19 @@ fn render_frame(
 
     // Primary plane scanout (any format) + cursor plane. Overlay planes left off —
     // they cause hard-to-diagnose flicker on some hardware (niri does the same).
+    //
+    // Skip cursor plane scanout when the cursor is dimmed: smithay's cursor plane
+    // cache is keyed by element id + commit and ignores alpha, so a 1.0 → <1.0
+    // change reuses the previously-drawn opaque buffer. Falling back to GPU
+    // compositing reapplies alpha every frame.
     let frame_flags = if data.config.backend.disable_direct_scanout {
         FrameFlags::empty()
     } else {
-        FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY | FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT
+        let mut f = FrameFlags::ALLOW_PRIMARY_PLANE_SCANOUT_ANY;
+        if cursor_alpha >= 1.0 {
+            f |= FrameFlags::ALLOW_CURSOR_PLANE_SCANOUT;
+        }
+        f
     };
 
     // Render via DRM compositor (latency-sensitive — do first)
