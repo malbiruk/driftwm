@@ -175,13 +175,11 @@ impl CompositorHandler for DriftWm {
                 if self.pending_center.remove(&root) {
                     let geo = window.geometry();
                     let has_size = geo.size.w > 0 && geo.size.h > 0;
+                    let is_fullscreen = self.fullscreen.values().any(|fs| fs.window == window);
 
                     // Capture preferred size once. Later updated only on user
                     // resize-grab completion (see handle_resize_commit).
-                    if has_size
-                        && !crate::state::fit::is_fit(&window)
-                        && !self.fullscreen.values().any(|fs| fs.window == window)
-                    {
+                    if has_size && !crate::state::fit::is_fit(&window) && !is_fullscreen {
                         crate::state::fit::set_restore_size_if_missing(&root, geo.size);
                     }
 
@@ -279,7 +277,11 @@ impl CompositorHandler for DriftWm {
                         } else {
                             self.pending_size.remove(&root);
                         }
-                    } else if has_size {
+                    } else if has_size && !is_fullscreen {
+                        // Skip positioning for fullscreen windows: enter_fullscreen
+                        // already mapped them to camera_i32, and the bar-shifted
+                        // centering below would override that by bar/2.
+                        //
                         // Position: rule coords are window-center with Y-up convention
                         // (positive = above origin). Negate Y for internal canvas coords.
                         let pos = if let Some(ref applied) = applied
@@ -407,7 +409,10 @@ impl CompositorHandler for DriftWm {
                         }
 
                         let is_widget = applied.as_ref().is_some_and(|a| a.widget);
-                        if !is_widget {
+                        // Skip for fullscreen: window_ssd_bar() returns 25 once
+                        // the decoration is in the map (above), so the camera
+                        // target drifts by bar/2 and breaks fullscreen alignment.
+                        if !is_widget && !is_fullscreen {
                             let reset = self.config.zoom_reset_on_new_window;
                             self.navigate_to_window(&window, reset);
                         }
