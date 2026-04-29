@@ -543,7 +543,7 @@ impl XdgDecorationHandler for DriftWm {
             // Client switching back to CSD: drop any stale SSD chrome.
             self.pending_ssd.remove(&wl_surface.id());
             self.decorations.remove(&wl_surface.id());
-            self.render.csd_shadows.remove(&wl_surface.id());
+            self.render.shadow_cache.remove(&wl_surface.id());
         }
     }
 

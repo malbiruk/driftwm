@@ -178,6 +178,85 @@ fn shadow_uniforms_precise(
     (uniforms, key)
 }
 
+/// Build (or reuse) a cached shadow `PixelShaderElement` for a window body and
+/// push it into `target` wrapped in a `RescaleRenderElement`.
+///
+/// `body_logical` is the rect that casts the shadow — the title-bar+content
+/// strip for SSD windows, or the content rect for CSD. The shadow rect is
+/// derived by inflating it by `SHADOW_RADIUS.ceil()` on every side.
+///
+/// Cache invalidation:
+/// * post-zoom phys key change → uniforms refreshed (geometry / scale / zoom moved)
+/// * opacity change → element reconstructed (alpha is fixed at construction time)
+#[allow(clippy::too_many_arguments)]
+fn push_shadow_element(
+    target: &mut Vec<OutputRenderElements>,
+    cache: &mut std::collections::HashMap<
+        smithay::reexports::wayland_server::backend::ObjectId,
+        crate::state::ShadowCacheEntry,
+    >,
+    surface_id: smithay::reexports::wayland_server::backend::ObjectId,
+    shader: &smithay::backend::renderer::gles::GlesPixelProgram,
+    body_logical: Rectangle<f64, Logical>,
+    corner_radius_logical: f32,
+    opacity: f64,
+    output_scale: Scale<f64>,
+    zoom: f64,
+) {
+    use driftwm::config::DecorationConfig;
+    let shadow_radius = DecorationConfig::SHADOW_RADIUS;
+    let pad = shadow_radius.ceil() as i32;
+
+    let body_x = body_logical.loc.x.round() as i32;
+    let body_y = body_logical.loc.y.round() as i32;
+    let body_w = body_logical.size.w.round() as i32;
+    let body_h = body_logical.size.h.round() as i32;
+    let shadow_area = Rectangle::new(
+        Point::<i32, Logical>::from((body_x - pad, body_y - pad)),
+        Size::<i32, Logical>::from((body_w + 2 * pad, body_h + 2 * pad)),
+    );
+
+    let body_pre_zoom: Rectangle<i32, Physical> =
+        body_logical.to_physical_precise_round(output_scale);
+    let corner_r_phys = corner_radius_logical * output_scale.x as f32 * zoom as f32;
+    let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
+        body_pre_zoom, shadow_area, output_scale, zoom, shadow_radius, corner_r_phys,
+    );
+
+    // Alpha is baked into the element at construction; rebuild on opacity change.
+    if cache
+        .get(&surface_id)
+        .is_some_and(|(elem, _)| (elem.alpha() - opacity as f32).abs() > f32::EPSILON)
+    {
+        cache.remove(&surface_id);
+    }
+
+    let (elem, cached_key) = cache.entry(surface_id).or_insert_with(|| {
+        let elem = PixelShaderElement::new(
+            shader.clone(),
+            shadow_area,
+            None,
+            opacity as f32,
+            fresh_uniforms.clone(),
+            Kind::Unspecified,
+        );
+        (elem, Some(fresh_key))
+    });
+
+    if *cached_key != Some(fresh_key) {
+        *cached_key = Some(fresh_key);
+        elem.update_uniforms(fresh_uniforms);
+    }
+    elem.resize(shadow_area, None);
+    target.push(OutputRenderElements::Background(
+        RescaleRenderElement::from_element(
+            elem.clone(),
+            Point::<i32, Physical>::from((0, 0)),
+            zoom,
+        ),
+    ));
+}
+
 const CORNER_CLIP_SRC: &str = include_str!("../shaders/corner_clip.glsl");
 
 pub const CORNER_CLIP_UNIFORMS: &[UniformName<'static>] = &[
@@ -804,73 +883,25 @@ pub fn compose_frame(
                 push_plain_elements(target, elems, zoom);
             }
 
-            // Shadow element: cached per-window, rebuilt only on resize.
-            // Stable Id lets the damage tracker skip unchanged shadow regions.
-            if let Some(ref shader) = state.render.shadow_shader {
-                use driftwm::config::DecorationConfig;
-                let radius = DecorationConfig::SHADOW_RADIUS;
-                let r = radius.ceil() as i32;
-                let shadow_w = geom_size.w + 2 * r;
-                let shadow_h = geom_size.h + bar_height + 2 * r;
-                let shadow_loc: Point<i32, Logical> = Point::from((
-                    render_loc.x.round() as i32 - r,
-                    render_loc.y.round() as i32 - bar_height - r,
-                ));
-                let shadow_area = Rectangle::new(shadow_loc, (shadow_w, shadow_h).into());
-                let corner_r = state.config.decorations.corner_radius as f32;
-
-                if let Some(deco) = state.decorations.get_mut(&wl_surface.id()) {
-                    let content_size = (geom_size.w, geom_size.h);
-                    if deco.cached_shadow.as_ref().is_some_and(|s| (s.alpha() - opacity as f32).abs() > f32::EPSILON) {
-                        deco.cached_shadow = None;
-                        deco.last_shadow_phys_key = None;
-                    }
-                    // Body pre-zoom physical rect (title + content combined),
-                    // via to_physical_precise_round — same chain as inner element.
-                    let body_logical: Rectangle<f64, Logical> = Rectangle::new(
-                        (render_loc.x, render_loc.y - bar_height as f64).into(),
-                        (geom_size.w as f64, (geom_size.h + bar_height) as f64).into(),
-                    );
-                    let body_pre_zoom: Rectangle<i32, Physical> =
-                        body_logical.to_physical_precise_round(scale);
-                    let corner_r_phys = corner_r * scale.x as f32 * zoom as f32;
-                    let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
-                        body_pre_zoom, shadow_area, scale, zoom, radius, corner_r_phys,
-                    );
-
-                    let shadow_elem = if let Some(shadow) = &mut deco.cached_shadow {
-                        if deco.shadow_content_size != content_size
-                            || deco.last_shadow_phys_key != Some(fresh_key)
-                        {
-                            deco.shadow_content_size = content_size;
-                            deco.last_shadow_phys_key = Some(fresh_key);
-                            shadow.update_uniforms(fresh_uniforms);
-                        }
-                        shadow.resize(shadow_area, None);
-                        shadow.clone()
-                    } else {
-                        deco.shadow_content_size = content_size;
-                        deco.last_shadow_phys_key = Some(fresh_key);
-                        let elem = PixelShaderElement::new(
-                            shader.clone(),
-                            shadow_area,
-                            None,
-                            opacity as f32,
-                            fresh_uniforms,
-                            Kind::Unspecified,
-                        );
-                        deco.cached_shadow = Some(elem.clone());
-                        elem
-                    };
-                    target.push(OutputRenderElements::Background(
-                        RescaleRenderElement::from_element(
-                            shadow_elem,
-                            Point::<i32, Physical>::from((0, 0)),
-                            zoom,
-                        ),
-                    ));
-                    shadow_count = 1;
-                }
+            // Shadow encloses title bar + content; cached per-surface so the
+            // damage tracker can skip unchanged regions across frames.
+            if let Some(shader) = state.render.shadow_shader.clone() {
+                let body_logical: Rectangle<f64, Logical> = Rectangle::new(
+                    (render_loc.x, render_loc.y - bar_height as f64).into(),
+                    (geom_size.w as f64, (geom_size.h + bar_height) as f64).into(),
+                );
+                push_shadow_element(
+                    target,
+                    &mut state.render.shadow_cache,
+                    wl_surface.id(),
+                    &shader,
+                    body_logical,
+                    state.config.decorations.corner_radius as f32,
+                    opacity,
+                    scale,
+                    zoom,
+                );
+                shadow_count = 1;
             }
         } else if let Some(ref shader) = state.render.corner_clip_shader {
             let geo = window.geometry();
@@ -902,61 +933,23 @@ pub fn compose_frame(
                     geometry, [radius, radius, radius, radius], zoom, output_scale,
                 );
 
-                // Compositor shadow behind CSD windows
-                if let Some(ref shadow_shader) = state.render.shadow_shader {
-                    use driftwm::config::DecorationConfig;
-                    let shadow_radius = DecorationConfig::SHADOW_RADIUS;
-                    let sr = shadow_radius.ceil() as i32;
-                    let shadow_w = geom_size.w + 2 * sr;
-                    let shadow_h = geom_size.h + 2 * sr;
-                    // render_loc is the buffer origin; geometry starts at render_loc + geo.loc
-                    let shadow_loc: Point<i32, Logical> = Point::from((
-                        render_loc.x.round() as i32 + geo.loc.x - sr,
-                        render_loc.y.round() as i32 + geo.loc.y - sr,
-                    ));
-                    let shadow_area = Rectangle::new(shadow_loc, (shadow_w, shadow_h).into());
-                    let content_size = (geom_size.w, geom_size.h);
-                    let corner_r = state.config.decorations.corner_radius as f32;
-
-                    // Body pre-zoom physical rect (content area),
-                    // via to_physical_precise_round — same chain as inner element.
+                // Compositor shadow behind CSD windows.
+                if let Some(shader) = state.render.shadow_shader.clone() {
                     let body_logical: Rectangle<f64, Logical> = Rectangle::new(
                         (render_loc.x + geo.loc.x as f64, render_loc.y + geo.loc.y as f64).into(),
                         (geom_size.w as f64, geom_size.h as f64).into(),
                     );
-                    let body_pre_zoom: Rectangle<i32, Physical> =
-                        body_logical.to_physical_precise_round(scale);
-                    let corner_r_phys = corner_r * scale.x as f32 * zoom as f32;
-                    let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
-                        body_pre_zoom, shadow_area, scale, zoom, shadow_radius, corner_r_phys,
+                    push_shadow_element(
+                        target,
+                        &mut state.render.shadow_cache,
+                        wl_surface.id(),
+                        &shader,
+                        body_logical,
+                        state.config.decorations.corner_radius as f32,
+                        opacity,
+                        scale,
+                        zoom,
                     );
-
-                    let shadow_entry = state.render.csd_shadows.entry(wl_surface.id());
-                    let (shadow_elem, cached_size, cached_key) = shadow_entry.or_insert_with(|| {
-                        let elem = PixelShaderElement::new(
-                            shadow_shader.clone(),
-                            shadow_area,
-                            None,
-                            opacity as f32,
-                            fresh_uniforms.clone(),
-                            Kind::Unspecified,
-                        );
-                        (elem, content_size, Some(fresh_key))
-                    });
-
-                    if *cached_size != content_size || *cached_key != Some(fresh_key) {
-                        *cached_size = content_size;
-                        *cached_key = Some(fresh_key);
-                        shadow_elem.update_uniforms(fresh_uniforms);
-                    }
-                    shadow_elem.resize(shadow_area, None);
-                    target.push(OutputRenderElements::Background(
-                        RescaleRenderElement::from_element(
-                            shadow_elem.clone(),
-                            Point::<i32, Physical>::from((0, 0)),
-                            zoom,
-                        ),
-                    ));
                     shadow_count = 1;
                 }
             } else {

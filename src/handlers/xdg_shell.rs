@@ -171,7 +171,7 @@ impl XdgShellHandler for DriftWm {
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface().clone();
         self.decorations.remove(&wl_surface.id());
-        self.render.csd_shadows.remove(&wl_surface.id());
+        self.render.shadow_cache.remove(&wl_surface.id());
         self.pending_ssd.remove(&wl_surface.id());
         self.pending_center.remove(&wl_surface);
         self.pending_size.remove(&wl_surface);

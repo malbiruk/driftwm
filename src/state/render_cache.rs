@@ -7,11 +7,7 @@ use smithay::utils::{Physical, Size};
 
 use super::CaptureOutputState;
 
-pub type CsdShadowEntry = (
-    PixelShaderElement,
-    (i32, i32),
-    Option<crate::render::ShadowPhysKey>,
-);
+pub type ShadowCacheEntry = (PixelShaderElement, Option<crate::render::ShadowPhysKey>);
 
 /// Cached GPU resources: compiled shaders, blur textures, background elements, capture state.
 pub struct RenderCache {
@@ -26,7 +22,7 @@ pub struct RenderCache {
     pub blur_bg_fbo: Option<(GlesTexture, Size<i32, Physical>)>,
     pub blur_geometry_generation: u64,
     pub blur_camera_generation: u64,
-    pub csd_shadows: HashMap<ObjectId, CsdShadowEntry>,
+    pub shadow_cache: HashMap<ObjectId, ShadowCacheEntry>,
     pub cached_bg_elements: HashMap<String, PixelShaderElement>,
     pub capture_state: HashMap<String, CaptureOutputState>,
     pub tile_shader: Option<GlesTexProgram>,
@@ -49,7 +45,7 @@ impl RenderCache {
             blur_bg_fbo: None,
             blur_geometry_generation: 0,
             blur_camera_generation: 0,
-            csd_shadows: HashMap::new(),
+            shadow_cache: HashMap::new(),
             cached_bg_elements: HashMap::new(),
             capture_state: HashMap::new(),
             tile_shader: None,

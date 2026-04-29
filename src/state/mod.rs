@@ -13,7 +13,7 @@ pub use cluster_snapshot::ClusterResizeSnapshot;
 pub(crate) use cluster_snapshot::snap_targets_impl;
 pub use cursor::{CursorFrames, CursorState};
 pub use persistence::{read_all_per_output_state, remove_state_file};
-pub use render_cache::RenderCache;
+pub use render_cache::{RenderCache, ShadowCacheEntry};
 
 use smithay::{
     desktop::{PopupManager, Space, Window},
