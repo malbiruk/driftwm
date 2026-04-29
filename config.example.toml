@@ -333,9 +333,9 @@
 # binary isn't found, X11 support is disabled with a warning; everything
 # else still runs.
 #
-# [xwayland_satellite]
+# [xwayland]
 # enabled = true                  # default: true
-# path    = "xwayland-satellite"  # absolute path or $PATH lookup; ~ expands
+# path    = "xwayland-satellite"  # path to xwayland-satellite binary ($PATH lookup works)
 
 # Per-output configuration. Each [[outputs]] entry matches by connector name.
 # Find connector names with wlr-randr or check driftwm logs at startup.

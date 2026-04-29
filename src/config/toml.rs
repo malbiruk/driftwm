@@ -23,7 +23,7 @@ pub(super) struct ConfigFile {
     pub mouse: MouseFileConfig,
     pub gestures: GestureFileConfig,
     pub env: HashMap<String, String>,
-    pub xwayland_satellite: XwaylandSatelliteConfig,
+    pub xwayland: XwaylandConfig,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
 }
@@ -245,12 +245,12 @@ pub(super) struct OutputRuleFile {
 
 #[derive(Deserialize)]
 #[serde(default, deny_unknown_fields)]
-pub(super) struct XwaylandSatelliteConfig {
+pub(super) struct XwaylandConfig {
     pub enabled: bool,
     pub path: String,
 }
 
-impl Default for XwaylandSatelliteConfig {
+impl Default for XwaylandConfig {
     fn default() -> Self {
         Self {
             enabled: true,

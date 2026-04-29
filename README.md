@@ -258,7 +258,7 @@ cargo build --release
 sudo make install
 ```
 
-### X11 support (optional)
+### X11 support
 
 X11 apps run through [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite)
 (>= 0.7). driftwm spawns it at startup and exports `DISPLAY=:N` so X11 clients
@@ -272,7 +272,9 @@ connect transparently. No extra config needed beyond having the binary in
 
 If satellite isn't found at startup, driftwm logs a warning and continues without
 X11 support. You can override the binary path or disable the integration in
-[`config.example.toml`](config.example.toml) under `[xwayland_satellite]`.
+[`config.example.toml`](config.example.toml) under `[xwayland]`.
+
+> Logs go to `$XDG_RUNTIME_DIR/driftwm.log` when launched by a display manager, otherwise stderr.
 
 ### Running
 

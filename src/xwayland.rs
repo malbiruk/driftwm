@@ -39,11 +39,11 @@ pub fn setup(state: &mut DriftWm) {
     if state.satellite.is_some() {
         return;
     }
-    if !state.config.xwayland_satellite_enabled {
+    if !state.config.xwayland_enabled {
         return;
     }
 
-    let path = state.config.xwayland_satellite_path.clone();
+    let path = state.config.xwayland_path.clone();
     if !probe_satellite(&path) {
         return;
     }
@@ -123,7 +123,8 @@ fn probe_satellite(path: &str) -> bool {
         Ok(c) => c,
         Err(err) => {
             tracing::warn!(
-                "xwayland-satellite not found at {path:?} (is it installed?): {err}"
+                "xwayland-satellite not found at {path:?}: {err} — X11 apps disabled \
+                 (install xwayland-satellite, or set [xwayland] enabled = false to silence)"
             );
             return false;
         }
@@ -132,7 +133,7 @@ fn probe_satellite(path: &str) -> bool {
         Ok(s) if s.success() => true,
         Ok(_) => {
             tracing::warn!(
-                "xwayland-satellite at {path:?} is too old (need >= 0.7), disabling integration"
+                "xwayland-satellite at {path:?} is too old (need >= 0.7) — X11 apps disabled"
             );
             false
         }
