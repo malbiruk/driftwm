@@ -60,7 +60,6 @@ impl DriftWm {
                 fingers,
             },
         );
-        pointer.frame(self);
     }
 
     fn forward_hold_end(&mut self, cancelled: bool, time: u32) {
@@ -74,6 +73,5 @@ impl DriftWm {
                 cancelled,
             },
         );
-        pointer.frame(self);
     }
 }

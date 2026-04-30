@@ -668,13 +668,11 @@ impl DriftWm {
                 fingers,
             },
         );
-        pointer.frame(self);
     }
 
     fn forward_swipe_update(&mut self, delta: Point<f64, Logical>, time: u32) {
         let pointer = self.seat.get_pointer().unwrap();
         pointer.gesture_swipe_update(self, &WlSwipeUpdate { time, delta });
-        pointer.frame(self);
     }
 
     fn forward_swipe_end(&mut self, cancelled: bool, time: u32) {
@@ -688,6 +686,5 @@ impl DriftWm {
                 cancelled,
             },
         );
-        pointer.frame(self);
     }
 }

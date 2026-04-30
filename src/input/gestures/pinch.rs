@@ -213,7 +213,6 @@ impl DriftWm {
                 fingers,
             },
         );
-        pointer.frame(self);
     }
 
     fn forward_pinch_update(
@@ -233,7 +232,6 @@ impl DriftWm {
                 rotation,
             },
         );
-        pointer.frame(self);
     }
 
     fn forward_pinch_end(&mut self, cancelled: bool, time: u32) {
@@ -247,6 +245,5 @@ impl DriftWm {
                 cancelled,
             },
         );
-        pointer.frame(self);
     }
 }
