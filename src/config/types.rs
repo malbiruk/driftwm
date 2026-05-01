@@ -120,6 +120,10 @@ pub enum WindowPlacement {
     /// Center on the cursor, clamped to the active output's usable canvas rect.
     /// Skips the auto-navigate so the camera stays where the user pointed.
     Cursor,
+    /// Snap-place adjacent to the focused window's cluster: try focused's
+    /// edges (CW from viewport-nearest), then BFS to neighbors. Falls back
+    /// to `Center` when no focused window or no valid placement was found.
+    Auto,
 }
 
 impl ModKey {

@@ -361,6 +361,14 @@ pub struct DriftWm {
     // -- global: window management --
     pub pending_center: HashSet<WlSurface>,
     pub pending_size: HashSet<WlSurface>,
+    /// Snapshot of the keyboard's focused window at `new_toplevel` time,
+    /// keyed by the new surface. Used by `auto_placement_pos` to anchor
+    /// against whatever the user was working with — *before* `new_toplevel`
+    /// auto-set focus to the new surface. `Some(None)` means the user
+    /// explicitly had no focus (e.g. clicked empty canvas), so auto-placement
+    /// falls back to center; missing entry means the snapshot was already
+    /// consumed.
+    pub auto_anchor_snapshot: HashMap<WlSurface, Option<Window>>,
     /// After unfit, re-center the window around `target_center` once its
     /// reported geometry actually changes from `pre_exit_size` — handles
     /// clients (Chromium) whose post-unfit size is smaller than what we
@@ -963,6 +971,124 @@ impl DriftWm {
         let y = raw_y.clamp(cy_min + bar_f, max_y);
 
         Some((x.round() as i32, y.round() as i32))
+    }
+
+    /// Spawn position for `placement = "auto"`: snap-place adjacent to the
+    /// focused window's cluster. Returns the new window's content top-left
+    /// (already shifted down by `bar` so the visual frame snaps to the
+    /// neighbor). `None` when there's no eligible focused window or no
+    /// valid placement was found — the caller should fall back to center.
+    ///
+    /// `new_window` is excluded from both the anchor search and the obstacle
+    /// list. New toplevels are initially mapped at the viewport center and
+    /// inserted at the front of `focus_history` (via `keyboard.set_focus`)
+    /// before this method runs, so without the skip we'd anchor the new
+    /// window against itself — explaining the (own_w + gap, 0) offset.
+    pub fn auto_placement_pos(
+        &self,
+        new_window: &Window,
+        new_size: Size<i32, Logical>,
+        bar: i32,
+    ) -> Option<(i32, i32)> {
+        // Anchor = whatever the keyboard was focused on at `new_toplevel`
+        // time, captured before we auto-set focus to the new surface.
+        // `None` for the entry (or absent entry) means no anchor — caller
+        // falls back to center. The snapshot was captured before
+        // `new_window`'s surface existed in keyboard focus, so it never
+        // points at the new window itself.
+        let new_surface = new_window.wl_surface()?.into_owned();
+        let focused = self.auto_anchor_snapshot.get(&new_surface)?.as_ref()?;
+        let widget = focused
+            .wl_surface()
+            .and_then(|s| driftwm::config::applied_rule(&s))
+            .is_some_and(|r| r.widget);
+        let is_fs = self.fullscreen.values().any(|fs| &fs.window == focused);
+        if widget || is_fs {
+            return None;
+        }
+
+        // Only anchor to focused if it's visibly the window the user is
+        // working with right now (≥50% of it inside the viewport). Same
+        // threshold as `CenterNearest`. When the user has panned away
+        // (or zoomed off the window), they intend to start a fresh
+        // cluster — caller falls back to center placement.
+        {
+            let f_loc = self.space.element_location(focused)?;
+            let f_size = focused.geometry().size;
+            let viewport_size = self.get_viewport_size();
+            let camera = self.camera();
+            let zoom = self.zoom();
+            let visible = driftwm::canvas::visible_fraction(
+                f_loc,
+                f_size,
+                camera,
+                viewport_size,
+                zoom,
+            );
+            if visible < 0.5 {
+                return None;
+            }
+        }
+
+        // Widgets (xdg-toplevel and canvas layer-shell) are visually below
+        // windows like wallpaper — auto placement ignores them entirely,
+        // neither as anchors nor as obstacles. New windows are free to
+        // land on top, same as on the canvas background.
+        let mut rects: Vec<crate::auto_placement::Rect> = Vec::new();
+        let mut eligible: HashSet<usize> = HashSet::new();
+        let mut focused_idx: Option<usize> = None;
+        for w in self.space.elements() {
+            if w == new_window {
+                continue;
+            }
+            let widget = w
+                .wl_surface()
+                .and_then(|s| driftwm::config::applied_rule(&s))
+                .is_some_and(|r| r.widget);
+            let is_fs = self.fullscreen.values().any(|fs| &fs.window == w);
+            if widget || is_fs {
+                continue;
+            }
+            let Some(loc) = self.space.element_location(w) else {
+                continue;
+            };
+            let size = w.geometry().size;
+            let b = self.window_ssd_bar(w);
+            let idx = rects.len();
+            rects.push(crate::auto_placement::Rect {
+                x: loc.x as f64,
+                y: (loc.y - b) as f64,
+                w: size.w as f64,
+                h: (size.h + b) as f64,
+            });
+            eligible.insert(idx);
+            if w == focused {
+                focused_idx = Some(idx);
+            }
+        }
+        let focused_idx = focused_idx?;
+
+        let new_w_f = new_size.w as f64;
+        let new_h_f = (new_size.h + bar) as f64;
+
+        let camera = self.camera();
+        let zoom = self.zoom();
+        let vc_screen = self.usable_center_screen();
+        let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
+
+        let pos = crate::auto_placement::place_auto(
+            &rects,
+            focused_idx,
+            &eligible,
+            new_w_f,
+            new_h_f,
+            vc,
+            self.config.snap_gap,
+        )?;
+
+        // place_auto returns frame top-left (above the SSD title bar).
+        // Convert to content top-left by shifting Y down by bar.
+        Some((pos.0.round() as i32, pos.1.round() as i32 + bar))
     }
 
     /// Offset a spawn position so it doesn't overlap an existing window.

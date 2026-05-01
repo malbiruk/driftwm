@@ -1,3 +1,4 @@
+mod auto_placement;
 mod backend;
 mod cluster;
 mod decorations;

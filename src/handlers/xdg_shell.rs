@@ -47,6 +47,19 @@ impl XdgShellHandler for DriftWm {
             })
             .unwrap_or((0, 0));
 
+        // Snapshot the keyboard's current focus *before* we override it —
+        // `auto_placement_pos` reads this to anchor against whatever the
+        // user was working with. `None` here means the user explicitly
+        // had no focused window (e.g. clicked empty canvas), so auto
+        // placement falls back to center instead of digging up the
+        // previous focus_history entry.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        let prev_focus_window = keyboard
+            .current_focus()
+            .and_then(|t| self.window_for_surface(&t.0));
+        self.auto_anchor_snapshot
+            .insert(wl_surface.clone(), prev_focus_window);
+
         // Initial configure is deferred to ensure_initial_configure in
         // compositor.rs first-commit handler so rule-resolved state (size,
         // decoration_mode, tiled) can be batched into a single configure.
@@ -57,7 +70,6 @@ impl XdgShellHandler for DriftWm {
         self.space.raise_element(&window, true);
         self.enforce_below_windows();
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        let keyboard = self.seat.get_keyboard().unwrap();
         keyboard.set_focus(self, Some(FocusTarget(wl_surface.clone())), serial);
         self.pending_center.insert(wl_surface);
     }

@@ -49,6 +49,16 @@ impl CompositorHandler for DriftWm {
         self.decorations.remove(&id);
         self.pending_ssd.remove(&id);
         self.pending_recenter.remove(&id);
+        self.auto_anchor_snapshot.remove(surface);
+        // Also drop any snapshot entries that pointed at the destroyed
+        // surface as their anchor. Keep `None`-anchor entries (those
+        // mean "user explicitly had no focus" — unrelated to this
+        // destruction). Compare borrowed surfaces directly. Drop entries
+        // whose anchor window has lost its wl_surface (unusable anyway).
+        self.auto_anchor_snapshot.retain(|_, anchor| match anchor.as_ref() {
+            None => true,
+            Some(w) => w.wl_surface().is_some_and(|s| &*s != surface),
+        });
         self.render.blur_cache.remove(&id);
         self.render.shadow_cache.remove(&id);
         // lock_surfaces is keyed by output, not surface — sweep values.
@@ -330,7 +340,16 @@ impl CompositorHandler for DriftWm {
                                 None
                             };
                             placed_at_cursor = cursor_pos.is_some();
-                            let placed = cursor_pos.unwrap_or_else(|| {
+                            let auto_pos = if cursor_pos.is_none()
+                                && matches!(
+                                    self.config.window_placement,
+                                    driftwm::config::WindowPlacement::Auto
+                                ) {
+                                    self.auto_placement_pos(&window, geo.size, bar_px)
+                                } else {
+                                    None
+                                };
+                            let placed = cursor_pos.or(auto_pos).unwrap_or_else(|| {
                                 let output_geo = self
                                     .active_output()
                                     .and_then(|o| self.space.output_geometry(&o));
@@ -461,6 +480,9 @@ impl CompositorHandler for DriftWm {
                                 smithay::input::pointer::CursorImageStatus::default_named();
                         }
                         self.pending_size.remove(&root);
+                        // One-shot: snapshot is only valid for the first
+                        // placement; later commits use the now-mapped state.
+                        self.auto_anchor_snapshot.remove(&root);
                     } else {
                         // No size yet — retry next commit
                         self.pending_center.insert(root.clone());

@@ -13,7 +13,13 @@
 # Where new windows spawn when no window rule positions them:
 #   "center" (default) — viewport center; camera animates to the new window.
 #   "cursor"           — centered on the cursor (clamped to the active output's
-#                        usable area); camera stays put.
+#                        usable area); camera stays put unless zoomed out and
+#                        zoom.reset_on_new_window is true.
+#   "auto"             — snap-place adjacent to the focused window's cluster:
+#                        try focused's edges (clockwise from the one nearest
+#                        the viewport center), then BFS to neighbors. Falls
+#                        back to "center" when no focused window or no valid
+#                        placement was found.
 # window_placement = "center"
 
 # Commands to run at startup (after WAYLAND_DISPLAY is set).
