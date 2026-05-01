@@ -62,6 +62,7 @@ pub(super) struct TrackpadConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
     pub click_method: Option<String>,
+    pub disable_while_typing: Option<bool>,
 }
 
 #[derive(Deserialize, Default)]

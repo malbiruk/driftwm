@@ -31,13 +31,14 @@ impl DriftWm {
     fn configure_trackpad(&self, device: &mut smithay::reexports::input::Device) {
         let cfg = &self.config.trackpad;
         tracing::info!(
-            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, profile={:?}, click_method={:?})",
+            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, profile={:?}, click_method={:?}, dwt={})",
             device.name(),
             cfg.tap_to_click,
             cfg.natural_scroll,
             cfg.accel_speed,
             cfg.accel_profile,
             cfg.click_method,
+            cfg.disable_while_typing,
         );
 
         if let Err(e) = device.config_tap_set_enabled(cfg.tap_to_click) {
@@ -45,6 +46,11 @@ impl DriftWm {
         }
         if let Err(e) = device.config_tap_set_drag_enabled(cfg.tap_and_drag) {
             tracing::warn!("Failed to set tap_and_drag: {e:?}");
+        }
+        if device.config_dwt_is_available()
+            && let Err(e) = device.config_dwt_set_enabled(cfg.disable_while_typing)
+        {
+            tracing::warn!("Failed to set disable_while_typing: {e:?}");
         }
         if let Err(e) = device.config_scroll_set_natural_scroll_enabled(cfg.natural_scroll) {
             tracing::warn!("Failed to set natural_scroll: {e:?}");

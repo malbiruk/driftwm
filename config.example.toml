@@ -53,6 +53,7 @@
 # accel_speed = 0.0           # pointer acceleration (-1.0 to 1.0)
 # accel_profile = "adaptive"  # "flat" or "adaptive"
 # click_method = "none"       # none = device default; clickfinger = finger count (1=left, 2=right, 3=middle); button_areas = position on trackpad
+# disable_while_typing = true  # ignore trackpad input shortly after a key press (palm rejection)
 
 [input.mouse]
 # accel_speed = 0.0           # pointer acceleration (-1.0 to 1.0)

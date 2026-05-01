@@ -346,6 +346,7 @@ pub struct TrackpadSettings {
     pub accel_speed: f64,
     pub accel_profile: AccelProfile,
     pub click_method: Option<String>,
+    pub disable_while_typing: bool,
 }
 
 impl Default for TrackpadSettings {
@@ -357,6 +358,7 @@ impl Default for TrackpadSettings {
             accel_speed: 0.0,
             accel_profile: AccelProfile::Adaptive,
             click_method: None,
+            disable_while_typing: true,
         }
     }
 }

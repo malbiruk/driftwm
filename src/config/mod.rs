@@ -382,6 +382,7 @@ impl Config {
                 accel_speed: t.accel_speed.unwrap_or(0.0).clamp(-1.0, 1.0),
                 accel_profile,
                 click_method: t.click_method.clone(),
+                disable_while_typing: t.disable_while_typing.unwrap_or(true),
             }
         };
 

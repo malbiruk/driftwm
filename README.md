@@ -171,12 +171,10 @@ window-search script that lets you search and jump to any open window.
 
 ### Everything else
 
-- X11 apps via [xwayland-satellite](https://github.com/Supreeeme/xwayland-satellite) (Steam, Wine, JetBrains, etc. — requires `xwayland-satellite` >= 0.7 in `$PATH`)
-- Session lock (swaylock), idle notify (swayidle/hypridle)
-- Screencasting (OBS, Firefox, Discord — requires `xdg-desktop-portal` + `xdg-desktop-portal-wlr`)
-- Screenshots (grim + slurp)
+- New window placement: in viewport center (default), under cursor, or snapped adjacent to the focused window's cluster
 - Click-to-focus (default) or focus-follows-mouse (sloppy focus)
-- All bindings (keyboard, mouse, gesture) fully configurable via TOML
+- Session lock (swaylock), idle notify (swayidle/hypridle)
+- Screen capture: screencasting (OBS, Firefox, Discord — requires `xdg-desktop-portal` + `xdg-desktop-portal-wlr`) and screenshots (grim + slurp)
 - 30+ Wayland protocols
 
 ## Install
