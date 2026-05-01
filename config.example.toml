@@ -10,6 +10,12 @@
 # Moving to empty canvas keeps focus; click empty canvas to unfocus.
 # focus_follows_mouse = false
 
+# Where new windows spawn when no window rule positions them:
+#   "center" (default) — viewport center; camera animates to the new window.
+#   "cursor"           — centered on the cursor (clamped to the active output's
+#                        usable area); camera stays put.
+# window_placement = "center"
+
 # Commands to run at startup (after WAYLAND_DISPLAY is set).
 # Each entry is passed to sh -c, so full shell syntax works (pipes, &&, env vars).
 # autostart = []

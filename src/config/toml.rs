@@ -24,6 +24,8 @@ pub(super) struct ConfigFile {
     pub gestures: GestureFileConfig,
     pub env: HashMap<String, String>,
     pub xwayland: XwaylandConfig,
+    /// Placement mode for newly mapped windows: `"center"` (default) or `"cursor"`.
+    pub window_placement: Option<String>,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
 }

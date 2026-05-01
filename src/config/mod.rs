@@ -15,9 +15,9 @@ use std::collections::HashMap;
 
 use smithay::backend::input::AxisSource;
 use smithay::input::keyboard::{Keysym, ModifiersState};
-use smithay::utils::{Logical, Point};
 #[cfg(test)]
 use smithay::utils::Transform;
+use smithay::utils::{Logical, Point};
 
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
 use parse_helpers::{
@@ -95,6 +95,7 @@ pub struct Config {
     pub window_rules: Vec<WindowRule>,
     pub xwayland_enabled: bool,
     pub xwayland_path: String,
+    pub window_placement: WindowPlacement,
     pub env: HashMap<String, String>,
     pub output_configs: Vec<OutputConfig>,
     bindings: HashMap<KeyCombo, Action>,
@@ -254,6 +255,15 @@ impl Config {
             Some(other) => {
                 tracing::warn!("Unknown cycle_modifier '{other}', using alt");
                 CycleModifier::Alt
+            }
+        };
+
+        let window_placement = match raw.window_placement.as_deref() {
+            Some("cursor") => WindowPlacement::Cursor,
+            Some("center") | None => WindowPlacement::Center,
+            Some(other) => {
+                tracing::warn!("Unknown window_placement '{other}', using 'center'");
+                WindowPlacement::Center
             }
         };
 
@@ -511,6 +521,7 @@ impl Config {
             window_rules,
             xwayland_enabled: raw.xwayland.enabled,
             xwayland_path: expand_tilde(&raw.xwayland.path),
+            window_placement,
             output_configs,
             bindings,
             mouse: mouse_bindings,
@@ -552,16 +563,12 @@ impl Config {
     /// Rules are applied in config order; later rules override earlier ones for
     /// scalar fields (decoration, opacity, position, size). Boolean flags
     /// (widget, blur, pass_keys) are sticky-on.
-    pub fn resolve_window_rules(
-        &self,
-        app_id: &str,
-        title: &str,
-    ) -> Option<AppliedWindowRule> {
+    pub fn resolve_window_rules(&self, app_id: &str, title: &str) -> Option<AppliedWindowRule> {
         let mut result: Option<AppliedWindowRule> = None;
         for rule in &self.window_rules {
             if rule.matches(app_id, title) {
                 match &mut result {
-                    None    => result = Some(AppliedWindowRule::from(rule)),
+                    None => result = Some(AppliedWindowRule::from(rule)),
                     Some(r) => r.merge_from(rule),
                 }
             }

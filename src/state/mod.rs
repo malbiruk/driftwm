@@ -924,6 +924,47 @@ impl DriftWm {
         )))
     }
 
+    /// Spawn position for `placement = "cursor"`: center the visual frame
+    /// (titlebar + content) on the cursor, clamped to the active output's
+    /// usable canvas rect so the new window is fully visible without panning.
+    /// `bar` is the SSD title-bar height (0 for CSD/borderless).
+    /// Returns `None` if there is no active output.
+    pub fn cursor_placement_pos(
+        &self,
+        window_size: Size<i32, Logical>,
+        bar: i32,
+    ) -> Option<(i32, i32)> {
+        self.active_output()?;
+
+        let pointer = self.seat.get_pointer()?;
+        let cursor = pointer.current_location();
+
+        // Active output's usable area is screen-local; convert to canvas coords.
+        let usable = self.get_usable_area();
+        let zoom = self.zoom();
+        let camera = self.camera();
+        let cx_min = camera.x + usable.loc.x as f64 / zoom;
+        let cy_min = camera.y + usable.loc.y as f64 / zoom;
+        let cx_max = camera.x + (usable.loc.x + usable.size.w) as f64 / zoom;
+        let cy_max = camera.y + (usable.loc.y + usable.size.h) as f64 / zoom;
+
+        // Target: visual frame center on cursor. Frame spans [loc.y - bar, loc.y + h],
+        // so frame center = loc.y + (h - bar)/2  →  loc.y = cursor.y - h/2 + bar/2.
+        let bar_f = bar as f64;
+        let raw_x = cursor.x - window_size.w as f64 / 2.0;
+        let raw_y = cursor.y - window_size.h as f64 / 2.0 + bar_f / 2.0;
+
+        // Clamp so the frame stays fully inside the usable canvas rect.
+        // For oversized windows, .max() keeps the upper bound >= lower bound
+        // (the top sticks at the usable edge; the bottom overflows).
+        let max_x = (cx_max - window_size.w as f64).max(cx_min);
+        let max_y = (cy_max - window_size.h as f64).max(cy_min + bar_f);
+        let x = raw_x.clamp(cx_min, max_x);
+        let y = raw_y.clamp(cy_min + bar_f, max_y);
+
+        Some((x.round() as i32, y.round() as i32))
+    }
+
     /// Offset a spawn position so it doesn't overlap an existing window.
     /// Walks in diagonal steps (title bar height) until no window is within a few pixels.
     pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {

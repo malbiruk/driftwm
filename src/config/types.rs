@@ -111,6 +111,17 @@ pub enum ModKey {
     Super,
 }
 
+/// How a new window is placed on the canvas when no window rule positions it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum WindowPlacement {
+    /// Center on the active output's viewport (and trigger navigate-to).
+    #[default]
+    Center,
+    /// Center on the cursor, clamped to the active output's usable canvas rect.
+    /// Skips the auto-navigate so the camera stays where the user pointed.
+    Cursor,
+}
+
 impl ModKey {
     /// Base modifier pattern with only the WM mod key set.
     pub(crate) fn base(self) -> Modifiers {
@@ -419,7 +430,7 @@ impl Pattern {
     pub fn matches(&self, value: &str) -> bool {
         match self {
             Pattern::Glob(pat) => glob_matches(pat, value),
-            Pattern::Regex(re)  => re.is_match(value),
+            Pattern::Regex(re) => re.is_match(value),
         }
     }
 }
@@ -477,7 +488,7 @@ impl PassKeys {
     pub fn allows_raw(&self, modifiers: &ModifiersState, sym: Keysym) -> bool {
         match self {
             PassKeys::None => false,
-            PassKeys::All  => true,
+            PassKeys::All => true,
             PassKeys::Only(combos) => {
                 let mut current = KeyCombo {
                     modifiers: Modifiers::from_state(modifiers),
@@ -493,10 +504,10 @@ impl PassKeys {
     /// `All` is sticky-on; `Only` lists are unioned; `None` is a no-op.
     pub fn merge_from(&mut self, other: &PassKeys) {
         match (&*self, other) {
-            (_, PassKeys::None)                              => {}  // other adds nothing
-            (PassKeys::All, _)                               => {}  // already maximally permissive
-            (_, PassKeys::All)                               => *self = PassKeys::All,
-            (PassKeys::None, PassKeys::Only(v))              => *self = PassKeys::Only(v.clone()),
+            (_, PassKeys::None) => {} // other adds nothing
+            (PassKeys::All, _) => {}  // already maximally permissive
+            (_, PassKeys::All) => *self = PassKeys::All,
+            (PassKeys::None, PassKeys::Only(v)) => *self = PassKeys::Only(v.clone()),
             (PassKeys::Only(existing), PassKeys::Only(extra)) => {
                 let mut merged = existing.clone();
                 for c in extra {
@@ -571,28 +582,38 @@ impl AppliedWindowRule {
     /// `pass_keys`: `All` is sticky-on; `Only` lists are unioned (see `PassKeys::merge_from`).
     /// Scalar fields (decoration, opacity, position, size) use last-wins.
     pub fn merge_from(&mut self, rule: &WindowRule) {
-        if rule.widget { self.widget = true; }
-        if rule.blur   { self.blur   = true; }
+        if rule.widget {
+            self.widget = true;
+        }
+        if rule.blur {
+            self.blur = true;
+        }
         self.pass_keys.merge_from(&rule.pass_keys);
         if rule.decoration.is_some() {
             self.decoration = rule.decoration.clone();
         }
-        if let Some(op)  = rule.opacity  { self.opacity   = Some(op);  }
-        if let Some(pos) = rule.position { self.position  = Some(pos); }
-        if let Some(sz)  = rule.size     { self.size       = Some(sz);  }
+        if let Some(op) = rule.opacity {
+            self.opacity = Some(op);
+        }
+        if let Some(pos) = rule.position {
+            self.position = Some(pos);
+        }
+        if let Some(sz) = rule.size {
+            self.size = Some(sz);
+        }
     }
 }
 
 impl From<&WindowRule> for AppliedWindowRule {
     fn from(rule: &WindowRule) -> Self {
         Self {
-            widget:     rule.widget,
+            widget: rule.widget,
             decoration: rule.decoration.clone(),
-            blur:       rule.blur,
-            opacity:    rule.opacity,
-            pass_keys:  rule.pass_keys.clone(),
-            position:   rule.position,
-            size:       rule.size,
+            blur: rule.blur,
+            opacity: rule.opacity,
+            pass_keys: rule.pass_keys.clone(),
+            position: rule.position,
+            size: rule.size,
         }
     }
 }
