@@ -1,6 +1,4 @@
-mod auto_placement;
 mod backend;
-mod cluster;
 mod decorations;
 mod focus;
 mod grabs;

@@ -2,13 +2,14 @@ use smithay::{
     backend::renderer::{
         element::{
             Element, Id, Kind, RenderElement, UnderlyingStorage,
-            memory::MemoryRenderBufferRenderElement,
-            render_elements,
-            surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement,
+            memory::MemoryRenderBufferRenderElement, render_elements,
+            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
             utils::RescaleRenderElement,
         },
-        gles::{GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformValue, element::PixelShaderElement},
+        gles::{
+            GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformValue,
+            element::PixelShaderElement,
+        },
         utils::{CommitCounter, DamageSet, OpaqueRegions},
     },
     utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
@@ -56,7 +57,10 @@ impl TileShaderElement {
             area,
             opaque_regions: opaque_regions.unwrap_or_default(),
             alpha,
-            additional_uniforms: additional_uniforms.into_iter().map(|u| u.into_owned()).collect(),
+            additional_uniforms: additional_uniforms
+                .into_iter()
+                .map(|u| u.into_owned())
+                .collect(),
             kind,
         }
     }
@@ -75,14 +79,21 @@ impl TileShaderElement {
     }
 
     pub fn update_uniforms(&mut self, additional_uniforms: Vec<Uniform<'_>>) {
-        self.additional_uniforms = additional_uniforms.into_iter().map(|u| u.into_owned()).collect();
+        self.additional_uniforms = additional_uniforms
+            .into_iter()
+            .map(|u| u.into_owned())
+            .collect();
         self.commit_counter.increment();
     }
 }
 
 impl Element for TileShaderElement {
-    fn id(&self) -> &Id { &self.id }
-    fn current_commit(&self) -> CommitCounter { self.commit_counter }
+    fn id(&self) -> &Id {
+        &self.id
+    }
+    fn current_commit(&self) -> CommitCounter {
+        self.commit_counter
+    }
 
     fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
         Rectangle::from_size((self.tex_w as f64, self.tex_h as f64).into())
@@ -99,8 +110,12 @@ impl Element for TileShaderElement {
             .collect()
     }
 
-    fn alpha(&self) -> f32 { self.alpha }
-    fn kind(&self) -> Kind { self.kind }
+    fn alpha(&self) -> f32 {
+        self.alpha
+    }
+    fn kind(&self) -> Kind {
+        self.kind
+    }
 }
 
 impl RenderElement<GlesRenderer> for TileShaderElement {
@@ -264,7 +279,8 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for PixelSnapRe
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), GlesError> {
-        self.element.draw(frame, src, dst, damage, opaque_regions, cache)
+        self.element
+            .draw(frame, src, dst, damage, opaque_regions, cache)
     }
 
     #[inline]
@@ -308,24 +324,16 @@ render_elements! {
 /// even when the client renders content into a subsurface (Firefox, apps
 /// with HW-accelerated video/GL).
 ///
-/// Port of niri's `ClippedSurfaceRenderElement`; simplified for driftwm's
-/// single-radius decoration model (per-corner radii still supported so SSD
-/// can zero the top corners under the title bar). Matrix math is niri's,
-/// including the viewporter `src` correction. Non-`Normal` surface
-/// transforms fall back to passthrough (no clip applied) — no driftwm-
-/// supported client currently sets one, but silently clipping a rotated
-/// buffer would be visibly wrong.
-///
 /// Storage:
 /// - `geometry` is in screen-logical pre-zoom coords (output-relative),
 ///   same coord space as the element location passed at build time.
 /// - `corner_radius` is `(top_left, top_right, bottom_right, bottom_left)`
 ///   in logical pixels (matches the `geo_size` uniform units; the shader
-///   multiplies both against `niri_scale` for the AA band).
+///   multiplies both against `aa_scale` for the AA band).
 /// - `output_scale` feeds `inner.geometry(scale)` at draw time to get the
 ///   element's pre-zoom physical rect in the same space as `geometry`
 ///   converted via `to_physical_precise_round(output_scale)`.
-/// - `niri_scale` is `output_scale * zoom` — keeps the AA band ~1 output
+/// - `aa_scale` is `output_scale * zoom` — keeps the AA band ~1 output
 ///   pixel wide regardless of canvas zoom.
 pub struct RoundedCornerElement {
     inner: WaylandSurfaceRenderElement<GlesRenderer>,
@@ -333,7 +341,7 @@ pub struct RoundedCornerElement {
     geometry: Rectangle<f64, Logical>,
     corner_radius: [f32; 4],
     output_scale: f64,
-    niri_scale: f32,
+    aa_scale: f32,
 }
 
 impl RoundedCornerElement {
@@ -343,9 +351,16 @@ impl RoundedCornerElement {
         geometry: Rectangle<f64, Logical>,
         corner_radius: [f32; 4],
         output_scale: f64,
-        niri_scale: f32,
+        aa_scale: f32,
     ) -> Self {
-        Self { inner, shader, geometry, corner_radius, output_scale, niri_scale }
+        Self {
+            inner,
+            shader,
+            geometry,
+            corner_radius,
+            output_scale,
+            aa_scale,
+        }
     }
 
     fn has_rounding(&self) -> bool {
@@ -359,7 +374,11 @@ impl RoundedCornerElement {
     fn corner_cutouts(&self, scale: Scale<f64>) -> [Rectangle<i32, Physical>; 4] {
         let geo: Rectangle<i32, Physical> = self.geometry.to_physical_precise_round(scale);
         let r_px = |r: f32| {
-            if r <= 0.0 { 0 } else { (r as f64 * scale.x).ceil() as i32 + 1 }
+            if r <= 0.0 {
+                0
+            } else {
+                (r as f64 * scale.x).ceil() as i32 + 1
+            }
         };
         let (w, h) = (geo.size.w, geo.size.h);
         let rtl = r_px(self.corner_radius[0]);
@@ -378,7 +397,7 @@ impl RoundedCornerElement {
         // Matrix uses physical units throughout — the ratios cancel when
         // normalizing to geo-space, so units don't matter as long as both
         // elem_geo and geo are the same. geo_size/corner_radius uniforms
-        // must be in logical pixels to pair with `niri_scale = output_scale
+        // must be in logical pixels to pair with `aa_scale = output_scale
         // * zoom`, so the shader's AA band lands at one output pixel.
         let scale = Scale::from(self.output_scale);
         let elem_geo = self.inner.geometry(scale);
@@ -413,19 +432,12 @@ impl RoundedCornerElement {
         let ty = -(src_y / src_h) * (elem_h / geo_h) + (elem_y - geo_y) / geo_h;
 
         // Column-major 3x3: cols stored back-to-back.
-        let input_to_geo: [f32; 9] = [
-            sx, 0.0, 0.0,
-            0.0, sy, 0.0,
-            tx, ty, 1.0,
-        ];
+        let input_to_geo: [f32; 9] = [sx, 0.0, 0.0, 0.0, sy, 0.0, tx, ty, 1.0];
 
-        let geo_size_logical = (
-            self.geometry.size.w as f32,
-            self.geometry.size.h as f32,
-        );
+        let geo_size_logical = (self.geometry.size.w as f32, self.geometry.size.h as f32);
 
         vec![
-            Uniform::new("niri_scale", self.niri_scale),
+            Uniform::new("aa_scale", self.aa_scale),
             Uniform::new("geo_size", geo_size_logical),
             Uniform::new(
                 "corner_radius",
@@ -448,12 +460,24 @@ impl RoundedCornerElement {
 }
 
 impl Element for RoundedCornerElement {
-    fn id(&self) -> &Id { self.inner.id() }
-    fn current_commit(&self) -> CommitCounter { self.inner.current_commit() }
-    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> { self.inner.location(scale) }
-    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> { self.inner.src() }
-    fn transform(&self) -> Transform { self.inner.transform() }
-    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> { self.inner.geometry(scale) }
+    fn id(&self) -> &Id {
+        self.inner.id()
+    }
+    fn current_commit(&self) -> CommitCounter {
+        self.inner.current_commit()
+    }
+    fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
+        self.inner.location(scale)
+    }
+    fn src(&self) -> Rectangle<f64, smithay::utils::Buffer> {
+        self.inner.src()
+    }
+    fn transform(&self) -> Transform {
+        self.inner.transform()
+    }
+    fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
+        self.inner.geometry(scale)
+    }
 
     fn damage_since(
         &self,
@@ -493,15 +517,22 @@ impl Element for RoundedCornerElement {
         let corners: Vec<Rectangle<i32, Physical>> = self
             .corner_cutouts(scale)
             .into_iter()
-            .map(|mut r| { r.loc += offset; r })
+            .map(|mut r| {
+                r.loc += offset;
+                r
+            })
             .collect();
         Rectangle::subtract_rects_many(clipped, corners)
             .into_iter()
             .collect()
     }
 
-    fn alpha(&self) -> f32 { self.inner.alpha() }
-    fn kind(&self) -> Kind { self.inner.kind() }
+    fn alpha(&self) -> f32 {
+        self.inner.alpha()
+    }
+    fn kind(&self) -> Kind {
+        self.inner.kind()
+    }
 }
 
 impl RenderElement<GlesRenderer> for RoundedCornerElement {
@@ -518,20 +549,22 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
         // transforms. For rotated/flipped surfaces we'd clip against the
         // wrong edges — fall back to the default tex program so at least
         // the content is visible. No driftwm-supported client sets this
-        // today; if one starts to, port niri's transform matrix chain.
+        // today; if one starts to, extend `compute_uniforms` with a
+        // transform-aware UV→geo matrix.
         if self.inner.transform() != Transform::Normal {
-            return self.inner.draw(frame, src, dst, damage, opaque_regions, user_data);
+            return self
+                .inner
+                .draw(frame, src, dst, damage, opaque_regions, user_data);
         }
         frame.override_default_tex_program(self.shader.clone(), self.compute_uniforms());
-        let result = self.inner.draw(frame, src, dst, damage, opaque_regions, user_data);
+        let result = self
+            .inner
+            .draw(frame, src, dst, damage, opaque_regions, user_data);
         frame.clear_tex_program_override();
         result
     }
 
-    fn underlying_storage(
-        &self,
-        renderer: &mut GlesRenderer,
-    ) -> Option<UnderlyingStorage<'_>> {
+    fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
         self.inner.underlying_storage(renderer)
     }
 }

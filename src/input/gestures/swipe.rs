@@ -26,7 +26,7 @@ use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{
     Action, BindingContext, ContinuousAction, GestureConfigEntry, GestureTrigger, ThresholdAction,
 };
-use driftwm::snap::{SnapState, snap_resize_edges};
+use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, has_bottom, has_left, has_right, has_top};
 use crate::input::pointer::{edges_from_position, resize_cursor};

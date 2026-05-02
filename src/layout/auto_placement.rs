@@ -19,8 +19,8 @@
 
 use std::collections::{HashSet, VecDeque};
 
-use crate::cluster::adjacent_side;
-use driftwm::snap::SnapRect;
+use crate::layout::cluster::adjacent_side;
+use crate::layout::snap::SnapRect;
 
 /// Below this `|vc - m.center|` threshold, the viewport gives no clear
 /// directional bias — treat it as "centered on M". Above the threshold,
@@ -228,8 +228,8 @@ fn edge_order_for(
             continue;
         }
         match adjacent_side(&m_snap, &w.to_snap(), gap) {
-            Some(crate::cluster::Side::Left | crate::cluster::Side::Right) => x_occupied = true,
-            Some(crate::cluster::Side::Top | crate::cluster::Side::Bottom) => y_occupied = true,
+            Some(crate::layout::cluster::Side::Left | crate::layout::cluster::Side::Right) => x_occupied = true,
+            Some(crate::layout::cluster::Side::Top | crate::layout::cluster::Side::Bottom) => y_occupied = true,
             None => (),
         }
     }

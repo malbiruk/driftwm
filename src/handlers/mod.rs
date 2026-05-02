@@ -15,16 +15,17 @@ use smithay::{
     delegate_single_pixel_buffer, delegate_text_input_manager, delegate_viewporter,
     delegate_virtual_keyboard_manager, delegate_xdg_activation,
     input::{
-        Seat, SeatHandler, SeatState, keyboard,
+        Seat, SeatHandler, SeatState,
         dnd::{self, DnDGrab},
+        keyboard,
         pointer::{CursorIcon, CursorImageStatus, Focus, PointerHandle},
     },
-    utils::Serial,
     reexports::input::DeviceCapability as LibinputCapability,
     reexports::wayland_server::{
         Resource,
         protocol::{wl_output::WlOutput, wl_surface::WlSurface},
     },
+    utils::Serial,
     utils::{Logical, Point},
     wayland::{
         dmabuf::{DmabufGlobal, DmabufHandler, DmabufState, ImportNotifier},
@@ -40,8 +41,7 @@ use smithay::{
         selection::{
             SelectionHandler,
             data_device::{
-                DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler,
-                set_data_device_focus,
+                DataDeviceHandler, DataDeviceState, WaylandDndGrabHandler, set_data_device_focus,
             },
             primary_selection::{
                 PrimarySelectionHandler, PrimarySelectionState, set_primary_focus,
@@ -136,8 +136,7 @@ impl WaylandDndGrabHandler for DriftWm {
             dnd::GrabType::Pointer => {
                 let pointer = seat.get_pointer().unwrap();
                 let start_data = pointer.grab_start_data().unwrap();
-                let grab =
-                    DnDGrab::new_pointer(&self.display_handle, start_data, source, seat);
+                let grab = DnDGrab::new_pointer(&self.display_handle, start_data, source, seat);
                 pointer.set_grab(self, grab, serial, Focus::Keep);
             }
             dnd::GrabType::Touch => {
@@ -359,11 +358,7 @@ impl KeyboardShortcutsInhibitHandler for DriftWm {
 delegate_keyboard_shortcuts_inhibit!(DriftWm);
 
 impl SecurityContextHandler for DriftWm {
-    fn context_created(
-        &mut self,
-        source: SecurityContextListenerSource,
-        context: SecurityContext,
-    ) {
+    fn context_created(&mut self, source: SecurityContextListenerSource, context: SecurityContext) {
         let result = self
             .loop_handle
             .insert_source(source, move |client, _, state| {
@@ -454,7 +449,11 @@ use smithay::delegate_xdg_dialog;
 use smithay::wayland::shell::xdg::dialog::XdgDialogHandler;
 
 impl XdgDialogHandler for DriftWm {
-    fn dialog_hint_changed(&mut self, toplevel: ToplevelSurface, hint: smithay::wayland::shell::xdg::dialog::ToplevelDialogHint) {
+    fn dialog_hint_changed(
+        &mut self,
+        toplevel: ToplevelSurface,
+        hint: smithay::wayland::shell::xdg::dialog::ToplevelDialogHint,
+    ) {
         if hint == smithay::wayland::shell::xdg::dialog::ToplevelDialogHint::Modal {
             // Redirect focus from parent to this modal dialog
             let wl_surface = toplevel.wl_surface().clone();
@@ -496,7 +495,7 @@ impl XdgDecorationHandler for DriftWm {
     ) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
-        // Always honor the client's wire-mode request — niri does the same
+        // Always honor the client's wire-mode request
         // (SDL2 has a bug where overriding leaves windows hidden).
         toplevel.with_pending_state(|state| {
             state.decoration_mode = Some(mode);
@@ -512,7 +511,10 @@ impl XdgDecorationHandler for DriftWm {
         //     asked for SSD (Alacritty / no-CSD apps need *some* chrome).
         let wl_surface = toplevel.wl_surface().clone();
         let applied = driftwm::config::applied_rule(&wl_surface);
-        let rule_explicit = applied.as_ref().and_then(|a| a.decoration.as_ref()).cloned();
+        let rule_explicit = applied
+            .as_ref()
+            .and_then(|a| a.decoration.as_ref())
+            .cloned();
         let create_titlebar = match rule_explicit {
             Some(driftwm::config::DecorationMode::Server) => true,
             Some(_) => false,

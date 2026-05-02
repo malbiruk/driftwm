@@ -1,6 +1,6 @@
 //! Graceful shutdown via SIGINT / SIGTERM / SIGHUP.
 //!
-//! The pattern (mirrors niri):
+//! The pattern:
 //! 1. `block_early()` — called very early in `main`, before any threads exist.
 //!    Uses `pthread_sigmask` to block the signals so the kernel's default
 //!    action (process termination) never fires; child threads inherit the

@@ -44,17 +44,15 @@ The `xcursor` crate's `Image::pixels_rgba` field is misleadingly named. The byte
 
 The matching DRM fourcc for that byte order is `Fourcc::Argb8888` (which smithay maps to GL `BGRA_EXT`), **not** `Fourcc::Abgr8888`. Using `Abgr8888` swaps R and B on screen — a yellow cursor renders mint-blue, a red cursor renders violet, etc.
 
-niri gets this right in `src/cursor.rs` (`MemoryRenderBuffer::from_slice(&frame.pixels_rgba, Fourcc::Argb8888, ...)`). Do the same here.
-
 ## X11 apps run through xwayland-satellite
 
 driftwm doesn't embed XWayland directly. X11 apps reach the compositor via [`xwayland-satellite`](https://github.com/Supreeeme/xwayland-satellite) (>= 0.7), which is itself a regular Wayland client that proxies X11 windows as plain xdg-toplevels. Implications:
 
 - **External binary required.** Without `xwayland-satellite` in `$PATH`, X11 apps fail to launch (no `DISPLAY` exported). driftwm logs a warning at startup and continues running. Override the path via `[xwayland] path = "..."` if needed.
-- **Eager spawn.** Satellite is spawned at compositor startup (not on-demand) and stays resident for the session. ~30MB resident overhead even if no X11 client ever runs. The on-demand `-listenfd` pattern that niri uses races with multi-layout XKB configs (`layout = "us,ru"` + `options = "grp:win_space_toggle"`) under Xwayland 24.x: the queued X11 connection on the pre-bound socket triggers Xwayland's keyboard initialization before `wl_keyboard.keymap` arrives, satellite panics. Vanilla mode avoids the race. Revisit if upstream fixes the listenfd path.
+- **Eager spawn.** Satellite is spawned at compositor startup (not on-demand) and stays resident for the session. ~30MB resident overhead even if no X11 client ever runs. The on-demand `-listenfd` pattern (compositor pre-binds the X11 socket and hands the FD to satellite on first connection) races with multi-layout XKB configs (`layout = "us,ru"` + `options = "grp:win_space_toggle"`) under Xwayland 24.x: the queued X11 connection on the pre-bound socket triggers Xwayland's keyboard initialization before `wl_keyboard.keymap` arrives, satellite panics. Vanilla mode avoids the race. Revisit if upstream fixes the listenfd path.
 - **`app_id` matches the X11 `WM_CLASS` instance** (typically lowercase). Window rules keyed on `xclass = "Steam"` no longer exist — use `app_id = "steam"` (note the lowercase).
 - **Override-redirect popups arrive as xdg-popups.** The compositor's existing popup positioning handles them; no special render path.
-- **Apps that pin windows to absolute screen coordinates** (older notification daemons, some game launchers) won't behave correctly. Run them in a nested compositor like `labwc` if needed (same recommendation as niri).
+- **Apps that pin windows to absolute screen coordinates** (older notification daemons, some game launchers) won't behave correctly. Run them in a nested compositor like `labwc` if needed.
 - **Clipboard works through standard Wayland data-device protocol.** xwayland-satellite owns selections as a normal Wayland client; the compositor doesn't bridge clipboards manually.
 - **No respawn-on-crash.** If satellite dies mid-session (rare), X11 stays dead until driftwm restart. Future enhancement.
 

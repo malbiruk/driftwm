@@ -360,7 +360,7 @@ impl XdgShellHandler for DriftWm {
             last_window_size: initial_window_size,
             output,
             last_clamped_location,
-            snap: driftwm::snap::SnapState::default(),
+            snap: driftwm::layout::snap::SnapState::default(),
             constraints,
             cluster_resize,
         };

@@ -14,7 +14,7 @@ use smithay::{
 
 use crate::state::{DriftWm, output_logical_size, output_state};
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
-use driftwm::snap::{SnapParams, SnapState, update_axis};
+use driftwm::layout::snap::{SnapParams, SnapState, update_axis};
 
 /// Which output edge is inhibited after a cross-output teleport.
 #[derive(Clone, Copy)]

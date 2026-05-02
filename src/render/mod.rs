@@ -260,7 +260,7 @@ fn push_shadow_element(
 const CORNER_CLIP_SRC: &str = include_str!("../shaders/corner_clip.glsl");
 
 pub const CORNER_CLIP_UNIFORMS: &[UniformName<'static>] = &[
-    UniformName { name: Cow::Borrowed("niri_scale"), type_: UniformType::_1f },
+    UniformName { name: Cow::Borrowed("aa_scale"), type_: UniformType::_1f },
     UniformName { name: Cow::Borrowed("geo_size"), type_: UniformType::_2f },
     UniformName { name: Cow::Borrowed("corner_radius"), type_: UniformType::_4f },
     UniformName { name: Cow::Borrowed("input_to_geo"), type_: UniformType::Matrix3x3 },
@@ -612,7 +612,7 @@ fn push_corner_clipped_elements(
     zoom: f64,
     output_scale: f64,
 ) {
-    let niri_scale = (output_scale * zoom) as f32;
+    let aa_scale = (output_scale * zoom) as f32;
     // Clamp radii so a tiny window doesn't get corners wider than half its
     // side. `max_r` is guarded against ≤0 since a degenerate window can
     // briefly have zero size and `clamp(lo, hi)` panics if `lo > hi`.
@@ -631,7 +631,7 @@ fn push_corner_clipped_elements(
                 geometry,
                 clamped,
                 output_scale,
-                niri_scale,
+                aa_scale,
             ),
             Point::<i32, Physical>::from((0, 0)),
             zoom,
@@ -738,9 +738,9 @@ pub fn compose_frame(
 
         // Split elements: toplevel + subsurfaces get corner-clipped, popups
         // don't (they can legitimately extend outside the parent's geometry —
-        // GTK menus, tooltips, autocomplete, etc). Mirrors niri/cosmic-comp;
-        // smithay's `Window::render_elements` bundles popups into one vec,
-        // which is why we can't use it directly for Wayland.
+        // GTK menus, tooltips, autocomplete, etc). smithay's
+        // `Window::render_elements` bundles popups into one vec, which is why
+        // we can't use it directly for Wayland.
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
         let (elems, popup_elems) = if let Some(toplevel) = window.toplevel() {
             let root = toplevel.wl_surface();

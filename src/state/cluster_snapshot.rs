@@ -35,9 +35,9 @@ use super::DriftWm;
 pub struct ClusterResizeMember {
     pub window: Window,
     pub initial_pos: Point<i32, Logical>,
-    pub initial_rect: driftwm::snap::SnapRect,
-    pub axis_x: Option<crate::cluster::Side>,
-    pub axis_y: Option<crate::cluster::Side>,
+    pub initial_rect: driftwm::layout::snap::SnapRect,
+    pub axis_x: Option<driftwm::layout::cluster::Side>,
+    pub axis_y: Option<driftwm::layout::cluster::Side>,
 }
 
 /// Frozen-at-grab-start cluster snapshot for `ResizeSurfaceGrab`.
@@ -60,7 +60,7 @@ pub struct ClusterResizeSnapshot {
     bonds_set: HashSet<(usize, usize)>,
     /// Primary window's rect frozen at grab start, used to compute
     /// primary-push encroachment in `resolve_cluster_shifts` phase 2.5.
-    pub primary_rect: driftwm::snap::SnapRect,
+    pub primary_rect: driftwm::layout::snap::SnapRect,
     /// Which edges are active for this resize (raw u32 bitmask: top=1,
     /// bottom=2, left=4, right=8). Combined with `primary_rect` and the
     /// current deltas, this lets `compute_shifts` reconstruct the primary's
@@ -76,7 +76,7 @@ impl ClusterResizeSnapshot {
             exclude: HashSet::new(),
             bonds: Vec::new(),
             bonds_set: HashSet::new(),
-            primary_rect: driftwm::snap::SnapRect {
+            primary_rect: driftwm::layout::snap::SnapRect {
                 x_low: 0.0,
                 x_high: 0.0,
                 y_low: 0.0,
@@ -136,13 +136,13 @@ impl ClusterResizeSnapshot {
         height_delta: i32,
         gap: f64,
     ) -> HashMap<usize, (i32, i32)> {
-        use crate::cluster::{ResizeClassification, resolve_cluster_shifts};
+        use driftwm::layout::cluster::{ResizeClassification, resolve_cluster_shifts};
         use smithay::utils::IsAlive;
 
         // Dead windows get a degenerate rect that can't produce overlap
         // in the push cascade, preventing ghost-rect collisions from a
         // member that was unmapped mid-drag.
-        const DEAD_RECT: driftwm::snap::SnapRect = driftwm::snap::SnapRect {
+        const DEAD_RECT: driftwm::layout::snap::SnapRect = driftwm::layout::snap::SnapRect {
             x_low: f64::MAX / 2.0,
             x_high: f64::MAX / 2.0,
             y_low: f64::MAX / 2.0,
@@ -199,14 +199,14 @@ impl DriftWm {
         &self,
         primary: &WlSurface,
         cluster_excludes: &HashSet<WlSurface>,
-    ) -> (Vec<driftwm::snap::SnapRect>, i32) {
+    ) -> (Vec<driftwm::layout::snap::SnapRect>, i32) {
         snap_targets_impl(&self.space, &self.decorations, primary, cluster_excludes)
     }
 
     /// Every non-widget window in the space with its `SnapRect`. Used to
     /// feed `cluster::cluster_of` at drag start. The surface is discarded —
     /// `Window` identity is what the BFS needs.
-    pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::snap::SnapRect)> {
+    pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::layout::snap::SnapRect)> {
         self.space
             .elements()
             .filter_map(|w| {
@@ -235,7 +235,7 @@ impl DriftWm {
         primary_pos: Point<i32, Logical>,
     ) -> ClusterDragSnapshot {
         let rects = self.all_windows_with_snap_rects();
-        let component = crate::cluster::cluster_of(window, &rects, self.config.snap_gap);
+        let component = driftwm::layout::cluster::cluster_of(window, &rects, self.config.snap_gap);
 
         let mut members = Vec::new();
         let mut surfaces = HashSet::new();
@@ -282,9 +282,9 @@ impl DriftWm {
         window: &Window,
         edges: xdg_toplevel::ResizeEdge,
     ) -> ClusterResizeSnapshot {
-        use crate::cluster::{Side, adjacent_side, cluster_of};
+        use driftwm::layout::cluster::{Side, adjacent_side, cluster_of};
         use crate::grabs::{has_bottom, has_left, has_right, has_top};
-        use driftwm::snap::SnapRect;
+        use driftwm::layout::snap::SnapRect;
 
         let rects = self.all_windows_with_snap_rects();
         let gap = self.config.snap_gap;
@@ -446,7 +446,7 @@ pub(crate) fn snap_targets_impl(
     >,
     primary: &WlSurface,
     cluster_excludes: &HashSet<WlSurface>,
-) -> (Vec<driftwm::snap::SnapRect>, i32) {
+) -> (Vec<driftwm::layout::snap::SnapRect>, i32) {
     let self_bar = if decorations.contains_key(&primary.id()) {
         driftwm::config::DecorationConfig::TITLE_BAR_HEIGHT
     } else {
@@ -476,7 +476,7 @@ fn window_snap_rect(
         WindowDecoration,
     >,
     w: &Window,
-) -> Option<(WlSurface, driftwm::snap::SnapRect)> {
+) -> Option<(WlSurface, driftwm::layout::snap::SnapRect)> {
     let surface = w.wl_surface()?.into_owned();
     if driftwm::config::applied_rule(&surface).is_some_and(|r| r.widget) {
         return None;
@@ -490,7 +490,7 @@ fn window_snap_rect(
     };
     Some((
         surface,
-        driftwm::snap::SnapRect {
+        driftwm::layout::snap::SnapRect {
             x_low: loc.x as f64,
             x_high: loc.x as f64 + size.w as f64,
             y_low: loc.y as f64 - bar as f64,

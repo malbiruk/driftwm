@@ -3,15 +3,16 @@
 //! Spawns `xwayland-satellite` eagerly at compositor startup so X11 apps
 //! can connect immediately.
 //!
-//! Background: niri's on-demand `-listenfd` pattern has an interop bug with
-//! Xwayland 24.x and multi-layout XKB configs (e.g. `layout = "us,ru"` +
-//! `options = "grp:win_space_toggle"`): the queued X11 connection on the
-//! pre-bound socket triggers Xwayland's keyboard initialization before the
-//! `wl_keyboard.keymap` event arrives, causing `XKB: Failed to compile keymap`
-//! and a satellite panic. Vanilla mode (satellite binds its own X11 socket
-//! on startup) avoids the race entirely. Trade-off: ~30MB resident even if no
-//! X11 client ever runs. Acceptable; if upstream fixes the listenfd path we
-//! can revisit.
+//! Background: the on-demand `-listenfd` pattern (compositor pre-binds the
+//! X11 socket and hands the FD to satellite on first X11 connection) has an
+//! interop bug with Xwayland 24.x and multi-layout XKB configs (e.g.
+//! `layout = "us,ru"` + `options = "grp:win_space_toggle"`): the queued X11
+//! connection on the pre-bound socket triggers Xwayland's keyboard
+//! initialization before the `wl_keyboard.keymap` event arrives, causing
+//! `XKB: Failed to compile keymap` and a satellite panic. Vanilla mode
+//! (satellite binds its own X11 socket on startup) avoids the race entirely.
+//! Trade-off: ~30MB resident even if no X11 client ever runs. Acceptable;
+//! if upstream fixes the listenfd path we can revisit.
 
 use std::os::unix::process::CommandExt;
 use std::process::{Child, Command, Stdio};

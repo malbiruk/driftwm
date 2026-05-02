@@ -326,7 +326,7 @@ impl DriftWm {
                     // Window's Hash/Eq are Arc pointer identity — stable despite
                     // interior mutability. Same allow as cluster_snapshot.rs.
                     #[allow(clippy::mutable_key_type)]
-                    let cluster = crate::cluster::cluster_of(
+                    let cluster = driftwm::layout::cluster::cluster_of(
                         &focused, &rects, self.config.snap_gap,
                     );
                     let members = self.space.elements()

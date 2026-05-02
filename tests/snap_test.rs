@@ -1,4 +1,4 @@
-use driftwm::snap::*;
+use driftwm::layout::snap::*;
 
 fn rect_h(x_low: f64, x_high: f64) -> SnapRect {
     SnapRect { x_low, x_high, y_low: -10000.0, y_high: 10000.0 }

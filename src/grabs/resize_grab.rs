@@ -22,7 +22,7 @@ use smithay::input::pointer::CursorImageStatus;
 
 use crate::state::{ClusterResizeSnapshot, DriftWm, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::snap::{SnapState, snap_resize_edges};
+use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
 /// Client-declared size constraints captured once at grab start.
 ///

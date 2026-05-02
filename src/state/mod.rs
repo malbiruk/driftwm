@@ -1034,7 +1034,7 @@ impl DriftWm {
         // windows like wallpaper — auto placement ignores them entirely,
         // neither as anchors nor as obstacles. New windows are free to
         // land on top, same as on the canvas background.
-        let mut rects: Vec<crate::auto_placement::Rect> = Vec::new();
+        let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
         let mut eligible: HashSet<usize> = HashSet::new();
         let mut focused_idx: Option<usize> = None;
         for w in self.space.elements() {
@@ -1055,7 +1055,7 @@ impl DriftWm {
             let size = w.geometry().size;
             let b = self.window_ssd_bar(w);
             let idx = rects.len();
-            rects.push(crate::auto_placement::Rect {
+            rects.push(driftwm::layout::auto_placement::Rect {
                 x: loc.x as f64,
                 y: (loc.y - b) as f64,
                 w: size.w as f64,
@@ -1076,7 +1076,7 @@ impl DriftWm {
         let vc_screen = self.usable_center_screen();
         let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
 
-        let pos = crate::auto_placement::place_auto(
+        let pos = driftwm::layout::auto_placement::place_auto(
             &rects,
             focused_idx,
             &eligible,

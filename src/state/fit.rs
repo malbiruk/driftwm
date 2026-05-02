@@ -29,8 +29,8 @@ pub struct RestoreSize(pub Size<i32, Logical>);
 /// bar — used by `fit_window_snapped` / `unfit_window_snapped` to compute
 /// exact per-edge deltas from the primary's pre-op and post-op geometry
 /// without having to round-trip through `all_windows_with_snap_rects`.
-fn snap_rect_at(loc: Point<i32, Logical>, size: Size<i32, Logical>, bar: i32) -> driftwm::snap::SnapRect {
-    driftwm::snap::SnapRect {
+fn snap_rect_at(loc: Point<i32, Logical>, size: Size<i32, Logical>, bar: i32) -> driftwm::layout::snap::SnapRect {
+    driftwm::layout::snap::SnapRect {
         x_low: loc.x as f64,
         x_high: (loc.x + size.w) as f64,
         y_low: (loc.y - bar) as f64,
@@ -232,8 +232,8 @@ impl DriftWm {
     fn shift_cluster_around_primary(
         &mut self,
         primary: &Window,
-        old_rect: driftwm::snap::SnapRect,
-        new_rect: driftwm::snap::SnapRect,
+        old_rect: driftwm::layout::snap::SnapRect,
+        new_rect: driftwm::layout::snap::SnapRect,
     ) {
         use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 

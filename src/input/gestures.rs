@@ -10,7 +10,7 @@ use smithay::{
 };
 
 use driftwm::config::{Action, Direction, ThresholdAction};
-use driftwm::snap::SnapState;
+use driftwm::layout::snap::SnapState;
 
 use crate::state::DriftWm;
 

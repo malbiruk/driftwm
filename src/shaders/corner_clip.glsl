@@ -28,7 +28,7 @@ varying vec2 v_coords;
 uniform float tint;
 #endif
 
-uniform float niri_scale;       // output_scale * zoom — keeps AA band ~1 output px wide
+uniform float aa_scale;       // output_scale * zoom — keeps AA band ~1 output px wide
 uniform vec2 geo_size;          // window geometry size (pre-zoom physical)
 uniform vec4 corner_radius;     // (top_left, top_right, bottom_right, bottom_left)
 uniform mat3 input_to_geo;      // buffer UV → geometry-normalized [0,1]²
@@ -52,7 +52,7 @@ float corner_alpha(vec2 coords, vec2 size, vec4 r) {
         return 1.0;
     }
     float dist = distance(coords, center);
-    float t = clamp((dist - radius) * niri_scale + 0.5, 0.0, 1.0);
+    float t = clamp((dist - radius) * aa_scale + 0.5, 0.0, 1.0);
     return 1.0 - t * t * (3.0 - 2.0 * t);
 }
 

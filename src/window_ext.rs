@@ -3,10 +3,10 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
-/// Set all four Tiled states on the toplevel's pending state. niri trick:
-/// GTK and other toolkits read Tiled as "drop your shadow + rounded corners"
-/// even if they ignore xdg-decoration. driftwm draws uniform shadow + corners
-/// on every window, so client chrome would just collide with ours.
+/// Set all four Tiled states on the toplevel's pending state. GTK and other
+/// toolkits read Tiled as "drop your shadow + rounded corners" even if they
+/// ignore xdg-decoration. driftwm draws uniform shadow + corners on every
+/// window, so client chrome would just collide with ours.
 ///
 /// Caveat: Tiled also affects how some clients pick a default size — SCTK-based
 /// terminals like Alacritty interpret `Tiled + size=None` as "stay at current
@@ -142,7 +142,6 @@ impl WindowExt for Window {
         // chrome to subtract from an explicit size, avoiding the historical
         // shrink spiral on repeated toggles) and send saved_size explicitly
         // (avoids SCTK reading "Tiled + None" as "stay at current size").
-        // Matches niri's approach of always configuring with an explicit size.
         toplevel.with_pending_state(|state| {
             state.states.unset(xdg_toplevel::State::Maximized);
             state.size = Some(saved_size);
