@@ -10,6 +10,7 @@ autostart = [
      "vorta -d",
      "~/Documents/work/scripts/driftwm/extras/widgets/launch.sh",
      "~/Documents/work/scripts/driftwm/extras/scripts/battery_notify.sh",
+     "~/Documents/work/scripts/driftwm/extras/scripts/theme-watch.sh",
      "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 330 '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh' timeout 600 'systemctl suspend' before-sleep '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh'",
 ]
 
@@ -47,6 +48,7 @@ decoration_fit_snapped = true
 [keybindings]
 "mod+return" = "exec ptyxis -s"
 "mod+d" = "exec fuzzel"
+"mod+shift+d" = "spawn ~/Documents/work/scripts/driftwm/extras/scripts/theme-toggle.sh"
 "mod+l" = "spawn ~/Documents/work/scripts/driftwm/extras/scripts/lock.sh"
 "mod+n" = "spawn swaync-client -t"
 # swayosd instead of default wpctl/brightnessctl
@@ -66,6 +68,9 @@ decoration_fit_snapped = true
 [[outputs]]
 name = "HDMI-A-1"
 transform = "90"
+
+[effects]
+blur_radius = 3
 
 # Dashboard widgets — positioned around origin for home view (1920x1080)
 
@@ -140,7 +145,7 @@ size=[500, 725]
 app_id = "org.telegram.desktop"
 decoration = "server"
 
-# Blur notifications
+# Blur shell-overlay popups (notifications + launcher)
 [[window_rules]]
 app_id = "swaync-control-center"
 blur = true

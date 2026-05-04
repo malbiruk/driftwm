@@ -1,0 +1,76 @@
+[general]
+import = ["~/Documents/work/scripts/driftwm/extras/alacritty/colors-light.toml"]
+
+[keyboard]
+bindings = [
+    { action = "SpawnNewInstance", key = "Return", mods = "Super|Alt" },
+]
+
+[selection]
+save_to_clipboard = true
+
+[scrolling]
+history = 65535
+
+[font]
+size = 11
+
+[font.normal]
+family = "Monaco Nerd Font"
+style = "Regular"
+
+[font.bold]
+family = "Roboto Mono"
+style = "Bold"
+
+[font.italic]
+family = "Monaco Nerd Font"
+style = "Italic"
+
+[font.bold_italic]
+family = "Monaco Nerd Font"
+style = "Bold Italic"
+
+[font.offset]
+x = 0
+y = 0
+
+[font.glyph_offset]
+x = 0
+y = 0
+
+[colors.cursor]
+text = "#112a2a"
+cursor = "#DCDFE4"
+
+[colors.vi_mode_cursor]
+text = "#112a2a"
+cursor = "#DCDFE4"
+
+[colors.search.matches]
+foreground = "#000000"
+background = "#1AE642"
+
+[colors.search.focused_match]
+foreground = "#000000"
+background = "#ff00ff"
+
+[colors.hints.start]
+foreground = "#1d1f21"
+background = "#1AE642"
+
+[colors.hints.end]
+foreground = "#1AE642"
+background = "#1d1f21"
+
+[colors.line_indicator]
+foreground = "#fa5b1c"
+background = "#1d1f21"
+
+[colors.footer_bar]
+background = "#731d8b"
+foreground = "#ffffff"
+
+[colors.selection]
+text = "#112a2a"
+background = "#1AE642"
