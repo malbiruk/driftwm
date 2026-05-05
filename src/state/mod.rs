@@ -2,6 +2,7 @@ mod animation;
 mod cluster_snapshot;
 mod cursor;
 pub mod fit;
+mod focus;
 mod fullscreen;
 mod init;
 mod navigation;
@@ -11,6 +12,7 @@ mod render_cache;
 pub use cluster_snapshot::ClusterResizeSnapshot;
 pub(crate) use cluster_snapshot::snap_targets_impl;
 pub use cursor::{CursorFrames, CursorState};
+pub use focus::FocusTarget;
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{RenderCache, ShadowCacheEntry};
 
@@ -113,8 +115,6 @@ pub enum SessionLock {
     /// Lock confirmed; rendering only the lock surface.
     Locked,
 }
-
-pub use crate::focus::FocusTarget;
 
 /// Log an error result with context, discarding the Ok value.
 #[inline]

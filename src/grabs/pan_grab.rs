@@ -10,8 +10,7 @@ use smithay::{
 };
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
-use crate::focus::FocusTarget;
-use crate::state::{DriftWm, output_state};
+use crate::state::{DriftWm, FocusTarget, output_state};
 
 /// Max squared screen-pixel distance for a press-release to count as a
 /// "click" (deselect) rather than a "drag" (pan). 5px → 25.

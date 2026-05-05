@@ -1,6 +1,5 @@
 mod backend;
 mod decorations;
-mod focus;
 mod grabs;
 mod handlers;
 mod input;
