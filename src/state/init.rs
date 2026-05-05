@@ -229,7 +229,7 @@ impl DriftWm {
             state_file_last_write: Instant::now(),
             active_layout: String::new(),
             state_file_layout: String::new(),
-            state_file_window_count: 0,
+            state_file_windows: Vec::new(),
             state_file_layer_count: 0,
             autostart,
             active_crtcs: HashSet::new(),

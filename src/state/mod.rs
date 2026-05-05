@@ -6,7 +6,7 @@ mod focus;
 mod fullscreen;
 mod init;
 mod navigation;
-mod persistence;
+pub mod persistence;
 mod reload;
 mod render_cache;
 pub use cluster_snapshot::ClusterResizeSnapshot;
@@ -410,7 +410,7 @@ pub struct DriftWm {
     /// Active XKB layout name (e.g. "English (US)"), updated on key events.
     pub active_layout: String,
     pub state_file_layout: String,
-    pub state_file_window_count: usize,
+    pub state_file_windows: Vec<persistence::WindowFingerprint>,
     pub state_file_layer_count: usize,
 
     // -- global: autostart --
