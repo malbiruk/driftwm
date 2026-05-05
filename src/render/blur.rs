@@ -243,8 +243,9 @@ pub(crate) fn process_blur_requests(
     let geom_gen = state.render.blur_geometry_generation;
     let camera_gen = state.render.blur_camera_generation;
     // Animated background shaders update per frame but the element Id is stable,
-    // so the bg_hash optimisation can't detect the change — force recompute each frame.
-    let animated_bg = state.render.background_is_animated;
+    // so the bg_hash optimisation can't detect the change. Re-blurring every frame
+    // is expensive, so it's opt-in via [effects].animate_blur.
+    let animated_bg = state.render.background_is_animated && state.config.effects.animate_blur;
 
     // Precompute per-request behind depth (index into all_elements where "below this window" begins)
     let behind_starts: Vec<usize> = blur_requests.iter().map(|req| {

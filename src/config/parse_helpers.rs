@@ -180,6 +180,7 @@ pub(super) fn parse_effects_config(raw: EffectsFileConfig) -> EffectsConfig {
     EffectsConfig {
         blur_radius: raw.blur_radius.unwrap_or(2),
         blur_strength: raw.blur_strength.unwrap_or(1.1),
+        animate_blur: raw.animate_blur.unwrap_or(false),
     }
 }
 

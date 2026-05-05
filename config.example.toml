@@ -116,6 +116,9 @@
 [effects]
 # blur_radius = 2                # number of Kawase down+up passes (default: 2)
 # blur_strength = 1.1            # per-pass texel spread (default: 1.1)
+# animate_blur = false           # re-blur every frame when the wallpaper is animated
+                                 # (expensive; default: false — blur is captured once and
+                                 # only refreshed when geometry/camera/static bg change)
 
 [backend]
 # Hardware stability quirks. All default to false (opt-in).

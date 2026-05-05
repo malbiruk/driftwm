@@ -645,6 +645,7 @@ pub struct BackendConfig {
 pub struct EffectsConfig {
     pub blur_radius: u32,
     pub blur_strength: f64,
+    pub animate_blur: bool,
 }
 
 impl Default for EffectsConfig {
@@ -652,6 +653,7 @@ impl Default for EffectsConfig {
         Self {
             blur_radius: 2,
             blur_strength: 1.1,
+            animate_blur: false,
         }
     }
 }
