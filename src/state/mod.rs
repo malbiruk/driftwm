@@ -294,6 +294,8 @@ pub struct DriftWm {
 
     // -- global: cursor --
     pub cursor: CursorState,
+    /// Drag-and-drop icon surface — rendered at pointer position during DnD.
+    pub dnd_icon: Option<WlSurface>,
 
     // -- global: backend --
     pub backend: Option<Backend>,
