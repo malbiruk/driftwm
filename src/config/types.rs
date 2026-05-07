@@ -124,6 +124,11 @@ pub enum WindowPlacement {
     /// edges (CW from viewport-nearest), then BFS to neighbors. Falls back
     /// to `Center` when no focused window or no valid placement was found.
     Auto,
+    /// Always place next to an existing visible window — never on top.
+    /// Scans all windows for a free adjacent spot, tries focus history first,
+    /// then every window on the canvas. Falls back to center only when the
+    /// canvas has no windows at all.
+    Tiling,
 }
 
 impl ModKey {

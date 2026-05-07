@@ -3,6 +3,7 @@ mod decorations;
 mod grabs;
 mod handlers;
 mod input;
+mod ipc;
 mod render;
 mod signals;
 mod state;
@@ -205,6 +206,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 smithay::reexports::calloop::timer::TimeoutAction::Drop
             },
         )?;
+    }
+
+    // IPC socket for external control (qs ipc, scripts).
+    // Accepts one command per connection, responds, then closes.
+    {
+        let (listener_fd, ipc_source) = ipc::create_ipc_listener()?;
+        event_loop.handle().insert_source(ipc_source, move |_, _, data: &mut DriftWm| {
+            ipc::handle_client(data, listener_fd);
+            Ok(smithay::reexports::calloop::PostAction::Continue)
+        })?;
+        tracing::info!("IPC socket at {}", ipc::socket_path().display());
     }
 
     // Run the event loop

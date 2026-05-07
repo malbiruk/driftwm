@@ -344,8 +344,9 @@ impl CompositorHandler for DriftWm {
                                 && matches!(
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
+                                        | driftwm::config::WindowPlacement::Tiling
                                 ) {
-                                    self.auto_placement_pos(&window, geo.size, bar_px)
+                                    self.auto_placement_pos(&window, geo.size, bar_px, self.config.window_placement)
                                 } else {
                                     None
                                 };

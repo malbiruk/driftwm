@@ -294,6 +294,8 @@ pub struct DriftWm {
 
     // -- global: cursor --
     pub cursor: CursorState,
+    /// Drag-and-drop icon surface — rendered at pointer position during DnD.
+    pub dnd_icon: Option<WlSurface>,
 
     // -- global: backend --
     pub backend: Option<Backend>,
@@ -989,51 +991,46 @@ impl DriftWm {
         new_window: &Window,
         new_size: Size<i32, Logical>,
         bar: i32,
+        mode: driftwm::config::WindowPlacement,
     ) -> Option<(i32, i32)> {
-        // Anchor = whatever the keyboard was focused on at `new_toplevel`
-        // time, captured before we auto-set focus to the new surface.
-        // `None` for the entry (or absent entry) means no anchor — caller
-        // falls back to center. The snapshot was captured before
-        // `new_window`'s surface existed in keyboard focus, so it never
-        // points at the new window itself.
         let new_surface = new_window.wl_surface()?.into_owned();
-        let focused = self.auto_anchor_snapshot.get(&new_surface)?.as_ref()?;
-        let widget = focused
-            .wl_surface()
-            .and_then(|s| driftwm::config::applied_rule(&s))
-            .is_some_and(|r| r.widget);
-        let is_fs = self.fullscreen.values().any(|fs| &fs.window == focused);
-        if widget || is_fs {
-            return None;
-        }
+        let mut primary_focused: Option<&Window> = self
+            .auto_anchor_snapshot
+            .get(&new_surface)
+            .and_then(|o| o.as_ref());
 
-        // Only anchor to focused if it's visibly the window the user is
-        // working with right now (≥50% of it inside the viewport). Same
-        // threshold as `CenterNearest`. When the user has panned away
-        // (or zoomed off the window), they intend to start a fresh
-        // cluster — caller falls back to center placement.
-        {
-            let f_loc = self.space.element_location(focused)?;
-            let f_size = focused.geometry().size;
-            let viewport_size = self.get_viewport_size();
-            let camera = self.camera();
-            let zoom = self.zoom();
-            let visible = driftwm::canvas::visible_fraction(
-                f_loc,
-                f_size,
-                camera,
-                viewport_size,
-                zoom,
-            );
-            if visible < 0.5 {
-                return None;
+        if let Some(f) = primary_focused {
+            let widget = f
+                .wl_surface()
+                .and_then(|s| driftwm::config::applied_rule(&s))
+                .is_some_and(|r| r.widget);
+            let is_fs = self.fullscreen.values().any(|fs| &fs.window == f);
+            if widget || is_fs {
+                primary_focused = None;
+            } else {
+                let f_loc = self.space.element_location(f)?;
+                let f_size = f.geometry().size;
+                let viewport_size = self.get_viewport_size();
+                let camera = self.camera();
+                let zoom = self.zoom();
+                let visible = driftwm::canvas::visible_fraction(
+                    f_loc, f_size, camera, viewport_size, zoom,
+                );
+                if visible < 0.5 {
+                    primary_focused = None;
+                }
             }
         }
 
-        // Widgets (xdg-toplevel and canvas layer-shell) are visually below
-        // windows like wallpaper — auto placement ignores them entirely,
-        // neither as anchors nor as obstacles. New windows are free to
-        // land on top, same as on the canvas background.
+        if primary_focused.is_none() {
+            primary_focused = self.focus_history.first();
+        }
+
+        let camera = self.camera();
+        let zoom = self.zoom();
+        let new_w_f = new_size.w as f64;
+        let new_h_f = (new_size.h + bar) as f64;
+
         let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
         let mut eligible: HashSet<usize> = HashSet::new();
         let mut focused_idx: Option<usize> = None;
@@ -1062,33 +1059,35 @@ impl DriftWm {
                 h: (size.h + b) as f64,
             });
             eligible.insert(idx);
-            if w == focused {
+            if Some(w) == primary_focused {
                 focused_idx = Some(idx);
             }
         }
-        let focused_idx = focused_idx?;
 
-        let new_w_f = new_size.w as f64;
-        let new_h_f = (new_size.h + bar) as f64;
-
-        let camera = self.camera();
-        let zoom = self.zoom();
         let vc_screen = self.usable_center_screen();
         let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
 
-        let pos = driftwm::layout::auto_placement::place_auto(
-            &rects,
-            focused_idx,
-            &eligible,
-            new_w_f,
-            new_h_f,
-            vc,
-            self.config.snap_gap,
-        )?;
+        if let Some(idx) = focused_idx {
+            let result = driftwm::layout::auto_placement::place_auto(
+                &rects, idx, &eligible, new_w_f, new_h_f, vc, self.config.snap_gap,
+            );
+            if let Some(pos) = result {
+                return Some((pos.0.round() as i32, pos.1.round() as i32 + bar));
+            }
+        }
 
-        // place_auto returns frame top-left (above the SSD title bar).
-        // Convert to content top-left by shifting Y down by bar.
-        Some((pos.0.round() as i32, pos.1.round() as i32 + bar))
+        if mode == driftwm::config::WindowPlacement::Tiling {
+            for idx in 0..rects.len() {
+                let result = driftwm::layout::auto_placement::place_auto(
+                    &rects, idx, &eligible, new_w_f, new_h_f, vc, self.config.snap_gap,
+                );
+                if let Some(pos) = result {
+                    return Some((pos.0.round() as i32, pos.1.round() as i32 + bar));
+                }
+            }
+        }
+
+        None
     }
 
     /// Offset a spawn position so it doesn't overlap an existing window.

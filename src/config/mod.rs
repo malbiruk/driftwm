@@ -261,6 +261,7 @@ impl Config {
         let window_placement = match raw.window_placement.as_deref() {
             Some("cursor") => WindowPlacement::Cursor,
             Some("auto") => WindowPlacement::Auto,
+            Some("tiling") => WindowPlacement::Tiling,
             Some("center") | None => WindowPlacement::Center,
             Some(other) => {
                 tracing::warn!("Unknown window_placement '{other}', using 'center'");
