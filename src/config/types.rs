@@ -210,6 +210,7 @@ impl KeyCombo {
 pub enum BindingContext {
     OnWindow,
     OnCanvas,
+    OnSection,
     Anywhere,
 }
 

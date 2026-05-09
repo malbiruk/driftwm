@@ -176,6 +176,7 @@ impl DriftWm {
             seat,
             cursor: CursorState::new(),
             dnd_icon: None,
+            ipc_handler: None,
             backend: None,
             decorations: HashMap::new(),
             pending_ssd: HashSet::new(),

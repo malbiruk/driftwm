@@ -306,6 +306,7 @@ impl Config {
         for (ctx, section) in [
             (BindingContext::OnWindow, raw.mouse.on_window),
             (BindingContext::OnCanvas, raw.mouse.on_canvas),
+            (BindingContext::OnSection, raw.mouse.on_section),
             (BindingContext::Anywhere, raw.mouse.anywhere),
         ] {
             if let Some(entries) = section {

@@ -210,11 +210,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // IPC socket for external control (qs ipc, scripts).
-    // Accepts one command per connection, responds, then closes.
     {
-        let (listener_fd, ipc_source) = ipc::create_ipc_listener()?;
+        let (ipc_source, ipc_raw) = ipc::create_ipc_listener()?;
+        data.ipc_handler = Some(ipc::IpcHandler::new());
         event_loop.handle().insert_source(ipc_source, move |_, _, data: &mut DriftWm| {
-            ipc::handle_client(data, listener_fd);
+            if let Some(ref mut handler) = data.ipc_handler {
+                handler.accept(ipc_raw);
+                handler.handle_clients(data);
+            }
             Ok(smithay::reexports::calloop::PostAction::Continue)
         })?;
         tracing::info!("IPC socket at {}", ipc::socket_path().display());

@@ -210,16 +210,14 @@ pub(super) struct WindowRuleFile {
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct MouseFileConfig {
-    /// Propagate edge-drag resize to snapped neighbors.
-    /// See [`super::Config::decoration_resize_snapped`].
     pub decoration_resize_snapped: Option<bool>,
-    /// Propagate decoration-initiated fit (maximize/unmaximize) to snapped neighbors.
-    /// See [`super::Config::decoration_fit_snapped`].
     pub decoration_fit_snapped: Option<bool>,
     #[serde(rename = "on-window")]
     pub on_window: Option<HashMap<String, String>>,
     #[serde(rename = "on-canvas")]
     pub on_canvas: Option<HashMap<String, String>>,
+    #[serde(rename = "on-section")]
+    pub on_section: Option<HashMap<String, String>>,
     pub anywhere: Option<HashMap<String, String>>,
 }
 
