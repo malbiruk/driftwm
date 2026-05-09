@@ -36,7 +36,7 @@ pub fn build_cursor_elements(
 
     // Separate the status check from mutable state access (Rust 2024 borrow rules)
     let status = state.cursor.cursor_status.clone();
-    match status {
+    let mut result = match status {
         CursorImageStatus::Hidden => vec![],
         CursorImageStatus::Surface(ref surface) => {
             if !surface.alive() {
@@ -68,7 +68,79 @@ pub fn build_cursor_elements(
         CursorImageStatus::Named(icon) => {
             build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
         }
+    };
+
+    if let Some(ref icon) = state.dnd_icon {
+        if icon.alive() {
+            let pos: Point<i32, Physical> = (
+                physical_pos.x as i32,
+                physical_pos.y as i32,
+            ).into();
+            let surface_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                    renderer,
+                    icon,
+                    pos,
+                    Scale::from(1.0),
+                    alpha,
+                    Kind::Cursor,
+                );
+            result.extend(surface_elems.into_iter().map(|e| OutputRenderElements::CursorSurface(e.into())));
+        }
     }
+
+    result
+}
+            let hotspot = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .map(|d| d.lock().unwrap().hotspot)
+                    .unwrap_or_default()
+            });
+            let pos: Point<i32, Physical> = (
+                (physical_pos.x - hotspot.x as f64) as i32,
+                (physical_pos.y - hotspot.y as f64) as i32,
+            ).into();
+            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                    renderer,
+                    surface,
+                    pos,
+                    Scale::from(1.0),
+                    alpha,
+                    Kind::Cursor,
+                );
+            elems.into_iter().map(|e| OutputRenderElements::CursorSurface(e.into())).collect()
+        }
+        CursorImageStatus::Named(icon) => {
+            build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
+        }
+    };
+
+    let mut dnd_elems = Vec::new();
+    if let Some(ref icon) = state.dnd_icon {
+        if icon.alive() {
+            let pos: Point<i32, Physical> = (
+                physical_pos.x as i32,
+                physical_pos.y as i32,
+            ).into();
+            let surface_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                    renderer,
+                    icon,
+                    pos,
+                    Scale::from(1.0),
+                    alpha,
+                    Kind::Cursor,
+                );
+            dnd_elems = surface_elems.into_iter().map(|e| OutputRenderElements::CursorSurface(e.into())).collect();
+        }
+    }
+
+    let mut result = cursor_elems;
+    result.extend(dnd_elems);
+    result
 }
 
 /// Build xcursor memory buffer elements for a named cursor icon.

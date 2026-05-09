@@ -133,9 +133,7 @@ impl WaylandDndGrabHandler for DriftWm {
         serial: Serial,
         type_: dnd::GrabType,
     ) {
-        if let Some(ref surface) = icon {
-            self.cursor.cursor_status = CursorImageStatus::Surface(surface.clone());
-        }
+        self.dnd_icon = icon.map(|s| smithay::reexports::wayland_server::Resource::clone(&s));
         match type_ {
             dnd::GrabType::Pointer => {
                 let pointer = seat.get_pointer().unwrap();
@@ -160,7 +158,7 @@ impl dnd::DndGrabHandler for DriftWm {
         _seat: Seat<Self>,
         _location: Point<f64, Logical>,
     ) {
-        self.cursor.cursor_status = CursorImageStatus::default_named();
+        self.dnd_icon = None;
     }
 }
 

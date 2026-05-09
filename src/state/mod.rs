@@ -299,6 +299,7 @@ pub struct DriftWm {
 
     // -- global: cursor --
     pub cursor: CursorState,
+    pub dnd_icon: Option<WlSurface>,
 
     // -- global: backend --
     pub backend: Option<Backend>,
