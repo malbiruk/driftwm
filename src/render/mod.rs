@@ -37,7 +37,7 @@ use smithay::backend::renderer::{
 };
 use smithay::output::Output;
 use smithay::reexports::wayland_server::Resource;
-use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
+use smithay::utils::{IsAlive, Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 use smithay::wayland::compositor::with_states;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
@@ -145,6 +145,11 @@ pub fn compose_frame(
     output: &Output,
     cursor_elements: Vec<OutputRenderElements>,
 ) -> Vec<OutputRenderElements> {
+    // Clean up dead DnD icon (source destroyed / Esc cancelled)
+    if state.dnd_icon.as_ref().is_some_and(|s| !s.alive()) {
+        state.dnd_icon = None;
+    }
+
     // Session lock: render only lock surface (or black) + cursor
     if !matches!(state.session_lock, crate::state::SessionLock::Unlocked) {
         return compose_lock_frame(state, renderer, output, cursor_elements);

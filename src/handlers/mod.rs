@@ -133,7 +133,7 @@ impl WaylandDndGrabHandler for DriftWm {
         serial: Serial,
         type_: dnd::GrabType,
     ) {
-        self.dnd_icon = icon.map(|s| smithay::reexports::wayland_server::Resource::clone(&s));
+        self.dnd_icon = icon;
         match type_ {
             dnd::GrabType::Pointer => {
                 let pointer = seat.get_pointer().unwrap();
