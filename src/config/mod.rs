@@ -19,6 +19,7 @@ use smithay::input::keyboard::{Keysym, ModifiersState};
 use smithay::utils::Transform;
 use smithay::utils::{Logical, Point};
 
+use crate::canvas;
 use defaults::{default_bindings, default_gesture_bindings, default_mouse_bindings};
 use parse_helpers::{
     parse_backend_config, parse_decoration_config, parse_effects_config, parse_output_outline,
@@ -66,9 +67,12 @@ pub struct Config {
     /// Padding (viewport/screen pixels) around the bounding box for ZoomToFit.
     /// Screen-space so the gutter is consistent regardless of the resulting zoom.
     pub zoom_fit_padding: f64,
-    /// Animate zoom back to 1.0 when a new window is mapped (true) or preserve current zoom (false).
+    /// Target zoom used by window navigation when reset zoom is requested.
+    pub zoom_navigation_target: f64,
+    /// Animate zoom to `zoom_navigation_target` when a new window is mapped
+    /// (true) or preserve current zoom (false).
     pub zoom_reset_on_new_window: bool,
-    /// Animate zoom back to 1.0 when an off-screen window requests activation
+    /// Animate zoom to `zoom_navigation_target` when an off-screen window requests activation
     /// (xdg-activation or foreign-toplevel click) (true) or just pan to it at current zoom (false).
     pub zoom_reset_on_activation: bool,
     pub snap_enabled: bool,
@@ -491,6 +495,11 @@ impl Config {
             cycle_modifier,
             zoom_step: raw.zoom.step.unwrap_or(1.1),
             zoom_fit_padding: raw.zoom.fit_padding.unwrap_or(80.0),
+            zoom_navigation_target: raw
+                .zoom
+                .navigation_target
+                .unwrap_or(1.0)
+                .clamp(canvas::MIN_ZOOM_FLOOR, 1.0),
             zoom_reset_on_new_window: raw.zoom.reset_on_new_window.unwrap_or(true),
             zoom_reset_on_activation: raw.zoom.reset_on_activation.unwrap_or(true),
             snap_enabled: raw.snap.enabled.unwrap_or(true),

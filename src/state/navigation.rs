@@ -1,8 +1,8 @@
 use smithay::{
-    desktop::Window,
+    desktop::{PopupManager, Window},
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::Point,
-    wayland::seat::WaylandFocus,
+    wayland::{compositor::get_parent, seat::WaylandFocus},
 };
 use driftwm::window_ext::WindowExt;
 
@@ -10,7 +10,7 @@ use super::DriftWm;
 
 impl DriftWm {
     /// Navigate the viewport to center on a window: raise, focus, animate camera.
-    /// When `reset_zoom` is true, zoom animates to 1.0 (intentional navigation).
+    /// When `reset_zoom` is true, zoom animates to the configured navigation target.
     /// Otherwise preserves current zoom, or restores saved zoom if leaving overview.
     pub fn navigate_to_window(&mut self, window: &Window, reset_zoom: bool) {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -18,7 +18,7 @@ impl DriftWm {
 
         let target_zoom = if reset_zoom {
             self.set_overview_return(None);
-            1.0
+            self.config.zoom_navigation_target
         } else {
             let overview_ret = self.overview_return();
             self.set_overview_return(None);
@@ -73,15 +73,19 @@ impl DriftWm {
     /// Should NOT be called during Alt-Tab cycling (history is frozen).
     /// Skips windows with `skip_taskbar` rule.
     pub fn update_focus_history(&mut self, surface: &WlSurface) {
-        if driftwm::config::applied_rule(surface).is_some_and(|r| r.widget) {
-            return;
-        }
         let window = self
             .space
             .elements()
-            .find(|w| w.wl_surface().as_deref() == Some(surface))
+            .find(|w| focus_belongs_to_window(surface, w))
             .cloned();
         if let Some(window) = window {
+            if window
+                .wl_surface()
+                .and_then(|s| driftwm::config::applied_rule(&s))
+                .is_some_and(|r| r.widget)
+            {
+                return;
+            }
             // Modal dialogs don't enter focus history — Alt-Tab navigates to
             // the parent instead, and focus redirect handles the rest.
             if window.is_modal() {
@@ -102,4 +106,30 @@ impl DriftWm {
             self.focus_history.insert(0, window);
         }
     }
+}
+
+fn focus_belongs_to_window(surface: &WlSurface, window: &Window) -> bool {
+    let Some(root) = window.wl_surface() else {
+        return false;
+    };
+
+    surface_in_tree(surface, &root)
+        || PopupManager::popups_for_surface(&root)
+            .any(|(popup, _)| surface_in_tree(surface, popup.wl_surface()))
+}
+
+fn surface_in_tree(surface: &WlSurface, root: &WlSurface) -> bool {
+    if surface == root {
+        return true;
+    }
+
+    let mut current = surface.clone();
+    while let Some(parent) = get_parent(&current) {
+        if &parent == root {
+            return true;
+        }
+        current = parent;
+    }
+
+    false
 }
