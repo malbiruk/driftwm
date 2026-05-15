@@ -94,11 +94,9 @@
 [zoom]
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
 # fit_padding = 80.0          # viewport px padding for zoom-to-fit (screen space)
-# navigation_target = 1.0     # target zoom for window navigation resets
-#                             # (0.9 = slightly zoomed out; clamped to 0.001..1.0)
-# reset_on_new_window = true  # animate zoom to navigation_target when a new window is mapped
+# reset_on_new_window = true  # animate zoom to 1.0 when a new window is mapped
 #                             # (false = keep current zoom, pan only)
-# reset_on_activation = true  # animate zoom to navigation_target when an off-screen window
+# reset_on_activation = true  # animate zoom to 1.0 when an off-screen window
 #                             # requests focus
 #                             # (false = keep current zoom, pan only)
 

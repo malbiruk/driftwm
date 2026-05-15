@@ -7,6 +7,7 @@ mod region;
 mod render;
 mod signals;
 mod state;
+mod surface_tree;
 mod xwayland;
 
 use state::{ClientState, DriftWm};

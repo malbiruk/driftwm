@@ -1,16 +1,17 @@
 use smithay::{
-    desktop::{PopupManager, Window},
+    desktop::Window,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     utils::Point,
-    wayland::{compositor::get_parent, seat::WaylandFocus},
+    wayland::seat::WaylandFocus,
 };
+use crate::surface_tree::focus_belongs_to_window;
 use driftwm::window_ext::WindowExt;
 
 use super::DriftWm;
 
 impl DriftWm {
     /// Navigate the viewport to center on a window: raise, focus, animate camera.
-    /// When `reset_zoom` is true, zoom animates to the configured navigation target.
+    /// When `reset_zoom` is true, zoom animates to 1.0 (intentional navigation).
     /// Otherwise preserves current zoom, or restores saved zoom if leaving overview.
     pub fn navigate_to_window(&mut self, window: &Window, reset_zoom: bool) {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
@@ -18,7 +19,7 @@ impl DriftWm {
 
         let target_zoom = if reset_zoom {
             self.set_overview_return(None);
-            self.config.zoom_navigation_target
+            1.0
         } else {
             let overview_ret = self.overview_return();
             self.set_overview_return(None);
@@ -106,30 +107,4 @@ impl DriftWm {
             self.focus_history.insert(0, window);
         }
     }
-}
-
-fn focus_belongs_to_window(surface: &WlSurface, window: &Window) -> bool {
-    let Some(root) = window.wl_surface() else {
-        return false;
-    };
-
-    surface_in_tree(surface, &root)
-        || PopupManager::popups_for_surface(&root)
-            .any(|(popup, _)| surface_in_tree(surface, popup.wl_surface()))
-}
-
-fn surface_in_tree(surface: &WlSurface, root: &WlSurface) -> bool {
-    if surface == root {
-        return true;
-    }
-
-    let mut current = surface.clone();
-    while let Some(parent) = get_parent(&current) {
-        if &parent == root {
-            return true;
-        }
-        current = parent;
-    }
-
-    false
 }

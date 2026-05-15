@@ -3,6 +3,7 @@ use std::collections::HashSet;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
 use crate::state::{DriftWm, FocusTarget, output_state};
+use crate::surface_tree::focus_belongs_to_toplevel;
 use driftwm::window_ext::WindowExt;
 use smithay::{
     delegate_xdg_shell,
@@ -17,7 +18,7 @@ use smithay::{
     },
     utils::{Rectangle, Serial},
     wayland::{
-        compositor::{get_parent, with_states},
+        compositor::with_states,
         seat::WaylandFocus,
         shell::xdg::{
             PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
@@ -225,30 +226,16 @@ impl XdgShellHandler for DriftWm {
                 .first()
                 .is_some_and(|last_focused| last_focused == window);
             if focus_on_this_toplevel || was_last_focused || no_keyboard_focus {
-                // Standalone toplevels have no parent — fall back to the most
-                // recent previous window so focus does not vanish (important
-                // with focus_follows_mouse when the pointer is over empty canvas).
-                let fallback = parent_focus
-                    .or_else(|| {
-                        self.focus_history
-                            .iter()
-                            .find(|w| w != &window)
-                            .cloned()
-                    })
-                    .or_else(|| {
-                        self.space
-                            .elements()
-                            .find(|w| {
-                                *w != window
-                                    && !w
-                                        .wl_surface()
-                                        .and_then(|s| driftwm::config::applied_rule(&s))
-                                        .is_some_and(|r| r.widget)
-                            })
-                            .cloned()
-                    });
-                if let Some(fallback) = fallback {
-                    self.navigate_to_window(&fallback, false);
+                if let Some(parent_focus) = parent_focus {
+                    self.navigate_to_window(&parent_focus, false);
+                } else if let Some(fallback) = self
+                    .focus_history
+                    .iter()
+                    .find(|w| w != &window)
+                    .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())))
+                {
+                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+                    keyboard.set_focus(self, Some(fallback), serial);
                 }
             }
             // If the destroyed window was fullscreen, restore viewport
@@ -407,34 +394,6 @@ impl XdgShellHandler for DriftWm {
 }
 
 delegate_xdg_shell!(DriftWm);
-
-fn focus_belongs_to_toplevel(
-    focus: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-    toplevel: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-) -> bool {
-    surface_in_tree(focus, toplevel)
-        || smithay::desktop::PopupManager::popups_for_surface(toplevel)
-            .any(|(popup, _)| surface_in_tree(focus, popup.wl_surface()))
-}
-
-fn surface_in_tree(
-    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-    root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-) -> bool {
-    if surface == root {
-        return true;
-    }
-
-    let mut current = surface.clone();
-    while let Some(parent) = get_parent(&current) {
-        if &parent == root {
-            return true;
-        }
-        current = parent;
-    }
-
-    false
-}
 
 /// Validate that the pointer has an active grab starting on the given surface.
 /// Returns the `GrabStartData` if the button click that started the grab
