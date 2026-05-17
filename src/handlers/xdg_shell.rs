@@ -214,8 +214,9 @@ impl XdgShellHandler for DriftWm {
             let fs_output = self.fullscreen.iter()
                 .find(|(_, fs)| &fs.window == window)
                 .map(|(o, _)| o.clone());
-            if let Some(ref output) = fs_output {
-                let fs = self.fullscreen.remove(output).unwrap();
+            if let Some(ref output) = fs_output
+                && let Some(fs) = self.fullscreen.remove(output)
+            {
                 output_state(output).camera = fs.saved_camera;
                 output_state(output).zoom = fs.saved_zoom;
                 self.update_output_from_camera();

@@ -403,7 +403,12 @@ where
                 let state = state.foreign_toplevel_manager_state();
                 state.instances.retain(|x| x != resource);
             }
-            _ => unreachable!(),
+            // Forward-compat: a future protocol revision could add new requests.
+            // Ignore rather than panic — a malformed or future-versioned client
+            // mustn't be able to take the compositor down.
+            other => tracing::debug!(
+                "zwlr_foreign_toplevel_manager_v1: ignoring unknown request {other:?}"
+            ),
         }
     }
 
@@ -468,7 +473,9 @@ where
             zwlr_foreign_toplevel_handle_v1::Request::UnsetFullscreen => {
                 state.unset_fullscreen(surface);
             }
-            _ => unreachable!(),
+            other => tracing::debug!(
+                "zwlr_foreign_toplevel_handle_v1: ignoring unknown request {other:?}"
+            ),
         }
     }
 
