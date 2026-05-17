@@ -44,6 +44,12 @@ pub struct MoveSurfaceGrab {
     /// doesn't change mid-drag, so we pay the `HashSet` build cost once
     /// instead of rebuilding it every motion tick.
     cluster_member_surfaces: HashSet<WlSurface>,
+    /// Last integer canvas position the primary window was mapped to. Used to
+    /// throttle blur cache invalidation: libinput delivers many motion events
+    /// per render frame and most of them resolve to the same integer position
+    /// (especially during snap holds), so bumping the blur generation
+    /// unconditionally re-runs Kawase blur on every blurred window for nothing.
+    last_mapped_loc: Option<Point<i32, Logical>>,
 }
 
 impl MoveSurfaceGrab {
@@ -64,6 +70,7 @@ impl MoveSurfaceGrab {
             inhibited_edge: None,
             cluster_members,
             cluster_member_surfaces,
+            last_mapped_loc: None,
         }
     }
 
@@ -208,8 +215,6 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
         _focus: Option<(<DriftWm as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
-        data.render.blur_geometry_generation += 1;
-
         // Phase 3 input routing already converted event.location to the focused
         // output's canvas space and updated data.focused_output. If that differs
         // from self.output, the pointer crossed an output boundary.
@@ -256,6 +261,11 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             }
             data.space
                 .map_element(self.window.clone(), self.initial_window_location, false);
+
+            // Output crossing always invalidates blur (different camera/zoom,
+            // different background sample region).
+            data.render.blur_geometry_generation += 1;
+            self.last_mapped_loc = Some(self.initial_window_location);
 
             handle.motion(data, None, event);
             return;
@@ -363,6 +373,16 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             data.space.map_element(member.clone(), member_pos, false);
         }
         data.space.map_element(self.window.clone(), new_loc, false);
+
+        // Sub-pixel motion that resolves to the same integer canvas position
+        // doesn't actually shift the window, so blurred neighbours don't need
+        // a fresh sample. Bumping on every motion event re-runs Kawase blur
+        // for every blurred surface and tanks GPU during drag.
+        if self.last_mapped_loc != Some(new_loc) {
+            data.render.blur_geometry_generation += 1;
+            self.last_mapped_loc = Some(new_loc);
+        }
+
         handle.motion(data, None, event);
 
         // Edge auto-pan detection using pinned output.
