@@ -270,7 +270,7 @@ impl DriftWm {
             state_file_windows: Vec::new(),
             state_file_layer_count: 0,
             autostart,
-            active_crtcs: HashSet::new(),
+            active_outputs: HashSet::new(),
             redraws_needed: HashSet::new(),
             frames_pending: HashSet::new(),
             estimated_vblank_timers: HashMap::new(),

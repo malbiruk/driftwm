@@ -107,7 +107,7 @@ fn mark_blur_region_pending_dirty(wl_surface: &WlSurface) {
             // content — we have to ask for a redraw explicitly, otherwise
             // a still surface that swaps its blur rect won't repaint.
             if became_dirty {
-                state.mark_all_dirty();
+                state.mark_dirty_for_surface(surface);
             }
         });
     }

@@ -118,7 +118,11 @@ impl CompositorHandler for DriftWm {
     }
 
     fn commit(&mut self, surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface) {
-        self.mark_all_dirty();
+        // Damage only the outputs that actually host this surface — global
+        // dirty here would force every CRTC to redraw on every wl_surface
+        // commit (video, terminal scroll, etc), defeating the per-output
+        // damage tracker.
+        self.mark_dirty_for_surface(surface);
 
         // Trim corners from CSD toplevels' opaque regions so the background renders
         // behind rounded corners. Some CSD apps (e.g. LibreOffice/GTK3) declare the

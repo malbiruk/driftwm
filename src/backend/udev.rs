@@ -116,7 +116,7 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
                 continue;
             };
             if *on {
-                data.redraws_needed.insert(crtc);
+                data.redraws_needed.insert(output.clone());
             } else {
                 if let Err(e) = surface.compositor.clear() {
                     tracing::warn!(
@@ -124,7 +124,7 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
                         output.name()
                     );
                 }
-                data.redraws_needed.remove(&crtc);
+                data.redraws_needed.remove(output);
                 data.frames_pending.remove(&crtc);
                 if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
                     data.loop_handle.remove(token);
@@ -136,18 +136,17 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
         driftwm::protocols::output_power::OutputPowerState::refresh(data);
     }
 
-    // 3. Mark CRTCs dirty for per-output animations
-    for (&crtc, surface) in dev.surfaces.iter() {
+    // Mark outputs dirty for per-output animations.
+    for (_, surface) in dev.surfaces.iter() {
         if data.dpms_off_outputs.contains(&surface.output) {
             continue;
         }
         if data.output_has_active_animations(&surface.output) {
-            data.redraws_needed.insert(crtc);
+            data.redraws_needed.insert(surface.output.clone());
         }
     }
 
-    // 3. Global animations (key repeat, cursor, animated bg) → mark all dirty
-    // mark_all_dirty() uses active_crtcs on DriftWm, not dev.surfaces
+    // Global animations (key repeat, cursor, animated bg) → every output.
     if data.held_action.is_some()
         || data.cursor.exec_cursor_show_at.is_some()
         || data.cursor.exec_cursor_deadline.is_some()
@@ -180,13 +179,13 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
         );
     }
 
-    // 5. Render outputs that need it
+    // Render outputs that need it.
     for (&crtc, surface) in dev.surfaces.iter_mut() {
         if data.dpms_off_outputs.contains(&surface.output) {
-            data.redraws_needed.remove(&crtc);
+            data.redraws_needed.remove(&surface.output);
             continue;
         }
-        if data.redraws_needed.contains(&crtc) && !data.frames_pending.contains(&crtc) {
+        if data.redraws_needed.contains(&surface.output) && !data.frames_pending.contains(&crtc) {
             render_frame(data, &mut surface.compositor, &surface.output, crtc);
         }
     }
@@ -522,7 +521,7 @@ pub fn init_udev(
                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
                         data.loop_handle.remove(token);
                     }
-                    if data.redraws_needed.contains(&crtc) {
+                    if data.redraws_needed.contains(&surface.output) {
                         render_frame(data, &mut surface.compositor, &surface.output, crtc);
                     }
                 }
@@ -646,7 +645,7 @@ pub fn init_udev(
                                         &saved,
                                     ) {
                                         surfaces.insert(crtc, sd);
-                                        data.active_crtcs.insert(crtc);
+                                        data.active_outputs.insert(surfaces[&crtc].output.clone());
                                         let surface = surfaces.get_mut(&crtc).unwrap();
                                         // Notify existing toplevels about the new output
                                         driftwm::protocols::foreign_toplevel::send_output_enter_all(
@@ -666,100 +665,10 @@ pub fn init_udev(
                                 } => {
                                     tracing::info!("Hotplug: CRTC {crtc:?} disconnected");
                                     if let Some(surface) = surfaces.remove(&crtc) {
-                                        driftwm::protocols::foreign_toplevel::send_output_leave_all(
-                                            &mut data.foreign_toplevel_state,
-                                            &surface.output,
-                                        );
-
-                                        // Stop capture/screencopy sessions for this output
-                                        data.image_copy_capture_state
-                                            .remove_output(&surface.output);
-                                        data.screencopy_state.remove_output(&surface.output);
-
-                                        // Tear down the wl_output global so clients
-                                        // (wf-recorder, swayosd, etc.) see the output go away.
-                                        remove_output_global(data, surface.global);
-
-                                        // Close layer surfaces on this output so clients
-                                        // (swayosd, waybar, etc.) can recreate on remaining outputs
-                                        for layer in
-                                            smithay::desktop::layer_map_for_output(&surface.output)
-                                                .layers()
-                                        {
-                                            layer.layer_surface().send_close();
-                                        }
-
-                                        if surfaces.is_empty() {
-                                            // Last output disconnected — keep it in the Space as
-                                            // a virtual placeholder so active_output() always
-                                            // returns Some. Input events (USB keyboard/mouse) may
-                                            // still arrive; the virtual output retains its old
-                                            // mode/size so position_transformed() works correctly.
-                                            tracing::warn!(
-                                                "Last output disconnected — keeping virtual output '{}'",
-                                                surface.output.name()
-                                            );
-                                            data.disconnected_outputs.insert(surface.output.name());
-                                            data.exit_fullscreen_on(&surface.output);
-                                            data.render.remove_output(&surface.output.name());
-                                            data.lock_surfaces.remove(&surface.output);
-                                        } else {
-                                            data.space.unmap_output(&surface.output);
-
-                                            // Cancel any active pointer grab — grabs store an Output
-                                            // clone and would operate on stale state after disconnect.
-                                            if let Some(pointer) = data.seat.get_pointer() {
-                                                let serial =
-                                                    smithay::utils::SERIAL_COUNTER.next_serial();
-                                                pointer.unset_grab(data, serial, 0);
-                                            }
-
-                                            // Clean up focused_output if it was on the disconnected output
-                                            if data
-                                                .focused_output
-                                                .as_ref()
-                                                .is_some_and(|fo| fo == &surface.output)
-                                            {
-                                                data.focused_output =
-                                                    data.space.outputs().next().cloned();
-                                                if let Some(ref new_out) = data.focused_output {
-                                                    let (cam, zoom, size) = {
-                                                        let os =
-                                                            crate::state::output_state(new_out);
-                                                        let sz = crate::state::output_logical_size(
-                                                            new_out,
-                                                        );
-                                                        (os.camera, os.zoom, sz)
-                                                    };
-                                                    let center = smithay::utils::Point::from((
-                                                        cam.x + size.w as f64 / (2.0 * zoom),
-                                                        cam.y + size.h as f64 / (2.0 * zoom),
-                                                    ));
-                                                    data.warp_pointer(center);
-                                                }
-                                            }
-
-                                            // Clean up gesture state if gesture was on the disconnected output
-                                            if data
-                                                .gesture_output
-                                                .as_ref()
-                                                .is_some_and(|go| go == &surface.output)
-                                            {
-                                                data.gesture_output = None;
-                                                data.gesture_state = None;
-                                            }
-
-                                            // Clean up per-output resources
-                                            data.render.remove_output(&surface.output.name());
-                                            data.fullscreen.remove(&surface.output);
-                                            data.lock_surfaces.remove(&surface.output);
-                                            data.dpms_off_outputs.remove(&surface.output);
-                                            data.pending_dpms.remove(&surface.output);
-                                        }
+                                        let is_last = surfaces.is_empty();
+                                        teardown_output(data, surface, is_last);
                                     }
-                                    data.active_crtcs.remove(&crtc);
                                     data.frames_pending.remove(&crtc);
-                                    data.redraws_needed.remove(&crtc);
                                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc)
                                     {
                                         data.loop_handle.remove(token);
@@ -787,11 +696,11 @@ pub fn init_udev(
     );
     event_loop.handle().register_dispatcher(udev_dispatcher)?;
 
-    // 12. Seed active_crtcs and queue initial render
+    // 12. Seed active_outputs and queue initial render
     {
         let mut dev = device.borrow_mut();
         for (&crtc, surface) in dev.surfaces.iter_mut() {
-            data.active_crtcs.insert(crtc);
+            data.active_outputs.insert(surface.output.clone());
             render_frame(data, &mut surface.compositor, &surface.output, crtc);
         }
         // 13. Notify output management clients of initial state
@@ -1211,6 +1120,92 @@ fn remove_output_global(data: &mut DriftWm, global: GlobalId) {
     }
 }
 
+/// Drop everything bound to a disconnected output.
+///
+/// Runs whether the output is the last surviving one or not. The "last output"
+/// path keeps the [`Output`] in the [`Space`] as a virtual placeholder (so
+/// `active_output()` stays `Some` while a USB monitor is replugged) but still
+/// needs the grab/gesture/focus cleanup — otherwise a move grab pinned to the
+/// dying output keeps mutating its stale per-output state on every cursor event.
+fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
+    let SurfaceData { output, global, .. } = surface;
+
+    driftwm::protocols::foreign_toplevel::send_output_leave_all(
+        &mut data.foreign_toplevel_state,
+        &output,
+    );
+    data.image_copy_capture_state.remove_output(&output);
+    data.screencopy_state.remove_output(&output);
+
+    // Disable the wl_output global before any further state mutation so clients
+    // (wf-recorder, swayosd, etc.) see the removal first.
+    remove_output_global(data, global);
+
+    // Close layer surfaces hosted on this output. They'll re-anchor against
+    // remaining outputs on their next configure round-trip.
+    for layer in smithay::desktop::layer_map_for_output(&output).layers() {
+        layer.layer_surface().send_close();
+    }
+
+    // Grabs (move/resize/pan/navigate) clone the Output and keep mutating its
+    // per-output state on every motion. Cancel before the output goes away.
+    if let Some(pointer) = data.seat.get_pointer() {
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        pointer.unset_grab(data, serial, 0);
+    }
+    if data
+        .gesture_output
+        .as_ref()
+        .is_some_and(|go| go == &output)
+    {
+        data.gesture_output = None;
+        data.gesture_state = None;
+    }
+
+    data.exit_fullscreen_on(&output);
+    data.render.remove_output(&output.name());
+    data.lock_surfaces.remove(&output);
+    data.active_outputs.remove(&output);
+    data.redraws_needed.remove(&output);
+
+    if is_last {
+        // Keep the Output mapped as a virtual placeholder so active_output()
+        // and other queries stay Some while no monitor is attached. The DRM
+        // surface and wl_output global are already gone, so it's purely an
+        // input-routing/coordinate-system anchor.
+        tracing::warn!(
+            "Last output disconnected — keeping virtual output '{}'",
+            output.name()
+        );
+        data.disconnected_outputs.insert(output.name());
+    } else {
+        data.space.unmap_output(&output);
+        data.fullscreen.remove(&output);
+        data.dpms_off_outputs.remove(&output);
+        data.pending_dpms.remove(&output);
+
+        if data
+            .focused_output
+            .as_ref()
+            .is_some_and(|fo| fo == &output)
+        {
+            data.focused_output = data.space.outputs().next().cloned();
+            if let Some(ref new_out) = data.focused_output {
+                let (cam, zoom, size) = {
+                    let os = crate::state::output_state(new_out);
+                    let sz = crate::state::output_logical_size(new_out);
+                    (os.camera, os.zoom, sz)
+                };
+                let center = smithay::utils::Point::from((
+                    cam.x + size.w as f64 / (2.0 * zoom),
+                    cam.y + size.h as f64 / (2.0 * zoom),
+                ));
+                data.warp_pointer(center);
+            }
+        }
+    }
+}
+
 /// Render a single frame and queue it to the DRM compositor.
 fn render_frame(
     data: &mut DriftWm,
@@ -1218,7 +1213,7 @@ fn render_frame(
     output: &Output,
     crtc: crtc::Handle,
 ) {
-    data.redraws_needed.remove(&crtc);
+    data.redraws_needed.remove(output);
 
     // Flush Wayland clients
     data.display_handle.flush_clients().ok();
@@ -1536,7 +1531,7 @@ fn apply_pending_mode_changes(
                     smithay::utils::Size::from((mode.size().0 as i32, mode.size().1 as i32));
                 data.resize_fullscreen_for_output(&surface.output, new_size);
                 data.render.remove_output(&name);
-                data.redraws_needed.insert(*crtc);
+                data.redraws_needed.insert(surface.output.clone());
                 data.output_config_dirty = true;
                 tracing::info!(
                     "Mode change applied to '{name}': {}x{}@{}Hz",

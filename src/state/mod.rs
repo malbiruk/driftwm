@@ -487,8 +487,11 @@ pub struct DriftWm {
     pub autostart: Vec<String>,
 
     // -- global: udev/DRM --
-    pub active_crtcs: HashSet<crtc::Handle>,
-    pub redraws_needed: HashSet<crtc::Handle>,
+    /// Outputs whose CRTC is currently active (driven by the backend).
+    /// Used as the universe for [`Self::mark_all_dirty`].
+    pub active_outputs: HashSet<Output>,
+    /// Outputs that need to render on the next backend tick.
+    pub redraws_needed: HashSet<Output>,
     pub frames_pending: HashSet<crtc::Handle>,
     /// One-shot timers armed when queue_frame returned EmptyFrame so the loop
     /// still wakes at ~refresh rate to advance animations (e.g. xcursor frames).
@@ -666,9 +669,62 @@ impl DriftWm {
         keyboard.set_focus(self, focus_surface, serial);
     }
 
-    /// Mark all active outputs as needing a redraw.
+    /// Mark every active output as needing a redraw.
     pub fn mark_all_dirty(&mut self) {
-        self.redraws_needed.extend(self.active_crtcs.iter());
+        self.redraws_needed.clone_from(&self.active_outputs);
+    }
+
+    /// Mark every output that currently displays `surface` (or its root toplevel /
+    /// hosting layer / lock output) as needing a redraw. Falls back to
+    /// [`Self::mark_all_dirty`] when the surface can't be resolved to a specific
+    /// output — covers DnD icons, orphan popups, and the brief window between
+    /// a toplevel's first commit and its space mapping.
+    pub fn mark_dirty_for_surface(&mut self, surface: &WlSurface) {
+        use smithay::desktop::{WindowSurfaceType, layer_map_for_output};
+        use smithay::wayland::compositor::get_parent;
+
+        let mut root = surface.clone();
+        while let Some(parent) = get_parent(&root) {
+            root = parent;
+        }
+
+        if let Some(window) = self
+            .space
+            .elements()
+            .find(|w| w.wl_surface().as_deref() == Some(&root))
+            .cloned()
+        {
+            let outputs = self.space.outputs_for_element(&window);
+            if !outputs.is_empty() {
+                for output in outputs {
+                    self.redraws_needed.insert(output);
+                }
+                return;
+            }
+        }
+
+        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
+        for output in &outputs {
+            let hit = layer_map_for_output(output)
+                .layer_for_surface(&root, WindowSurfaceType::ALL)
+                .is_some();
+            if hit {
+                self.redraws_needed.insert(output.clone());
+                return;
+            }
+        }
+
+        if let Some(output) = self
+            .lock_surfaces
+            .iter()
+            .find(|(_, ls)| ls.wl_surface() == &root)
+            .map(|(o, _)| o.clone())
+        {
+            self.redraws_needed.insert(output);
+            return;
+        }
+
+        self.mark_all_dirty();
     }
 
     pub fn cursor_is_animated(&self) -> bool {
