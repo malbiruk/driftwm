@@ -224,6 +224,7 @@ impl DriftWm {
             cursor: CursorState::new(),
             dnd_icon: None,
             backend: None,
+            ipc_server: None,
             decorations: HashMap::new(),
             pending_ssd: HashSet::new(),
             decoration_scale: 1,

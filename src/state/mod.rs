@@ -328,6 +328,9 @@ pub struct DriftWm {
     pub dnd_icon: Option<DndIcon>,
 
     pub backend: Option<Backend>,
+    // -- global: IPC server --
+    pub ipc_server: Option<crate::ipc::IpcServer>,
+    // -- global: SSD decorations --
     pub decorations: HashMap<
         smithay::reexports::wayland_server::backend::ObjectId,
         crate::decorations::WindowDecoration,
