@@ -302,6 +302,8 @@ pub struct DriftWm {
 
     // -- global: backend --
     pub backend: Option<Backend>,
+    // -- global: IPC server --
+    pub ipc_server: Option<crate::ipc::IpcServer>,
     // -- global: SSD decorations --
     pub decorations: HashMap<
         smithay::reexports::wayland_server::backend::ObjectId,

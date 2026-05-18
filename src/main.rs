@@ -3,6 +3,7 @@ mod decorations;
 mod grabs;
 mod handlers;
 mod input;
+mod ipc;
 mod region;
 mod render;
 mod signals;
@@ -77,6 +78,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_loop.get_signal(),
     );
 
+    // Initialize IPC server
+    match crate::ipc::IpcServer::new(&event_loop.handle()) {
+        Ok(server) => data.ipc_server = Some(server),
+        Err(e) => tracing::warn!("IPC server failed to start: {}", e),
+    }
+
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     let drm_device = match backend_name.as_str() {
         "udev" => Some(backend::udev::init_udev(&mut event_loop, &mut data)?),
@@ -115,6 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // set in Config::load() with user [env] overrides taking precedence.
     unsafe { std::env::set_var("XDG_SESSION_CLASS", "user") };
     unsafe { std::env::set_var("XDG_SESSION_DESKTOP", "driftwm") };
+
+    // Add WAYLAND_DISPLAY to child_env for autostart commands
+    data.config.child_env.insert("WAYLAND_DISPLAY".to_string(), socket_name.clone());
 
     // Export only session-level vars to systemd and D-Bus. Pass them through
     // Command::env() rather than relying on process env — the policy is "don't
