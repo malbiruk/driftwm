@@ -1024,4 +1024,26 @@ impl SessionLockHandler for DriftWm {
     }
 }
 
+use driftwm::protocols::gamma_control::{GammaControlHandler, GammaControlManagerState};
+
+impl GammaControlHandler for DriftWm {
+    fn gamma_control_manager_state(&mut self) -> &mut GammaControlManagerState {
+        &mut self.gamma_control_manager_state
+    }
+
+    fn get_gamma_size(&mut self, output: &smithay::output::Output) -> Option<u32> {
+        self.udev_device.as_ref()?.get_gamma_size(output)
+    }
+
+    fn set_gamma(
+        &mut self,
+        output: &smithay::output::Output,
+        ramp: Option<Vec<u16>>,
+    ) -> Option<()> {
+        self.udev_device.as_ref()?.set_gamma(output, ramp)
+    }
+}
+
+driftwm::delegate_gamma_control!(DriftWm);
+
 delegate_session_lock!(DriftWm);

@@ -40,6 +40,7 @@ use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
 use crate::backend::Backend;
 use crate::backend::cvt;
+use crate::backend::gamma::{GammaProps, set_gamma_for_crtc_legacy};
 use crate::render::OutputRenderElements;
 use crate::state::{DriftWm, init_output_state};
 use driftwm::config::{OutputMode as ConfigOutputMode, OutputPosition};
@@ -76,14 +77,79 @@ struct SurfaceData {
     model: String,
     serial_number: String,
     global: GlobalId,
+    /// Atomic GAMMA_LUT/GAMMA_LUT_SIZE property handles. `None` if the driver
+    /// doesn't expose them; in that case we fall back to legacy `set_gamma`.
+    gamma_props: Option<GammaProps>,
+    /// Gamma ramp queued while the session is inactive (VT switched away).
+    /// Re-applied on session resume. `Some(Some(ramp))` = set to ramp,
+    /// `Some(None)` = reset to identity, `None` = nothing pending.
+    pending_gamma_change: Option<Option<Vec<u16>>>,
 }
 
 /// Opaque handle to udev backend device data. Returned by init_udev,
-/// passed to render_if_needed. main.rs never sees internals.
+/// stored on `DriftWm::udev_device` (single owner). Rc-cloneable so the
+/// render loop and gamma-control handler can each grab an independent
+/// `RefCell` borrow without re-routing through DriftWm.
+#[derive(Clone)]
 pub(crate) struct UdevDevice(Rc<RefCell<DeviceData>>);
 
+/// Apply (or clear, with `None`) a gamma ramp on `surface` via whichever
+/// path the CRTC supports — atomic GAMMA_LUT first, legacy ioctl fallback.
+fn apply_gamma(
+    surface: &mut SurfaceData,
+    drm: &DrmDevice,
+    crtc: crtc::Handle,
+    ramp: Option<&[u16]>,
+) -> Option<()> {
+    if let Some(gp) = &mut surface.gamma_props {
+        gp.set_gamma(drm, ramp)
+    } else {
+        set_gamma_for_crtc_legacy(drm, crtc, ramp)
+    }
+}
+
+impl UdevDevice {
+    /// Look up the per-output gamma LUT size. Prefers atomic GAMMA_LUT_SIZE;
+    /// falls back to the CRTC's legacy `gamma_length`. Returns `None` if the
+    /// CRTC reports size 0 (e.g. Apple DCP on Asahi, virtual outputs without
+    /// gamma support) so the protocol cleanly fails the control rather than
+    /// advertising a 0-entry LUT.
+    pub(crate) fn get_gamma_size(&self, output: &Output) -> Option<u32> {
+        use smithay::reexports::drm::control::Device as _;
+        let dev = self.0.borrow();
+        let (crtc, surface) = dev.surfaces.iter().find(|(_, s)| s.output == *output)?;
+        let size = if let Some(gp) = &surface.gamma_props {
+            gp.gamma_size(&dev.drm)?
+        } else {
+            dev.drm.get_crtc(*crtc).ok()?.gamma_length()
+        };
+        (size != 0).then_some(size)
+    }
+
+    /// Apply a gamma ramp (or reset to identity if `None`). Atomic path if
+    /// the driver exposes GAMMA_LUT; legacy ioctl otherwise. If the session
+    /// is inactive (VT switched away), the ramp is queued on the surface
+    /// and re-applied on resume.
+    pub(crate) fn set_gamma(&self, output: &Output, ramp: Option<Vec<u16>>) -> Option<()> {
+        let mut dev = self.0.borrow_mut();
+        let DeviceData { drm, surfaces, .. } = &mut *dev;
+        let (crtc, surface) = surfaces.iter_mut().find(|(_, s)| s.output == *output)?;
+
+        if !drm.is_active() {
+            surface.pending_gamma_change = Some(ramp);
+            return Some(());
+        }
+
+        apply_gamma(surface, drm, *crtc, ramp.as_deref())
+    }
+}
+
 /// Tick animations once for all outputs, mark dirty CRTCs, then render.
-pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
+///
+/// Reads the `UdevDevice` from `data.udev_device` (single owner). Cheap
+/// `Rc` clone so we hold an independent `RefCell` borrow without conflicting
+/// with mutations on `data`.
+pub(crate) fn render_if_needed(data: &mut DriftWm) {
     // Fast path: nothing needs attention — skip all work when idle
     if data.redraws_needed.is_empty()
         && !data.has_active_animations()
@@ -93,6 +159,10 @@ pub(crate) fn render_if_needed(device: &UdevDevice, data: &mut DriftWm) {
     {
         return;
     }
+
+    let Some(device) = data.udev_device.clone() else {
+        return;
+    };
 
     // 1. Tick animations once for all outputs (before device borrow)
     data.tick_all_animations();
@@ -570,11 +640,32 @@ pub fn init_udev(
                     data.dpms_off_outputs.clear();
                     data.pending_dpms.clear();
                     driftwm::protocols::output_power::OutputPowerState::refresh(data);
-                    for (&crtc, surface) in dev.surfaces.iter_mut() {
+                    let DeviceData { drm, surfaces, .. } = &mut *dev;
+                    for (&crtc, surface) in surfaces.iter_mut() {
                         if let Err(e) = surface.compositor.reset_state() {
                             tracing::warn!("Failed to reset DRM surface state: {e}");
                         }
                         let _ = surface.compositor.frame_submitted();
+                        if let Some(ramp) = surface.pending_gamma_change.take() {
+                            if apply_gamma(surface, drm, crtc, ramp.as_deref()).is_none() {
+                                tracing::warn!(
+                                    "failed to re-apply gamma on session resume for crtc {crtc:?}"
+                                );
+                            }
+                        } else if let Some(gp) = &mut surface.gamma_props
+                            && gp.has_previous_blob()
+                        {
+                            // VT switch clears CRTC gamma to default. Re-apply
+                            // the last-set blob so a tint set before the switch
+                            // doesn't silently vanish until the client re-polls.
+                            // Legacy path has no equivalent — kernel doesn't
+                            // retain the ramp and we don't shadow it.
+                            if gp.restore_gamma(drm).is_none() {
+                                tracing::warn!(
+                                    "failed to restore gamma on session resume for crtc {crtc:?}"
+                                );
+                            }
+                        }
                         render_frame(data, &mut surface.compositor, &surface.output, crtc);
                     }
                 }
@@ -1091,6 +1182,14 @@ fn create_surface(
         .map_output(&output, effective_camera.to_i32_round());
     state.recompute_decoration_scale();
 
+    let gamma_props = GammaProps::new(drm, crtc);
+    if gamma_props.is_none() {
+        tracing::info!(
+            "GAMMA_LUT atomic property unavailable on CRTC {crtc:?} — falling back to legacy \
+             drmModeCrtcSetGamma ioctl. Driver may not expose GAMMA_LUT/GAMMA_LUT_SIZE properties."
+        );
+    }
+
     Some(SurfaceData {
         compositor,
         output,
@@ -1099,6 +1198,8 @@ fn create_surface(
         model,
         serial_number,
         global,
+        gamma_props,
+        pending_gamma_change: None,
     })
 }
 
@@ -1137,6 +1238,7 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
     );
     data.image_copy_capture_state.remove_output(&output);
     data.screencopy_state.remove_output(&output);
+    data.gamma_control_manager_state.output_removed(&output);
 
     // Disable the wl_output global before any further state mutation so clients
     // (wf-recorder, swayosd, etc.) see the removal first.

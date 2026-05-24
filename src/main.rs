@@ -79,13 +79,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
-    let drm_device = match backend_name.as_str() {
-        "udev" => Some(backend::udev::init_udev(&mut event_loop, &mut data)?),
-        _ => {
-            backend::winit::init_winit(&mut event_loop, &mut data)?;
-            None
+    match backend_name.as_str() {
+        "udev" => {
+            let dev = backend::udev::init_udev(&mut event_loop, &mut data)?;
+            data.udev_device = Some(dev);
         }
-    };
+        _ => backend::winit::init_winit(&mut event_loop, &mut data)?,
+    }
 
     // Register the Wayland Display as a calloop source so client messages
     // are dispatched automatically. This replaces the old poll_fd approach.
@@ -222,9 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Run the event loop
     tracing::info!("Starting event loop — launch apps with: WAYLAND_DISPLAY={socket_name} <app>");
     event_loop.run(None, &mut data, |data| {
-        if let Some(ref device) = drm_device {
-            backend::udev::render_if_needed(device, data);
-        }
+        backend::udev::render_if_needed(data);
         data.space.refresh();
         data.popups.cleanup();
         data.display_handle.flush_clients().ok();

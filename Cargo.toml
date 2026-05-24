@@ -32,4 +32,5 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 libc = "0.2"
 calloop = { version = "0.14", features = ["signals"] }
 drm-ffi = "0.9"
+bytemuck = { version = "1.25", features = ["derive"] }
 cosmic-text = { version = "0.17.0", features = ["shape-run-cache"] }

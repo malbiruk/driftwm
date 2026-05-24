@@ -152,6 +152,11 @@ impl DriftWm {
             );
         let session_lock_manager_state =
             SessionLockManagerState::new::<Self, _>(&dh, client_is_unrestricted);
+        let gamma_control_manager_state =
+            driftwm::protocols::gamma_control::GammaControlManagerState::new::<Self, _>(
+                &dh,
+                client_is_unrestricted,
+            );
         let xdg_foreign_state = XdgForeignState::new::<Self>(&dh);
         smithay::wayland::content_type::ContentTypeState::new::<Self>(&dh);
         {
@@ -245,6 +250,7 @@ impl DriftWm {
             xdg_foreign_state,
             background_effect_state,
             session_lock_manager_state,
+            gamma_control_manager_state,
             session_lock: SessionLock::Unlocked,
             lock_surfaces: HashMap::new(),
             pointer_over_layer: false,
@@ -284,6 +290,7 @@ impl DriftWm {
             output_config_dirty: false,
             pending_mode_changes: HashMap::new(),
             satellite: None,
+            udev_device: None,
             last_titlebar_click: None,
         }
     }

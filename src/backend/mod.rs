@@ -1,4 +1,5 @@
 pub mod cvt;
+pub mod gamma;
 pub mod udev;
 pub mod winit;
 

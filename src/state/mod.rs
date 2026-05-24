@@ -421,6 +421,7 @@ pub struct DriftWm {
     #[allow(dead_code)]
     pub background_effect_state: BackgroundEffectState,
     pub session_lock_manager_state: SessionLockManagerState,
+    pub gamma_control_manager_state: driftwm::protocols::gamma_control::GammaControlManagerState,
     pub session_lock: SessionLock,
     // -- per-output: lock surface (one per output in multi-monitor) --
     pub lock_surfaces: HashMap<Output, LockSurface>,
@@ -530,6 +531,11 @@ pub struct DriftWm {
 
     // -- global: xwayland-satellite (on-demand X11 socket integration) --
     pub satellite: Option<crate::xwayland::Satellite>,
+
+    /// Udev backend handle (Rc — cloneable). Single owner here; render loop
+    /// and protocols (gamma_control) borrow via `udev_device.as_ref()`.
+    /// `None` when the winit backend is in use.
+    pub udev_device: Option<crate::backend::udev::UdevDevice>,
 
     // -- global: SSD title bar double-click --
     pub last_titlebar_click: Option<(
