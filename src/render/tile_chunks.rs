@@ -1,12 +1,13 @@
 //! Chunked tile-background rendering. `BgChunkCache` owns a [`TiffSource`] and
-//! decodes+uploads tiles on demand; element create/reuse emits only what's
-//! already cached.
+//! decodes+uploads tiles on demand at a zoom-selected LOD. When the requested
+//! fine LOD isn't cached, [`chunk_render_elements`] falls back to the coarsest
+//! cached LOD that covers the region (blurry-then-sharp loading).
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 use smithay::backend::allocator::Fourcc;
-use smithay::backend::renderer::ImportMem;
+use smithay::backend::renderer::{ImportMem, Texture};
 use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
@@ -15,19 +16,27 @@ use super::tile_chunks_tiff::TiffSource;
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
 pub struct BgChunkCache {
+    /// LOD 0 image dimensions in canvas units (defines the wrap period and
+    /// the clip rect against which every LOD's chunks are intersected).
     pub image_dims: (u32, u32),
     /// Canvas-coord position of the image's top-left corner. Set so the image
     /// is *centered* on canvas (0, 0) — i.e. `(-image_w/2, -image_h/2)`. Wrap
     /// seams then sit at ±image_w/2, ±image_h/2 rather than at the origin.
     pub image_position: Point<i32, Logical>,
-    pub chunk_canvas_size: i32,
     pub chunk_bg_shader: GlesTexProgram,
-    pub chunks: HashMap<(i32, i32), GlesTexture>,
-    pub chunk_elements: HashMap<(i32, i32, i32, i32), TileShaderElement>,
+    pub chunks: HashMap<(u32, i32, i32), GlesTexture>,
+    /// A coarse-LOD fallback tile can show up here keyed at its own `lod` even
+    /// when the requesting fine LOD has no element of its own, so the key
+    /// space spans all LODs, not just the currently-selected one.
+    pub chunk_elements: HashMap<(u32, i32, i32, i32, i32), TileShaderElement>,
+    /// Per-LOD chunk canvas span (canvas units per tile at that LOD). Computed
+    /// once at init so lookup and emission read the same rounded values, and
+    /// validated to a strict 2× ratio between adjacent LODs — coarser-LOD
+    /// fallback's `div_euclid(2)` map then has no straddle gaps.
+    chunk_canvas_sizes: Vec<i32>,
     source: TiffSource,
 }
 
-// Silenced until init_background's TIFF routing lands.
 #[allow(dead_code)]
 impl BgChunkCache {
     /// Caller must run [`ensure_visible_loaded`](Self::ensure_visible_loaded)
@@ -37,17 +46,20 @@ impl BgChunkCache {
         source: TiffSource,
         chunk_bg_shader: GlesTexProgram,
     ) -> Result<Self, String> {
-        let meta = *source
+        for (i, meta) in source.lods().iter().enumerate() {
+            if meta.tile_dims.0 != meta.tile_dims.1 {
+                return Err(format!(
+                    "LOD {i}: non-square tile dims {:?} not supported",
+                    meta.tile_dims
+                ));
+            }
+        }
+        let lod0 = *source
             .lods()
             .first()
             .ok_or("TIFF has no LOD levels")?;
-        if meta.tile_dims.0 != meta.tile_dims.1 {
-            return Err(format!(
-                "non-square tile dims {:?} not supported",
-                meta.tile_dims
-            ));
-        }
-        let image_dims = meta.image_dims;
+        let image_dims = lod0.image_dims;
+        let chunk_canvas_sizes = derive_chunk_canvas_sizes(&source)?;
         let image_position = Point::from((
             -(image_dims.0 as i32) / 2,
             -(image_dims.1 as i32) / 2,
@@ -55,30 +67,41 @@ impl BgChunkCache {
         Ok(Self {
             image_dims,
             image_position,
-            chunk_canvas_size: meta.tile_dims.0 as i32,
             chunk_bg_shader,
             chunks: HashMap::new(),
             chunk_elements: HashMap::new(),
+            chunk_canvas_sizes,
             source,
         })
     }
 
-    /// Decode + upload up to `budget` not-yet-cached visible tiles; over-budget
-    /// tiles are reconsidered next frame. Failed decodes are logged and
-    /// dropped so the caller retries.
+    pub fn n_lods(&self) -> u32 {
+        self.chunk_canvas_sizes.len() as u32
+    }
+
+    pub fn chunk_canvas_size_at(&self, lod: u32) -> i32 {
+        self.chunk_canvas_sizes[lod as usize]
+    }
+
+    /// Decode + upload up to `budget` not-yet-cached visible tiles at the LOD
+    /// chosen by `zoom`. Over-budget tiles are reconsidered next frame; failed
+    /// decodes are logged and dropped so the caller retries.
     pub fn ensure_visible_loaded(
         &mut self,
         viewport: Rectangle<i32, Logical>,
         renderer: &mut GlesRenderer,
+        zoom: f64,
         budget: usize,
     ) -> usize {
+        let target_lod = pick_lod(zoom, self.n_lods());
+        let chunk_size = self.chunk_canvas_size_at(target_lod);
         let visible = visibility_query(
             viewport,
             self.image_position,
             self.image_dims,
-            self.chunk_canvas_size,
+            chunk_size,
         );
-        // Dedup (cx, cy) across wrap offsets: one image tile maps to many
+        // Dedup (cx, cy) across wrap offsets: one source tile maps to many
         // canvas instances but uploads once.
         let mut wanted: HashSet<(i32, i32)> = HashSet::with_capacity(visible.len());
         for (cx, cy, _kx, _ky) in &visible {
@@ -89,19 +112,21 @@ impl BgChunkCache {
             if loaded >= budget {
                 break;
             }
-            if self.chunks.contains_key(&(cx, cy)) {
+            if self.chunks.contains_key(&(target_lod, cx, cy)) {
                 continue;
             }
             // visibility_query clips to image bounds so cx/cy >= 0.
             let Ok(cx_u) = u32::try_from(cx) else { continue };
             let Ok(cy_u) = u32::try_from(cy) else { continue };
-            match self.load_tile(cx_u, cy_u, renderer) {
+            match self.load_tile(target_lod, cx_u, cy_u, renderer) {
                 Ok(tex) => {
-                    self.chunks.insert((cx, cy), tex);
+                    self.chunks.insert((target_lod, cx, cy), tex);
                     loaded += 1;
                 }
                 Err(e) => {
-                    tracing::warn!("chunked tile ({cx},{cy}) load failed: {e}");
+                    tracing::warn!(
+                        "chunked tile (LOD {target_lod}, {cx},{cy}) load failed: {e}"
+                    );
                 }
             }
         }
@@ -110,11 +135,12 @@ impl BgChunkCache {
 
     fn load_tile(
         &mut self,
+        lod: u32,
         cx: u32,
         cy: u32,
         renderer: &mut GlesRenderer,
     ) -> Result<GlesTexture, String> {
-        let tile = self.source.read_tile(0, cx, cy)?;
+        let tile = self.source.read_tile(lod, cx, cy)?;
         renderer
             .import_memory(
                 &tile.rgba,
@@ -126,6 +152,60 @@ impl BgChunkCache {
                 format!("import_memory ({}x{}): {e}", tile.width, tile.height)
             })
     }
+}
+
+/// Pick the largest LOD whose sample density still matches or exceeds what the
+/// screen needs at this zoom — `k = floor(-log2(zoom))`. Clamped to
+/// `[0, n_lods - 1]`. At `zoom >= 1.0` always returns LOD 0. NaN/non-finite
+/// zoom returns LOD 0 (defensive — animation math shouldn't produce NaN,
+/// but a clamp prevents a panic from `as u32` on a NaN cast).
+pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
+    if n_lods == 0 {
+        return 0;
+    }
+    let last = n_lods - 1;
+    if zoom >= 1.0 || !zoom.is_finite() {
+        return 0;
+    }
+    if zoom <= 0.0 {
+        return last;
+    }
+    let n = (-zoom.log2()).floor();
+    if !n.is_finite() || n < 0.0 {
+        return 0;
+    }
+    (n as u32).min(last)
+}
+
+/// Compute per-LOD canvas chunk sizes (canvas units per tile at that LOD) and
+/// validate that adjacent LODs sit at a strict 2× ratio. Most pyramidal-TIFF
+/// converters (vips, gdal) output power-of-2 pyramids; non-2× pyramids would
+/// require multi-coarse-tile lookup to avoid straddle gaps in the fallback
+/// path, which isn't worth the complexity. Reject at init instead.
+fn derive_chunk_canvas_sizes(source: &TiffSource) -> Result<Vec<i32>, String> {
+    let lods = source.lods();
+    let lod_0_w = lods[0].image_dims.0 as f64;
+    let mut sizes = Vec::with_capacity(lods.len());
+    for (i, meta) in lods.iter().enumerate() {
+        let scale = lod_0_w / meta.image_dims.0 as f64;
+        let s = (meta.tile_dims.0 as f64 * scale).round() as i32;
+        if s <= 0 {
+            return Err(format!("LOD {i}: derived canvas chunk size {s} <= 0"));
+        }
+        sizes.push(s);
+    }
+    for i in 1..sizes.len() {
+        if sizes[i] != 2 * sizes[i - 1] {
+            return Err(format!(
+                "non-power-of-2 LOD pyramid: LOD {i} canvas chunk size {} \
+                 must be 2× LOD {} size {} (use a vips/gdal-style 2× pyramid)",
+                sizes[i],
+                i - 1,
+                sizes[i - 1],
+            ));
+        }
+    }
+    Ok(sizes)
 }
 
 /// Integer `k` offsets along one axis such that image instance `k` overlaps
@@ -212,42 +292,77 @@ pub(crate) fn chunk_canvas_origin(
 
 /// Per-frame visibility update + element create/reuse.
 ///
-/// * Inner `TileShaderElement` is persistent per `(cx, cy, kx, ky)` with a stable
-///   `Id`; `resize()` is idempotent so a static camera leaves the commit counter
-///   alone and the damage tracker preserves the frame.
-/// * All chunks share a `(0, 0)` rounding anchor in `PixelSnapRescaleElement` so
-///   adjacent chunks meet at pixel-consistent edges at fractional zoom — actual
-///   position lives in the inner element's `area`.
+/// Selects the target LOD from `zoom`, then for each visible fine chunk walks
+/// progressively coarser cached LODs until one is found (or skips if none).
+/// The coarser tile renders over a LARGER canvas area than the fine chunk
+/// asked for; adjacent fine chunks that resolve to the same coarse tile
+/// dedup to a single element via the `(lod, cx, cy, kx, ky)` element key.
+///
+/// * Inner `TileShaderElement` is persistent per element key with a stable
+///   `Id`; `resize()` is idempotent so a static camera leaves the commit
+///   counter alone and the damage tracker preserves the frame.
+/// * All chunks share a `(0, 0)` rounding anchor in `PixelSnapRescaleElement`
+///   so adjacent chunks meet at pixel-consistent edges at fractional zoom —
+///   actual position lives in the inner element's `area`.
 pub fn chunk_render_elements(
     cache: &mut BgChunkCache,
     viewport: Rectangle<i32, Logical>,
     camera: Point<f64, Logical>,
     zoom: f64,
 ) -> Vec<PixelSnapRescaleElement<TileShaderElement>> {
-    let visible = visibility_query(
+    let target_lod = pick_lod(zoom, cache.n_lods());
+    let target_chunk_size = cache.chunk_canvas_size_at(target_lod);
+    let visible_target = visibility_query(
         viewport,
         cache.image_position,
         cache.image_dims,
-        cache.chunk_canvas_size,
+        target_chunk_size,
     );
-    let visible_set: HashSet<(i32, i32, i32, i32)> = visible.iter().copied().collect();
+
+    let n_lods = cache.n_lods();
+    let mut to_render: HashSet<(u32, i32, i32, i32, i32)> =
+        HashSet::with_capacity(visible_target.len());
+    for (cx_t, cy_t, kx, ky) in &visible_target {
+        // (kx, ky) factors into element placement, not LOD lookup — coarser
+        // LODs are picked on the k=0-instance canvas origin.
+        let target_cx_canvas = cx_t * target_chunk_size;
+        let target_cy_canvas = cy_t * target_chunk_size;
+        for try_lod in target_lod..n_lods {
+            let try_size = cache.chunk_canvas_size_at(try_lod);
+            let try_cx = target_cx_canvas.div_euclid(try_size);
+            let try_cy = target_cy_canvas.div_euclid(try_size);
+            if cache.chunks.contains_key(&(try_lod, try_cx, try_cy)) {
+                to_render.insert((try_lod, try_cx, try_cy, *kx, *ky));
+                break;
+            }
+        }
+    }
+
     cache
         .chunk_elements
-        .retain(|key, _| visible_set.contains(key));
+        .retain(|key, _| to_render.contains(key));
 
     let camera_i = Point::<i32, Logical>::from((camera.x.round() as i32, camera.y.round() as i32));
-    let chunk_size = cache.chunk_canvas_size;
     let image_dims = cache.image_dims;
     let image_position = cache.image_position;
 
-    let mut out = Vec::with_capacity(visible.len());
-    for key in visible {
-        let (cx, cy, kx, ky) = key;
-        // Edge chunks (right/bottom) may be smaller than `chunk_size` when
-        // `image_dims` isn't a multiple of `chunk_size`. Use the actual size
-        // for both the canvas area and the texture sample rect — otherwise
-        // edge chunks get stretched to `chunk_size` and overlap the next
-        // wrap-offset instance.
+    // Sort for deterministic emission order: HashSet iteration is non-
+    // deterministic, and overlapping coarse tiles (LOD-boundary fallback)
+    // would otherwise z-fight frame-to-frame.
+    let mut ordered: Vec<_> = to_render.into_iter().collect();
+    ordered.sort_unstable();
+
+    let mut out = Vec::with_capacity(ordered.len());
+    for key in ordered {
+        let (lod, cx, cy, kx, ky) = key;
+        let chunk_size = cache.chunk_canvas_size_at(lod);
+        // Edge chunks (right/bottom) may be smaller when image_dims isn't a
+        // multiple of chunk_size at this LOD. Use the actual size for the
+        // canvas area so edge chunks don't stretch past the next wrap-offset
+        // instance. Texture pixel dims come from the GPU texture itself
+        // (`tex.width()/height()`) — at coarser LODs they're FAR smaller than
+        // the canvas span, and passing canvas units as tex_w/tex_h would make
+        // the shader sample a tiny corner of the texture into a huge area.
         let (chunk_w, chunk_h) = chunk_actual_size(cx, cy, image_dims, chunk_size);
         let canvas_origin =
             chunk_canvas_origin(cx, cy, kx, ky, image_position, image_dims, chunk_size);
@@ -257,20 +372,16 @@ pub fn chunk_render_elements(
         );
         let opaque = vec![area];
 
-        // Source-chunk grid is fully populated by the loader; a missing
-        // (cx, cy) would be a bug. Skip rather than panic.
-        if !cache.chunks.contains_key(&(cx, cy)) {
-            continue;
-        }
+        // Resolve loop above only inserts keys whose `chunks` entry exists.
+        let tex = cache.chunks.get(&(lod, cx, cy)).unwrap().clone();
+        let tex_w = tex.width() as i32;
+        let tex_h = tex.height() as i32;
         let elem = cache.chunk_elements.entry(key).or_insert_with(|| {
-            // Cloned inside the closure so cache-hit iterations skip the
-            // refcount bump on `tex` and the shader.
-            let tex = cache.chunks.get(&(cx, cy)).unwrap().clone();
             TileShaderElement::new(
                 cache.chunk_bg_shader.clone(),
                 tex,
-                chunk_w,
-                chunk_h,
+                tex_w,
+                tex_h,
                 area,
                 Some(opaque.clone()),
                 1.0,
@@ -279,12 +390,11 @@ pub fn chunk_render_elements(
             )
         });
         // Idempotent when `area` is unchanged — no commit bump, no damage.
-        // `camera_i` is integer-rounded, so sub-pixel camera drift (<= 0.5
+        // `camera_i` is integer-rounded so sub-pixel camera drift (<= 0.5
         // logical px) produces the same `area` and the same no-damage path.
         elem.resize(area, Some(opaque));
         out.push(PixelSnapRescaleElement::from_element(
             elem.clone(),
-            // Shared rounding anchor (not image_position) — see fn doc.
             Point::<i32, Physical>::from((0, 0)),
             zoom,
         ));
@@ -526,6 +636,55 @@ mod tests {
         assert!(v.contains(&(1, 0, -1, 0)));
         assert!(v.contains(&(0, 0, 0, 0)));
         assert_eq!(v.len(), 2);
+    }
+
+    #[test]
+    fn pick_lod_at_native_zoom_returns_zero() {
+        assert_eq!(pick_lod(1.0, 5), 0);
+        assert_eq!(pick_lod(2.0, 5), 0);
+    }
+
+    #[test]
+    fn pick_lod_descends_with_zoom() {
+        assert_eq!(pick_lod(0.5, 5), 1);
+        assert_eq!(pick_lod(0.25, 5), 2);
+        assert_eq!(pick_lod(0.125, 5), 3);
+    }
+
+    #[test]
+    fn pick_lod_just_below_power_of_two() {
+        // zoom = 0.49 → -log2(0.49) ≈ 1.03 → floor 1 → LOD 1 (still sharp
+        // enough; LOD 1 pixel covers 0.98 screen px at this zoom).
+        assert_eq!(pick_lod(0.49, 5), 1);
+        // zoom = 0.51 just above 0.5 → -log2 ≈ 0.97 → floor 0 → LOD 0.
+        assert_eq!(pick_lod(0.51, 5), 0);
+    }
+
+    #[test]
+    fn pick_lod_clamps_to_last() {
+        // zoom = 0.01 → -log2(0.01) ≈ 6.64 → floor 6 → clamp to last = 4.
+        assert_eq!(pick_lod(0.01, 5), 4);
+    }
+
+    #[test]
+    fn pick_lod_non_finite_returns_zero() {
+        // NaN/Infinity from buggy animation math collapse to 0 rather than
+        // panic on the `as u32` cast.
+        assert_eq!(pick_lod(f64::NAN, 5), 0);
+        assert_eq!(pick_lod(f64::INFINITY, 5), 0);
+        assert_eq!(pick_lod(f64::NEG_INFINITY, 5), 0);
+    }
+
+    #[test]
+    fn pick_lod_zero_zoom_returns_last() {
+        assert_eq!(pick_lod(0.0, 5), 4);
+    }
+
+    #[test]
+    fn pick_lod_zero_lods_returns_zero() {
+        // Defensive: caller invariant is n_lods >= 1, but the function
+        // shouldn't panic if the invariant breaks.
+        assert_eq!(pick_lod(0.5, 0), 0);
     }
 
     #[test]
