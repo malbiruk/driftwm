@@ -57,7 +57,6 @@ pub struct BgChunkCache {
     source: TiffSource,
 }
 
-#[allow(dead_code)]
 impl BgChunkCache {
     /// Caller must run [`ensure_visible_loaded`](Self::ensure_visible_loaded)
     /// before [`chunk_render_elements`] each frame — otherwise freshly visible

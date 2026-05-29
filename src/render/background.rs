@@ -84,6 +84,11 @@ pub fn init_background(
     // fresh verdict, so the error set by the output that first compiled it must
     // be left untouched (a second-monitor cache hit must not clear it).
     let outcome: Option<Result<(), String>> = match state.config.background.kind.clone() {
+        BackgroundKind::Tile(path) if is_tiff_path(&path) => {
+            Some(tile_chunks_or_shader_fallback(
+                state, renderer, initial_size, output_name, &path,
+            ))
+        }
         BackgroundKind::Tile(path) => texture_or_shader_fallback(
             state, renderer, initial_size, output_name, &path, TextureBgMode::Tile,
         ),
@@ -100,6 +105,63 @@ pub fn init_background(
         Some(Err(msg)) => state.set_error(crate::state::ErrorSource::Background, msg),
         None => {}
     }
+}
+
+fn is_tiff_path(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".tif") || lower.ends_with(".tiff")
+}
+
+fn tile_chunks_or_shader_fallback(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    initial_size: Size<i32, Logical>,
+    output_name: &str,
+    path: &str,
+) -> Result<(), String> {
+    match init_tile_chunks_bg(state, renderer, path, output_name) {
+        Ok(()) => Ok(()),
+        Err(msg) => {
+            init_shader_bg(state, renderer, initial_size, output_name);
+            Err(msg)
+        }
+    }
+}
+
+/// Tiles load lazily — first ~5-10 frames after init/reload render blank
+/// until the budget fills the visible set (no coarser-LOD fallback cold).
+fn init_tile_chunks_bg(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    path: &str,
+    output_name: &str,
+) -> Result<(), String> {
+    use crate::render::tile_chunks::BgChunkCache;
+    use crate::render::tile_chunks_tiff::TiffSource;
+
+    let source = TiffSource::open(path).map_err(|e| format!("tile bg '{path}': {e}"))?;
+    if state.render.chunk_bg_shader.is_none() {
+        const SRC: &str = include_str!("../shaders/chunk_bg.glsl");
+        state.render.chunk_bg_shader = Some(
+            renderer
+                .compile_custom_texture_shader(SRC, &[])
+                .map_err(|e| format!("tile bg '{path}': chunk_bg shader compile: {e}"))?,
+        );
+    }
+    let shader = state.render.chunk_bg_shader.as_ref().unwrap().clone();
+    let cache = BgChunkCache::new_from_tiff(source, shader)
+        .map_err(|e| format!("tile bg '{path}': {e}"))?;
+    // Chunked path manages its own elements + uniforms; clear shader-mode
+    // flags so a previously-animated shader bg doesn't keep forcing the
+    // background-damage path.
+    state.render.background_is_animated = false;
+    state.render.background_uses_camera = false;
+    state.render.background_uses_zoom = false;
+    state
+        .render
+        .cached_tile_chunks
+        .insert(output_name.to_string(), cache);
+    Ok(())
 }
 
 /// Try the configured image; on failure fall back to the default shader but

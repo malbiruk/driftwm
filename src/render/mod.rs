@@ -621,6 +621,11 @@ pub fn compose_frame(
 
     let bg_elements: Vec<OutputRenderElements> =
         if let Some(cache) = state.render.cached_tile_chunks.get_mut(&output.name()) {
+            // 4 tiles per frame: ~5-20ms decode budget on typical CPU. Tune
+            // here if cold-pan stutters on a fast machine or a faster decoder
+            // becomes available. Coarser-LOD fallback covers the gap when the
+            // budget runs out (except at cold start when nothing is cached).
+            cache.ensure_visible_loaded(visible_rect, renderer, zoom, 4);
             tile_chunks::chunk_render_elements(cache, visible_rect, camera, zoom)
                 .into_iter()
                 .map(OutputRenderElements::TileBgChunk)

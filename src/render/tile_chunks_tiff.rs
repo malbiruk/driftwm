@@ -7,8 +7,6 @@
 //! Validation refuses stripped TIFFs and unsupported color types (only
 //! RGB8 / RGBA8 are accepted) so we never silently degrade or panic later.
 
-#![allow(dead_code)] // until init_background routes TIFF paths here.
-
 use std::fs::File;
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
