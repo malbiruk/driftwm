@@ -1,15 +1,17 @@
-//! Chunked tile-background rendering. The source produces a populated
-//! `BgChunkCache` (image dims, chunk textures, compiled shader); this module
-//! handles per-frame visibility, element create/reuse, and seam-free
-//! positioning.
+//! Chunked tile-background rendering. `BgChunkCache` owns a [`TiffSource`] and
+//! decodes+uploads tiles on demand; element create/reuse emits only what's
+//! already cached.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
+use smithay::backend::allocator::Fourcc;
+use smithay::backend::renderer::ImportMem;
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::{GlesTexProgram, GlesTexture};
-use smithay::utils::{Logical, Physical, Point, Rectangle, Size};
+use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
+use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 
+use super::tile_chunks_tiff::TiffSource;
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
 pub struct BgChunkCache {
@@ -22,6 +24,108 @@ pub struct BgChunkCache {
     pub chunk_bg_shader: GlesTexProgram,
     pub chunks: HashMap<(i32, i32), GlesTexture>,
     pub chunk_elements: HashMap<(i32, i32, i32, i32), TileShaderElement>,
+    source: TiffSource,
+}
+
+// Silenced until init_background's TIFF routing lands.
+#[allow(dead_code)]
+impl BgChunkCache {
+    /// Caller must run [`ensure_visible_loaded`](Self::ensure_visible_loaded)
+    /// before [`chunk_render_elements`] each frame — otherwise freshly visible
+    /// tiles silently no-op and the screen stays blank until the next call.
+    pub fn new_from_tiff(
+        source: TiffSource,
+        chunk_bg_shader: GlesTexProgram,
+    ) -> Result<Self, String> {
+        let meta = *source
+            .lods()
+            .first()
+            .ok_or("TIFF has no LOD levels")?;
+        if meta.tile_dims.0 != meta.tile_dims.1 {
+            return Err(format!(
+                "non-square tile dims {:?} not supported",
+                meta.tile_dims
+            ));
+        }
+        let image_dims = meta.image_dims;
+        let image_position = Point::from((
+            -(image_dims.0 as i32) / 2,
+            -(image_dims.1 as i32) / 2,
+        ));
+        Ok(Self {
+            image_dims,
+            image_position,
+            chunk_canvas_size: meta.tile_dims.0 as i32,
+            chunk_bg_shader,
+            chunks: HashMap::new(),
+            chunk_elements: HashMap::new(),
+            source,
+        })
+    }
+
+    /// Decode + upload up to `budget` not-yet-cached visible tiles; over-budget
+    /// tiles are reconsidered next frame. Failed decodes are logged and
+    /// dropped so the caller retries.
+    pub fn ensure_visible_loaded(
+        &mut self,
+        viewport: Rectangle<i32, Logical>,
+        renderer: &mut GlesRenderer,
+        budget: usize,
+    ) -> usize {
+        let visible = visibility_query(
+            viewport,
+            self.image_position,
+            self.image_dims,
+            self.chunk_canvas_size,
+        );
+        // Dedup (cx, cy) across wrap offsets: one image tile maps to many
+        // canvas instances but uploads once.
+        let mut wanted: HashSet<(i32, i32)> = HashSet::with_capacity(visible.len());
+        for (cx, cy, _kx, _ky) in &visible {
+            wanted.insert((*cx, *cy));
+        }
+        let mut loaded = 0;
+        for (cx, cy) in wanted {
+            if loaded >= budget {
+                break;
+            }
+            if self.chunks.contains_key(&(cx, cy)) {
+                continue;
+            }
+            // visibility_query clips to image bounds so cx/cy >= 0.
+            let Ok(cx_u) = u32::try_from(cx) else { continue };
+            let Ok(cy_u) = u32::try_from(cy) else { continue };
+            match self.load_tile(cx_u, cy_u, renderer) {
+                Ok(tex) => {
+                    self.chunks.insert((cx, cy), tex);
+                    loaded += 1;
+                }
+                Err(e) => {
+                    tracing::warn!("chunked tile ({cx},{cy}) load failed: {e}");
+                }
+            }
+        }
+        loaded
+    }
+
+    fn load_tile(
+        &mut self,
+        cx: u32,
+        cy: u32,
+        renderer: &mut GlesRenderer,
+    ) -> Result<GlesTexture, String> {
+        let tile = self.source.read_tile(0, cx, cy)?;
+        renderer
+            .import_memory(
+                &tile.rgba,
+                Fourcc::Abgr8888,
+                Size::<i32, Buffer>::from((tile.width as i32, tile.height as i32)),
+                false,
+            )
+            .map_err(|e| {
+                format!("import_memory ({}x{}): {e}", tile.width, tile.height)
+            })
+    }
 }
 
 /// Integer `k` offsets along one axis such that image instance `k` overlaps

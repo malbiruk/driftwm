@@ -7,7 +7,7 @@
 //! Validation refuses stripped TIFFs and unsupported color types (only
 //! RGB8 / RGBA8 are accepted) so we never silently degrade or panic later.
 
-#![allow(dead_code)] // wired up to BgChunkCache in the next phase.
+#![allow(dead_code)] // until init_background routes TIFF paths here.
 
 use std::fs::File;
 use std::io::BufReader;
@@ -37,6 +37,13 @@ pub struct TiffSource {
     current_lod: u32,
 }
 
+pub struct DecodedTile {
+    pub rgba: Vec<u8>,
+    /// Actual tile dimensions after edge cropping (≤ `LodMetadata.tile_dims`).
+    pub width: u32,
+    pub height: u32,
+}
+
 impl TiffSource {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, String> {
         let path = path.as_ref().to_path_buf();
@@ -54,10 +61,10 @@ impl TiffSource {
         &self.lods
     }
 
-    /// Decode tile `(cx, cy)` of level `lod` as tightly-packed RGBA8 bytes.
-    /// `read_chunk` already returns a tight `actual_w * actual_h * samples`
-    /// buffer for edge tiles (the crate strips internal tile padding).
-    pub fn read_tile(&mut self, lod: u32, cx: u32, cy: u32) -> Result<Vec<u8>, String> {
+    /// `read_chunk` returns a tight `actual_w * actual_h * samples` buffer for
+    /// edge tiles (the crate strips internal tile padding), so the returned
+    /// `DecodedTile` carries the cropped dims rather than `tile_dims`.
+    pub fn read_tile(&mut self, lod: u32, cx: u32, cy: u32) -> Result<DecodedTile, String> {
         let lod_idx = lod as usize;
         let meta = self
             .lods
@@ -83,17 +90,21 @@ impl TiffSource {
             other => return Err(format!("non-u8 sample type at LOD {lod}: {other:?}")),
         };
 
-        let actual_w = (meta.image_dims.0 - cx * meta.tile_dims.0).min(meta.tile_dims.0);
-        let actual_h = (meta.image_dims.1 - cy * meta.tile_dims.1).min(meta.tile_dims.1);
+        let width = (meta.image_dims.0 - cx * meta.tile_dims.0).min(meta.tile_dims.0);
+        let height = (meta.image_dims.1 - cy * meta.tile_dims.1).min(meta.tile_dims.1);
         let bpp_raw = bytes_per_pixel(meta.color);
-        let expected_len = (actual_w as usize) * (actual_h as usize) * bpp_raw;
+        let expected_len = (width as usize) * (height as usize) * bpp_raw;
         if raw.len() != expected_len {
             return Err(format!(
                 "tile ({cx},{cy}) at LOD {lod}: decoded {} bytes, expected {expected_len}",
                 raw.len()
             ));
         }
-        Ok(rgb_to_rgba8(raw, meta.color))
+        Ok(DecodedTile {
+            rgba: rgb_to_rgba8(raw, meta.color),
+            width,
+            height,
+        })
     }
 
     /// IFDs are a singly-linked list — no API to seek backward, so a backward
