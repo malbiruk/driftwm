@@ -413,10 +413,15 @@ fn evict_lru_to_budget(
 ///
 /// Hybrid policy: `ceil(-log2(zoom))` for inter-LOD transitions (snappy
 /// detail downgrades, no per-tile inefficiency at zoom boundaries), but the
-/// boundary INTO the LAST LOD uses the geometric mean (`round`-style)
-/// instead. The last LOD is the shader-mode fallback plane — jumping into
-/// it costs more than a normal LOD step (loses per-tile sharpness entirely),
-/// so we hold the per-tile band one extra half-octave before crossing over.
+/// boundary INTO the LAST LOD lags by a full octave (`raw < last - 1.0`)
+/// instead of the half-octave geometric mean. The last LOD is the shader
+/// fallback plane — jumping into it costs us per-tile sharpness, but
+/// staying *out* of it through the coarsest per-tile band costs perf,
+/// because that band contains the most visible tiles per viewport (e.g.
+/// 30–70 elements at LOD N-1 on a 16K image). Holding per-tile one extra
+/// half-octave (the previous policy) wasn't worth the perf cliff; one full
+/// octave puts the transition at a power-of-two zoom which is also where
+/// the visual mismatch is least jarring.
 pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     if n_lods == 0 {
         return 0;
@@ -434,8 +439,8 @@ pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     }
     let target_ceil = raw.ceil() as u32;
     // If ceil would pick the fallback LOD but we're not yet past the
-    // geometric-mean boundary (`raw >= last - 0.5`), stay one step finer.
-    if target_ceil >= last && raw < last as f64 - 0.5 {
+    // power-of-two boundary (`raw >= last - 1.0`), stay one step finer.
+    if target_ceil >= last && raw < last as f64 - 1.0 {
         last.saturating_sub(1)
     } else {
         target_ceil.min(last)
@@ -975,14 +980,13 @@ mod tests {
     }
 
     #[test]
-    fn pick_lod_last_boundary_uses_geometric_mean() {
-        // n_lods=5, last=4 → fallback boundary at zoom = 2^-3.5 ≈ 0.0884.
-        // Zoom just above the boundary stays in per-tile LOD 3 (ceil
-        // would say 4, hybrid demotes by 1 to avoid premature fallback).
-        assert_eq!(pick_lod(0.10, 5), 3);
-        // Zoom just below the geometric-mean boundary commits to the
-        // fallback (LOD 4).
-        assert_eq!(pick_lod(0.08, 5), 4);
+    fn pick_lod_last_boundary_is_power_of_two() {
+        // n_lods=5, last=4 → fallback boundary at zoom = 2^-3 = 0.125,
+        // a full octave finer than the previous half-octave geometric
+        // mean. Trade: skip the painful coarsest-per-tile band where
+        // per-viewport tile counts spike.
+        assert_eq!(pick_lod(0.13, 5), 3);
+        assert_eq!(pick_lod(0.12, 5), 4);
     }
 
     #[test]
