@@ -8,6 +8,7 @@ mod layers;
 mod lifecycle;
 mod shaders;
 mod tile_chunks;
+mod tile_chunks_tiff;
 
 pub use background::{init_background, update_background_element};
 pub use blur::BlurCache;
