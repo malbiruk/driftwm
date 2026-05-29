@@ -15,6 +15,18 @@ use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 use super::tile_chunks_tiff::TiffSource;
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
+/// Hardcoded VRAM ceiling for cached chunked-bg tiles. Matches the `image`
+/// crate's default decompression-bomb cap — same order of magnitude as the
+/// memory a "reasonable" wallpaper consumes — and lets ~2000 256×256 RGBA8
+/// tiles coexist, easily covering visible+nearby at any zoom.
+const VRAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+struct ChunkMeta {
+    bytes: u64,
+    last_touched_frame: u64,
+}
+
 pub struct BgChunkCache {
     /// LOD 0 image dimensions in canvas units (defines the wrap period and
     /// the clip rect against which every LOD's chunks are intersected).
@@ -34,6 +46,14 @@ pub struct BgChunkCache {
     /// validated to a strict 2× ratio between adjacent LODs — coarser-LOD
     /// fallback's `div_euclid(2)` map then has no straddle gaps.
     chunk_canvas_sizes: Vec<i32>,
+    /// Parallel to `chunks`: tracks per-tile VRAM and last-touched frame for
+    /// LRU eviction. Kept separate so external readers of `chunks` see the
+    /// textures directly.
+    chunk_meta: HashMap<(u32, i32, i32), ChunkMeta>,
+    vram_bytes: u64,
+    /// Advanced once per frame; used only as a relative LRU timestamp.
+    /// u64::MAX wraparound is millennia at 60 fps — ignored.
+    frame_counter: u64,
     source: TiffSource,
 }
 
@@ -71,6 +91,9 @@ impl BgChunkCache {
             chunks: HashMap::new(),
             chunk_elements: HashMap::new(),
             chunk_canvas_sizes,
+            chunk_meta: HashMap::new(),
+            vram_bytes: 0,
+            frame_counter: 0,
             source,
         })
     }
@@ -83,9 +106,10 @@ impl BgChunkCache {
         self.chunk_canvas_sizes[lod as usize]
     }
 
-    /// Decode + upload up to `budget` not-yet-cached visible tiles at the LOD
-    /// chosen by `zoom`. Over-budget tiles are reconsidered next frame; failed
-    /// decodes are logged and dropped so the caller retries.
+    /// Per-frame entry point: bump LRU clock, stamp visible tiles and their
+    /// coarser-LOD fallback ancestors, then upload up to `budget` new fine
+    /// tiles and evict over-budget LRU. Over-budget tiles get reconsidered
+    /// next frame; failed decodes are logged so the caller retries.
     pub fn ensure_visible_loaded(
         &mut self,
         viewport: Rectangle<i32, Logical>,
@@ -93,13 +117,14 @@ impl BgChunkCache {
         zoom: f64,
         budget: usize,
     ) -> usize {
+        self.frame_counter = self.frame_counter.wrapping_add(1);
         let target_lod = pick_lod(zoom, self.n_lods());
-        let chunk_size = self.chunk_canvas_size_at(target_lod);
+        let target_chunk_size = self.chunk_canvas_size_at(target_lod);
         let visible = visibility_query(
             viewport,
             self.image_position,
             self.image_dims,
-            chunk_size,
+            target_chunk_size,
         );
         // Dedup (cx, cy) across wrap offsets: one source tile maps to many
         // canvas instances but uploads once.
@@ -107,6 +132,24 @@ impl BgChunkCache {
         for (cx, cy, _kx, _ky) in &visible {
             wanted.insert((*cx, *cy));
         }
+
+        // Stamp coarser-LOD fallback ancestors so eviction can't drop the
+        // coarse cover while the fine LOD is still loading — would flash blank.
+        let n_lods = self.n_lods();
+        let frame = self.frame_counter;
+        for (cx_t, cy_t) in &wanted {
+            let canvas_x = cx_t * target_chunk_size;
+            let canvas_y = cy_t * target_chunk_size;
+            for try_lod in target_lod..n_lods {
+                let try_size = self.chunk_canvas_size_at(try_lod);
+                let try_cx = canvas_x.div_euclid(try_size);
+                let try_cy = canvas_y.div_euclid(try_size);
+                if let Some(m) = self.chunk_meta.get_mut(&(try_lod, try_cx, try_cy)) {
+                    m.last_touched_frame = frame;
+                }
+            }
+        }
+
         let mut loaded = 0;
         for (cx, cy) in wanted {
             if loaded >= budget {
@@ -120,7 +163,19 @@ impl BgChunkCache {
             let Ok(cy_u) = u32::try_from(cy) else { continue };
             match self.load_tile(target_lod, cx_u, cy_u, renderer) {
                 Ok(tex) => {
-                    self.chunks.insert((target_lod, cx, cy), tex);
+                    // 4 bytes/texel estimate for RGBA8 — drivers may pad small
+                    // textures up; accept 5-10% slop in the budget.
+                    let bytes = (tex.width() as u64) * (tex.height() as u64) * 4;
+                    let key = (target_lod, cx, cy);
+                    self.chunks.insert(key, tex);
+                    self.vram_bytes = self.vram_bytes.saturating_add(bytes);
+                    self.chunk_meta.insert(
+                        key,
+                        ChunkMeta {
+                            bytes,
+                            last_touched_frame: frame,
+                        },
+                    );
                     loaded += 1;
                 }
                 Err(e) => {
@@ -130,7 +185,36 @@ impl BgChunkCache {
                 }
             }
         }
+        self.evict_over_budget();
         loaded
+    }
+
+    fn evict_over_budget(&mut self) {
+        if self.vram_bytes <= VRAM_BUDGET_BYTES {
+            return;
+        }
+        let evicted = evict_lru_to_budget(
+            &mut self.chunk_meta,
+            &mut self.vram_bytes,
+            VRAM_BUDGET_BYTES,
+        );
+        if evicted.is_empty() {
+            return;
+        }
+        // One O(N+M) retain pass beats N-per-key removal.
+        let evicted_set: HashSet<(u32, i32, i32)> = evicted.iter().copied().collect();
+        for key in &evicted_set {
+            self.chunks.remove(key);
+        }
+        self.chunk_elements.retain(|elem_key, _| {
+            !evicted_set.contains(&(elem_key.0, elem_key.1, elem_key.2))
+        });
+        tracing::debug!(
+            "chunked tile-bg: evicted {} tile(s), vram_bytes now {} / {}",
+            evicted.len(),
+            self.vram_bytes,
+            VRAM_BUDGET_BYTES
+        );
     }
 
     fn load_tile(
@@ -152,6 +236,34 @@ impl BgChunkCache {
                 format!("import_memory ({}x{}): {e}", tile.width, tile.height)
             })
     }
+}
+
+/// Returns evicted keys; caller drops them from the parallel texture map.
+/// Split out as a pure function so the LRU math is unit-testable without GLES.
+fn evict_lru_to_budget(
+    meta: &mut HashMap<(u32, i32, i32), ChunkMeta>,
+    vram_bytes: &mut u64,
+    budget: u64,
+) -> Vec<(u32, i32, i32)> {
+    let mut evicted = Vec::new();
+    if *vram_bytes <= budget {
+        return evicted;
+    }
+    let mut by_age: Vec<((u32, i32, i32), u64)> = meta
+        .iter()
+        .map(|(k, m)| (*k, m.last_touched_frame))
+        .collect();
+    by_age.sort_unstable_by_key(|(_, t)| *t);
+    for (key, _) in by_age {
+        if *vram_bytes <= budget {
+            break;
+        }
+        if let Some(m) = meta.remove(&key) {
+            *vram_bytes = vram_bytes.saturating_sub(m.bytes);
+            evicted.push(key);
+        }
+    }
+    evicted
 }
 
 /// Pick the largest LOD whose sample density still matches or exceeds what the
@@ -673,6 +785,98 @@ mod tests {
         assert_eq!(pick_lod(f64::NAN, 5), 0);
         assert_eq!(pick_lod(f64::INFINITY, 5), 0);
         assert_eq!(pick_lod(f64::NEG_INFINITY, 5), 0);
+    }
+
+    fn meta(t: u64, bytes: u64) -> ChunkMeta {
+        ChunkMeta {
+            bytes,
+            last_touched_frame: t,
+        }
+    }
+
+    #[test]
+    fn evict_lru_noop_under_budget() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(10, 100)),
+            ((0, 1, 0), meta(20, 100)),
+        ]
+        .into_iter()
+        .collect();
+        let mut bytes: u64 = 200;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 1000);
+        assert!(ev.is_empty());
+        assert_eq!(bytes, 200);
+        assert_eq!(m.len(), 2);
+    }
+
+    #[test]
+    fn evict_lru_drops_oldest_first() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(5, 100)),
+            ((0, 1, 0), meta(7, 100)),
+            ((0, 2, 0), meta(9, 100)),
+        ]
+        .into_iter()
+        .collect();
+        let mut bytes: u64 = 300;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 100);
+        assert_eq!(ev.len(), 2);
+        assert_eq!(ev[0], (0, 0, 0));
+        assert_eq!(ev[1], (0, 1, 0));
+        assert_eq!(bytes, 100);
+        assert!(m.contains_key(&(0, 2, 0)));
+    }
+
+    #[test]
+    fn evict_lru_stops_at_budget_boundary() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(5, 100)),
+            ((0, 1, 0), meta(7, 100)),
+        ]
+        .into_iter()
+        .collect();
+        let mut bytes: u64 = 200;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 100);
+        assert_eq!(ev, vec![(0, 0, 0)]);
+        assert_eq!(bytes, 100);
+        assert!(m.contains_key(&(0, 1, 0)));
+    }
+
+    #[test]
+    fn evict_lru_handles_byte_saturation() {
+        // Stored bytes wildly exceed actual sum — saturating_sub keeps it at 0.
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> =
+            [((0, 0, 0), meta(5, u64::MAX))].into_iter().collect();
+        let mut bytes: u64 = 50;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 0);
+        assert_eq!(ev, vec![(0, 0, 0)]);
+        assert_eq!(bytes, 0);
+    }
+
+    #[test]
+    fn evict_lru_empty_meta_is_noop() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = HashMap::new();
+        let mut bytes: u64 = 0;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 0);
+        assert!(ev.is_empty());
+        assert_eq!(bytes, 0);
+    }
+
+    #[test]
+    fn evict_lru_ties_preserve_at_least_one() {
+        // `sort_unstable_by_key` is non-deterministic on ties, but the per-
+        // iteration budget check guarantees we don't over-evict.
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(5, 100)),
+            ((0, 1, 0), meta(5, 100)),
+        ]
+        .into_iter()
+        .collect();
+        let mut bytes: u64 = 200;
+        let ev = evict_lru_to_budget(&mut m, &mut bytes, 100);
+        assert_eq!(ev.len(), 1);
+        assert_eq!(m.len(), 1);
+        assert_eq!(bytes, 100);
     }
 
     #[test]
