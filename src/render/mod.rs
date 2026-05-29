@@ -9,6 +9,7 @@ mod lifecycle;
 mod shaders;
 mod tile_chunks;
 mod tile_chunks_tiff;
+mod tile_worker;
 
 pub use background::{init_background, update_background_element};
 pub use blur::BlurCache;
@@ -621,11 +622,13 @@ pub fn compose_frame(
 
     let bg_elements: Vec<OutputRenderElements> =
         if let Some(cache) = state.render.cached_tile_chunks.get_mut(&output.name()) {
-            // 4 tiles per frame: ~5-20ms decode budget on typical CPU. Tune
-            // here if cold-pan stutters on a fast machine or a faster decoder
-            // becomes available. Coarser-LOD fallback covers the gap when the
-            // budget runs out (except at cold start when nothing is cached).
-            cache.ensure_visible_loaded(visible_rect, renderer, zoom, 4);
+            // 8 GLES uploads per frame: decode is off-thread now so render
+            // time per uploaded blob is the only constraint. import_memory of
+            // a 256×256 RGBA8 is sub-ms on M1, ~2-3ms on weak iGPUs — 8 keeps
+            // total upload time under ~25ms even on the slow path, and on
+            // fast hardware lets the worker pool's burst output drain in one
+            // frame. Coarser-LOD overlays + fallback plane cover undrained.
+            cache.ensure_visible_loaded(visible_rect, renderer, zoom, 8);
             tile_chunks::chunk_render_elements(cache, visible_rect, camera, zoom)
                 .into_iter()
                 .map(OutputRenderElements::TileBgChunk)

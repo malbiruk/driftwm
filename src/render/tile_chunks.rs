@@ -5,7 +5,9 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+use std::path::PathBuf;
 
+use calloop::LoopSignal;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{ImportMem, Texture};
 use smithay::backend::renderer::element::Kind;
@@ -15,6 +17,7 @@ use smithay::backend::renderer::gles::{
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 
 use super::tile_chunks_tiff::TiffSource;
+use super::tile_worker::{TileRequest, WorkerPool};
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
 /// Hardcoded VRAM ceiling for cached chunked-bg tiles. Matches the `image`
@@ -59,7 +62,18 @@ pub struct BgChunkCache {
     chunk_meta: HashMap<(u32, i32, i32), ChunkMeta>,
     vram_bytes: u64,
     frame_counter: u64,
-    source: TiffSource,
+    /// Off-thread decoder pool. Render thread only ever calls
+    /// `import_memory` on already-decoded blobs from the response channel —
+    /// no libtiff work happens here. Pool shuts down cleanly on drop.
+    pool: WorkerPool,
+    /// Outstanding decode requests, keyed by `(lod, cx, cy)`. Used to dedupe
+    /// (don't enqueue the same tile twice while one's already in flight) and
+    /// to drive [`Self::has_pending_loads`].
+    in_flight: HashSet<(u32, i32, i32)>,
+    /// Tiles whose decode failed at least once. Skipped from future enqueues
+    /// so a permanent file-format error doesn't spin the loop forever — the
+    /// fallback plane covers that region instead.
+    failed: HashSet<(u32, i32, i32)>,
     /// Whole coarsest-LOD image as one texture, eagerly decoded at init.
     /// Renders as the base plane under every per-tile fine chunk — gives
     /// every zoom level a guaranteed non-blank starting point.
@@ -76,11 +90,18 @@ impl BgChunkCache {
     /// before [`chunk_render_elements`] each frame so per-tile fine LODs get a
     /// chance to upload — the fallback plane always renders, but without
     /// `ensure_visible_loaded` it's the only thing on screen.
+    ///
+    /// Spawns a decoder thread pool ([`WorkerPool`]) which reopens the TIFF
+    /// once per worker (libtiff isn't safe to share). The init-scan
+    /// `TiffSource` is used only for the fallback-plane decode and is
+    /// dropped immediately after.
     pub fn new_from_tiff(
         mut source: TiffSource,
+        path: PathBuf,
         chunk_bg_shader: GlesTexProgram,
         fallback_shader: GlesTexProgram,
         renderer: &mut GlesRenderer,
+        loop_signal: LoopSignal,
     ) -> Result<Self, String> {
         for (i, meta) in source.lods().iter().enumerate() {
             if meta.tile_dims.0 != meta.tile_dims.1 {
@@ -132,6 +153,9 @@ impl BgChunkCache {
             )
             .map_err(|e| format!("fallback texture upload: {e}"))?;
 
+        drop(source);
+        let pool = WorkerPool::spawn(path, loop_signal)?;
+
         let image_position = Point::from((
             -(image_dims.0 as i32) / 2,
             -(image_dims.1 as i32) / 2,
@@ -146,7 +170,9 @@ impl BgChunkCache {
             chunk_meta: HashMap::new(),
             vram_bytes: 0,
             frame_counter: 0,
-            source,
+            pool,
+            in_flight: HashSet::new(),
+            failed: HashSet::new(),
             fallback_texture,
             fallback_shader,
             fallback_element: None,
@@ -161,18 +187,27 @@ impl BgChunkCache {
         self.chunk_canvas_sizes[lod as usize]
     }
 
-    /// Per-frame entry point: bump LRU clock, stamp visible tiles and their
-    /// coarser-LOD fallback ancestors, then upload up to `budget` new fine
-    /// tiles and evict over-budget LRU. Over-budget tiles get reconsidered
-    /// next frame; failed decodes are logged so the caller retries.
+    /// Per-frame entry point: drain ready decodes onto the GPU, stamp LRU,
+    /// then enqueue any newly-needed visible tiles for the worker pool. Each
+    /// frame uploads at most `upload_budget` decoded blobs — caps render-
+    /// thread GPU import time even when workers produce a burst faster than
+    /// the compositor can absorb. Worker queue is unbounded by design: a fast
+    /// pan can enqueue 50+ requests in one frame and workers self-throttle
+    /// via decode time.
+    ///
+    /// Returns the number of tiles uploaded this frame.
     pub fn ensure_visible_loaded(
         &mut self,
         viewport: Rectangle<i32, Logical>,
         renderer: &mut GlesRenderer,
         zoom: f64,
-        budget: usize,
+        upload_budget: usize,
     ) -> usize {
         self.frame_counter = self.frame_counter.wrapping_add(1);
+        let frame = self.frame_counter;
+
+        let uploaded = self.drain_responses(renderer, upload_budget, frame);
+
         let target_lod = pick_lod(zoom, self.n_lods());
         let target_chunk_size = self.chunk_canvas_size_at(target_lod);
         let visible = visibility_query(
@@ -181,8 +216,6 @@ impl BgChunkCache {
             self.image_dims,
             target_chunk_size,
         );
-        // Dedup (cx, cy) across wrap offsets: one source tile maps to many
-        // canvas instances but uploads once.
         let mut wanted: HashSet<(i32, i32)> = HashSet::with_capacity(visible.len());
         for (cx, cy, _kx, _ky) in &visible {
             wanted.insert((*cx, *cy));
@@ -191,7 +224,6 @@ impl BgChunkCache {
         // Stamp coarser-LOD fallback ancestors so eviction can't drop the
         // coarse cover while the fine LOD is still loading — would flash blank.
         let n_lods = self.n_lods();
-        let frame = self.frame_counter;
         for (cx_t, cy_t) in &wanted {
             let canvas_x = cx_t * target_chunk_size;
             let canvas_y = cy_t * target_chunk_size;
@@ -205,13 +237,12 @@ impl BgChunkCache {
             }
         }
 
-        // Collect tiles needed at every LOD from `coarsest-1` down to target,
-        // coarse first — the coarsest LOD itself is the fallback plane and
-        // doesn't get per-tile caching. Coarser LODs cover the whole visible
-        // area in 1-4 tiles each, so any cached coarse tile acts as a sharper
-        // overlay over the fallback for every fine chunk on top.
+        // Enqueue tiles from every LOD strictly finer than the fallback,
+        // coarse-first — coarse LODs cover a wide area in 1-4 tiles each, so
+        // landing a coarse LOD first gives every fine chunk a sharper-than-
+        // fallback overlay while it waits its turn.
         let coarsest = n_lods - 1;
-        let mut needed: Vec<(u32, i32, i32)> = Vec::new();
+        let mut enqueued = 0usize;
         if target_lod < coarsest {
             for lod in (target_lod..coarsest).rev() {
                 let size = self.chunk_canvas_size_at(lod);
@@ -226,47 +257,95 @@ impl BgChunkCache {
                     at_lod.insert((*cx, *cy));
                 }
                 for (cx, cy) in at_lod {
-                    if !self.chunks.contains_key(&(lod, cx, cy)) {
-                        needed.push((lod, cx, cy));
+                    let key = (lod, cx, cy);
+                    if self.chunks.contains_key(&key)
+                        || self.in_flight.contains(&key)
+                        || self.failed.contains(&key)
+                    {
+                        continue;
                     }
+                    let Ok(cx_u) = u32::try_from(cx) else { continue };
+                    let Ok(cy_u) = u32::try_from(cy) else { continue };
+                    self.in_flight.insert(key);
+                    self.pool.enqueue(TileRequest { lod, cx: cx_u, cy: cy_u });
+                    enqueued += 1;
                 }
             }
         }
+        if enqueued > 0 {
+            tracing::trace!(
+                "chunked tile-bg: enqueued {enqueued} tile(s); {} in-flight",
+                self.in_flight.len()
+            );
+        }
+        self.evict_over_budget();
+        uploaded
+    }
 
-        let mut loaded = 0;
-        for (lod, cx, cy) in needed {
-            if loaded >= budget {
+    /// True iff the worker pool has unfinished decode requests OR there are
+    /// undrained responses sitting in the channel. The udev render scheduler
+    /// reads this to keep firing frames until the visible set fully resolves
+    /// — without it, missing fine chunks stay covered by the fallback plane
+    /// until external damage (cursor, animation, client commit) re-wakes the
+    /// loop. Failed decodes don't keep this true: once a tile is in
+    /// `self.failed`, it's never re-enqueued.
+    pub fn has_pending_loads(&self) -> bool {
+        !self.in_flight.is_empty()
+    }
+
+    fn drain_responses(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        upload_budget: usize,
+        frame: u64,
+    ) -> usize {
+        let mut uploaded = 0;
+        while uploaded < upload_budget {
+            let Some(resp) = self.pool.try_recv() else {
                 break;
-            }
-            // visibility_query clips to image bounds so cx/cy >= 0.
-            let Ok(cx_u) = u32::try_from(cx) else { continue };
-            let Ok(cy_u) = u32::try_from(cy) else { continue };
-            match self.load_tile(lod, cx_u, cy_u, renderer) {
-                Ok(tex) => {
-                    // 4 bytes/texel estimate for RGBA8 — drivers may pad small
-                    // textures up; accept 5-10% slop in the budget.
-                    let bytes = (tex.width() as u64) * (tex.height() as u64) * 4;
-                    let key = (lod, cx, cy);
-                    self.chunks.insert(key, tex);
-                    self.vram_bytes = self.vram_bytes.saturating_add(bytes);
-                    self.chunk_meta.insert(
-                        key,
-                        ChunkMeta {
-                            bytes,
-                            last_touched_frame: frame,
-                        },
-                    );
-                    loaded += 1;
+            };
+            let key = (resp.req.lod, resp.req.cx as i32, resp.req.cy as i32);
+            self.in_flight.remove(&key);
+            match resp.result {
+                Ok(tile) => {
+                    match renderer.import_memory(
+                        &tile.rgba,
+                        Fourcc::Abgr8888,
+                        Size::<i32, Buffer>::from((tile.width as i32, tile.height as i32)),
+                        false,
+                    ) {
+                        Ok(tex) => {
+                            let bytes = (tex.width() as u64) * (tex.height() as u64) * 4;
+                            self.chunks.insert(key, tex);
+                            self.vram_bytes = self.vram_bytes.saturating_add(bytes);
+                            self.chunk_meta.insert(
+                                key,
+                                ChunkMeta {
+                                    bytes,
+                                    last_touched_frame: frame,
+                                },
+                            );
+                            uploaded += 1;
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "chunked tile (LOD {}, {},{}) import_memory: {e}",
+                                resp.req.lod, resp.req.cx, resp.req.cy
+                            );
+                            self.failed.insert(key);
+                        }
+                    }
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "chunked tile (LOD {lod}, {cx},{cy}) load failed: {e}"
+                        "chunked tile (LOD {}, {},{}) decode: {e}",
+                        resp.req.lod, resp.req.cx, resp.req.cy
                     );
+                    self.failed.insert(key);
                 }
             }
         }
-        self.evict_over_budget();
-        loaded
+        uploaded
     }
 
     fn evict_over_budget(&mut self) {
@@ -297,25 +376,6 @@ impl BgChunkCache {
         );
     }
 
-    fn load_tile(
-        &mut self,
-        lod: u32,
-        cx: u32,
-        cy: u32,
-        renderer: &mut GlesRenderer,
-    ) -> Result<GlesTexture, String> {
-        let tile = self.source.read_tile(lod, cx, cy)?;
-        renderer
-            .import_memory(
-                &tile.rgba,
-                Fourcc::Abgr8888,
-                Size::<i32, Buffer>::from((tile.width as i32, tile.height as i32)),
-                false,
-            )
-            .map_err(|e| {
-                format!("import_memory ({}x{}): {e}", tile.width, tile.height)
-            })
-    }
 }
 
 /// Returns evicted keys; caller drops them from the parallel texture map.

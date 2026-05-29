@@ -151,11 +151,17 @@ impl UdevDevice {
 /// with mutations on `data`.
 pub(crate) fn render_if_needed(data: &mut DriftWm) {
     // Fast path: nothing needs attention — skip all work when idle
+    let any_chunked_pending = data
+        .render
+        .cached_tile_chunks
+        .values()
+        .any(|c| c.has_pending_loads());
     if data.redraws_needed.is_empty()
         && !data.has_active_animations()
         && !data.render.background_is_animated
         && !data.output_config_dirty
         && data.pending_dpms.is_empty()
+        && !any_chunked_pending
     {
         return;
     }
@@ -212,6 +218,15 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
             continue;
         }
         if data.output_has_active_animations(&surface.output) {
+            data.redraws_needed.insert(surface.output.clone());
+        }
+        // Chunked-bg with tiles still to upload: keep firing frames until the
+        // visible set fully resolves. Otherwise the loop idles after pan
+        // stops and blurry chunks stay covered by the fallback plane until
+        // unrelated damage (cursor, animation, client commit) wakes us.
+        if let Some(cache) = data.render.cached_tile_chunks.get(&surface.output.name())
+            && cache.has_pending_loads()
+        {
             data.redraws_needed.insert(surface.output.clone());
         }
     }

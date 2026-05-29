@@ -160,8 +160,15 @@ fn init_tile_chunks_bg(
         .as_ref()
         .ok_or_else(|| format!("tile bg '{path}': tile_bg shader compile failed"))?
         .clone();
-    let cache = BgChunkCache::new_from_tiff(source, chunk_shader, fallback_shader, renderer)
-        .map_err(|e| format!("tile bg '{path}': {e}"))?;
+    let cache = BgChunkCache::new_from_tiff(
+        source,
+        std::path::PathBuf::from(path),
+        chunk_shader,
+        fallback_shader,
+        renderer,
+        state.loop_signal.clone(),
+    )
+    .map_err(|e| format!("tile bg '{path}': {e}"))?;
     // Chunked path manages its own elements + uniforms; clear shader-mode
     // flags so a previously-animated shader bg doesn't keep forcing the
     // background-damage path.
