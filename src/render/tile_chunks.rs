@@ -9,7 +9,9 @@ use std::ops::Range;
 use smithay::backend::allocator::Fourcc;
 use smithay::backend::renderer::{ImportMem, Texture};
 use smithay::backend::renderer::element::Kind;
-use smithay::backend::renderer::gles::{GlesRenderer, GlesTexProgram, GlesTexture};
+use smithay::backend::renderer::gles::{
+    GlesRenderer, GlesTexProgram, GlesTexture, Uniform,
+};
 use smithay::utils::{Buffer, Logical, Physical, Point, Rectangle, Size};
 
 use super::tile_chunks_tiff::TiffSource;
@@ -20,6 +22,14 @@ use super::{PixelSnapRescaleElement, TileShaderElement};
 /// memory a "reasonable" wallpaper consumes — and lets ~2000 256×256 RGBA8
 /// tiles coexist, easily covering visible+nearby at any zoom.
 const VRAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Cap on the fallback texture's longest side. Picks the finest LOD whose
+/// `max(image_w, image_h) <= FALLBACK_MAX_DIM` — so a deep pyramid's tiny
+/// coarsest page (e.g. 256×256 for a 16K source) doesn't end up as the
+/// fallback and force everything to look blurry at moderate zoom-out. At
+/// 2048 the fallback is 1:1 sharp at the "1 full image in viewport" zoom
+/// of a typical 1080p–4K display and costs ~16 MB VRAM per output.
+const FALLBACK_MAX_DIM: u32 = 2048;
 
 #[derive(Debug, Clone, Copy)]
 struct ChunkMeta {
@@ -36,34 +46,41 @@ pub struct BgChunkCache {
     /// seams then sit at ±image_w/2, ±image_h/2 rather than at the origin.
     pub image_position: Point<i32, Logical>,
     pub chunk_bg_shader: GlesTexProgram,
+    /// Per-tile cache for LODs 0..coarsest-1. The coarsest LOD itself is
+    /// served by [`fallback_texture`], so per-tile caching at that level would
+    /// just duplicate VRAM.
     pub chunks: HashMap<(u32, i32, i32), GlesTexture>,
-    /// A coarse-LOD fallback tile can show up here keyed at its own `lod` even
-    /// when the requesting fine LOD has no element of its own, so the key
-    /// space spans all LODs, not just the currently-selected one.
     pub chunk_elements: HashMap<(u32, i32, i32, i32, i32), TileShaderElement>,
     /// Per-LOD chunk canvas span (canvas units per tile at that LOD). Computed
     /// once at init so lookup and emission read the same rounded values, and
     /// validated to a strict 2× ratio between adjacent LODs — coarser-LOD
     /// fallback's `div_euclid(2)` map then has no straddle gaps.
     chunk_canvas_sizes: Vec<i32>,
-    /// Parallel to `chunks`: tracks per-tile VRAM and last-touched frame for
-    /// LRU eviction. Kept separate so external readers of `chunks` see the
-    /// textures directly.
     chunk_meta: HashMap<(u32, i32, i32), ChunkMeta>,
     vram_bytes: u64,
-    /// Advanced once per frame; used only as a relative LRU timestamp.
-    /// u64::MAX wraparound is millennia at 60 fps — ignored.
     frame_counter: u64,
     source: TiffSource,
+    /// Whole coarsest-LOD image as one texture, eagerly decoded at init.
+    /// Renders as the base plane under every per-tile fine chunk — gives
+    /// every zoom level a guaranteed non-blank starting point.
+    fallback_texture: GlesTexture,
+    /// Reuses `tile_bg.glsl`: a single quad covers the visible viewport and
+    /// the shader handles infinite wrap via modulo sampling — extreme
+    /// zoom-out (100+ wrap instances visible) stays at constant cost.
+    fallback_shader: GlesTexProgram,
+    fallback_element: Option<TileShaderElement>,
 }
 
 impl BgChunkCache {
     /// Caller must run [`ensure_visible_loaded`](Self::ensure_visible_loaded)
-    /// before [`chunk_render_elements`] each frame — otherwise freshly visible
-    /// tiles silently no-op and the screen stays blank until the next call.
+    /// before [`chunk_render_elements`] each frame so per-tile fine LODs get a
+    /// chance to upload — the fallback plane always renders, but without
+    /// `ensure_visible_loaded` it's the only thing on screen.
     pub fn new_from_tiff(
-        source: TiffSource,
+        mut source: TiffSource,
         chunk_bg_shader: GlesTexProgram,
+        fallback_shader: GlesTexProgram,
+        renderer: &mut GlesRenderer,
     ) -> Result<Self, String> {
         for (i, meta) in source.lods().iter().enumerate() {
             if meta.tile_dims.0 != meta.tile_dims.1 {
@@ -78,7 +95,43 @@ impl BgChunkCache {
             .first()
             .ok_or("TIFF has no LOD levels")?;
         let image_dims = lod0.image_dims;
-        let chunk_canvas_sizes = derive_chunk_canvas_sizes(&source)?;
+        let mut chunk_canvas_sizes = derive_chunk_canvas_sizes(&source)?;
+        let n_truncated = chunk_canvas_sizes.len();
+
+        // Pick fallback LOD: the FINEST (lowest-index) LOD whose dimensions
+        // fit within `FALLBACK_MAX_DIM`. Deep pyramids would otherwise pin
+        // the fallback to a too-blurry coarsest page.
+        let mut fallback_lod = (n_truncated - 1) as u32;
+        for i in 0..n_truncated {
+            let dims = source.lods()[i].image_dims;
+            if dims.0.max(dims.1) <= FALLBACK_MAX_DIM {
+                fallback_lod = i as u32;
+                break;
+            }
+        }
+        // LODs past the fallback are unused (per-tile loading stops at
+        // `fallback_lod - 1`; pick_lod clamps to `fallback_lod`). Truncate so
+        // `n_lods()` reports the actually-used count.
+        chunk_canvas_sizes.truncate((fallback_lod + 1) as usize);
+        tracing::info!(
+            "chunked tile-bg: pyramid {} LODs total, using LODs 0-{} (LOD {} as fallback plane, {}×{} px)",
+            n_truncated,
+            fallback_lod,
+            fallback_lod,
+            source.lods()[fallback_lod as usize].image_dims.0,
+            source.lods()[fallback_lod as usize].image_dims.1,
+        );
+
+        let fallback = source.read_whole_lod(fallback_lod)?;
+        let fallback_texture = renderer
+            .import_memory(
+                &fallback.rgba,
+                Fourcc::Abgr8888,
+                Size::<i32, Buffer>::from((fallback.width as i32, fallback.height as i32)),
+                false,
+            )
+            .map_err(|e| format!("fallback texture upload: {e}"))?;
+
         let image_position = Point::from((
             -(image_dims.0 as i32) / 2,
             -(image_dims.1 as i32) / 2,
@@ -94,6 +147,9 @@ impl BgChunkCache {
             vram_bytes: 0,
             frame_counter: 0,
             source,
+            fallback_texture,
+            fallback_shader,
+            fallback_element: None,
         })
     }
 
@@ -149,23 +205,48 @@ impl BgChunkCache {
             }
         }
 
+        // Collect tiles needed at every LOD from `coarsest-1` down to target,
+        // coarse first — the coarsest LOD itself is the fallback plane and
+        // doesn't get per-tile caching. Coarser LODs cover the whole visible
+        // area in 1-4 tiles each, so any cached coarse tile acts as a sharper
+        // overlay over the fallback for every fine chunk on top.
+        let coarsest = n_lods - 1;
+        let mut needed: Vec<(u32, i32, i32)> = Vec::new();
+        if target_lod < coarsest {
+            for lod in (target_lod..coarsest).rev() {
+                let size = self.chunk_canvas_size_at(lod);
+                let visible = visibility_query(
+                    viewport,
+                    self.image_position,
+                    self.image_dims,
+                    size,
+                );
+                let mut at_lod: HashSet<(i32, i32)> = HashSet::with_capacity(visible.len());
+                for (cx, cy, _kx, _ky) in &visible {
+                    at_lod.insert((*cx, *cy));
+                }
+                for (cx, cy) in at_lod {
+                    if !self.chunks.contains_key(&(lod, cx, cy)) {
+                        needed.push((lod, cx, cy));
+                    }
+                }
+            }
+        }
+
         let mut loaded = 0;
-        for (cx, cy) in wanted {
+        for (lod, cx, cy) in needed {
             if loaded >= budget {
                 break;
-            }
-            if self.chunks.contains_key(&(target_lod, cx, cy)) {
-                continue;
             }
             // visibility_query clips to image bounds so cx/cy >= 0.
             let Ok(cx_u) = u32::try_from(cx) else { continue };
             let Ok(cy_u) = u32::try_from(cy) else { continue };
-            match self.load_tile(target_lod, cx_u, cy_u, renderer) {
+            match self.load_tile(lod, cx_u, cy_u, renderer) {
                 Ok(tex) => {
                     // 4 bytes/texel estimate for RGBA8 — drivers may pad small
                     // textures up; accept 5-10% slop in the budget.
                     let bytes = (tex.width() as u64) * (tex.height() as u64) * 4;
-                    let key = (target_lod, cx, cy);
+                    let key = (lod, cx, cy);
                     self.chunks.insert(key, tex);
                     self.vram_bytes = self.vram_bytes.saturating_add(bytes);
                     self.chunk_meta.insert(
@@ -179,7 +260,7 @@ impl BgChunkCache {
                 }
                 Err(e) => {
                     tracing::warn!(
-                        "chunked tile (LOD {target_lod}, {cx},{cy}) load failed: {e}"
+                        "chunked tile (LOD {lod}, {cx},{cy}) load failed: {e}"
                     );
                 }
             }
@@ -265,11 +346,17 @@ fn evict_lru_to_budget(
     evicted
 }
 
-/// Pick the largest LOD whose sample density still matches or exceeds what the
-/// screen needs at this zoom — `k = floor(-log2(zoom))`. Clamped to
-/// `[0, n_lods - 1]`. At `zoom >= 1.0` always returns LOD 0. NaN/non-finite
-/// zoom returns LOD 0 (defensive — animation math shouldn't produce NaN,
-/// but a clamp prevents a panic from `as u32` on a NaN cast).
+/// Pick the LOD whose sample density meets the screen's needs at this zoom.
+/// Clamped to `[0, n_lods - 1]`. At `zoom >= 1.0` always returns LOD 0.
+/// NaN/non-finite zoom returns LOD 0 (defensive — animation math shouldn't
+/// produce NaN, but a clamp prevents a panic from `as u32` on a NaN cast).
+///
+/// Hybrid policy: `ceil(-log2(zoom))` for inter-LOD transitions (snappy
+/// detail downgrades, no per-tile inefficiency at zoom boundaries), but the
+/// boundary INTO the LAST LOD uses the geometric mean (`round`-style)
+/// instead. The last LOD is the shader-mode fallback plane — jumping into
+/// it costs more than a normal LOD step (loses per-tile sharpness entirely),
+/// so we hold the per-tile band one extra half-octave before crossing over.
 pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     if n_lods == 0 {
         return 0;
@@ -281,18 +368,26 @@ pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     if zoom <= 0.0 {
         return last;
     }
-    let n = (-zoom.log2()).floor();
-    if !n.is_finite() || n < 0.0 {
+    let raw = -zoom.log2();
+    if !raw.is_finite() || raw < 0.0 {
         return 0;
     }
-    (n as u32).min(last)
+    let target_ceil = raw.ceil() as u32;
+    // If ceil would pick the fallback LOD but we're not yet past the
+    // geometric-mean boundary (`raw >= last - 0.5`), stay one step finer.
+    if target_ceil >= last && raw < last as f64 - 0.5 {
+        last.saturating_sub(1)
+    } else {
+        target_ceil.min(last)
+    }
 }
 
 /// Compute per-LOD canvas chunk sizes (canvas units per tile at that LOD) and
-/// validate that adjacent LODs sit at a strict 2× ratio. Most pyramidal-TIFF
-/// converters (vips, gdal) output power-of-2 pyramids; non-2× pyramids would
-/// require multi-coarse-tile lookup to avoid straddle gaps in the fallback
-/// path, which isn't worth the complexity. Reject at init instead.
+/// truncate at the first non-2× transition. The coarser-LOD fallback's
+/// `div_euclid` lookup only works when adjacent canvas grids align at a 2×
+/// ratio. vips's `--pyramid` produces power-of-2 chains but the *last* page
+/// often drifts by ±1 px when the source image dims don't divide evenly; we
+/// just drop that tail rather than reject the whole TIFF.
 fn derive_chunk_canvas_sizes(source: &TiffSource) -> Result<Vec<i32>, String> {
     let lods = source.lods();
     let lod_0_w = lods[0].image_dims.0 as f64;
@@ -307,13 +402,16 @@ fn derive_chunk_canvas_sizes(source: &TiffSource) -> Result<Vec<i32>, String> {
     }
     for i in 1..sizes.len() {
         if sizes[i] != 2 * sizes[i - 1] {
-            return Err(format!(
-                "non-power-of-2 LOD pyramid: LOD {i} canvas chunk size {} \
-                 must be 2× LOD {} size {} (use a vips/gdal-style 2× pyramid)",
+            tracing::warn!(
+                "chunked tile-bg: LOD {i} canvas chunk size {} != 2× LOD {} ({}); \
+                 truncating pyramid to {} usable LOD(s)",
                 sizes[i],
                 i - 1,
                 sizes[i - 1],
-            ));
+                i,
+            );
+            sizes.truncate(i);
+            break;
         }
     }
     Ok(sizes)
@@ -401,13 +499,10 @@ pub(crate) fn chunk_canvas_origin(
     ))
 }
 
-/// Per-frame visibility update + element create/reuse.
-///
-/// Selects the target LOD from `zoom`, then for each visible fine chunk walks
-/// progressively coarser cached LODs until one is found (or skips if none).
-/// The coarser tile renders over a LARGER canvas area than the fine chunk
-/// asked for; adjacent fine chunks that resolve to the same coarse tile
-/// dedup to a single element via the `(lod, cx, cy, kx, ky)` element key.
+/// Per-frame visibility + element create/reuse. Emits cached per-tile fine
+/// chunks first (drawn on top in smithay's z-order: first in vec = topmost),
+/// then a fallback-plane element per wrap offset that always renders the
+/// whole image at coarsest-LOD detail underneath. No chunk is ever blank.
 ///
 /// * Inner `TileShaderElement` is persistent per element key with a stable
 ///   `Id`; `resize()` is idempotent so a static camera leaves the commit
@@ -422,29 +517,34 @@ pub fn chunk_render_elements(
     zoom: f64,
 ) -> Vec<PixelSnapRescaleElement<TileShaderElement>> {
     let target_lod = pick_lod(zoom, cache.n_lods());
-    let target_chunk_size = cache.chunk_canvas_size_at(target_lod);
-    let visible_target = visibility_query(
-        viewport,
-        cache.image_position,
-        cache.image_dims,
-        target_chunk_size,
-    );
-
     let n_lods = cache.n_lods();
-    let mut to_render: HashSet<(u32, i32, i32, i32, i32)> =
-        HashSet::with_capacity(visible_target.len());
-    for (cx_t, cy_t, kx, ky) in &visible_target {
-        // (kx, ky) factors into element placement, not LOD lookup — coarser
-        // LODs are picked on the k=0-instance canvas origin.
-        let target_cx_canvas = cx_t * target_chunk_size;
-        let target_cy_canvas = cy_t * target_chunk_size;
-        for try_lod in target_lod..n_lods {
-            let try_size = cache.chunk_canvas_size_at(try_lod);
-            let try_cx = target_cx_canvas.div_euclid(try_size);
-            let try_cy = target_cy_canvas.div_euclid(try_size);
-            if cache.chunks.contains_key(&(try_lod, try_cx, try_cy)) {
-                to_render.insert((try_lod, try_cx, try_cy, *kx, *ky));
-                break;
+    let coarsest = n_lods - 1;
+
+    // Per-tile resolve only across LODs strictly finer than coarsest — the
+    // coarsest LOD is the fallback plane, no per-tile cache there.
+    let mut to_render: HashSet<(u32, i32, i32, i32, i32)> = HashSet::new();
+    if target_lod < coarsest {
+        let target_chunk_size = cache.chunk_canvas_size_at(target_lod);
+        let visible_target = visibility_query(
+            viewport,
+            cache.image_position,
+            cache.image_dims,
+            target_chunk_size,
+        );
+        to_render.reserve(visible_target.len());
+        for (cx_t, cy_t, kx, ky) in &visible_target {
+            // (kx, ky) factors into element placement, not LOD lookup — coarser
+            // LODs are picked on the k=0-instance canvas origin.
+            let target_cx_canvas = cx_t * target_chunk_size;
+            let target_cy_canvas = cy_t * target_chunk_size;
+            for try_lod in target_lod..coarsest {
+                let try_size = cache.chunk_canvas_size_at(try_lod);
+                let try_cx = target_cx_canvas.div_euclid(try_size);
+                let try_cy = target_cy_canvas.div_euclid(try_size);
+                if cache.chunks.contains_key(&(try_lod, try_cx, try_cy)) {
+                    to_render.insert((try_lod, try_cx, try_cy, *kx, *ky));
+                    break;
+                }
             }
         }
     }
@@ -458,12 +558,11 @@ pub fn chunk_render_elements(
     let image_position = cache.image_position;
 
     // Sort for deterministic emission order: HashSet iteration is non-
-    // deterministic, and overlapping coarse tiles (LOD-boundary fallback)
-    // would otherwise z-fight frame-to-frame.
+    // deterministic, and overlapping coarse tiles would otherwise z-fight.
     let mut ordered: Vec<_> = to_render.into_iter().collect();
     ordered.sort_unstable();
 
-    let mut out = Vec::with_capacity(ordered.len());
+    let mut out = Vec::with_capacity(ordered.len() + 1);
     for key in ordered {
         let (lod, cx, cy, kx, ky) = key;
         let chunk_size = cache.chunk_canvas_size_at(lod);
@@ -510,6 +609,50 @@ pub fn chunk_render_elements(
             zoom,
         ));
     }
+
+    // Single fallback element via `tile_bg.glsl` — the shader handles wrap
+    // via modulo sampling, so the cost is constant regardless of how many
+    // image instances the viewport spans.
+    let canvas_w = viewport.size.w.max(1);
+    let canvas_h = viewport.size.h.max(1);
+    let fallback_area = Rectangle::new(
+        Point::<i32, Logical>::from((
+            viewport.loc.x - camera_i.x,
+            viewport.loc.y - camera_i.y,
+        )),
+        Size::from((canvas_w, canvas_h)),
+    );
+    let fallback_opaque = vec![fallback_area];
+    let fallback_uniforms = vec![
+        Uniform::new("u_camera", (camera.x as f32, camera.y as f32)),
+        Uniform::new(
+            "u_tile_size",
+            (image_dims.0 as f32, image_dims.1 as f32),
+        ),
+        Uniform::new("u_output_size", (canvas_w as f32, canvas_h as f32)),
+    ];
+    let fallback_tex_w = cache.fallback_texture.width() as i32;
+    let fallback_tex_h = cache.fallback_texture.height() as i32;
+    let fb = cache.fallback_element.get_or_insert_with(|| {
+        TileShaderElement::new(
+            cache.fallback_shader.clone(),
+            cache.fallback_texture.clone(),
+            fallback_tex_w,
+            fallback_tex_h,
+            fallback_area,
+            Some(fallback_opaque.clone()),
+            1.0,
+            fallback_uniforms.clone(),
+            Kind::Unspecified,
+        )
+    });
+    fb.resize(fallback_area, Some(fallback_opaque));
+    fb.update_uniforms(fallback_uniforms);
+    out.push(PixelSnapRescaleElement::from_element(
+        fb.clone(),
+        Point::<i32, Physical>::from((0, 0)),
+        zoom,
+    ));
     out
 }
 
@@ -764,11 +907,22 @@ mod tests {
 
     #[test]
     fn pick_lod_just_below_power_of_two() {
-        // zoom = 0.49 → -log2(0.49) ≈ 1.03 → floor 1 → LOD 1 (still sharp
-        // enough; LOD 1 pixel covers 0.98 screen px at this zoom).
-        assert_eq!(pick_lod(0.49, 5), 1);
-        // zoom = 0.51 just above 0.5 → -log2 ≈ 0.97 → floor 0 → LOD 0.
-        assert_eq!(pick_lod(0.51, 5), 0);
+        // Inter-LOD transitions use ceil semantics — at zoom 0.49 we're one
+        // power-of-2 step below LOD 1's native zoom of 0.5, so LOD 2.
+        assert_eq!(pick_lod(0.49, 5), 2);
+        // zoom 0.51 just above 0.5 → ceil(0.971) = 1.
+        assert_eq!(pick_lod(0.51, 5), 1);
+    }
+
+    #[test]
+    fn pick_lod_last_boundary_uses_geometric_mean() {
+        // n_lods=5, last=4 → fallback boundary at zoom = 2^-3.5 ≈ 0.0884.
+        // Zoom just above the boundary stays in per-tile LOD 3 (ceil
+        // would say 4, hybrid demotes by 1 to avoid premature fallback).
+        assert_eq!(pick_lod(0.10, 5), 3);
+        // Zoom just below the geometric-mean boundary commits to the
+        // fallback (LOD 4).
+        assert_eq!(pick_lod(0.08, 5), 4);
     }
 
     #[test]

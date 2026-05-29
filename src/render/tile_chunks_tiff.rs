@@ -105,6 +105,93 @@ impl TiffSource {
         })
     }
 
+    /// Decode the entire LOD `lod` as one tightly-packed RGBA8 image by
+    /// stitching individual tile reads. Used by `BgChunkCache` for the
+    /// always-cached "fallback plane" at the coarsest LOD. Tolerates per-tile
+    /// decode failures (some encoders emit LZW streams that the tiff crate
+    /// flags as malformed) by leaving that tile's region zeroed — better a
+    /// dark patch in the fallback than blocking the whole init.
+    pub fn read_whole_lod(&mut self, lod: u32) -> Result<DecodedTile, String> {
+        let lod_idx = lod as usize;
+        let meta = self
+            .lods
+            .get(lod_idx)
+            .copied()
+            .ok_or_else(|| format!("LOD {lod} out of range"))?;
+        let (w, h) = meta.image_dims;
+        let (tile_w, tile_h) = meta.tile_dims;
+        let tiles_across = w.div_ceil(tile_w);
+        let tiles_down = h.div_ceil(tile_h);
+        let bpp = bytes_per_pixel(meta.color);
+        let row_stride = (w as usize) * bpp;
+        let mut full = vec![0u8; (h as usize) * row_stride];
+
+        self.navigate_to_lod(lod)?;
+        let mut ok = 0u32;
+        let mut failed = 0u32;
+        for cy in 0..tiles_down {
+            for cx in 0..tiles_across {
+                let tile_index = cy * tiles_across + cx;
+                let chunk = match self.decoder.read_chunk(tile_index) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        tracing::warn!(
+                            "LOD {lod} tile ({cx},{cy}) decode failed (hole in \
+                             fallback plane): {e}"
+                        );
+                        failed += 1;
+                        continue;
+                    }
+                };
+                let raw = match chunk {
+                    DecodingResult::U8(v) => v,
+                    other => {
+                        tracing::warn!(
+                            "LOD {lod} tile ({cx},{cy}) non-u8 sample type: {other:?}"
+                        );
+                        failed += 1;
+                        continue;
+                    }
+                };
+                let actual_w = (w - cx * tile_w).min(tile_w);
+                let actual_h = (h - cy * tile_h).min(tile_h);
+                let expected = (actual_w as usize) * (actual_h as usize) * bpp;
+                if raw.len() != expected {
+                    tracing::warn!(
+                        "LOD {lod} tile ({cx},{cy}): {} bytes, expected {expected}",
+                        raw.len()
+                    );
+                    failed += 1;
+                    continue;
+                }
+                let tile_row = (actual_w as usize) * bpp;
+                for row in 0..actual_h as usize {
+                    let dst_y = (cy * tile_h) as usize + row;
+                    let dst_x = (cx * tile_w) as usize;
+                    let dst_start = dst_y * row_stride + dst_x * bpp;
+                    let src_start = row * tile_row;
+                    full[dst_start..dst_start + tile_row]
+                        .copy_from_slice(&raw[src_start..src_start + tile_row]);
+                }
+                ok += 1;
+            }
+        }
+        if ok == 0 {
+            return Err(format!("LOD {lod}: every tile failed to decode"));
+        }
+        if failed > 0 {
+            tracing::warn!(
+                "LOD {lod}: {failed} of {} tiles failed; fallback plane has holes",
+                ok + failed
+            );
+        }
+        Ok(DecodedTile {
+            rgba: rgb_to_rgba8(full, meta.color),
+            width: w,
+            height: h,
+        })
+    }
+
     /// IFDs are a singly-linked list — no API to seek backward, so a backward
     /// jump rebuilds the decoder. Cheap for adjacent-LOD access; if a future
     /// loader randomizes LOD access, cache IFD offsets and seek directly.

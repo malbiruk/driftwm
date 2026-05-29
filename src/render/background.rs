@@ -148,8 +148,19 @@ fn init_tile_chunks_bg(
                 .map_err(|e| format!("tile bg '{path}': chunk_bg shader compile: {e}"))?,
         );
     }
-    let shader = state.render.chunk_bg_shader.as_ref().unwrap().clone();
-    let cache = BgChunkCache::new_from_tiff(source, shader)
+    // Fallback plane reuses `tile_bg.glsl` (shared with single-texture tile
+    // mode) so wrap is shader-driven instead of one element per `(kx, ky)`.
+    if state.render.tile_shader.is_none() {
+        state.render.tile_shader = compile_tile_bg_shader(renderer);
+    }
+    let chunk_shader = state.render.chunk_bg_shader.as_ref().unwrap().clone();
+    let fallback_shader = state
+        .render
+        .tile_shader
+        .as_ref()
+        .ok_or_else(|| format!("tile bg '{path}': tile_bg shader compile failed"))?
+        .clone();
+    let cache = BgChunkCache::new_from_tiff(source, chunk_shader, fallback_shader, renderer)
         .map_err(|e| format!("tile bg '{path}': {e}"))?;
     // Chunked path manages its own elements + uniforms; clear shader-mode
     // flags so a previously-animated shader bg doesn't keep forcing the
