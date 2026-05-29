@@ -13,12 +13,25 @@ mod xwayland;
 use state::{ClientState, DriftWm};
 use std::sync::Arc;
 
+/// Wrap the system allocator with Tracy's profiled allocator when the
+/// allocations feature is on. Tracks every allocation on the timeline; only
+/// useful when chasing allocation hotspots.
+#[cfg(feature = "profile-with-tracy-allocations")]
+#[global_allocator]
+static GLOBAL: tracy_client::ProfiledAllocator<std::alloc::System> =
+    tracy_client::ProfiledAllocator::new(std::alloc::System, 100);
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Block SIGINT/SIGTERM/SIGHUP before any threads spawn so they're
     // delivered via signalfd (see signals::listen) instead of killing the
     // process. Child threads inherit the mask; spawn_command clears it for
     // exec'd children.
     signals::block_early()?;
+
+    // Start Tracy server connection BEFORE other threads spawn so they're
+    // captured. No-op without the profile-with-tracy feature.
+    #[cfg(feature = "profile-with-tracy")]
+    tracy_client::Client::start();
 
     if std::env::var("RUST_LOG").is_err() {
         unsafe { std::env::set_var("RUST_LOG", "info") };

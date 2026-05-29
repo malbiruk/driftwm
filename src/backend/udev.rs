@@ -1332,6 +1332,9 @@ fn render_frame(
     output: &Output,
     crtc: crtc::Handle,
 ) {
+    #[cfg(feature = "profile-with-tracy")]
+    let _span = tracy_client::span!("udev::render_frame");
+
     data.redraws_needed.remove(output);
 
     // Flush Wayland clients
@@ -1498,6 +1501,12 @@ fn render_frame(
     // Post-render
     crate::render::post_render(data, output);
     data.display_handle.flush_clients().ok();
+
+    #[cfg(feature = "profile-with-tracy")]
+    {
+        drop(_span);
+        tracy_client::Client::running().map(|c| c.frame_mark());
+    }
 }
 
 /// Forward a page-flip's timing to all clients waiting on `wp_presentation`.

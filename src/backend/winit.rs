@@ -161,6 +161,9 @@ pub fn init_winit(
                 return TimeoutAction::Drop;
             }
 
+            #[cfg(feature = "profile-with-tracy")]
+            let _frame_span = tracy_client::span!("winit::frame");
+
             // --- Flush Wayland client messages before rendering ---
             data.display_handle.flush_clients().ok();
 
@@ -273,6 +276,13 @@ pub fn init_winit(
             crate::render::refresh_foreign_toplevels(data);
             crate::render::post_render(data, &output);
             data.display_handle.flush_clients().ok();
+
+            #[cfg(feature = "profile-with-tracy")]
+            {
+                drop(_frame_span);
+                tracy_client::Client::running()
+                    .map(|c| c.frame_mark());
+            }
 
             TimeoutAction::ToDuration(Duration::from_millis(16))
         })?;

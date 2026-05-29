@@ -203,6 +203,9 @@ impl BgChunkCache {
         zoom: f64,
         upload_budget: usize,
     ) -> usize {
+        #[cfg(feature = "profile-with-tracy")]
+        let _span = tracy_client::span!("BgChunkCache::ensure_visible_loaded");
+
         self.frame_counter = self.frame_counter.wrapping_add(1);
         let frame = self.frame_counter;
 
@@ -299,6 +302,9 @@ impl BgChunkCache {
         upload_budget: usize,
         frame: u64,
     ) -> usize {
+        #[cfg(feature = "profile-with-tracy")]
+        let _span = tracy_client::span!("BgChunkCache::drain_responses");
+
         let mut uploaded = 0;
         while uploaded < upload_budget {
             let Some(resp) = self.pool.try_recv() else {
@@ -581,9 +587,39 @@ pub fn chunk_render_elements(
     camera: Point<f64, Logical>,
     zoom: f64,
 ) -> Vec<PixelSnapRescaleElement<TileShaderElement>> {
+    #[cfg(feature = "profile-with-tracy")]
+    let _span = tracy_client::span!("chunk_render_elements");
+
     let target_lod = pick_lod(zoom, cache.n_lods());
     let n_lods = cache.n_lods();
     let coarsest = n_lods - 1;
+
+    #[cfg(feature = "profile-with-tracy")]
+    {
+        // Plots correlate per-frame chunked-bg internals with frame time on
+        // the Tracy timeline. Static names (`new_leak`) so the plot survives
+        // across frames as the same line.
+        static VRAM_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        static IN_FLIGHT_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        static TARGET_LOD_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        let vram = VRAM_PLOT.get_or_init(|| {
+            tracy_client::PlotName::new_leak("bg_chunks.vram_mb".to_string())
+        });
+        let in_flight = IN_FLIGHT_PLOT.get_or_init(|| {
+            tracy_client::PlotName::new_leak("bg_chunks.in_flight".to_string())
+        });
+        let target = TARGET_LOD_PLOT.get_or_init(|| {
+            tracy_client::PlotName::new_leak("bg_chunks.target_lod".to_string())
+        });
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(*vram, (cache.vram_bytes as f64) / (1024.0 * 1024.0));
+            client.plot(*in_flight, cache.in_flight.len() as f64);
+            client.plot(*target, target_lod as f64);
+        }
+    }
 
     // Per-tile resolve only across LODs strictly finer than coarsest — the
     // coarsest LOD is the fallback plane, no per-tile cache there.

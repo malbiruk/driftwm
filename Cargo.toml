@@ -36,6 +36,32 @@ drm-ffi = "0.9"
 bytemuck = { version = "1.25", features = ["derive"] }
 cosmic-text = { version = "0.17.0", features = ["shape-run-cache"] }
 sd-notify = "0.4"
+tracy-client = { version = "0.18.4", default-features = false, optional = true }
+
+[features]
+# Enables the Tracy profiler instrumentation. Spans, plots, and frame marks
+# are no-ops without this feature, so it carries zero overhead off.
+#
+# Usage:
+#   1. Install the Tracy server GUI: https://github.com/wolfpld/tracy/releases
+#   2. cargo run --release --features profile-with-tracy
+#   3. In Tracy GUI, click "Connect" to localhost.
+profile-with-tracy = [
+    "dep:tracy-client",
+    "tracy-client/default",
+    "smithay/tracy_gpu_profiling",
+]
+# Tracy server connects on-demand instead of at startup. Use when running the
+# compositor as a long-lived process and only profiling occasionally.
+profile-with-tracy-ondemand = [
+    "profile-with-tracy",
+    "tracy-client/ondemand",
+    "tracy-client/manual-lifetime",
+]
+# Wraps the global allocator with Tracy's profiled allocator so allocations
+# show up on the timeline. Adds noticeable overhead — use only when chasing
+# allocation hotspots.
+profile-with-tracy-allocations = ["profile-with-tracy"]
 
 [profile.release]
 lto = "thin"

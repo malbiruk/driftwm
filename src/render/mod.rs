@@ -154,6 +154,9 @@ pub fn compose_frame(
     output: &Output,
     cursor_elements: Vec<OutputRenderElements>,
 ) -> Vec<OutputRenderElements> {
+    #[cfg(feature = "profile-with-tracy")]
+    let _span = tracy_client::span!("compose_frame");
+
     if state.dnd_icon.as_ref().is_some_and(|i| !i.surface.alive()) {
         state.dnd_icon = None;
     }
