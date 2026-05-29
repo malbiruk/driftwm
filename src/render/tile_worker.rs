@@ -1,4 +1,4 @@
-//! Multi-threaded TIFF tile decoder pool. Off-loads `TiffSource::read_tile`
+//! Multi-threaded TIFF tile decoder pool. Off-loads `TiffSource::read_block`
 //! from the render thread so the compositor stays at 60fps while chunked
 //! backgrounds resolve. Texture upload (`import_memory`) stays on the render
 //! thread — it needs the GL context — but the long pole (libtiff +
@@ -29,8 +29,12 @@ pub const N_WORKERS: usize = 6;
 #[derive(Debug, Clone, Copy)]
 pub struct TileRequest {
     pub lod: u32,
+    /// Block coordinates on LOD `lod`'s render-chunk grid, which aggregates
+    /// `aggregation × aggregation` TIFF tiles per block.
     pub cx: u32,
     pub cy: u32,
+    /// Tiles per block edge. `1` = single TIFF tile (no stitching).
+    pub aggregation: u32,
 }
 
 pub struct TileResponse {
@@ -136,7 +140,7 @@ fn worker_loop(
                 s = queue.cv.wait(s).unwrap();
             }
         };
-        let result = source.read_tile(req.lod, req.cx, req.cy);
+        let result = source.read_block(req.lod, req.cx, req.cy, req.aggregation);
         if resp_tx.send(TileResponse { req, result }).is_err() {
             // Pool dropped; we're the last writer or close to it.
             return;

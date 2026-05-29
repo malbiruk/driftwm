@@ -27,12 +27,38 @@ use super::{PixelSnapRescaleElement, TileShaderElement};
 const VRAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Cap on the fallback texture's longest side. Picks the finest LOD whose
-/// `max(image_w, image_h) <= FALLBACK_MAX_DIM` — so a deep pyramid's tiny
-/// coarsest page (e.g. 256×256 for a 16K source) doesn't end up as the
-/// fallback and force everything to look blurry at moderate zoom-out. At
-/// 2048 the fallback is 1:1 sharp at the "1 full image in viewport" zoom
-/// of a typical 1080p–4K display and costs ~16 MB VRAM per output.
-const FALLBACK_MAX_DIM: u32 = 2048;
+/// `max(image_w, image_h) <= FALLBACK_MAX_DIM` as the constant-cost shader
+/// fallback plane; everything finer is per-tile. A higher cap also sets the
+/// floor on per-tile work: the coarsest per-tile LOD is the one just finer
+/// than the fallback, and *that* band carries the most visible elements per
+/// viewport, so it's the frame-time hot spot (Tracy: ~15 ms / 42% over budget
+/// at the LOD just below fallback). Raising the cap to 4096 demotes that band
+/// into the O(1) shader plane — same on-screen detail, no per-element cliff —
+/// at the cost of a larger fallback texture (worst case ~67 MB at 4096², vs
+/// the 512 MB VRAM budget — negligible; ~28 MB for a 43K source whose
+/// fallback lands on a 2.7K LOD). A 16K source's coarsest page is still far
+/// below 4096 so deep pyramids don't regress to a blurry fallback.
+const FALLBACK_MAX_DIM: u32 = 4096;
+
+/// Target render-chunk size in canvas units (= LOD-0 image pixels). Per-LOD
+/// aggregation pads each chunk to roughly this size so visible-chunk count
+/// stays ≈ 6 at every LOD's native zoom. Frame time at fractional zoom is
+/// dominated by `PixelSnapRescaleElement` per-element rescale (~0.7 ms each
+/// on M1); 4-6 elements ≈ shader-fallback frame time, so the LOD boundary
+/// stops feeling like a perf cliff. Larger targets multiply per-chunk decode
+/// work and VRAM 4×; smaller ones bring back wobble at fractional zoom.
+const TARGET_CHUNK_CANVAS: i32 = 2048;
+
+/// Separate, smaller target for LOD 0. At zoom ≥ 1.0 the rescale is identity
+/// so per-element GPU cost is low — but the un-aggregated 256-px tile grid
+/// still emits ~60 elements per viewport and floods the decode queue (Tracy:
+/// LOD 0 ~10× the per-frame element-emission cost of any other LOD, in-flight
+/// peaks ~140 vs ~10 elsewhere). A 1024 target cuts that to ~12 elements / 16
+/// tiles per chunk: smoother panning, while keeping sharpening granular
+/// enough that freshly-revealed edges don't dwell on the magnified fallback.
+/// Smaller than `TARGET_CHUNK_CANVAS` because the fractional-zoom rescale cost
+/// that justifies 2048 elsewhere doesn't apply here.
+const LOD0_TARGET_CHUNK_CANVAS: i32 = 1024;
 
 #[derive(Debug, Clone, Copy)]
 struct ChunkMeta {
@@ -54,11 +80,14 @@ pub struct BgChunkCache {
     /// just duplicate VRAM.
     pub chunks: HashMap<(u32, i32, i32), GlesTexture>,
     pub chunk_elements: HashMap<(u32, i32, i32, i32, i32), TileShaderElement>,
-    /// Per-LOD chunk canvas span (canvas units per tile at that LOD). Computed
-    /// once at init so lookup and emission read the same rounded values, and
-    /// validated to a strict 2× ratio between adjacent LODs — coarser-LOD
-    /// fallback's `div_euclid(2)` map then has no straddle gaps.
+    /// Per-LOD chunk canvas span (canvas units per render chunk at that LOD).
+    /// Adjacent ratios are integer powers of 2 — the coarser-LOD fallback's
+    /// `canvas_x.div_euclid(try_size)` lookup needs an integer multiple, which
+    /// the aggregation pass guarantees.
     chunk_canvas_sizes: Vec<i32>,
+    /// Per-LOD TIFF-tile aggregation factor (tiles per chunk edge). See
+    /// `TARGET_CHUNK_CANVAS`.
+    aggregations: Vec<u32>,
     chunk_meta: HashMap<(u32, i32, i32), ChunkMeta>,
     vram_bytes: u64,
     frame_counter: u64,
@@ -116,14 +145,15 @@ impl BgChunkCache {
             .first()
             .ok_or("TIFF has no LOD levels")?;
         let image_dims = lod0.image_dims;
-        let mut chunk_canvas_sizes = derive_chunk_canvas_sizes(&source)?;
-        let n_truncated = chunk_canvas_sizes.len();
+        let n_on_disk = source.lods().len();
+        let (mut chunk_canvas_sizes, mut aggregations) = derive_chunk_layout(&source)?;
+        let n_after_vips_trunc = chunk_canvas_sizes.len();
 
         // Pick fallback LOD: the FINEST (lowest-index) LOD whose dimensions
         // fit within `FALLBACK_MAX_DIM`. Deep pyramids would otherwise pin
         // the fallback to a too-blurry coarsest page.
-        let mut fallback_lod = (n_truncated - 1) as u32;
-        for i in 0..n_truncated {
+        let mut fallback_lod = (n_after_vips_trunc - 1) as u32;
+        for i in 0..n_after_vips_trunc {
             let dims = source.lods()[i].image_dims;
             if dims.0.max(dims.1) <= FALLBACK_MAX_DIM {
                 fallback_lod = i as u32;
@@ -134,11 +164,13 @@ impl BgChunkCache {
         // `fallback_lod - 1`; pick_lod clamps to `fallback_lod`). Truncate so
         // `n_lods()` reports the actually-used count.
         chunk_canvas_sizes.truncate((fallback_lod + 1) as usize);
+        aggregations.truncate((fallback_lod + 1) as usize);
+        debug_assert_eq!(chunk_canvas_sizes.len(), aggregations.len());
         tracing::info!(
-            "chunked tile-bg: pyramid {} LODs total, using LODs 0-{} (LOD {} as fallback plane, {}×{} px)",
-            n_truncated,
-            fallback_lod,
-            fallback_lod,
+            "chunked tile-bg: TIFF has {n_on_disk} pages on disk; {} pass vips ±1 truncation; \
+             using LODs 0-{fallback_lod} (LOD {fallback_lod} as fallback plane, {}×{} px); \
+             chunk_canvas_sizes={chunk_canvas_sizes:?}, aggregations={aggregations:?}",
+            n_after_vips_trunc,
             source.lods()[fallback_lod as usize].image_dims.0,
             source.lods()[fallback_lod as usize].image_dims.1,
         );
@@ -167,6 +199,7 @@ impl BgChunkCache {
             chunks: HashMap::new(),
             chunk_elements: HashMap::new(),
             chunk_canvas_sizes,
+            aggregations,
             chunk_meta: HashMap::new(),
             vram_bytes: 0,
             frame_counter: 0,
@@ -185,6 +218,10 @@ impl BgChunkCache {
 
     pub fn chunk_canvas_size_at(&self, lod: u32) -> i32 {
         self.chunk_canvas_sizes[lod as usize]
+    }
+
+    pub fn aggregation_at(&self, lod: u32) -> u32 {
+        self.aggregations[lod as usize]
     }
 
     /// Per-frame entry point: drain ready decodes onto the GPU, stamp LRU,
@@ -226,11 +263,15 @@ impl BgChunkCache {
 
         // Stamp coarser-LOD fallback ancestors so eviction can't drop the
         // coarse cover while the fine LOD is still loading — would flash blank.
+        // Bound is `..coarsest` (exclusive): the coarsest LOD is the always-
+        // resident fallback plane, never inserted into chunk_meta, so a
+        // `get_mut` lookup there is wasted work.
         let n_lods = self.n_lods();
+        let coarsest = n_lods - 1;
         for (cx_t, cy_t) in &wanted {
             let canvas_x = cx_t * target_chunk_size;
             let canvas_y = cy_t * target_chunk_size;
-            for try_lod in target_lod..n_lods {
+            for try_lod in target_lod..coarsest {
                 let try_size = self.chunk_canvas_size_at(try_lod);
                 let try_cx = canvas_x.div_euclid(try_size);
                 let try_cy = canvas_y.div_euclid(try_size);
@@ -244,7 +285,6 @@ impl BgChunkCache {
         // coarse-first — coarse LODs cover a wide area in 1-4 tiles each, so
         // landing a coarse LOD first gives every fine chunk a sharper-than-
         // fallback overlay while it waits its turn.
-        let coarsest = n_lods - 1;
         let mut enqueued = 0usize;
         if target_lod < coarsest {
             for lod in (target_lod..coarsest).rev() {
@@ -259,6 +299,7 @@ impl BgChunkCache {
                 for (cx, cy, _kx, _ky) in &visible {
                     at_lod.insert((*cx, *cy));
                 }
+                let aggregation = self.aggregation_at(lod);
                 for (cx, cy) in at_lod {
                     let key = (lod, cx, cy);
                     if self.chunks.contains_key(&key)
@@ -270,7 +311,12 @@ impl BgChunkCache {
                     let Ok(cx_u) = u32::try_from(cx) else { continue };
                     let Ok(cy_u) = u32::try_from(cy) else { continue };
                     self.in_flight.insert(key);
-                    self.pool.enqueue(TileRequest { lod, cx: cx_u, cy: cy_u });
+                    self.pool.enqueue(TileRequest {
+                        lod,
+                        cx: cx_u,
+                        cy: cy_u,
+                        aggregation,
+                    });
                     enqueued += 1;
                 }
             }
@@ -453,39 +499,64 @@ pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     }
 }
 
-/// Compute per-LOD canvas chunk sizes (canvas units per tile at that LOD) and
-/// truncate at the first non-2× transition. The coarser-LOD fallback's
-/// `div_euclid` lookup only works when adjacent canvas grids align at a 2×
-/// ratio. vips's `--pyramid` produces power-of-2 chains but the *last* page
-/// often drifts by ±1 px when the source image dims don't divide evenly; we
-/// just drop that tail rather than reject the whole TIFF.
-fn derive_chunk_canvas_sizes(source: &TiffSource) -> Result<Vec<i32>, String> {
+/// Compute per-LOD canvas chunk sizes and TIFF-tile aggregation factors.
+/// Truncates the pyramid at the first non-2× *raw* transition: vips's
+/// `--pyramid` produces power-of-2 chains but the last page can drift ±1 px
+/// when source dims don't divide evenly, and the fallback's `div_euclid`
+/// lookup can't tolerate that straddle.
+fn derive_chunk_layout(source: &TiffSource) -> Result<(Vec<i32>, Vec<u32>), String> {
     let lods = source.lods();
     let lod_0_w = lods[0].image_dims.0 as f64;
-    let mut sizes = Vec::with_capacity(lods.len());
+    let mut raw = Vec::with_capacity(lods.len());
     for (i, meta) in lods.iter().enumerate() {
         let scale = lod_0_w / meta.image_dims.0 as f64;
         let s = (meta.tile_dims.0 as f64 * scale).round() as i32;
         if s <= 0 {
             return Err(format!("LOD {i}: derived canvas chunk size {s} <= 0"));
         }
-        sizes.push(s);
+        raw.push(s);
     }
-    for i in 1..sizes.len() {
-        if sizes[i] != 2 * sizes[i - 1] {
+    for i in 1..raw.len() {
+        if raw[i] != 2 * raw[i - 1] {
             tracing::warn!(
-                "chunked tile-bg: LOD {i} canvas chunk size {} != 2× LOD {} ({}); \
+                "chunked tile-bg: LOD {i} raw canvas chunk size {} != 2× LOD {} ({}); \
                  truncating pyramid to {} usable LOD(s)",
-                sizes[i],
+                raw[i],
                 i - 1,
-                sizes[i - 1],
+                raw[i - 1],
                 i,
             );
-            sizes.truncate(i);
+            raw.truncate(i);
             break;
         }
     }
-    Ok(sizes)
+    let aggregations =
+        compute_aggregations(&raw, TARGET_CHUNK_CANVAS, LOD0_TARGET_CHUNK_CANVAS);
+    let sizes: Vec<i32> = raw
+        .iter()
+        .zip(&aggregations)
+        .map(|(r, a)| r * (*a as i32))
+        .collect();
+    Ok((sizes, aggregations))
+}
+
+/// Per-LOD TIFF-tile aggregation factor. Each LOD floor-divides its target by
+/// `raw_size` so the final chunk size never exceeds the target, then clamps to
+/// ≥ 1 (guarding raw_size == 0). LOD 0 uses `lod0_target` (smaller — see
+/// [`LOD0_TARGET_CHUNK_CANVAS`]); every coarser LOD uses `target`.
+pub(crate) fn compute_aggregations(
+    raw_sizes: &[i32],
+    target: i32,
+    lod0_target: i32,
+) -> Vec<u32> {
+    let mut agg = vec![1u32; raw_sizes.len()];
+    for i in 0..raw_sizes.len() {
+        let t = if i == 0 { lod0_target } else { target };
+        if raw_sizes[i] > 0 && raw_sizes[i] < t {
+            agg[i] = ((t / raw_sizes[i]) as u32).max(1);
+        }
+    }
+    agg
 }
 
 /// Integer `k` offsets along one axis such that image instance `k` overlaps
@@ -1142,6 +1213,74 @@ mod tests {
         // Defensive: caller invariant is n_lods >= 1, but the function
         // shouldn't panic if the invariant breaks.
         assert_eq!(pick_lod(0.5, 0), 0);
+    }
+
+    #[test]
+    fn aggregations_lod_zero_uses_lod0_target() {
+        // LOD 0 aggregates against the smaller lod0_target (256 → 1024/256 = 4),
+        // not the coarser-LOD target.
+        let agg = compute_aggregations(&[256, 512, 1024, 2048], 2048, 1024);
+        assert_eq!(agg[0], 4);
+    }
+
+    #[test]
+    fn aggregations_typical_43k_image() {
+        let raw = vec![256, 512, 1024, 2048, 4096, 8192, 16384, 32768];
+        let agg = compute_aggregations(&raw, 2048, 1024);
+        assert_eq!(agg, vec![4, 4, 2, 1, 1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn aggregations_final_sizes_monotonic_integer_ratios() {
+        // Adjacent final-size ratios must be integer powers of 2 — the
+        // coarser-LOD fallback's `canvas_x.div_euclid(size)` lookup needs it.
+        let raw = vec![256, 512, 1024, 2048, 4096, 8192];
+        let agg = compute_aggregations(&raw, 2048, 1024);
+        let sizes: Vec<i32> = raw.iter().zip(&agg).map(|(r, a)| r * *a as i32).collect();
+        assert_eq!(sizes, vec![1024, 2048, 2048, 2048, 4096, 8192]);
+        for i in 1..sizes.len() {
+            let ratio = sizes[i] as f64 / sizes[i - 1] as f64;
+            assert!(
+                ratio == 1.0 || ratio == 2.0 || ratio == 4.0 || ratio == 8.0,
+                "LOD {i} ratio {ratio} is not a power of 2"
+            );
+            assert!(
+                sizes[i] % sizes[i - 1] == 0,
+                "LOD {i} ({}) not divisible by LOD {} ({})",
+                sizes[i],
+                i - 1,
+                sizes[i - 1]
+            );
+        }
+    }
+
+    #[test]
+    fn aggregations_target_below_raw_keeps_one() {
+        let agg = compute_aggregations(&[1024, 2048, 4096], 1024, 1024);
+        assert_eq!(agg, vec![1, 1, 1]);
+    }
+
+    #[test]
+    fn aggregations_empty_input() {
+        assert_eq!(compute_aggregations(&[], 2048, 1024), Vec::<u32>::new());
+    }
+
+    #[test]
+    fn aggregations_zero_raw_clamps_to_one() {
+        // Guard against div-by-zero on a pathological raw=0 entry. Other LODs
+        // still aggregate: LOD 0 by lod0_target (1024/256=4), LOD 2 by the
+        // coarser-LOD target (2048/1024=2).
+        let agg = compute_aggregations(&[256, 0, 1024], 2048, 1024);
+        assert_eq!(agg[1], 1);
+        assert_eq!(agg[0], 4);
+        assert_eq!(agg[2], 2);
+    }
+
+    #[test]
+    fn aggregations_single_lod() {
+        // Only LOD 0 present (tiny single-page TIFF): no panic, aggregates by
+        // lod0_target.
+        assert_eq!(compute_aggregations(&[256], 2048, 1024), vec![4]);
     }
 
     #[test]

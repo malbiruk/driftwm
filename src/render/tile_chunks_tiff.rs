@@ -2,7 +2,8 @@
 //!
 //! Each IFD ("page") in the file is one LOD level. Page 0 is full resolution;
 //! each subsequent page is a downsampled copy. Tiles within a page are read
-//! lazily via `read_tile(lod, cx, cy)`.
+//! lazily via `read_block(lod, gx, gy, n)`, which stitches an `n×n` block of
+//! TIFF tiles into a single tightly-packed RGBA buffer for upload.
 //!
 //! Validation refuses stripped TIFFs and unsupported color types (only
 //! RGB8 / RGBA8 are accepted) so we never silently degrade or panic later.
@@ -59,49 +60,100 @@ impl TiffSource {
         &self.lods
     }
 
-    /// `read_chunk` returns a tight `actual_w * actual_h * samples` buffer for
-    /// edge tiles (the crate strips internal tile padding), so the returned
-    /// `DecodedTile` carries the cropped dims rather than `tile_dims`.
-    pub fn read_tile(&mut self, lod: u32, cx: u32, cy: u32) -> Result<DecodedTile, String> {
+    /// Read an `n×n` block of TIFF tiles starting at block index `(gx, gy)`
+    /// (TIFF tile range `[gx*n .. gx*n+n) × [gy*n .. gy*n+n)`) and stitch
+    /// into one tightly-packed RGBA buffer. Edge blocks clip both the inner
+    /// tile range and per-tile actual dims, so the returned `DecodedTile`
+    /// carries the cropped block size, not `n * tile_dim`.
+    ///
+    /// Aggregation shrinks per-block element count at the renderer, where
+    /// per-element rescale dominates frame time at fractional zoom. See
+    /// `tile_chunks::TARGET_CHUNK_CANVAS`.
+    pub fn read_block(
+        &mut self,
+        lod: u32,
+        gx: u32,
+        gy: u32,
+        n: u32,
+    ) -> Result<DecodedTile, String> {
+        if n == 0 {
+            return Err("read_block: aggregation factor n must be >= 1".into());
+        }
         let lod_idx = lod as usize;
         let meta = self
             .lods
             .get(lod_idx)
             .copied()
             .ok_or_else(|| format!("LOD {lod} out of range (have {})", self.lods.len()))?;
-        let tiles_across = meta.image_dims.0.div_ceil(meta.tile_dims.0);
-        let tiles_down = meta.image_dims.1.div_ceil(meta.tile_dims.1);
-        if cx >= tiles_across || cy >= tiles_down {
+        let (img_w, img_h) = meta.image_dims;
+        let (tile_w, tile_h) = meta.tile_dims;
+        let tiles_across = img_w.div_ceil(tile_w);
+        let tiles_down = img_h.div_ceil(tile_h);
+
+        let start_tx = gx * n;
+        let start_ty = gy * n;
+        if start_tx >= tiles_across || start_ty >= tiles_down {
             return Err(format!(
-                "tile ({cx},{cy}) out of range at LOD {lod} ({tiles_across}x{tiles_down})"
+                "block ({gx},{gy}) n={n} starts past tile grid at LOD {lod} \
+                 ({tiles_across}×{tiles_down})"
             ));
         }
+        let end_tx = (start_tx + n).min(tiles_across);
+        let end_ty = (start_ty + n).min(tiles_down);
+
+        // Block pixel dims: full tile_w/h for each interior tile, partial for
+        // a right/bottom-edge tile that abuts the image boundary.
+        let block_w = (end_tx * tile_w).min(img_w) - start_tx * tile_w;
+        let block_h = (end_ty * tile_h).min(img_h) - start_ty * tile_h;
 
         self.navigate_to_lod(lod)?;
-        let tile_index = cy * tiles_across + cx;
-        let chunk = self
-            .decoder
-            .read_chunk(tile_index)
-            .map_err(|e| format!("read_chunk({tile_index}) at LOD {lod}: {e}"))?;
-        let raw = match chunk {
-            DecodingResult::U8(v) => v,
-            other => return Err(format!("non-u8 sample type at LOD {lod}: {other:?}")),
-        };
 
-        let width = (meta.image_dims.0 - cx * meta.tile_dims.0).min(meta.tile_dims.0);
-        let height = (meta.image_dims.1 - cy * meta.tile_dims.1).min(meta.tile_dims.1);
         let bpp_raw = bytes_per_pixel(meta.color);
-        let expected_len = (width as usize) * (height as usize) * bpp_raw;
-        if raw.len() != expected_len {
-            return Err(format!(
-                "tile ({cx},{cy}) at LOD {lod}: decoded {} bytes, expected {expected_len}",
-                raw.len()
-            ));
+        let stitched_row_stride = (block_w as usize) * 4;
+        let mut stitched = vec![0u8; (block_h as usize) * stitched_row_stride];
+
+        for ty_off in 0..(end_ty - start_ty) {
+            for tx_off in 0..(end_tx - start_tx) {
+                let cx = start_tx + tx_off;
+                let cy = start_ty + ty_off;
+                let tile_index = cy * tiles_across + cx;
+                let chunk = self
+                    .decoder
+                    .read_chunk(tile_index)
+                    .map_err(|e| format!("read_chunk({tile_index}) at LOD {lod}: {e}"))?;
+                let raw = match chunk {
+                    DecodingResult::U8(v) => v,
+                    other => {
+                        return Err(format!("non-u8 sample type at LOD {lod}: {other:?}"));
+                    }
+                };
+                let actual_w = (img_w - cx * tile_w).min(tile_w);
+                let actual_h = (img_h - cy * tile_h).min(tile_h);
+                let expected = (actual_w as usize) * (actual_h as usize) * bpp_raw;
+                if raw.len() != expected {
+                    return Err(format!(
+                        "tile ({cx},{cy}) at LOD {lod}: decoded {} bytes, expected {expected}",
+                        raw.len()
+                    ));
+                }
+                let rgba = rgb_to_rgba8(raw, meta.color);
+                let src_row_stride = (actual_w as usize) * 4;
+                let dst_x_px = (tx_off * tile_w) as usize;
+                let dst_y_px = (ty_off * tile_h) as usize;
+                for row in 0..actual_h as usize {
+                    let dst_start =
+                        (dst_y_px + row) * stitched_row_stride + dst_x_px * 4;
+                    let src_start = row * src_row_stride;
+                    stitched[dst_start..dst_start + src_row_stride]
+                        .copy_from_slice(&rgba[src_start..src_start + src_row_stride]);
+                }
+            }
         }
+
         Ok(DecodedTile {
-            rgba: rgb_to_rgba8(raw, meta.color),
-            width,
-            height,
+            rgba: stitched,
+            width: block_w,
+            height: block_h,
         })
     }
 
@@ -296,7 +348,7 @@ mod tests {
     use std::io::{Cursor, Write};
 
     /// The tiff crate's encoder can't produce tiled output, so we can only
-    /// exercise the negative path here; positive open() / read_tile() coverage
+    /// exercise the negative path here; positive open() / read_block() coverage
     /// is deferred to a real vips-produced fixture in phase 4+.
     fn write_stripped_rgb8_tiff(path: &Path) {
         use tiff::encoder::TiffEncoder;
