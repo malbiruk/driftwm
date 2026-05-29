@@ -40,6 +40,9 @@ pub struct RenderCache {
     pub wallpaper_shader: Option<GlesTexProgram>,
     pub cached_wallpaper_bg: HashMap<String, crate::render::TileShaderElement>,
     pub cached_error_bar: HashMap<String, crate::render::ErrorBarCache>,
+    /// Pass-through fragment shader cloned into each `BgChunkCache`.
+    pub chunk_bg_shader: Option<GlesTexProgram>,
+    pub cached_tile_chunks: HashMap<String, crate::render::BgChunkCache>,
 }
 
 impl RenderCache {
@@ -68,6 +71,8 @@ impl RenderCache {
             wallpaper_shader: None,
             cached_wallpaper_bg: HashMap::new(),
             cached_error_bar: HashMap::new(),
+            chunk_bg_shader: None,
+            cached_tile_chunks: HashMap::new(),
         }
     }
 
@@ -84,6 +89,7 @@ impl RenderCache {
         self.cached_tile_bg.remove(output_name);
         self.cached_wallpaper_bg.remove(output_name);
         self.cached_error_bar.remove(output_name);
+        self.cached_tile_chunks.remove(output_name);
         self.remove_capture_state(output_name);
     }
 }

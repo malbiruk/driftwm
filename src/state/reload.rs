@@ -88,6 +88,8 @@ impl DriftWm {
         self.render.cached_tile_bg.clear();
         self.render.wallpaper_shader = None;
         self.render.cached_wallpaper_bg.clear();
+        self.render.chunk_bg_shader = None;
+        self.render.cached_tile_chunks.clear();
 
         // Border + shadow caches key on phys-only — color and corner_radius
         // live in uniforms. Drop both so edits to those config fields apply.

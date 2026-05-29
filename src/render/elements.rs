@@ -87,6 +87,20 @@ impl TileShaderElement {
     }
 }
 
+fn tile_corner_round(
+    area: Rectangle<i32, Logical>,
+    scale: Scale<f64>,
+) -> Rectangle<i32, Physical> {
+    let x0 = (area.loc.x as f64 * scale.x).round() as i32;
+    let y0 = (area.loc.y as f64 * scale.y).round() as i32;
+    let x1 = ((area.loc.x + area.size.w) as f64 * scale.x).round() as i32;
+    let y1 = ((area.loc.y + area.size.h) as f64 * scale.y).round() as i32;
+    Rectangle::new(
+        Point::from((x0, y0)),
+        Size::from(((x1 - x0).max(0), (y1 - y0).max(0))),
+    )
+}
+
 impl Element for TileShaderElement {
     fn id(&self) -> &Id {
         &self.id
@@ -100,13 +114,25 @@ impl Element for TileShaderElement {
     }
 
     fn geometry(&self, scale: Scale<f64>) -> Rectangle<i32, Physical> {
-        self.area.to_physical_precise_round(scale)
+        // Corner-round so adjacent chunks sharing a pre-scale edge land on
+        // the same post-scale pixel — independent loc/size rounding leaves
+        // 1px seams between neighbors at fractional output_scale.
+        tile_corner_round(self.area, scale)
     }
 
     fn opaque_regions(&self, scale: Scale<f64>) -> OpaqueRegions<i32, Physical> {
+        // OutputDamageTracker treats opaque regions as element-local and
+        // translates them by `geometry().loc`. `self.opaque_regions` live in the
+        // same absolute pre-scale space as `self.area`, so subtract the scaled
+        // area origin or chunks at non-zero offsets get translated twice.
+        let origin = tile_corner_round(self.area, scale).loc;
         self.opaque_regions
             .iter()
-            .map(|region| region.to_physical_precise_round(scale))
+            .map(|region| {
+                let mut r = tile_corner_round(*region, scale);
+                r.loc -= origin;
+                r
+            })
             .collect()
     }
 
@@ -303,6 +329,9 @@ render_elements! {
     pub OutputRenderElements<=GlesRenderer>;
     Background=RescaleRenderElement<PixelShaderElement>,
     TileBg=RescaleRenderElement<TileShaderElement>,
+    // PixelSnap (not Rescale): chunks need a shared rounding anchor to meet
+    // at pixel-consistent edges at fractional zoom.
+    TileBgChunk=PixelSnapRescaleElement<TileShaderElement>,
     WallpaperBg=TileShaderElement,
     Decoration=PixelSnapRescaleElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
     Window=PixelSnapRescaleElement<WaylandSurfaceRenderElement<GlesRenderer>>,
