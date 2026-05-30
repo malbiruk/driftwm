@@ -105,7 +105,7 @@ not stuck to the screen. This gives spatial awareness when panning.
 Three modes (all rendered as shaders internally):
 
 - **`shader`** — procedural GLSL, animated or static. Default is a dot grid. See [docs/shaders.md](docs/shaders.md) to write your own. Bundled shaders live in `extras/wallpapers/{static,animated}/`.
-- **`tile`** — PNG/JPG (single texture, tiled infinitely) or pyramidal tiled TIFF (gigapixel, streamed on demand at the LOD that matches the current zoom).
+- **`tile`** — PNG/JPG (single texture, tiled infinitely), or a tiled pyramidal TIFF for [gigapixel wallpapers](docs/gigapixel-wallpapers.md).
 - **`wallpaper`** — single image stretched to fill viewport (does not scroll/zoom) — a classic desktop wallpaper.
 
 GPU cost scales with what a shader reads: one that reads no viewport uniforms renders once (as cheap as `wallpaper`); reading `u_camera`/`u_zoom` redraws on pan/zoom; reading `u_time` redraws every frame. Tiles redraw on pan/zoom; `wallpaper` renders once.
@@ -117,15 +117,6 @@ path = "~/.config/driftwm/bg.glsl"
 # Or: type = "tile",      path = "~/Pictures/tile.png"
 # Or: type = "tile",      path = "~/Pictures/world.tif"   # pyramidal TIFF
 # Or: type = "wallpaper", path = "~/Pictures/wallpaper.jpg"
-```
-
-**Gigapixel wallpapers.** For images that exceed `GL_MAX_TEXTURE_SIZE` (typically 8K–16K per side), convert to pyramidal tiled BigTIFF — driftwm streams tiles on demand at the LOD that matches the current zoom and caches at most 512 MB of decoded tiles per output. The pyramid must be 2× per level (default for the converters below):
-
-```bash
-vips tiffsave input.jpg output.tif --tile --pyramid --bigtiff --compression=lzw
-# or with gdal:
-gdal_translate -of GTiff -co TILED=YES -co COMPRESS=LZW input.jpg output.tif
-gdaladdo -r average output.tif 2 4 8 16 32
 ```
 
 ### Window rules
