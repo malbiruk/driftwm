@@ -122,6 +122,7 @@ fn tile_chunks_or_shader_fallback(
     match init_tile_chunks_bg(state, renderer, path, output_name) {
         Ok(()) => Ok(()),
         Err(msg) => {
+            tracing::error!("{msg}, using default shader");
             init_shader_bg(state, renderer, initial_size, output_name);
             Err(msg)
         }
@@ -299,7 +300,10 @@ fn load_image_to_texture(
         Ok(texture) => Ok((texture, w as i32, h as i32)),
         Err(e) => {
             tracing::error!("Failed to upload texture from {path}: {e}, using default shader");
-            Err(format!("background image '{path}': upload failed: {e}"))
+            Err(format!(
+                "background image '{path}': upload failed (image likely too large) — \
+                 gigapixel wallpapers need a tiled pyramidal TIFF"
+            ))
         }
     }
 }

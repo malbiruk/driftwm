@@ -284,7 +284,7 @@ fn scan_lods(path: &Path) -> Result<Vec<LodMetadata>, String> {
 
 fn read_lod_metadata(decoder: &mut Decoder<BufReader<File>>) -> Result<LodMetadata, String> {
     if decoder.get_chunk_type() != ChunkType::Tile {
-        return Err("page is stripped, not tiled — pyramidal TIFF must be tiled".into());
+        return Err("TIFF is stripped, not tiled — needs a tiled, pyramidal TIFF".into());
     }
     // PlanarConfiguration is optional; absence = Chunky (TIFF default, samples
     // interleaved per pixel). Planar puts each sample in its own plane, which
