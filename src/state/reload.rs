@@ -90,6 +90,7 @@ impl DriftWm {
         self.render.cached_wallpaper_bg.clear();
         self.render.chunk_bg_shader = None;
         self.render.cached_tile_chunks.clear();
+        self.render.cached_shader_chunks.clear();
 
         // Border + shadow caches key on phys-only — color and corner_radius
         // live in uniforms. Drop both so edits to those config fields apply.
@@ -114,7 +115,9 @@ impl DriftWm {
                         new_config.cursor_theme = self.config.cursor_theme.clone();
                         match &self.config.cursor_theme {
                             Some(t) => {
-                                new_config.child_env.insert("XCURSOR_THEME".into(), t.clone());
+                                new_config
+                                    .child_env
+                                    .insert("XCURSOR_THEME".into(), t.clone());
                             }
                             None => {
                                 new_config.child_env.remove("XCURSOR_THEME");

@@ -95,6 +95,9 @@ pub fn init_background(
         BackgroundKind::Wallpaper(path) => texture_or_shader_fallback(
             state, renderer, initial_size, output_name, &path, TextureBgMode::Wallpaper,
         ),
+        BackgroundKind::Shader(path) if state.config.background.cache_shader => {
+            shader_chunks_or_live(state, renderer, initial_size, output_name, &path)
+        }
         BackgroundKind::Shader(_) | BackgroundKind::Default => {
             init_shader_bg(state, renderer, initial_size, output_name)
         }
@@ -161,6 +164,7 @@ fn init_tile_chunks_bg(
         .as_ref()
         .ok_or_else(|| format!("tile bg '{path}': tile_bg shader compile failed"))?
         .clone();
+    let budget_bytes = state.config.background.cache_budget_mb as u64 * 1024 * 1024;
     let cache = BgChunkCache::new_from_tiff(
         source,
         std::path::PathBuf::from(path),
@@ -168,6 +172,7 @@ fn init_tile_chunks_bg(
         fallback_shader,
         renderer,
         state.loop_signal.clone(),
+        budget_bytes,
     )
     .map_err(|e| format!("tile bg '{path}': {e}"))?;
     // Chunked path manages its own elements + uniforms; clear shader-mode
@@ -181,6 +186,109 @@ fn init_tile_chunks_bg(
         .cached_tile_chunks
         .insert(output_name.to_string(), cache);
     Ok(())
+}
+
+enum ShaderBakeOutcome {
+    /// Eligible and the cache was built for this output.
+    Baked,
+    /// Not a rigid `u_camera`-only shader — caller renders it live.
+    Ineligible,
+    /// Eligible but reading/compiling failed — caller renders live + reports.
+    Failed(String),
+}
+
+/// `cache_shader` dispatch for a `Shader` background: try to build the chunked
+/// shader-bake cache, else render the shader live. Eligible-but-failed and
+/// ineligible both fall through to `init_shader_bg` so the screen is never blank.
+fn shader_chunks_or_live(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    initial_size: Size<i32, Logical>,
+    output_name: &str,
+    path: &str,
+) -> Option<Result<(), String>> {
+    match try_init_shader_chunks(state, renderer, output_name, path) {
+        ShaderBakeOutcome::Baked => Some(Ok(())),
+        ShaderBakeOutcome::Failed(msg) => {
+            init_shader_bg(state, renderer, initial_size, output_name);
+            Some(Err(msg))
+        }
+        ShaderBakeOutcome::Ineligible => {
+            init_shader_bg(state, renderer, initial_size, output_name)
+        }
+    }
+}
+
+fn try_init_shader_chunks(
+    state: &mut crate::state::DriftWm,
+    renderer: &mut GlesRenderer,
+    output_name: &str,
+    path: &str,
+) -> ShaderBakeOutcome {
+    use crate::render::ShaderChunkCache;
+
+    let src = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => return ShaderBakeOutcome::Failed(format!("background shader '{path}': {e}")),
+    };
+    // Eligible = rigid function of canvas: u_camera present, no u_time/u_zoom.
+    // A no-u_camera shader is screen-fixed (already cheap); baking it into
+    // canvas chunks would make it wrongly scroll. Parallax isn't detectable
+    // here (substring match) and is a documented user footgun — see config docs.
+    let uses_camera = references_uniform(&src, "vec2", "u_camera");
+    let animated = references_uniform(&src, "float", "u_time");
+    let uses_zoom = references_uniform(&src, "float", "u_zoom");
+    if !uses_camera || animated || uses_zoom {
+        return ShaderBakeOutcome::Ineligible;
+    }
+
+    let shader = if let Some(ref cached) = state.render.background_shader {
+        cached.clone()
+    } else {
+        match renderer.compile_custom_pixel_shader(&src, BG_UNIFORMS) {
+            Ok(s) => {
+                state.render.background_shader = Some(s.clone());
+                s
+            }
+            Err(e) => {
+                return ShaderBakeOutcome::Failed(format!(
+                    "background shader '{path}': compile error: {e}"
+                ));
+            }
+        }
+    };
+
+    if state.render.chunk_bg_shader.is_none() {
+        const SRC: &str = include_str!("../shaders/chunk_bg.glsl");
+        match renderer.compile_custom_texture_shader(SRC, &[]) {
+            Ok(s) => state.render.chunk_bg_shader = Some(s),
+            Err(e) => {
+                return ShaderBakeOutcome::Failed(format!(
+                    "background shader '{path}': chunk_bg compile error: {e}"
+                ));
+            }
+        }
+    }
+    let chunk_bg = state.render.chunk_bg_shader.as_ref().unwrap().clone();
+
+    let output_scale = state
+        .space
+        .outputs()
+        .find(|o| o.name() == output_name)
+        .map(|o| o.current_scale().fractional_scale())
+        .unwrap_or(1.0);
+
+    let budget_bytes = state.config.background.cache_budget_mb as u64 * 1024 * 1024;
+    // Chunked path manages its own elements + uniforms; clear shader-mode flags
+    // so a prior animated/pan shader doesn't keep forcing the bg-damage path.
+    state.render.background_is_animated = false;
+    state.render.background_uses_camera = false;
+    state.render.background_uses_zoom = false;
+    state.render.cached_shader_chunks.insert(
+        output_name.to_string(),
+        ShaderChunkCache::new(shader, chunk_bg, output_scale, budget_bytes),
+    );
+    ShaderBakeOutcome::Baked
 }
 
 /// Try the configured image; on failure fall back to the default shader but

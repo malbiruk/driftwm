@@ -20,22 +20,18 @@ use super::tile_chunks_tiff::TiffSource;
 use super::tile_worker::{TileRequest, WorkerPool};
 use super::{PixelSnapRescaleElement, TileShaderElement};
 
-/// Hardcoded VRAM ceiling for cached chunked-bg tiles. Matches the `image`
-/// crate's default decompression-bomb cap — same order of magnitude as the
-/// memory a "reasonable" wallpaper consumes — and lets ~2000 256×256 RGBA8
-/// tiles coexist, easily covering visible+nearby at any zoom.
-const VRAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
-
 /// Cap on the fallback texture's longest side. Picks the finest LOD whose
 /// `max(image_w, image_h) <= FALLBACK_MAX_DIM` as the constant-cost shader
-/// fallback plane; everything finer is per-tile. This also sets the floor on
-/// per-tile work: the coarsest per-tile LOD (just finer than the fallback)
-/// carries the most visible elements per viewport, so it's the frame-time hot
-/// spot (Tracy: ~15 ms / 42% over budget there). 4096 demotes that band into
-/// the O(1) shader plane — same on-screen detail, no per-element cliff — at the
-/// cost of a larger fallback texture (worst case ~67 MB at 4096², negligible vs
-/// the 512 MB VRAM budget). A 16K source's coarsest page is still well below
-/// 4096, so deep pyramids don't regress to a blurry fallback.
+/// fallback plane; everything finer is per-tile. A higher cap also sets the
+/// floor on per-tile work: the coarsest per-tile LOD is the one just finer
+/// than the fallback, and *that* band carries the most visible elements per
+/// viewport, so it's the frame-time hot spot (Tracy: ~15 ms / 42% over budget
+/// at the LOD just below fallback). Raising the cap to 4096 demotes that band
+/// into the O(1) shader plane — same on-screen detail, no per-element cliff —
+/// at the cost of a larger fallback texture (worst case ~67 MB at 4096², a
+/// fraction of the cache budget — negligible; ~28 MB for a 43K source whose
+/// fallback lands on a 2.7K LOD). A 16K source's coarsest page is still far
+/// below 4096 so deep pyramids don't regress to a blurry fallback.
 const FALLBACK_MAX_DIM: u32 = 4096;
 
 /// Target render-chunk size in canvas units (= LOD-0 image pixels). Per-LOD
@@ -57,9 +53,9 @@ const TARGET_CHUNK_CANVAS: i32 = 2048;
 const LOD0_TARGET_CHUNK_CANVAS: i32 = 1024;
 
 #[derive(Debug, Clone, Copy)]
-struct ChunkMeta {
-    bytes: u64,
-    last_touched_frame: u64,
+pub(crate) struct ChunkMeta {
+    pub(crate) bytes: u64,
+    pub(crate) last_touched_frame: u64,
 }
 
 pub struct BgChunkCache {
@@ -86,6 +82,8 @@ pub struct BgChunkCache {
     aggregations: Vec<u32>,
     chunk_meta: HashMap<(u32, i32, i32), ChunkMeta>,
     vram_bytes: u64,
+    /// LRU ceiling in bytes (`[background] cache_budget_mb`).
+    vram_budget_bytes: u64,
     frame_counter: u64,
     /// Off-thread decoder pool. Render thread only ever calls
     /// `import_memory` on already-decoded blobs from the response channel —
@@ -132,6 +130,7 @@ impl BgChunkCache {
         fallback_shader: GlesTexProgram,
         renderer: &mut GlesRenderer,
         loop_signal: LoopSignal,
+        vram_budget_bytes: u64,
     ) -> Result<Self, String> {
         for (i, meta) in source.lods().iter().enumerate() {
             if meta.tile_dims.0 != meta.tile_dims.1 {
@@ -206,6 +205,7 @@ impl BgChunkCache {
             aggregations,
             chunk_meta: HashMap::new(),
             vram_bytes: 0,
+            vram_budget_bytes,
             frame_counter: 0,
             pool,
             in_flight: HashSet::new(),
@@ -404,13 +404,13 @@ impl BgChunkCache {
     }
 
     fn evict_over_budget(&mut self) {
-        if self.vram_bytes <= VRAM_BUDGET_BYTES {
+        if self.vram_bytes <= self.vram_budget_bytes {
             return;
         }
         let evicted = evict_lru_to_budget(
             &mut self.chunk_meta,
             &mut self.vram_bytes,
-            VRAM_BUDGET_BYTES,
+            self.vram_budget_bytes,
         );
         if evicted.is_empty() {
             return;
@@ -427,7 +427,7 @@ impl BgChunkCache {
             "chunked tile-bg: evicted {} tile(s), vram_bytes now {} / {}",
             evicted.len(),
             self.vram_bytes,
-            VRAM_BUDGET_BYTES
+            self.vram_budget_bytes
         );
     }
 
@@ -435,7 +435,7 @@ impl BgChunkCache {
 
 /// Returns evicted keys; caller drops them from the parallel texture map.
 /// Split out as a pure function so the LRU math is unit-testable without GLES.
-fn evict_lru_to_budget(
+pub(crate) fn evict_lru_to_budget(
     meta: &mut HashMap<(u32, i32, i32), ChunkMeta>,
     vram_bytes: &mut u64,
     budget: u64,

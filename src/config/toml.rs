@@ -166,6 +166,8 @@ pub(super) struct BackgroundFileConfig {
     pub path: Option<String>,
     pub shader_path: Option<String>,
     pub tile_path: Option<String>,
+    pub cache_shader: Option<bool>,
+    pub cache_budget_mb: Option<u32>,
 }
 
 #[derive(Deserialize, Default)]

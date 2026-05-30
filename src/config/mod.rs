@@ -350,6 +350,8 @@ impl Config {
         }
 
         let background = BackgroundConfig {
+            cache_shader: raw.background.cache_shader.unwrap_or(false),
+            cache_budget_mb: raw.background.cache_budget_mb.unwrap_or(128),
             kind: resolve_background_kind(raw.background),
         };
 
@@ -626,6 +628,8 @@ fn resolve_background_kind(raw: toml::BackgroundFileConfig) -> BackgroundKind {
         path,
         shader_path,
         tile_path,
+        cache_shader: _,
+        cache_budget_mb: _,
     } = raw;
     if kind.is_some() && (shader_path.is_some() || tile_path.is_some()) {
         tracing::warn!(

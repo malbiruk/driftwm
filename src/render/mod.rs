@@ -6,6 +6,7 @@ mod elements;
 mod error_bar;
 mod layers;
 mod lifecycle;
+mod shader_chunks;
 mod shaders;
 mod tile_chunks;
 mod tile_chunks_tiff;
@@ -20,6 +21,7 @@ pub use elements::{
     OutputRenderElements, PixelSnapRescaleElement, RoundedCornerElement, TileShaderElement,
 };
 pub use error_bar::ErrorBarCache;
+pub use shader_chunks::ShaderChunkCache;
 pub use tile_chunks::BgChunkCache;
 pub use lifecycle::{
     post_render, refresh_foreign_toplevels, take_presentation_feedback,
@@ -166,10 +168,17 @@ pub fn compose_frame(
     }
 
     let name = output.name();
-    if !state.render.cached_bg_elements.contains_key(&name)
+    let output_fullscreen = state.is_output_fullscreen(output);
+    if output_fullscreen {
+        // A fullscreen window fully occludes the canvas: free its big chunk
+        // caches (GPU textures) and skip compositing the background below.
+        // Maximize is NOT fullscreen, so a maximized window keeps its background.
+        state.render.remove_background_chunks(&name);
+    } else if !state.render.cached_bg_elements.contains_key(&name)
         && !state.render.cached_tile_bg.contains_key(&name)
         && !state.render.cached_wallpaper_bg.contains_key(&name)
         && !state.render.cached_tile_chunks.contains_key(&name)
+        && !state.render.cached_shader_chunks.contains_key(&name)
     {
         let output_size = crate::state::output_logical_size(output);
         init_background(state, renderer, output_size, &name);
@@ -624,7 +633,16 @@ pub fn compose_frame(
     );
 
     let bg_elements: Vec<OutputRenderElements> =
-        if let Some(cache) = state.render.cached_tile_chunks.get_mut(&output.name()) {
+        if output_fullscreen {
+            // Background freed + occluded above; emit nothing.
+            vec![]
+        } else if let Some(cache) = state.render.cached_shader_chunks.get_mut(&output.name()) {
+            cache
+                .render_elements(visible_rect, renderer, camera, zoom)
+                .into_iter()
+                .map(OutputRenderElements::TileBgChunk)
+                .collect()
+        } else if let Some(cache) = state.render.cached_tile_chunks.get_mut(&output.name()) {
             // 8 GLES uploads/frame: decode is off-thread, so render-time per
             // blob is the only constraint. import_memory of a 256×256 RGBA8 is
             // sub-ms on M1, ~2-3ms on weak iGPUs — 8 keeps upload under ~25ms on

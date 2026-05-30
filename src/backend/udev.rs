@@ -155,7 +155,12 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         .render
         .cached_tile_chunks
         .values()
-        .any(|c| c.has_pending_loads());
+        .any(|c| c.has_pending_loads())
+        || data
+            .render
+            .cached_shader_chunks
+            .values()
+            .any(|c| c.has_pending_bakes());
     if data.redraws_needed.is_empty()
         && !data.has_active_animations()
         && !data.render.background_is_animated
@@ -226,6 +231,12 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         // unrelated damage (cursor, animation, client commit) wakes us.
         if let Some(cache) = data.render.cached_tile_chunks.get(&surface.output.name())
             && cache.has_pending_loads()
+        {
+            data.redraws_needed.insert(surface.output.clone());
+        }
+        // Same for chunked shader-bake: refine sharp chunks after pan stops.
+        if let Some(cache) = data.render.cached_shader_chunks.get(&surface.output.name())
+            && cache.has_pending_bakes()
         {
             data.redraws_needed.insert(surface.output.clone());
         }
@@ -1271,11 +1282,7 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         pointer.unset_grab(data, serial, 0);
     }
-    if data
-        .gesture_output
-        .as_ref()
-        .is_some_and(|go| go == &output)
-    {
+    if data.gesture_output.as_ref().is_some_and(|go| go == &output) {
         data.gesture_output = None;
         data.gesture_state = None;
     }
@@ -1303,11 +1310,7 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
         data.dpms_off_outputs.remove(&output);
         data.pending_dpms.remove(&output);
 
-        if data
-            .focused_output
-            .as_ref()
-            .is_some_and(|fo| fo == &output)
-        {
+        if data.focused_output.as_ref().is_some_and(|fo| fo == &output) {
             data.focused_output = data.space.outputs().next().cloned();
             if let Some(ref new_out) = data.focused_output {
                 let (cam, zoom, size) = {

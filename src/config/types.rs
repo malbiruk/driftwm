@@ -921,4 +921,12 @@ pub enum BackgroundKind {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct BackgroundConfig {
     pub kind: BackgroundKind,
+    /// Bake a static `u_camera`-only shader to chunked GPU textures and pan
+    /// those, instead of recomputing the fragment shader every frame. No-op for
+    /// non-shader backgrounds and for shaders using `u_time`/`u_zoom`.
+    pub cache_shader: bool,
+    /// Memory ceiling (MB) for the background chunk cache — covers both the
+    /// shader-bake cache (`cache_shader`) and gigapixel-TIFF wallpapers. The
+    /// cache LRU-evicts to stay under this; lower it on low-memory machines.
+    pub cache_budget_mb: u32,
 }

@@ -43,6 +43,8 @@ pub struct RenderCache {
     /// Pass-through fragment shader cloned into each `BgChunkCache`.
     pub chunk_bg_shader: Option<GlesTexProgram>,
     pub cached_tile_chunks: HashMap<String, crate::render::BgChunkCache>,
+    /// Per-output chunked shader-bake caches (`cache_shader`).
+    pub cached_shader_chunks: HashMap<String, crate::render::ShaderChunkCache>,
 }
 
 impl RenderCache {
@@ -73,12 +75,23 @@ impl RenderCache {
             cached_error_bar: HashMap::new(),
             chunk_bg_shader: None,
             cached_tile_chunks: HashMap::new(),
+            cached_shader_chunks: HashMap::new(),
         }
     }
 
     pub fn remove_capture_state(&mut self, output_name: &str) {
         self.capture_state
             .retain(|k, _| !k.ends_with(&format!(":{output_name}")));
+    }
+
+    /// Drop the large per-output background chunk caches (shader-bake + gigapixel
+    /// TIFF), freeing hundreds of MB of GPU textures. The small single-texture
+    /// tile/wallpaper/shader-element caches stay resident (cheap, and re-decoding
+    /// on exit would hitch). `compose_frame` lazily rebuilds the chunk caches
+    /// (progressive blurry-then-sharp) on the first non-fullscreen frame.
+    pub fn remove_background_chunks(&mut self, output_name: &str) {
+        self.cached_tile_chunks.remove(output_name);
+        self.cached_shader_chunks.remove(output_name);
     }
 
     /// Drop all per-output GPU state for `output_name`. Called on output
@@ -89,7 +102,7 @@ impl RenderCache {
         self.cached_tile_bg.remove(output_name);
         self.cached_wallpaper_bg.remove(output_name);
         self.cached_error_bar.remove(output_name);
-        self.cached_tile_chunks.remove(output_name);
+        self.remove_background_chunks(output_name);
         self.remove_capture_state(output_name);
     }
 }
