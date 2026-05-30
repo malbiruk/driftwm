@@ -4,11 +4,11 @@
 
 driftwm — a trackpad-first infinite canvas Wayland compositor written in Rust. Windows float on an unbounded 2D plane navigated via trackpad gestures (pan, zoom, pinch). No workspaces, no tiling. Built on [smithay](https://github.com/Smithay/smithay).
 
-The project is launched (v0.1.x). See `docs/DESIGN.md` for the full specification and `docs/CAVEATS.md` for architectural pitfalls.
+The project is launched (v0.1.x). See `dev/docs/CAVEATS.md` for architectural pitfalls.
 
 ## Conventions
 
-- Documentation files (except README.md) live in `docs/`.
+- Documentation splits by audience: user-facing docs (shaders, window rules) live in `docs/`; internal dev/architecture notes and profiling tooling live in `dev/docs/` and `dev/scripts/`. `README.md` stays at the repo root.
 - Config path: `~/.config/driftwm/config.toml` (respects `XDG_CONFIG_HOME`).
 
 ## Code Style
@@ -66,7 +66,7 @@ Current source layout:
 - `shaders/` — GLSL shader source files (dot_grid, shadow, blur_down/blur_up/blur_mask, corner_clip, tile_bg)
 - `layout/` — window position relationships on the canvas. `snap.rs` (magnetic edge alignment during drag, defines `SnapRect`), `cluster.rs` (BFS over snap-adjacency graph for the focused window's connected component, computed on-demand), `auto_placement.rs` (smart placement of a new window adjacent to the focused window's cluster)
 - `window_ext.rs` — `WindowExt` trait for window operations (close, app_id, title, configure)
-- `xwayland.rs` — eager `xwayland-satellite` spawn at compositor startup; vanilla mode (satellite binds its own X11 socket). niri's on-demand `-listenfd` pattern races with multi-layout XKB configs under Xwayland 24.x — see `docs/CAVEATS.md`.
+- `xwayland.rs` — eager `xwayland-satellite` spawn at compositor startup; vanilla mode (satellite binds its own X11 socket). niri's on-demand `-listenfd` pattern races with multi-layout XKB configs under Xwayland 24.x — see `dev/docs/CAVEATS.md`.
 - `input/` — `mod.rs` (keyboard handling, pointer motion absolute+relative, surface_under hit-testing), `actions.rs` (execute_action dispatch for all keybindings), `pointer.rs` (context-aware mouse dispatch, button/axis handling, compositor resize/pan grabs), `gestures.rs` (table-driven gesture dispatch from config, continuous/threshold state machine, libinput device config, client forwarding)
 - `grabs/` — `mod.rs`, `move_grab.rs` (MoveSurfaceGrab), `resize_grab.rs` (ResizeSurfaceGrab, ResizeState), `pan_grab.rs` (PanGrab for viewport panning), `navigate_grab.rs` (NavigateGrab for directional window navigation)
 - `handlers/` — `compositor.rs` (commit, resize repositioning, dmabuf, layer commit), `layer_shell.rs` (wlr-layer-shell handler), `xdg_shell.rs` (CSD move/resize, window centering, fullscreen, popup grabs), `mod.rs` (seat, data device, output, cursor_shape, foreign toplevel, session lock, xdg-decoration, output management, protocol delegates)
@@ -87,7 +87,7 @@ Current source layout:
 
 ## Smithay API Reference
 
-When you discover smithay API signatures by reading source in `~/.cargo/registry/src/`, document them in `docs/smithay-api.md` so you don't need to re-read the source next time. Include trait signatures, key type definitions, and how pieces fit together.
+When you discover smithay API signatures by reading source in `~/.cargo/registry/src/`, document them in `dev/docs/smithay-api.md` so you don't need to re-read the source next time. Include trait signatures, key type definitions, and how pieces fit together.
 
 ## Rust Edition
 

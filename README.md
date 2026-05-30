@@ -150,7 +150,7 @@ decoration = "none"
 > **Tip:** to find a window's `app_id`, check `$XDG_RUNTIME_DIR/driftwm/state` —
 > the `windows` field lists all open windows by their app ID.
 
-See [docs/window_rules.md](window_rules.md) for more details.
+See [docs/window-rules.md](docs/window-rules.md) for more details.
 
 ### Multi-monitor
 
