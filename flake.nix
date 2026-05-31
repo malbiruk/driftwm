@@ -85,6 +85,10 @@
           for f in extras/wallpapers/*.glsl; do
             install -Dm644 "$f" "$out/share/driftwm/wallpapers/$(basename "$f")"
           done
+
+        substituteInPlace $out/share/wayland-sessions/driftwm.desktop --replace-fail "Exec=driftwm-session" "Exec=$out/bin/driftwm-session"
+
+        substituteInPlace $out/lib/systemd/user/driftwm.service --replace-fail "ExecStart=driftwm" "ExecStart=$out/bin/driftwm"
         '';
 
         passthru.providedSessions = [ "driftwm" ];
