@@ -84,11 +84,10 @@ impl RenderCache {
             .retain(|k, _| !k.ends_with(&format!(":{output_name}")));
     }
 
-    /// Drop the large per-output background chunk caches (shader-bake + gigapixel
-    /// TIFF), freeing hundreds of MB of GPU textures. The small single-texture
-    /// tile/wallpaper/shader-element caches stay resident (cheap, and re-decoding
-    /// on exit would hitch). `compose_frame` lazily rebuilds the chunk caches
-    /// (progressive blurry-then-sharp) on the first non-fullscreen frame.
+    /// Drop the large per-output chunk caches (shader-bake + gigapixel TIFF),
+    /// freeing hundreds of MB of GPU textures. Single-texture tile/wallpaper
+    /// caches stay (cheap; re-decoding on exit would hitch). `compose_frame`
+    /// lazily rebuilds the chunk caches on the first non-fullscreen frame.
     pub fn remove_background_chunks(&mut self, output_name: &str) {
         self.cached_tile_chunks.remove(output_name);
         self.cached_shader_chunks.remove(output_name);

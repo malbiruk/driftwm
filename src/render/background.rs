@@ -197,9 +197,8 @@ enum ShaderBakeOutcome {
     Failed(String),
 }
 
-/// `cache_shader` dispatch for a `Shader` background: try to build the chunked
-/// shader-bake cache, else render the shader live. Eligible-but-failed and
-/// ineligible both fall through to `init_shader_bg` so the screen is never blank.
+/// `cache_shader` dispatch for a `Shader` background. Failed and ineligible
+/// both fall through to `init_shader_bg` so the screen is never blank.
 fn shader_chunks_or_live(
     state: &mut crate::state::DriftWm,
     renderer: &mut GlesRenderer,

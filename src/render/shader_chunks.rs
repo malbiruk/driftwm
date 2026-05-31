@@ -53,14 +53,14 @@ pub struct ShaderChunkCache {
     /// `bake_px² * 4` bytes (~4 MB at scale 1.0).
     vram_budget_bytes: u64,
     frame_counter: u64,
-    /// Set each frame: true while any visible target-LOD chunk is still unbaked.
-    /// Drives the udev loop to re-fire so refinement completes without external
-    /// damage (mirrors the TIFF path's `has_pending_loads`).
+    /// True while any visible target-LOD chunk is still unbaked. Drives the
+    /// udev loop to re-fire so refinement completes without external damage
+    /// (mirrors the TIFF path's `has_pending_loads`).
     pending: bool,
-    /// True when the visible working set alone exceeds the budget. Fine refine
-    /// is skipped (only the coarse cover is kept) so the cache stays blurry but
-    /// stable instead of thrash-evicting visible chunks every frame. Tracked to
-    /// log the transition once rather than per frame.
+    /// True when the visible working set alone exceeds the budget: fine refine
+    /// is skipped (coarse cover only) so the cache stays blurry but stable
+    /// instead of thrash-evicting visible chunks every frame. Tracked so the
+    /// transition logs once, not per frame.
     degraded: bool,
 }
 
@@ -105,7 +105,8 @@ impl ShaderChunkCache {
     /// shader once with `u_camera` = the chunk's canvas origin and the `size`
     /// uniform = the chunk's canvas span. Goes through the same
     /// `PixelShaderElement` draw path as the live shader, so baked pixels match
-    /// live output exactly. Returns whether the bake (and cache insert) succeeded.
+    /// live output exactly. On GPU failure the chunk is left uncached, so the
+    /// coarse-to-fine resolve falls back to a coarser LOD.
     fn bake_chunk(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -113,7 +114,7 @@ impl ShaderChunkCache {
         cx: i32,
         cy: i32,
         frame: u64,
-    ) -> bool {
+    ) {
         let chunk_size = self.chunk_canvas_size_at(lod);
         let origin = chunk_origin(cx, cy, chunk_size);
         let bake_px = self.bake_px;
@@ -128,7 +129,7 @@ impl ShaderChunkCache {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!("shader-bake (LOD {lod}, {cx},{cy}) create_buffer: {e}");
-                    return false;
+                    return;
                 }
             };
 
@@ -154,7 +155,7 @@ impl ShaderChunkCache {
                 Ok(t) => t,
                 Err(e) => {
                     tracing::warn!("shader-bake (LOD {lod}, {cx},{cy}) bind: {e}");
-                    return false;
+                    return;
                 }
             };
             let mut dt = OutputDamageTracker::new(
@@ -168,7 +169,7 @@ impl ShaderChunkCache {
         };
         if !ok {
             tracing::warn!("shader-bake (LOD {lod}, {cx},{cy}) render_output failed");
-            return false;
+            return;
         }
 
         let bytes = (bake_px as u64) * (bake_px as u64) * 4;
@@ -181,7 +182,6 @@ impl ShaderChunkCache {
             },
         );
         self.vram_bytes = self.vram_bytes.saturating_add(bytes);
-        true
     }
 
     fn evict_over_budget(&mut self) {
@@ -250,11 +250,10 @@ impl ShaderChunkCache {
             }
         }
 
-        // 1. Resident coarse cover. The coarsest LOD spans BASE<<(n_lods-1)
-        //    canvas px per chunk, so the few visible cover cells are baked once
-        //    and stay put across pans (you almost never cross one) — the
-        //    always-on, never-blank floor under the sharp layer. Stamp each
-        //    frame so the LRU keeps them resident.
+        // Resident coarse cover: the coarsest LOD spans a huge canvas area per
+        // chunk, so the few cover cells are baked once and reused across pans —
+        // the never-blank floor under the sharp layer. Stamp each frame so the
+        // LRU keeps them resident.
         let coarsest_size = self.chunk_canvas_size_at(coarsest);
         let cover = visible_chunks(viewport, coarsest_size);
         for (cx, cy) in &cover {
@@ -269,11 +268,10 @@ impl ShaderChunkCache {
         let target_size = self.chunk_canvas_size_at(target_lod);
         let visible_target = visible_chunks(viewport, target_size);
 
-        // Graceful degrade: if the cover + sharp working set can't both fit the
+        // Graceful degrade: if cover + sharp working set can't both fit the
         // budget, baking sharp chunks would just evict still-visible ones every
-        // frame (thrash + a busy-loop via `pending`). Skip the fine refine and
-        // show the coarse cover — blurrier, but stable and cheap. Each chunk
-        // (any LOD) is bake_px² * 4 bytes.
+        // frame (thrash + a busy-loop via `pending`). Skip fine refine and show
+        // the coarse cover — blurrier, but stable. Each chunk is bake_px² * 4.
         let bytes_per_chunk = (self.bake_px as u64).pow(2) * 4;
         let working_set = (cover.len() + visible_target.len()) as u64 * bytes_per_chunk;
         let degraded = working_set > self.vram_budget_bytes;
@@ -289,11 +287,10 @@ impl ShaderChunkCache {
             }
         }
 
-        // 2. Budgeted fine refine at the target LOD. Unbaked cells show the
-        //    coarse cover (or a finer intermediate left over from a prior zoom)
-        //    until a later frame sharpens them; `pending` keeps the udev loop
-        //    firing meanwhile. No fine step when target == coarsest (deep
-        //    zoom-out) or when degraded.
+        // Budgeted fine refine at the target LOD. Unbaked cells show the coarse
+        // cover (or a finer intermediate from a prior zoom) until a later frame
+        // sharpens them; `pending` keeps the udev loop firing meanwhile. Skipped
+        // when target == coarsest (deep zoom-out) or degraded.
         let mut baked = 0usize;
         self.pending = false;
         if target_lod != coarsest && !degraded {
@@ -312,11 +309,10 @@ impl ShaderChunkCache {
             }
         }
 
-        // 3. Resolve coarse-to-fine: for each visible target cell, display the
-        //    finest cached chunk covering it (target → … → coarsest). The
-        //    coarsest is always present (step 1), so this never comes up empty.
-        //    Stamp the chosen chunk so an intermediate cover still on screen
-        //    survives eviction.
+        // Resolve coarse-to-fine: for each visible target cell, display the
+        // finest cached chunk covering it. The coarsest is always present, so
+        // this never comes up empty. Stamp the chosen chunk so an intermediate
+        // cover still on screen survives eviction.
         let mut to_render: HashSet<(u32, i32, i32)> = HashSet::with_capacity(visible_target.len());
         for (cx, cy) in &visible_target {
             let canvas_x = cx * target_size;

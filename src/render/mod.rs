@@ -170,9 +170,8 @@ pub fn compose_frame(
     let name = output.name();
     let output_fullscreen = state.is_output_fullscreen(output);
     if output_fullscreen {
-        // A fullscreen window fully occludes the canvas: free its big chunk
-        // caches (GPU textures) and skip compositing the background below.
-        // Maximize is NOT fullscreen, so a maximized window keeps its background.
+        // Fullscreen fully occludes the canvas: free its chunk caches and skip
+        // the background. Maximize is NOT fullscreen, so it keeps its background.
         state.render.remove_background_chunks(&name);
     } else if !state.render.cached_bg_elements.contains_key(&name)
         && !state.render.cached_tile_bg.contains_key(&name)
@@ -634,7 +633,6 @@ pub fn compose_frame(
 
     let bg_elements: Vec<OutputRenderElements> =
         if output_fullscreen {
-            // Background freed + occluded above; emit nothing.
             vec![]
         } else if let Some(cache) = state.render.cached_shader_chunks.get_mut(&output.name()) {
             cache

@@ -197,28 +197,19 @@
 # # tile_path   = "..."
 #
 # cache_shader = false
-#   Render the shader once to a texture and pan that, instead of recomputing it
-#   every frame — makes a heavy static shader pan as cheaply as an image
-#   (chunked GPU textures, LRU-capped at a couple hundred MB per output).
-#   Default off.
-#
-#   ONLY for shaders where panning slides the whole image rigidly as one: every
-#   pixel's color is fixed by its canvas position, nothing depends on the camera
-#   beyond that shift. In GLSL — u_camera used once, at full scale, as the only
-#   camera term:
+#   Bake a heavy static shader to a texture once, then pan that — so it pans as
+#   cheaply as an image instead of recomputing every frame.
+#   ONLY correct for shaders that slide rigidly with the camera: u_camera used
+#   once, at full scale, as the only camera term. In GLSL:
 #       vec2 canvas = v_coords * size + u_camera;   // pan shifts the image 1:1
-#   Parallax (u_camera * factor — layers slide at different rates) renders WRONG;
-#   animated (u_time) and zoom-dependent (u_zoom) shaders are never cached
-#   (rendered live instead).
+#   Parallax (u_camera * factor) renders WRONG; animated (u_time) and
+#   zoom-dependent (u_zoom) shaders are never cached and render live.
 #
 # cache_budget_mb = 128
-#   Memory ceiling for the background chunk cache, in MB. Covers BOTH the
-#   shader-bake cache above and gigapixel (pyramidal TIFF) tile wallpapers.
-#   The cache evicts least-recently-seen chunks to stay under this. On unified-
-#   memory / integrated GPUs this is system RAM; on discrete GPUs it's VRAM.
-#   Raise it for sharper revisits on large / HiDPI displays; lower it on
-#   memory-constrained machines (a too-low value just keeps the background
-#   blurrier — it never stutters). Default 128.
+#   Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers,
+#   with LRU eviction. Raise it for sharper revisits on large / HiDPI displays;
+#   lower it on memory-constrained machines (too low just keeps the background
+#   blurrier).
 
 # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
 # Merges with defaults. Use "none" to unbind a default binding.
