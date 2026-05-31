@@ -18,12 +18,10 @@ use calloop::LoopSignal;
 
 use super::tile_chunks_tiff::{DecodedTile, TiffSource};
 
-/// Per-pool worker count. Six fills our 8-tile-per-frame upload budget
-/// when decodes run ~10 ms each (60 wpr × 60 fps ≈ 600 decodes/sec, brushes
-/// the upload cap of ~480/sec → no further parallelism gain past this).
-/// Workers are parked in the kernel when idle and don't reserve cores;
-/// idle cost is ~2 MB stack each, file handles only while a TIFF wallpaper
-/// is active. See commit history for the bench rationale.
+/// Per-pool worker count. Six fills our 8-tile-per-frame upload budget when
+/// decodes run ~10 ms each (60 wpr × 60 fps ≈ 600 decodes/sec, brushes the
+/// upload cap of ~480/sec → no further parallelism gain past this). Idle
+/// workers park in the kernel (~2 MB stack each, no reserved cores).
 pub const N_WORKERS: usize = 6;
 
 #[derive(Debug, Clone, Copy)]
@@ -114,8 +112,7 @@ impl Drop for WorkerPool {
         }
         self.queue.cv.notify_all();
         for handle in self.workers.drain(..) {
-            // Workers exit after their current decode (5-20ms worst case).
-            // join() is bounded; we don't need a timeout.
+            // join() is bounded: workers exit after their in-flight decode (5-20ms).
             let _ = handle.join();
         }
     }

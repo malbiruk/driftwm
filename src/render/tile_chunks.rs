@@ -28,16 +28,14 @@ const VRAM_BUDGET_BYTES: u64 = 512 * 1024 * 1024;
 
 /// Cap on the fallback texture's longest side. Picks the finest LOD whose
 /// `max(image_w, image_h) <= FALLBACK_MAX_DIM` as the constant-cost shader
-/// fallback plane; everything finer is per-tile. A higher cap also sets the
-/// floor on per-tile work: the coarsest per-tile LOD is the one just finer
-/// than the fallback, and *that* band carries the most visible elements per
-/// viewport, so it's the frame-time hot spot (Tracy: ~15 ms / 42% over budget
-/// at the LOD just below fallback). Raising the cap to 4096 demotes that band
-/// into the O(1) shader plane — same on-screen detail, no per-element cliff —
-/// at the cost of a larger fallback texture (worst case ~67 MB at 4096², vs
-/// the 512 MB VRAM budget — negligible; ~28 MB for a 43K source whose
-/// fallback lands on a 2.7K LOD). A 16K source's coarsest page is still far
-/// below 4096 so deep pyramids don't regress to a blurry fallback.
+/// fallback plane; everything finer is per-tile. This also sets the floor on
+/// per-tile work: the coarsest per-tile LOD (just finer than the fallback)
+/// carries the most visible elements per viewport, so it's the frame-time hot
+/// spot (Tracy: ~15 ms / 42% over budget there). 4096 demotes that band into
+/// the O(1) shader plane — same on-screen detail, no per-element cliff — at the
+/// cost of a larger fallback texture (worst case ~67 MB at 4096², negligible vs
+/// the 512 MB VRAM budget). A 16K source's coarsest page is still well below
+/// 4096, so deep pyramids don't regress to a blurry fallback.
 const FALLBACK_MAX_DIM: u32 = 4096;
 
 /// Target render-chunk size in canvas units (= LOD-0 image pixels). Per-LOD
@@ -49,15 +47,13 @@ const FALLBACK_MAX_DIM: u32 = 4096;
 /// work and VRAM 4×; smaller ones bring back wobble at fractional zoom.
 const TARGET_CHUNK_CANVAS: i32 = 2048;
 
-/// Separate, smaller target for LOD 0. At zoom ≥ 1.0 the rescale is identity
-/// so per-element GPU cost is low — but the un-aggregated 256-px tile grid
-/// still emits ~60 elements per viewport and floods the decode queue (Tracy:
-/// LOD 0 ~10× the per-frame element-emission cost of any other LOD, in-flight
-/// peaks ~140 vs ~10 elsewhere). A 1024 target cuts that to ~12 elements / 16
-/// tiles per chunk: smoother panning, while keeping sharpening granular
-/// enough that freshly-revealed edges don't dwell on the magnified fallback.
-/// Smaller than `TARGET_CHUNK_CANVAS` because the fractional-zoom rescale cost
-/// that justifies 2048 elsewhere doesn't apply here.
+/// Smaller target for LOD 0. At zoom ≥ 1.0 the rescale is identity (low
+/// per-element GPU cost), so the 2048 target that fights fractional-zoom
+/// rescale cost elsewhere doesn't apply — but the un-aggregated 256-px tile
+/// grid still emits ~60 elements per viewport and floods the decode queue
+/// (Tracy: in-flight peaks ~140 vs ~10 elsewhere). 1024 cuts that to ~12
+/// elements / 16 tiles per chunk while keeping sharpening granular enough that
+/// freshly-revealed edges don't dwell on the magnified fallback.
 const LOD0_TARGET_CHUNK_CANVAS: i32 = 1024;
 
 #[derive(Debug, Clone, Copy)]
@@ -112,6 +108,11 @@ pub struct BgChunkCache {
     /// zoom-out (100+ wrap instances visible) stays at constant cost.
     fallback_shader: GlesTexProgram,
     fallback_element: Option<TileShaderElement>,
+    /// Last `(camera, canvas_w, canvas_h)` pushed to `fallback_element`. Skips
+    /// the per-frame `update_uniforms` — and its full-viewport commit bump —
+    /// when the viewport is unchanged; otherwise a static camera repaints the
+    /// whole background (blur included) every frame.
+    fallback_uniform_state: Option<(Point<f64, Logical>, i32, i32)>,
 }
 
 impl BgChunkCache {
@@ -166,6 +167,9 @@ impl BgChunkCache {
         chunk_canvas_sizes.truncate((fallback_lod + 1) as usize);
         aggregations.truncate((fallback_lod + 1) as usize);
         debug_assert_eq!(chunk_canvas_sizes.len(), aggregations.len());
+        // `n_lods() >= 1` invariant relied on by `coarsest = n_lods - 1` in
+        // the per-frame paths, which subtract without a zero-guard.
+        debug_assert!(!chunk_canvas_sizes.is_empty(), "at least one usable LOD");
         tracing::info!(
             "chunked tile-bg: TIFF has {n_on_disk} pages on disk; {} pass vips ±1 truncation; \
              using LODs 0-{fallback_lod} (LOD {fallback_lod} as fallback plane, {}×{} px); \
@@ -209,6 +213,7 @@ impl BgChunkCache {
             fallback_texture,
             fallback_shader,
             fallback_element: None,
+            fallback_uniform_state: None,
         })
     }
 
@@ -224,13 +229,12 @@ impl BgChunkCache {
         self.aggregations[lod as usize]
     }
 
-    /// Per-frame entry point: drain ready decodes onto the GPU, stamp LRU,
-    /// then enqueue any newly-needed visible tiles for the worker pool. Each
-    /// frame uploads at most `upload_budget` decoded blobs — caps render-
-    /// thread GPU import time even when workers produce a burst faster than
-    /// the compositor can absorb. Worker queue is unbounded by design: a fast
-    /// pan can enqueue 50+ requests in one frame and workers self-throttle
-    /// via decode time.
+    /// Per-frame entry point: drain ready decodes onto the GPU, stamp LRU, then
+    /// enqueue newly-needed visible tiles. At most `upload_budget` blobs upload
+    /// per frame, capping render-thread GPU import time when workers burst
+    /// faster than the compositor can absorb. The worker queue is unbounded by
+    /// design — a fast pan can enqueue 50+ requests in one frame and workers
+    /// self-throttle via decode time.
     ///
     /// Returns the number of tiles uploaded this frame.
     pub fn ensure_visible_loaded(
@@ -331,13 +335,12 @@ impl BgChunkCache {
         uploaded
     }
 
-    /// True iff the worker pool has unfinished decode requests OR there are
-    /// undrained responses sitting in the channel. The udev render scheduler
-    /// reads this to keep firing frames until the visible set fully resolves
-    /// — without it, missing fine chunks stay covered by the fallback plane
-    /// until external damage (cursor, animation, client commit) re-wakes the
-    /// loop. Failed decodes don't keep this true: once a tile is in
-    /// `self.failed`, it's never re-enqueued.
+    /// True while any decode is still in flight. The udev render scheduler reads
+    /// this to keep firing frames until the visible set resolves — otherwise
+    /// missing fine chunks stay covered by the fallback plane until external
+    /// damage (cursor, animation, client commit) re-wakes the loop. Failed
+    /// decodes land in `self.failed` and are never re-enqueued, so they don't
+    /// keep this true.
     pub fn has_pending_loads(&self) -> bool {
         !self.in_flight.is_empty()
     }
@@ -463,17 +466,15 @@ fn evict_lru_to_budget(
 /// NaN/non-finite zoom returns LOD 0 (defensive — animation math shouldn't
 /// produce NaN, but a clamp prevents a panic from `as u32` on a NaN cast).
 ///
-/// Hybrid policy: `ceil(-log2(zoom))` for inter-LOD transitions (snappy
-/// detail downgrades, no per-tile inefficiency at zoom boundaries), but the
-/// boundary INTO the LAST LOD lags by a full octave (`raw < last - 1.0`)
-/// instead of the half-octave geometric mean. The last LOD is the shader
-/// fallback plane — jumping into it costs us per-tile sharpness, but
-/// staying *out* of it through the coarsest per-tile band costs perf,
-/// because that band contains the most visible tiles per viewport (e.g.
-/// 30–70 elements at LOD N-1 on a 16K image). Holding per-tile one extra
-/// half-octave (the previous policy) wasn't worth the perf cliff; one full
-/// octave puts the transition at a power-of-two zoom which is also where
-/// the visual mismatch is least jarring.
+/// Hybrid policy: `ceil(-log2(zoom))` for inter-LOD transitions (snappy detail
+/// downgrades, no per-tile inefficiency at zoom boundaries), but the boundary
+/// INTO the LAST LOD lags by a full octave (`raw < last - 1.0`) rather than the
+/// half-octave geometric mean. The last LOD is the shader fallback plane;
+/// entering it loses per-tile sharpness, but staying *out* through the coarsest
+/// per-tile band costs perf — that band holds the most visible tiles per
+/// viewport (30–70 elements at LOD N-1 on a 16K image). A full octave puts the
+/// transition at a power-of-two zoom, where the visual mismatch is least
+/// jarring.
 pub(crate) fn pick_lod(zoom: f64, n_lods: u32) -> u32 {
     if n_lods == 0 {
         return 0;
@@ -667,9 +668,8 @@ pub fn chunk_render_elements(
 
     #[cfg(feature = "profile-with-tracy")]
     {
-        // Plots correlate per-frame chunked-bg internals with frame time on
-        // the Tracy timeline. Static names (`new_leak`) so the plot survives
-        // across frames as the same line.
+        // Static plot names (`new_leak`) so each survives across frames as the
+        // same line on the Tracy timeline.
         static VRAM_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
             std::sync::OnceLock::new();
         static IN_FLIGHT_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
@@ -738,13 +738,11 @@ pub fn chunk_render_elements(
     for key in ordered {
         let (lod, cx, cy, kx, ky) = key;
         let chunk_size = cache.chunk_canvas_size_at(lod);
-        // Edge chunks (right/bottom) may be smaller when image_dims isn't a
-        // multiple of chunk_size at this LOD. Use the actual size for the
-        // canvas area so edge chunks don't stretch past the next wrap-offset
-        // instance. Texture pixel dims come from the GPU texture itself
-        // (`tex.width()/height()`) — at coarser LODs they're FAR smaller than
-        // the canvas span, and passing canvas units as tex_w/tex_h would make
-        // the shader sample a tiny corner of the texture into a huge area.
+        // Actual (possibly partial) size keeps right/bottom edge chunks from
+        // stretching past the next wrap-offset instance. Texture pixel dims come
+        // from the GPU texture (`tex.width()/height()`), not the canvas span —
+        // at coarse LODs the texture is far smaller, so passing canvas units as
+        // tex_w/tex_h would sample a tiny corner into a huge area.
         let (chunk_w, chunk_h) = chunk_actual_size(cx, cy, image_dims, chunk_size);
         let canvas_origin =
             chunk_canvas_origin(cx, cy, kx, ky, image_position, image_dims, chunk_size);
@@ -805,6 +803,12 @@ pub fn chunk_render_elements(
     ];
     let fallback_tex_w = cache.fallback_texture.width() as i32;
     let fallback_tex_h = cache.fallback_texture.height() as i32;
+    // Only camera and output size feed the fallback uniforms (u_tile_size is
+    // constant). Re-push — and take its full-viewport commit bump — only when
+    // one changed; else a static-camera frame (cursor move, client commit, tile
+    // upload) would needlessly repaint the whole bg.
+    let needs_uniform_update =
+        cache.fallback_uniform_state != Some((camera, canvas_w, canvas_h));
     let fb = cache.fallback_element.get_or_insert_with(|| {
         TileShaderElement::new(
             cache.fallback_shader.clone(),
@@ -819,12 +823,15 @@ pub fn chunk_render_elements(
         )
     });
     fb.resize(fallback_area, Some(fallback_opaque));
-    fb.update_uniforms(fallback_uniforms);
+    if needs_uniform_update {
+        fb.update_uniforms(fallback_uniforms);
+    }
     out.push(PixelSnapRescaleElement::from_element(
         fb.clone(),
         Point::<i32, Physical>::from((0, 0)),
         zoom,
     ));
+    cache.fallback_uniform_state = Some((camera, canvas_w, canvas_h));
     out
 }
 

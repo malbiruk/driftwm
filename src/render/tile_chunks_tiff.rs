@@ -347,9 +347,9 @@ mod tests {
     use super::*;
     use std::io::{Cursor, Write};
 
-    /// The tiff crate's encoder can't produce tiled output, so we can only
-    /// exercise the negative path here; positive open() / read_block() coverage
-    /// is deferred to a real vips-produced fixture in phase 4+.
+    /// The tiff crate's encoder can't produce tiled output, so only the
+    /// negative path is exercised here; positive open() / read_block() coverage
+    /// needs a real vips-produced tiled fixture.
     fn write_stripped_rgb8_tiff(path: &Path) {
         use tiff::encoder::TiffEncoder;
         use tiff::encoder::colortype::RGB8;
