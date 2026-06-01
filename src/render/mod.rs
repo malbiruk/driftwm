@@ -4,6 +4,7 @@ mod capture;
 mod cursor;
 mod elements;
 mod error_bar;
+mod help_overlay;
 mod layers;
 mod lifecycle;
 mod shader_chunks;
@@ -21,6 +22,7 @@ pub use elements::{
     OutputRenderElements, PixelSnapRescaleElement, RoundedCornerElement, TileShaderElement,
 };
 pub use error_bar::ErrorBarCache;
+pub use help_overlay::HelpOverlayCache;
 pub use lifecycle::{
     post_render, refresh_foreign_toplevels, take_presentation_feedback,
     update_primary_scanout_output,
@@ -817,6 +819,12 @@ pub fn compose_frame(
     let error_bar = error_bar::build_error_bar_elements(state, renderer, output);
     if !error_bar.is_empty() {
         all_elements.splice(cursor_count..cursor_count, error_bar);
+    }
+
+    // Help overlay sits above the error bar but still below the cursor.
+    let help = help_overlay::build_help_overlay_elements(state, renderer, output);
+    if !help.is_empty() {
+        all_elements.splice(cursor_count..cursor_count, help);
     }
 
     all_elements

@@ -254,6 +254,7 @@
 # "mod+return" = "exec <detected terminal>"
 # "mod+d" = "exec <detected launcher>"
 # "mod+q" = "close-window"
+# "mod+h" = "toggle-help"        # show/hide the keyboard-shortcuts overlay
 # "mod+f" = "toggle-fullscreen"
 # "mod+m" = "fit-window"
 # "mod+shift+m" = "fit-window-snapped"

@@ -135,6 +135,13 @@ impl Config {
         self.bindings.get(&combo)
     }
 
+    /// Iterate every active keyboard binding. Order is unspecified (hash map);
+    /// callers that display these should sort. Used by the help overlay to
+    /// render the live binding set.
+    pub fn keybindings(&self) -> impl Iterator<Item = (&KeyCombo, &Action)> {
+        self.bindings.iter()
+    }
+
     /// Look up a mouse button action by modifier state, button code, and context.
     pub fn mouse_button_lookup_ctx(
         &self,

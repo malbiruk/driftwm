@@ -29,7 +29,10 @@ impl DriftWm {
         if self.is_fullscreen()
             && !matches!(
                 action,
-                Action::ToggleFullscreen | Action::Spawn(_) | Action::ReloadConfig
+                Action::ToggleFullscreen
+                    | Action::Spawn(_)
+                    | Action::ReloadConfig
+                    | Action::ToggleHelp
             )
         {
             self.exit_fullscreen();
@@ -394,6 +397,9 @@ impl DriftWm {
             }
             Action::ReloadConfig => {
                 self.reload_config();
+            }
+            Action::ToggleHelp => {
+                self.help_visible = !self.help_visible;
             }
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");

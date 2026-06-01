@@ -60,6 +60,7 @@ pub enum Action {
     SendToOutput(Direction),
     FocusCenter,
     ReloadConfig,
+    ToggleHelp,
     Quit,
 }
 

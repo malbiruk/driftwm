@@ -305,6 +305,7 @@ impl DriftWm {
             udev_device: None,
             last_titlebar_click: None,
             errors: BTreeMap::new(),
+            help_visible: false,
         }
     }
 }

@@ -50,6 +50,13 @@ pub(super) fn default_bindings(
         ),
         (
             KeyCombo {
+                modifiers: m.clone(),
+                sym: Keysym::from(keysyms::KEY_h),
+            },
+            Action::ToggleHelp,
+        ),
+        (
+            KeyCombo {
                 modifiers: m_shift.clone(),
                 sym: Keysym::from(keysyms::KEY_Up),
             },

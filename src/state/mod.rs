@@ -512,6 +512,10 @@ pub struct DriftWm {
     /// Compositor-generated errors shown in the on-screen error bar, keyed by
     /// source. Empty = no bar. Use [`Self::set_error`]/[`Self::clear_error`].
     pub errors: BTreeMap<ErrorSource, String>,
+
+    /// Whether the keyboard-shortcuts help overlay is shown. Toggled by
+    /// [`Action::ToggleHelp`](driftwm::config::Action::ToggleHelp).
+    pub help_visible: bool,
 }
 
 #[derive(Default)]
