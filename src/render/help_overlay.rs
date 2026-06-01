@@ -322,36 +322,37 @@ fn resolve_on_path(prog: &str) -> Option<PathBuf> {
     })
 }
 
-/// Flatten the rows into header/row blocks in section order, then pack them
-/// greedily into newspaper-style columns sized to fit the available height.
+/// Group the rows into indivisible sections (a header plus its rows), then pack
+/// whole sections into newspaper-style columns sized to fit the available
+/// height. Keeping a section intact means a header is never separated from its
+/// rows across a column break. A single section taller than a column still gets
+/// placed (the card grows rather than dropping content).
 fn layout_columns(rows: &[Row], lines_per_col: usize) -> Vec<Vec<Block>> {
-    let mut blocks: Vec<Block> = Vec::new();
+    let mut sections: Vec<Vec<Block>> = Vec::new();
     for category in Category::ORDER {
-        let mut section: Vec<&Row> = rows.iter().filter(|r| r.category == category).collect();
-        if section.is_empty() {
+        let mut rows_in: Vec<&Row> = rows.iter().filter(|r| r.category == category).collect();
+        if rows_in.is_empty() {
             continue;
         }
-        section.sort_by(|a, b| a.desc.cmp(&b.desc).then_with(|| a.keys.cmp(&b.keys)));
-        blocks.push(Block::Header(category.title().to_string()));
-        for r in section {
-            blocks.push(Block::Row {
-                keys: r.keys.clone(),
-                desc: r.desc.clone(),
-            });
-        }
+        rows_in.sort_by(|a, b| a.desc.cmp(&b.desc).then_with(|| a.keys.cmp(&b.keys)));
+        let mut section = vec![Block::Header(category.title().to_string())];
+        section.extend(rows_in.into_iter().map(|r| Block::Row {
+            keys: r.keys.clone(),
+            desc: r.desc.clone(),
+        }));
+        sections.push(section);
     }
 
     let lines_per_col = lines_per_col.max(1);
     let mut columns: Vec<Vec<Block>> = vec![Vec::new()];
-    for block in blocks {
-        let cur = columns.last().unwrap();
-        // Avoid orphaning a header at the very bottom of a column.
-        let is_header = matches!(block, Block::Header(_));
-        let would_orphan = is_header && cur.len() + 1 >= lines_per_col;
-        if cur.len() >= lines_per_col || (would_orphan && !cur.is_empty()) {
+    for section in sections {
+        let cur_len = columns.last().unwrap().len();
+        // Start a new column if this section wouldn't fit in the current one
+        // (unless the column is empty — an oversized section must go somewhere).
+        if cur_len > 0 && cur_len + section.len() > lines_per_col {
             columns.push(Vec::new());
         }
-        columns.last_mut().unwrap().push(block);
+        columns.last_mut().unwrap().extend(section);
     }
     columns
 }
@@ -646,19 +647,57 @@ mod tests {
 
     #[test]
     fn layout_splits_into_columns_when_tall() {
-        let rows: Vec<Row> = (0..20)
-            .map(|i| Row {
-                category: Category::Windows,
-                keys: format!("Super + {i}"),
-                desc: format!("action {i}"),
+        // Several sections, each small, with a tight per-column budget: they
+        // should spill into multiple columns.
+        let cats = [
+            Category::Apps,
+            Category::Navigation,
+            Category::View,
+            Category::Windows,
+        ];
+        let rows: Vec<Row> = cats
+            .iter()
+            .flat_map(|&c| {
+                (0..3).map(move |i| Row {
+                    category: c,
+                    keys: format!("Super + {i}"),
+                    desc: format!("action {i}"),
+                })
             })
             .collect();
-        let cols = layout_columns(&rows, 8);
+        let cols = layout_columns(&rows, 5);
         assert!(
             cols.len() >= 2,
             "expected multiple columns, got {}",
             cols.len()
         );
+    }
+
+    #[test]
+    fn layout_keeps_sections_intact() {
+        // A header must always be followed by at least its first row in the same
+        // column — sections are never split across a column break.
+        let cats = [Category::Apps, Category::Navigation, Category::Windows];
+        let rows: Vec<Row> = cats
+            .iter()
+            .flat_map(|&c| {
+                (0..4).map(move |i| Row {
+                    category: c,
+                    keys: format!("K{i}"),
+                    desc: format!("d{i}"),
+                })
+            })
+            .collect();
+        for col in layout_columns(&rows, 5) {
+            for (i, block) in col.iter().enumerate() {
+                if matches!(block, Block::Header(_)) {
+                    assert!(
+                        matches!(col.get(i + 1), Some(Block::Row { .. })),
+                        "header not followed by its rows in the same column"
+                    );
+                }
+            }
+        }
     }
 
     /// Render the real overlay (default bindings) to a PNG for visual review.
