@@ -114,6 +114,8 @@ GPU cost scales with what a shader reads: one that reads no viewport uniforms re
 [background]
 type = "shader"
 path = "~/.config/driftwm/bg.glsl"
+# texture = "~/Pictures/img.jpg"  # if it's a texture-based shader
+
 # Or: type = "tile",      path = "~/Pictures/tile.png"
 # Or: type = "tile",      path = "~/Pictures/world.tif"   # pyramidal TIFF
 # Or: type = "wallpaper", path = "~/Pictures/wallpaper.jpg"
