@@ -281,7 +281,12 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
             data.redraws_needed.remove(&surface.output);
             continue;
         }
-        if data.redraws_needed.contains(&surface.output) && !data.frames_pending.contains(&crtc) {
+        // An armed estimated-VBlank timer counts as waiting, like frames_pending:
+        // re-rendering before either resolves spins render_frame past refresh rate.
+        if data.redraws_needed.contains(&surface.output)
+            && !data.frames_pending.contains(&crtc)
+            && !data.estimated_vblank_timers.contains_key(&crtc)
+        {
             render_frame(data, &mut surface.compositor, &surface.output, crtc);
         }
     }
@@ -1463,10 +1468,10 @@ fn render_frame(
                     os.frame_callback_sequence = os.frame_callback_sequence.wrapping_add(1);
                 }
                 Err(FrameError::EmptyFrame) => {
-                    // No page flip → no VBlank. Arm a wake if animations still need ticking.
-                    if data.has_active_animations() || data.render.background_is_animated {
-                        queue_estimated_vblank_timer(data, output, crtc);
-                    }
+                    // No page flip - no real VBlank to wake us. Always arm the
+                    // estimated timer so the render gate paces re-renders to the refresh
+                    // period; otherwise a dirty-but-unchanged output spins render_frame.
+                    queue_estimated_vblank_timer(data, output, crtc);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to queue frame: {e:?}");
