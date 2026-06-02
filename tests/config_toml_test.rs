@@ -326,22 +326,6 @@ fn toml_cycle_modifier_ctrl() {
 }
 
 #[test]
-fn toml_background_tilde_expansion() {
-    let toml = r#"
-        [background]
-        shader_path = "~/shaders/bg.frag"
-    "#;
-    let config = Config::from_toml(toml).unwrap();
-    match config.background.kind {
-        BackgroundKind::Shader { path, texture } => {
-            assert!(!path.starts_with("~"), "tilde should be expanded");
-            assert_eq!(texture, None);
-        }
-        other => panic!("expected BackgroundKind::Shader from legacy shader_path, got {other:?}"),
-    }
-}
-
-#[test]
 fn toml_background_new_form_wallpaper() {
     let toml = r#"
         [background]
@@ -367,21 +351,6 @@ fn toml_background_unknown_type_falls_back_to_default() {
     "#;
     let config = Config::from_toml(toml).unwrap();
     assert_eq!(config.background.kind, BackgroundKind::Default);
-}
-
-#[test]
-fn toml_background_type_overrides_legacy() {
-    let toml = r#"
-        [background]
-        type = "wallpaper"
-        path = "/tmp/wp.png"
-        shader_path = "/tmp/sh.glsl"
-    "#;
-    let config = Config::from_toml(toml).unwrap();
-    assert!(matches!(
-        config.background.kind,
-        BackgroundKind::Wallpaper(_)
-    ));
 }
 
 #[test]

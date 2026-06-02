@@ -167,8 +167,6 @@ pub(super) struct BackgroundFileConfig {
     pub path: Option<String>,
     /// Optional image sampled by a `type = "shader"` background via `tex`.
     pub texture: Option<String>,
-    pub shader_path: Option<String>,
-    pub tile_path: Option<String>,
     pub cache_shader: Option<bool>,
     pub cache_budget_mb: Option<u32>,
 }

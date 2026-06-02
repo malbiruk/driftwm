@@ -200,10 +200,6 @@
 # # path = "/usr/local/share/driftwm/wallpapers/textured/ripple.glsl"
 # # texture = "~/Pictures/Wallpapers/photo.jpg"
 #
-# Legacy (still works, prefer the form above):
-# # shader_path = "..."
-# # tile_path   = "..."
-#
 # cache_shader = false
 #   Bake a heavy static shader to a texture once, then pan that — so it pans as
 #   cheaply as an image instead of recomputing every frame.

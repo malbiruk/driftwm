@@ -198,15 +198,6 @@ path = "~/Pictures/wallpaper.png"
 The `wallpaper` mode stretches the image to fill the output. Pick an image
 sized to your monitor for best results.
 
-### Legacy fields
-
-`shader_path` and `tile_path` are still accepted for backwards compatibility
-and behave like `type = "shader"` and `type = "tile"` respectively. They log
-an info-level deprecation hint at startup; prefer `type` + `path` in new
-configs.
-
-If both `type` and a legacy field are set, `type` wins.
-
 ## Reloading after edits
 
 The config is automatically reloaded when the file changes. The shader is

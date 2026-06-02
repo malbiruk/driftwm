@@ -1,4 +1,5 @@
 mod defaults;
+
 mod parse;
 mod parse_helpers;
 mod toml;
@@ -631,18 +632,10 @@ fn resolve_background_kind(raw: toml::BackgroundFileConfig) -> BackgroundKind {
         kind,
         path,
         texture,
-        shader_path,
-        tile_path,
         cache_shader: _,
         cache_budget_mb: _,
     } = raw;
     let texture = texture.as_deref().map(expand_tilde);
-    if kind.is_some() && (shader_path.is_some() || tile_path.is_some()) {
-        tracing::warn!(
-            "[background] both `type` and a legacy `shader_path`/`tile_path` are set; \
-             the new `type`/`path` takes precedence"
-        );
-    }
     if let Some(t) = kind.as_deref() {
         return match (t, path) {
             ("shader", Some(p)) => BackgroundKind::Shader {
@@ -660,19 +653,6 @@ fn resolve_background_kind(raw: toml::BackgroundFileConfig) -> BackgroundKind {
                 BackgroundKind::Default
             }
         };
-    }
-    if let Some(p) = shader_path {
-        tracing::info!(
-            "[background] `shader_path` is deprecated, prefer `type = \"shader\"` + `path`"
-        );
-        return BackgroundKind::Shader {
-            path: expand_tilde(&p),
-            texture,
-        };
-    }
-    if let Some(p) = tile_path {
-        tracing::info!("[background] `tile_path` is deprecated, prefer `type = \"tile\"` + `path`");
-        return BackgroundKind::Tile(expand_tilde(&p));
     }
     BackgroundKind::Default
 }
