@@ -17,7 +17,8 @@ Designed with laptops in mind: navigation and window management are trackpad-fir
 
 Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm); borrows implementation details from [niri](https://github.com/YaLTeR/niri).
 
-**WARNING:** This is experimental software. Primarily built with AI. Use at your own risk.
+> [!WARNING]  
+> This is experimental software. Primarily built with AI. Use at your own risk.
 
 ## Features
 
@@ -71,7 +72,8 @@ Move window with 3-finger doubletap-swipe or `Alt` + drag. Resize with `Alt` + 3
 
 **Snapped windows form a cluster.** Two benefits: neighbors stay visible at your view's edge for spatial context, and `Shift` + any move/resize/fit action acts on the whole cluster. Shuffle a layout in one drag, resize a row of panes proportionally, or scope an overview to just the cluster (`Mod+Shift+W`). No explicit grouping to manage.
 
-> **Tip:** while dragging a window, keyboard shortcuts still work. Use `Mod+1-4`
+> [!TIP]
+> While dragging a window, keyboard shortcuts still work. Use `Mod+1-4`
 > to jump to a bookmark or `Mod+A` to go home — your held window comes with you.
 
 Fit-window (`Mod+M`) is the maximize analogue — centers the viewport, resets
@@ -149,7 +151,8 @@ widget = true
 decoration = "none"
 ```
 
-> **Tip:** to find a window's `app_id`, check `$XDG_RUNTIME_DIR/driftwm/state` —
+> [!TIP]
+> To find a window's `app_id`, check `$XDG_RUNTIME_DIR/driftwm/state` —
 > the `windows` field lists all open windows by their app ID.
 
 See [docs/window-rules.md](docs/window-rules.md) for more details.
@@ -250,7 +253,8 @@ sudo apt install libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm
 sudo pacman -S libdisplay-info libinput seatd mesa libxkbcommon
 ```
 
-> **Note:** Ubuntu 24.04 ships Rust 1.75 which is too old. Install via
+> [!NOTE]
+> Ubuntu 24.04 ships Rust 1.75 which is too old. Install via
 > [rustup](https://rustup.rs/) instead of `apt install rustc`.
 
 Then build and install:
