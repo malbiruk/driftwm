@@ -22,7 +22,24 @@ impl DriftWm {
             return;
         };
 
-        // If already fullscreen on this output, exit first
+        // A client re-asserting fullscreen must be idempotent. A toolkit that
+        // re-sends a fullscreen request while already fullscreen (e.g. osu! on
+        // focus changes) would otherwise hit the exit+re-enter path below, which
+        // recaptures `saved_size` from the window's *current* geometry — which
+        // is the fullscreen viewport size, since the windowed buffer was never
+        // committed in between. That corrupts saved_size to the full viewport,
+        // so a later exit "restores" to full size and toggling fullscreen can
+        // never recover. Re-send the configure and keep the existing saved_*.
+        if self
+            .fullscreen
+            .get(&output)
+            .is_some_and(|fs| &fs.window == window)
+        {
+            window.enter_fullscreen_configure(self.get_viewport_size());
+            return;
+        }
+
+        // A different window is taking over this output's fullscreen: exit first.
         if self.fullscreen.contains_key(&output) {
             self.exit_fullscreen();
         }
