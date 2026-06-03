@@ -150,6 +150,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             Ok(Action::SwitchLayout(target))
         }
         "reload-config" => Ok(Action::ReloadConfig),
+        "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
         "quit" => Ok(Action::Quit),
         other => Err(format!("unknown action: {other}")),
     }
@@ -284,6 +285,7 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
         | "fit-window"
         | "fit-window-snapped"
         | "reload-config"
+        | "toggle-cursor-pan"
         | "quit"
         | "close-window" => {
             let action = parse_action(s)?;

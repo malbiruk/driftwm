@@ -175,6 +175,9 @@ pub fn init_winit(
             // --- Scroll momentum ---
             data.apply_scroll_momentum(dt);
 
+            // --- Cursor edge-pan (recompute velocity from current cursor pos) ---
+            data.refresh_cursor_edge_pan();
+
             // --- Edge auto-pan (window drag near viewport edges) ---
             data.apply_edge_pan();
 

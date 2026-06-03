@@ -123,6 +123,12 @@ pub(super) struct EdgePanConfig {
     pub zone: Option<f64>,
     pub speed_min: Option<f64>,
     pub speed_max: Option<f64>,
+    /// Enable cursor edge-pan at startup (pan when the bare cursor touches a
+    /// screen edge, not just while dragging a window).
+    pub cursor_pan: Option<bool>,
+    /// Activation zone for cursor edge-pan, px from the edge (kept small so it
+    /// doesn't trigger accidentally — distinct from the window-drag `zone`).
+    pub cursor_zone: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]

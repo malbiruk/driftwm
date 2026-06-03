@@ -206,7 +206,7 @@ impl DriftWm {
         seat.add_pointer();
 
         let autostart = config.autostart.clone();
-
+        let edge_pan_cursor = config.edge_pan_cursor;
         Self {
             start_time: Instant::now(),
             display_handle: dh,
@@ -312,6 +312,7 @@ impl DriftWm {
             udev_device: None,
             last_titlebar_click: None,
             errors: init_errors,
+            cursor_edge_pan: edge_pan_cursor,
         }
     }
 }

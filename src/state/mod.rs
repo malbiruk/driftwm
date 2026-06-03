@@ -534,6 +534,11 @@ pub struct DriftWm {
     /// Compositor-generated errors shown in the on-screen error bar, keyed by
     /// source. Empty = no bar. Use [`Self::set_error`]/[`Self::clear_error`].
     pub errors: BTreeMap<ErrorSource, String>,
+
+    /// Cursor edge-pan: when true, the viewport pans while the bare cursor
+    /// touches a screen edge. Toggled by
+    /// [`Action::ToggleCursorPan`](driftwm::config::Action::ToggleCursorPan).
+    pub cursor_edge_pan: bool,
 }
 
 #[derive(Default)]

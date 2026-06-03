@@ -97,6 +97,12 @@
 # zone = 100.0                # activation zone width (px from viewport edge)
 # speed_min = 4.0             # px/frame at zone boundary
 # speed_max = 10.0            # px/frame at viewport edge
+# cursor_pan = false          # pan when the bare cursor touches a screen edge
+#                             # (not just while dragging). Toggle: "toggle-cursor-pan".
+# cursor_zone = 20.0          # cursor edge-pan activation zone (px) — kept small
+#                             # so it doesn't trigger by accident.
+#                             # Pans at a constant speed_max within the zone (steady,
+#                             # push-speed independent); speed_min is unused here.
 
 [zoom]
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
@@ -257,6 +263,7 @@
 # "mod+return" = "exec <detected terminal>"
 # "mod+d" = "exec <detected launcher>"
 # "mod+q" = "close-window"
+# "mod+e" = "toggle-cursor-pan"     # toggle cursor edge-pan (see [navigation.edge_pan])
 # "mod+f" = "toggle-fullscreen"
 # "mod+m" = "fit-window"
 # "mod+shift+m" = "fit-window-snapped"

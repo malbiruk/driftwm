@@ -58,6 +58,11 @@ pub struct Config {
     /// Edge auto-pan: speed range (px/frame). Quadratic ramp from min to max.
     pub edge_pan_min: f64,
     pub edge_pan_max: f64,
+    /// Cursor edge-pan: pan the viewport when the bare cursor touches a screen
+    /// edge (toggle with `toggle-cursor-pan`). This is the startup default.
+    pub edge_pan_cursor: bool,
+    /// Cursor edge-pan activation zone, px from the edge.
+    pub edge_pan_cursor_zone: f64,
     /// Base lerp factor for camera animation (frame-rate independent). 0.15 = smooth.
     pub animation_speed: f64,
     /// On close, pan the camera to the newly focused window (true). When false,
@@ -542,6 +547,8 @@ impl Config {
             edge_zone: raw.navigation.edge_pan.zone.unwrap_or(100.0),
             edge_pan_min: raw.navigation.edge_pan.speed_min.unwrap_or(4.0),
             edge_pan_max: raw.navigation.edge_pan.speed_max.unwrap_or(10.0),
+            edge_pan_cursor: raw.navigation.edge_pan.cursor_pan.unwrap_or(false),
+            edge_pan_cursor_zone: raw.navigation.edge_pan.cursor_zone.unwrap_or(20.0),
             animation_speed: raw.navigation.animation_speed.unwrap_or(0.3),
             auto_navigate_on_close: raw.navigation.auto_navigate_on_close.unwrap_or(true),
             cycle_modifier,

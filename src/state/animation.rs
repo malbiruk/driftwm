@@ -351,6 +351,10 @@ impl DriftWm {
         // Global (not per-output) ticks
         self.apply_key_repeat();
         self.check_exec_cursor_timeout();
+        // Re-arm cursor edge-pan from the current cursor position before the
+        // per-output velocities are applied below (disarms outputs the cursor
+        // has left; keeps the active output's speed stable frame-to-frame).
+        self.refresh_cursor_edge_pan();
 
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
         let active = self.active_output();

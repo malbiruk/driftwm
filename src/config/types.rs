@@ -69,6 +69,7 @@ pub enum Action {
     FocusCenter,
     SwitchLayout(LayoutSwitch),
     ReloadConfig,
+    ToggleCursorPan,
     Quit,
 }
 

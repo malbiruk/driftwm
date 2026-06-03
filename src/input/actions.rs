@@ -25,7 +25,7 @@ impl DriftWm {
             .map(|fs| fs.window.clone())
             .or_else(|| self.gesture_exited_fullscreen.take());
 
-        // Any action except ToggleFullscreen/Spawn/ReloadConfig exits fullscreen first
+        // Any action except ToggleFullscreen/Spawn/ReloadConfig/ToggleCursorPan exits fullscreen first
         if self.is_fullscreen()
             && !matches!(
                 action,
@@ -33,6 +33,7 @@ impl DriftWm {
                     | Action::Spawn(_)
                     | Action::ReloadConfig
                     | Action::SwitchLayout(_)
+                    | Action::ToggleCursorPan
             )
         {
             self.exit_fullscreen();
@@ -421,6 +422,16 @@ impl DriftWm {
             }
             Action::ReloadConfig => {
                 self.reload_config();
+            }
+            Action::ToggleCursorPan => {
+                self.cursor_edge_pan = !self.cursor_edge_pan;
+                if !self.cursor_edge_pan {
+                    // Stop any in-progress pan immediately.
+                    let outputs: Vec<_> = self.space.outputs().cloned().collect();
+                    for o in outputs {
+                        crate::state::output_state(&o).edge_pan_velocity = None;
+                    }
+                }
             }
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");

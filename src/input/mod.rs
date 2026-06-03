@@ -27,6 +27,46 @@ use crate::state::{DriftWm, FocusTarget};
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use driftwm::protocols::output_power::OutputPowerHandler;
 
+/// Constant-speed edge-pan velocity for the bare cursor: a steady glide
+/// whenever the cursor sits within `zone` px of a screen edge, directed away
+/// from the edge(s) it's near. Unlike the window-drag joystick curve, the
+/// magnitude does not ramp with depth — so the speed stays the same no matter
+/// how hard the cursor is pushed into the edge. Diagonals are normalized so a
+/// corner doesn't pan √2 faster. Returns `None` outside the zone.
+fn cursor_edge_pan_velocity(
+    screen_pos: Point<f64, Logical>,
+    output_w: f64,
+    output_h: f64,
+    zone: f64,
+    speed: f64,
+) -> Option<Point<f64, Logical>> {
+    let dist_left = screen_pos.x;
+    let dist_right = output_w - screen_pos.x;
+    let dist_top = screen_pos.y;
+    let dist_bottom = output_h - screen_pos.y;
+
+    let mut vx: f64 = 0.0;
+    let mut vy: f64 = 0.0;
+    if dist_left < zone {
+        vx -= 1.0;
+    }
+    if dist_right < zone {
+        vx += 1.0;
+    }
+    if dist_top < zone {
+        vy -= 1.0;
+    }
+    if dist_bottom < zone {
+        vy += 1.0;
+    }
+
+    let len = (vx * vx + vy * vy).sqrt();
+    if len == 0.0 {
+        return None;
+    }
+    Some(Point::from((vx / len * speed, vy / len * speed)))
+}
+
 /// Find the canvas-space element location of the window that owns the given surface.
 fn window_origin_for_surface(
     state: &DriftWm,
@@ -376,6 +416,7 @@ impl DriftWm {
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
         self.maybe_hover_focus(canvas_pos);
+        self.refresh_cursor_edge_pan();
     }
 
     /// Handle relative pointer motion (libinput mice/trackpads).
@@ -606,6 +647,69 @@ impl DriftWm {
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
         self.maybe_hover_focus(canvas_pos);
+        self.refresh_cursor_edge_pan();
+    }
+
+    /// Cursor edge-pan: recompute the velocity from the cursor's *current*
+    /// position every frame, rather than latching it on pointer-motion events.
+    ///
+    /// Re-evaluating from position each frame makes the pan speed stable — the
+    /// same whether the cursor rests against the edge or is actively shoved into
+    /// it. (A per-motion latch goes stale the instant the cursor stops, so a
+    /// resting cursor would keep whatever speed the last motion event sampled,
+    /// while a continuously-pushed one stays at full speed: pushing felt
+    /// faster.) The speed is constant within the zone, not ramped by depth, so
+    /// pushing deeper never speeds it up either — a steady glide, like a game's
+    /// screen-edge scroll.
+    ///
+    /// Only the output the cursor is on is ever armed; every other output is
+    /// disarmed, so a monitor the cursor leaves stops panning immediately
+    /// instead of drifting on its own.
+    pub(super) fn refresh_cursor_edge_pan(&mut self) {
+        // During a grab (e.g. window move) the grab owns edge_pan_velocity.
+        if self.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
+            return;
+        }
+        if !self.cursor_edge_pan {
+            return;
+        }
+
+        let active = self.active_output();
+        let outputs: Vec<_> = self.space.outputs().cloned().collect();
+        for o in &outputs {
+            if active.as_ref() != Some(o) {
+                crate::state::output_state(o).edge_pan_velocity = None;
+            }
+        }
+
+        let Some(output) = active else {
+            return;
+        };
+        // A fullscreen window owns the whole viewport — edge-panning the camera
+        // out from under it just breaks the fullscreen surface.
+        if self.is_output_fullscreen(&output) {
+            crate::state::output_state(&output).edge_pan_velocity = None;
+            return;
+        }
+
+        let (camera, zoom) = {
+            let os = crate::state::output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let canvas_pos = self.seat.get_pointer().unwrap().current_location();
+        let screen_pos =
+            driftwm::canvas::canvas_to_screen(driftwm::canvas::CanvasPos(canvas_pos), camera, zoom)
+                .0;
+
+        let size = crate::state::output_logical_size(&output);
+        let velocity = cursor_edge_pan_velocity(
+            screen_pos,
+            size.w as f64,
+            size.h as f64,
+            self.config.edge_pan_cursor_zone,
+            self.config.edge_pan_max,
+        );
+        crate::state::output_state(&output).edge_pan_velocity = velocity;
     }
 
     /// Find the Wayland surface and local coordinates under the given canvas position.
