@@ -152,7 +152,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { std::env::set_var("XDG_SESSION_DESKTOP", "driftwm") };
 
     // Add WAYLAND_DISPLAY to child_env for autostart commands
-    data.config.child_env.insert("WAYLAND_DISPLAY".to_string(), socket_name.clone());
+    data.config
+        .child_env
+        .insert("WAYLAND_DISPLAY".to_string(), socket_name.clone());
 
     // Export only session-level vars to systemd and D-Bus. Pass them through
     // Command::env() rather than relying on process env — the policy is "don't
