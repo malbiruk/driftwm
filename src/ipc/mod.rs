@@ -16,7 +16,7 @@ pub struct IpcServer {
 }
 
 impl IpcServer {
-    pub fn new(event_loop: &LoopHandle<'static, DriftWm>) -> anyhow::Result<Self> {
+    pub fn new(event_loop: &LoopHandle<'static, DriftWm>) -> Result<Self, Box<dyn std::error::Error>> {
         let runtime_dir = std::env::var("XDG_RUNTIME_DIR")
             .unwrap_or_else(|_| "/tmp".to_string());
         let socket_path = PathBuf::from(format!("{}/driftwm/ipc.sock", runtime_dir));
@@ -111,6 +111,7 @@ impl IpcClient {
 const MAX_COMMAND_SIZE: usize = 4096;
 
 fn process_command(command: &str, state: &mut DriftWm) -> String {
+    state.mark_all_dirty();
     let command = command.trim();
     if command.is_empty() {
         return json_response("error", "empty command");
@@ -151,7 +152,6 @@ fn handle_camera(args: Vec<&str>, state: &mut DriftWm) -> String {
         };
 
         let target = Point::from((x, y));
-        state.set_camera(target);
         state.set_camera_target(Some(target));
 
         json_response("ok", serde_json::json!({
@@ -177,7 +177,6 @@ fn handle_zoom(args: Vec<&str>, state: &mut DriftWm) -> String {
             return json_response("error", "zoom must be 0.1-10.0");
         }
 
-        state.set_zoom(zoom);
         state.set_zoom_target(Some(zoom));
 
         json_response("ok", serde_json::json!({
