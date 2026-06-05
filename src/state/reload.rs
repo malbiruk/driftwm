@@ -22,14 +22,15 @@ impl DriftWm {
                 return;
             }
         };
-        let mut new_config = match driftwm::config::Config::from_toml(&contents) {
-            Ok(c) => c,
-            Err(e) => {
-                tracing::error!("Config reload: parse error: {e}");
-                self.set_error(ErrorSource::Config, format!("config error: {e}"));
-                return;
-            }
-        };
+        let (mut new_config, config_errors) =
+            match driftwm::config::Config::from_toml_collect(&contents) {
+                Ok((c, errs)) => (c, errs),
+                Err(e) => {
+                    tracing::error!("Config reload: parse error: {e}");
+                    self.set_error(ErrorSource::Config, format!("config error: {e}"));
+                    return;
+                }
+            };
 
         if new_config.keyboard_layout != self.config.keyboard_layout {
             let kb = &new_config.keyboard_layout;
@@ -164,7 +165,11 @@ impl DriftWm {
         self.apply_output_rules_after_reload();
         self.recompute_decoration_scale();
 
-        self.clear_error(ErrorSource::Config);
+        if let Some(first) = config_errors.into_iter().next() {
+            self.set_error(ErrorSource::Config, first);
+        } else {
+            self.clear_error(ErrorSource::Config);
+        }
         self.mark_all_dirty();
         tracing::info!("Config reloaded");
     }

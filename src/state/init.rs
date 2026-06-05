@@ -48,8 +48,6 @@ use smithay::{
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::time::Instant;
 
-use driftwm::config::Config;
-
 use super::{CursorState, DriftWm, ErrorSource, RenderCache, SessionLock, client_is_unrestricted};
 
 impl DriftWm {
@@ -175,7 +173,14 @@ impl DriftWm {
         let background_effect_state =
             smithay::wayland::background_effect::BackgroundEffectState::new::<Self>(&dh);
 
-        let (config, config_error) = Config::load_reporting();
+        let (config, config_errors) = {
+            let (c, errs) = driftwm::config::Config::load_collect();
+            (c, errs)
+        };
+        let mut init_errors: BTreeMap<ErrorSource, String> = BTreeMap::new();
+        if let Some(first) = config_errors.first() {
+            init_errors.insert(ErrorSource::Config, first.clone());
+        }
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat-0");
         let kb = &config.keyboard_layout;
@@ -201,11 +206,6 @@ impl DriftWm {
         seat.add_pointer();
 
         let autostart = config.autostart.clone();
-
-        let mut errors = BTreeMap::new();
-        if let Some(msg) = config_error {
-            errors.insert(ErrorSource::Config, msg);
-        }
 
         Self {
             start_time: Instant::now(),
@@ -311,7 +311,7 @@ impl DriftWm {
             satellite: None,
             udev_device: None,
             last_titlebar_click: None,
-            errors,
+            errors: init_errors,
         }
     }
 }

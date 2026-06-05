@@ -192,8 +192,14 @@ impl Config {
     /// Parse a TOML string into a Config. Useful for testing and config reload.
     /// Does NOT set env vars (unlike `load()`).
     pub fn from_toml(toml_str: &str) -> Result<Self, ::toml::de::Error> {
+        Self::from_toml_collect(toml_str).map(|(c, _)| c)
+    }
+
+    /// Parse a TOML string into a Config, collecting validation warnings
+    /// (out-of-bounds values, deprecated fields, etc.) alongside.
+    pub fn from_toml_collect(toml_str: &str) -> Result<(Self, Vec<String>), ::toml::de::Error> {
         let raw: ConfigFile = ::toml::from_str(toml_str)?;
-        Ok(Self::from_raw(raw))
+        Ok(Self::from_raw_collect(raw))
     }
 
     /// Load config from `$XDG_CONFIG_HOME/driftwm/config.toml` (or `~/.config/driftwm/config.toml`).
@@ -202,59 +208,74 @@ impl Config {
         Self::load_from(&config_path())
     }
 
-    /// Like [`Self::load`] but also returns a user-facing error on read/parse
-    /// failure, for the on-screen error bar.
-    pub fn load_reporting() -> (Self, Option<String>) {
-        Self::load_from_reporting(&config_path())
+    /// Like `load()` but returns config file warnings (out-of-bounds values, etc.)
+    /// alongside the config so callers can surface them in the on-screen error bar.
+    pub fn load_collect() -> (Self, Vec<String>) {
+        Self::load_from_collect(&config_path())
     }
 
     /// Load config from an explicit path. Used by `--config <path>` CLI arg.
     /// Missing file → all defaults. Parse failure → error log + all defaults.
     pub fn load_from(config_path: &std::path::Path) -> Self {
-        Self::load_from_reporting(config_path).0
+        Self::load_from_collect(config_path).0
     }
 
-    /// Like [`Self::load_from`] but also returns a user-facing error when the file
-    /// can't be read or parsed. Message format matches the hot-reload path.
-    pub fn load_from_reporting(config_path: &std::path::Path) -> (Self, Option<String>) {
-        let (raw, error) = match std::fs::read_to_string(config_path) {
+    /// Like `load_from` but returns config file warnings alongside the config.
+    pub fn load_from_collect(config_path: &std::path::Path) -> (Self, Vec<String>) {
+        let (raw, mut warnings) = match std::fs::read_to_string(config_path) {
             Ok(contents) => {
                 tracing::info!("Loaded config from {}", config_path.display());
                 match ::toml::from_str::<ConfigFile>(&contents) {
-                    Ok(cf) => (cf, None),
+                    Ok(cf) => (cf, vec![]),
                     Err(e) => {
-                        tracing::error!("Failed to parse config: {e}");
-                        (ConfigFile::default(), Some(format!("config error: {e}")))
+                        let msg = format!("config error: {e}");
+                        tracing::error!("{msg}");
+                        (ConfigFile::default(), vec![msg])
                     }
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
                 tracing::info!("No config file found, using defaults");
-                (ConfigFile::default(), None)
+                (ConfigFile::default(), vec![])
             }
             Err(e) => {
-                tracing::error!("Failed to read config: {e}");
-                (
-                    ConfigFile::default(),
-                    Some(format!(
-                        "config: failed to read {}: {e}",
-                        config_path.display()
-                    )),
-                )
+                let msg = format!("config: failed to read {}: {e}", config_path.display());
+                tracing::error!("{msg}");
+                (ConfigFile::default(), vec![msg])
             }
         };
-        (Self::from_raw(raw), error)
+        let (cfg, extra) = Self::from_raw_collect(raw);
+        warnings.extend(extra);
+        (cfg, warnings)
     }
 
     /// Build a Config from a parsed (but unvalidated) ConfigFile.
     /// Never touches process env — child env is built into `child_env` and
     /// applied via `Command::envs()` per spawn.
     fn from_raw(raw: ConfigFile) -> Self {
+        Self::from_raw_collect(raw).0
+    }
+
+    /// Like `from_raw` but returns config file warnings (out-of-bounds values,
+    /// deprecated fields, etc.) alongside the config so callers can surface
+    /// them in the on-screen error bar.
+    fn from_raw_collect(raw: ConfigFile) -> (Self, Vec<String>) {
+        let mut errors: Vec<String> = Vec::new();
+
+        /// Collect a validation warning: log it and also push to the errors vec.
+        macro_rules! warn_and_collect {
+            ($fmt:literal $(, $arg:expr)* $(,)?) => {{
+                let msg = format!($fmt $(, $arg)*);
+                tracing::warn!("{msg}");
+                errors.push(msg);
+            }};
+        }
+
         let mod_key = match raw.mod_key.as_deref() {
             Some("alt") => ModKey::Alt,
             Some("super") | None => ModKey::Super,
             Some(other) => {
-                tracing::warn!("Unknown mod_key '{other}', using super");
+                warn_and_collect!("config: unknown mod_key '{other}', using super");
                 ModKey::Super
             }
         };
@@ -263,7 +284,7 @@ impl Config {
             Some("ctrl") => CycleModifier::Ctrl,
             Some("alt") | None => CycleModifier::Alt,
             Some(other) => {
-                tracing::warn!("Unknown cycle_modifier '{other}', using alt");
+                warn_and_collect!("config: unknown cycle_modifier '{other}', using alt");
                 CycleModifier::Alt
             }
         };
@@ -273,7 +294,7 @@ impl Config {
             Some("auto") => WindowPlacement::Auto,
             Some("center") | None => WindowPlacement::Center,
             Some(other) => {
-                tracing::warn!("Unknown window_placement '{other}', using 'center'");
+                warn_and_collect!("config: unknown window_placement '{other}', using center");
                 WindowPlacement::Center
             }
         };
@@ -299,12 +320,12 @@ impl Config {
                                     bindings.insert(combo, action);
                                 }
                                 Err(e) => {
-                                    tracing::warn!("Invalid action '{action_str}': {e}");
+                                    warn_and_collect!("config: invalid action '{action_str}': {e}");
                                 }
                             }
                         }
                     }
-                    Err(e) => tracing::warn!("Invalid key combo '{key_str}': {e}"),
+                    Err(e) => warn_and_collect!("config: invalid key combo '{key_str}': {e}"),
                 }
             }
         }
@@ -329,12 +350,16 @@ impl Config {
                                         mouse_bindings.insert(ctx, binding, action);
                                     }
                                     Err(e) => {
-                                        tracing::warn!("Invalid mouse action '{action_str}': {e}");
+                                        warn_and_collect!(
+                                            "config: invalid mouse action '{action_str}': {e}"
+                                        );
                                     }
                                 }
                             }
                         }
-                        Err(e) => tracing::warn!("Invalid mouse binding '{key_str}': {e}"),
+                        Err(e) => {
+                            warn_and_collect!("config: invalid mouse binding '{key_str}': {e}")
+                        }
                     }
                 }
             }
@@ -358,14 +383,16 @@ impl Config {
                                         gesture_bindings.insert(ctx, binding, entry);
                                     }
                                     Err(e) => {
-                                        tracing::warn!(
-                                            "Invalid gesture binding '{key_str}' = '{action_str}': {e}"
+                                        warn_and_collect!(
+                                            "config: invalid gesture binding '{key_str}' = '{action_str}': {e}"
                                         );
                                     }
                                 }
                             }
                         }
-                        Err(e) => tracing::warn!("Invalid gesture binding '{key_str}': {e}"),
+                        Err(e) => {
+                            warn_and_collect!("config: invalid gesture binding '{key_str}': {e}")
+                        }
                     }
                 }
             }
@@ -374,7 +401,7 @@ impl Config {
         let background = BackgroundConfig {
             cache_shader: raw.background.cache_shader.unwrap_or(false),
             cache_budget_mb: raw.background.cache_budget_mb.unwrap_or(128),
-            kind: resolve_background_kind(raw.background),
+            kind: resolve_background_kind(raw.background, &mut errors),
         };
 
         let trackpad = {
@@ -383,7 +410,9 @@ impl Config {
                 Some("flat") => AccelProfile::Flat,
                 Some("adaptive") | None => AccelProfile::Adaptive,
                 Some(other) => {
-                    tracing::warn!("Unknown trackpad accel_profile '{other}', using adaptive");
+                    warn_and_collect!(
+                        "config: unknown trackpad accel_profile '{other}', using adaptive"
+                    );
                     AccelProfile::Adaptive
                 }
             };
@@ -404,7 +433,7 @@ impl Config {
                 Some("adaptive") => AccelProfile::Adaptive,
                 Some("flat") | None => AccelProfile::Flat,
                 Some(other) => {
-                    tracing::warn!("Unknown mouse accel_profile '{other}', using flat");
+                    warn_and_collect!("config: unknown mouse accel_profile '{other}', using flat");
                     AccelProfile::Flat
                 }
             };
@@ -446,15 +475,15 @@ impl Config {
                 match parse_output_rule(rule) {
                     Ok(config) => {
                         if configs.iter().any(|c| c.name == config.name) {
-                            tracing::warn!(
-                                "Duplicate [[outputs]] name '{}', keeping first",
+                            warn_and_collect!(
+                                "config: duplicate [[outputs]] name '{}', keeping first",
                                 config.name
                             );
                         } else {
                             configs.push(config);
                         }
                     }
-                    Err(e) => tracing::warn!("Bad [[outputs]] entry: {e}"),
+                    Err(e) => warn_and_collect!("config: bad [[outputs]] entry: {e}"),
                 }
             }
             configs
@@ -467,8 +496,8 @@ impl Config {
         let trackpad_speed = if let Some(s) = raw.navigation.trackpad_speed {
             s
         } else if let Some(s) = raw.input.scroll.speed {
-            tracing::warn!(
-                "[input.scroll] speed is deprecated, use [navigation] trackpad_speed instead"
+            warn_and_collect!(
+                "config: [input.scroll] speed is deprecated, use [navigation] trackpad_speed instead"
             );
             s
         } else {
@@ -478,8 +507,8 @@ impl Config {
         let friction = if let Some(f) = raw.navigation.friction {
             f
         } else if let Some(f) = raw.input.scroll.friction {
-            tracing::warn!(
-                "[input.scroll] friction is deprecated, use [navigation] friction instead"
+            warn_and_collect!(
+                "config: [input.scroll] friction is deprecated, use [navigation] friction instead"
             );
             f
         } else {
@@ -500,7 +529,7 @@ impl Config {
             child_env.insert(k.clone(), v.clone());
         }
 
-        Self {
+        let config = Self {
             mod_key,
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
             trackpad_speed,
@@ -561,7 +590,8 @@ impl Config {
             gestures: gesture_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),
             caps_lock: raw.input.keyboard.caps_lock.unwrap_or(false),
-        }
+        };
+        (config, errors)
     }
 
     /// Find the first matching window rule for `app_id` and `title`.
@@ -645,7 +675,10 @@ impl Config {
     }
 }
 
-fn resolve_background_kind(raw: toml::BackgroundFileConfig) -> BackgroundKind {
+fn resolve_background_kind(
+    raw: toml::BackgroundFileConfig,
+    errors: &mut Vec<String>,
+) -> BackgroundKind {
     let toml::BackgroundFileConfig {
         kind,
         path,
@@ -663,11 +696,16 @@ fn resolve_background_kind(raw: toml::BackgroundFileConfig) -> BackgroundKind {
             ("tile", Some(p)) => BackgroundKind::Tile(expand_tilde(&p)),
             ("wallpaper", Some(p)) => BackgroundKind::Wallpaper(expand_tilde(&p)),
             (_, None) => {
-                tracing::warn!("[background] type=\"{t}\" requires `path`, using default");
+                let msg =
+                    format!("config: [background] type=\"{t}\" requires `path`, using default");
+                tracing::warn!("{msg}");
+                errors.push(msg);
                 BackgroundKind::Default
             }
             (other, _) => {
-                tracing::warn!("[background] unknown type \"{other}\", using default");
+                let msg = format!("config: [background] unknown type \"{other}\", using default");
+                tracing::warn!("{msg}");
+                errors.push(msg);
                 BackgroundKind::Default
             }
         };
