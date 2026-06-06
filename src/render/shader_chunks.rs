@@ -37,6 +37,13 @@ const N_LODS: u32 = 8;
 /// sharp target-LOD bakes so a fast pan can't stall a frame. Tuned via Tracy.
 const BAKE_BUDGET: usize = 2;
 
+/// One-shot bake cap on the frame the target LOD changes. Baking only
+/// `BAKE_BUDGET` of the freshly-unbaked LOD leaves the viewport blur-popping
+/// through the coarse cover for several frames; this sharpens a normal new LOD
+/// in one frame. Still bounded so a pathologically large visible set (8K /
+/// fractional scale) degrades to a 2-frame fill, not a synchronous GPU stall.
+const LOD_SWITCH_BAKE_BUDGET: usize = 16;
+
 /// Apron width, in baked texels, added on every side of a chunk. Display-time
 /// bilinear sampling reaches at most one texel past the sampled point, so a
 /// 1-texel apron of true neighbor-continuation pixels is enough to stop edge
@@ -100,6 +107,11 @@ pub struct ShaderChunkCache {
     /// instead of thrash-evicting visible chunks every frame. Tracked so the
     /// transition logs once, not per frame.
     degraded: bool,
+    /// `target_lod` from the previous frame, to detect LOD switches. The
+    /// `BAKE_BUDGET` throttle paces *pan* (new chunks revealed continuously); a
+    /// LOD switch reveals a small viewport-bounded set once, so it gets the
+    /// larger one-shot `LOD_SWITCH_BAKE_BUDGET` instead.
+    last_target_lod: Option<u32>,
 }
 
 impl ShaderChunkCache {
@@ -124,6 +136,7 @@ impl ShaderChunkCache {
             frame_counter: 0,
             pending: false,
             degraded: false,
+            last_target_lod: None,
         }
     }
 
@@ -344,6 +357,14 @@ impl ShaderChunkCache {
         // cover (or a finer intermediate from a prior zoom) until a later frame
         // sharpens them; `pending` keeps the udev loop firing meanwhile. Skipped
         // when target == coarsest (deep zoom-out) or degraded.
+        // Larger one-shot budget the frame the LOD changes; see
+        // [`LOD_SWITCH_BAKE_BUDGET`].
+        let lod_changed = self.last_target_lod != Some(target_lod);
+        let budget = if lod_changed {
+            LOD_SWITCH_BAKE_BUDGET
+        } else {
+            BAKE_BUDGET
+        };
         let mut baked = 0usize;
         self.pending = false;
         if target_lod != coarsest && !degraded {
@@ -353,13 +374,21 @@ impl ShaderChunkCache {
                     m.last_touched_frame = frame;
                     continue;
                 }
-                if baked < BAKE_BUDGET {
+                if baked < budget {
                     self.bake_chunk(renderer, target_lod, *cx, *cy, frame);
                     baked += 1;
                 } else {
                     self.pending = true;
                 }
             }
+        }
+
+        // Don't record on a degraded frame: it skips baking, so claiming the LOD
+        // would rob the next healthy frame of its one-shot fill. The coarsest LOD
+        // does count as serviced (its cover is always resident), so zooming back
+        // in from deep zoom-out still triggers a fresh fill.
+        if !degraded {
+            self.last_target_lod = Some(target_lod);
         }
 
         // Resolve coarse-to-fine: for each visible target cell, display the
