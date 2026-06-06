@@ -1,7 +1,7 @@
 // Dot grid background — evenly spaced dots that scroll with the canvas.
 // Zoom is handled externally (RescaleRenderElement) — shader works in canvas space.
 // Edit colors, spacing, and dot size directly here.
-precision mediump float;
+precision highp float;
 
 varying vec2 v_coords;
 uniform vec2 size;
