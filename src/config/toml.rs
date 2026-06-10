@@ -50,7 +50,6 @@ pub(super) struct EffectsFileConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct InputConfig {
     pub keyboard: KeyboardConfig,
-    pub scroll: ScrollConfig,
     pub trackpad: TrackpadConfig,
     pub mouse: MouseDeviceFileConfig,
 }
@@ -88,13 +87,6 @@ pub(super) struct KeyboardConfig {
     pub num_lock: Option<bool>,
     pub caps_lock: Option<bool>,
     pub remember_layout_per_window: Option<bool>,
-}
-
-#[derive(Deserialize, Default)]
-#[serde(default, deny_unknown_fields)]
-pub(super) struct ScrollConfig {
-    pub speed: Option<f64>,
-    pub friction: Option<f64>,
 }
 
 #[derive(Deserialize, Default)]

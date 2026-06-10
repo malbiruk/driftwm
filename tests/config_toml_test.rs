@@ -201,12 +201,10 @@ fn toml_old_flat_mouse_section_is_rejected() {
 #[test]
 fn toml_scalar_overrides() {
     let toml = r#"
-        [input.scroll]
-        speed = 2.5
-        friction = 0.92
-
         [navigation]
+        trackpad_speed = 2.5
         nudge_step = 50
+        friction = 0.92
 
         [zoom]
         step = 1.2
@@ -251,22 +249,6 @@ fn toml_auto_navigate_on_close_can_be_disabled() {
     "#;
     let config = Config::from_toml(toml).unwrap();
     assert!(!config.auto_navigate_on_close);
-}
-
-#[test]
-fn toml_new_navigation_fields_override_deprecated_scroll() {
-    let toml = r#"
-        [input.scroll]
-        speed = 2.5
-        friction = 0.92
-
-        [navigation]
-        trackpad_speed = 3.0
-        friction = 0.96
-    "#;
-    let config = Config::from_toml(toml).unwrap();
-    assert!((config.trackpad_speed - 3.0).abs() < f64::EPSILON);
-    assert!((config.friction - 0.96).abs() < f64::EPSILON);
 }
 
 #[test]

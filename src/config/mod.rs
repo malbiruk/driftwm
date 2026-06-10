@@ -499,28 +499,9 @@ impl Config {
         let effects = parse_effects_config(raw.effects);
         let backend = parse_backend_config(raw.backend);
 
-        // Deprecation: [input.scroll] → [navigation] trackpad_speed / friction
-        let trackpad_speed = if let Some(s) = raw.navigation.trackpad_speed {
-            s
-        } else if let Some(s) = raw.input.scroll.speed {
-            warn_and_collect!(
-                "config: [input.scroll] speed is deprecated, use [navigation] trackpad_speed instead"
-            );
-            s
-        } else {
-            1.5
-        };
+        let trackpad_speed = raw.navigation.trackpad_speed.unwrap_or(1.5);
         let mouse_speed = raw.navigation.mouse_speed.unwrap_or(1.0);
-        let friction = if let Some(f) = raw.navigation.friction {
-            f
-        } else if let Some(f) = raw.input.scroll.friction {
-            warn_and_collect!(
-                "config: [input.scroll] friction is deprecated, use [navigation] friction instead"
-            );
-            f
-        } else {
-            0.94
-        };
+        let friction = raw.navigation.friction.unwrap_or(0.94);
 
         let mut child_env: HashMap<String, String> = TOOLKIT_DEFAULTS
             .iter()
