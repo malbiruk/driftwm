@@ -12,7 +12,9 @@ Exports CSVs from a .tracy file via `tracy-csvexport`, then reports:
 Usage:
     dev/scripts/tracy_analyze.py CAPTURE.tracy
     dev/scripts/tracy_analyze.py CAPTURE.tracy --bucket-by bg_chunks.target_lod
+    dev/scripts/tracy_analyze.py CAPTURE.tracy --bucket-by frame.commits
     dev/scripts/tracy_analyze.py CAPTURE.tracy --frame-zone winit::frame
+    dev/scripts/tracy_analyze.py CAPTURE.tracy --gpu
 
 The csvexport binary is found via $TRACY_CSVEXPORT, else `tracy-csvexport` on
 PATH, else ~/tracy/csvexport/build/tracy-csvexport (the from-source build that
@@ -149,14 +151,81 @@ def report_buckets(
     times = [t for t, _ in plot]
     vals = [v for _, v in plot]
     buckets: dict[float, list[int]] = {}
-    for start, dt in frames:
+    interval_buckets: dict[float, list[int]] = {}
+    starts = [t for t, _ in frames]
+    for n, (start, dt) in enumerate(frames):
+        # Skip the first frame after an idle gap: a cumulative plot sample
+        # there (e.g. frame.commits) covers the whole gap, not one frame.
+        if n > 0 and start - starts[n - 1] >= IDLE_GAP_NS:
+            continue
         i = bisect.bisect_right(times, start + dt) - 1
         if i < 0:
             continue
+        # The interval n→n+1 is bucketed by the plot value at frame n. For
+        # plots emitted at frame start (frame.commits), that value covers the
+        # *preceding* interval — the work submitted before this render, which
+        # is what contends with it.
         buckets.setdefault(vals[i], []).append(dt)
+        if n + 1 < len(starts) and starts[n + 1] - start < IDLE_GAP_NS:
+            interval_buckets.setdefault(vals[i], []).append(starts[n + 1] - start)
     print(f"\n=== frame exec time bucketed by {plot_name} ===")
     for key in sorted(buckets):
         stats(f"{plot_name}={key:g}", buckets[key])
+    print(f"\n=== frame interval bucketed by {plot_name} (stutter = >16.6ms) ===")
+    for key in sorted(interval_buckets):
+        stats(f"{plot_name}={key:g}", interval_buckets[key])
+
+
+def report_gpu(csvexport: str, trace: str, frames: list[tuple[int, int]] | None) -> None:
+    """GPU zone stats from `tracy-csvexport -g`, split by proximity to slow
+    frames. Fixed-work zones (clear, draw_solid) stretching near slow frames
+    indicate whole-GPU stalls/contention rather than an expensive shader."""
+    gpu: dict[str, list[tuple[float, float]]] = {}
+    raw_rows = 0
+    for row in csv.DictReader(export(csvexport, trace, ["-g"]).splitlines()):
+        raw_rows += 1
+        try:
+            t = float(row["Time from start of program"])
+            dt = float(row["GPU execution time"])
+        except (ValueError, TypeError, KeyError):
+            continue
+        gpu.setdefault(row["name"], []).append((t, dt))
+    if not gpu:
+        if raw_rows:
+            print(
+                "\n(GPU rows present but columns unrecognized — "
+                "tracy-csvexport version mismatch?)"
+            )
+        else:
+            print("\n(no GPU zones in capture — udev + profile-with-tracy required)")
+        return
+
+    print("\n=== GPU zone exec times ===")
+    for name, spans in sorted(gpu.items(), key=lambda kv: -sum(d for _, d in kv[1])):
+        stats(name, [int(d) for _, d in spans])
+
+    if not frames:
+        return
+    starts = [t for t, _ in frames]
+    slow = sorted(
+        starts[i]
+        for i in range(len(starts) - 1)
+        if 25e6 <= starts[i + 1] - starts[i] < IDLE_GAP_NS
+    )
+    if not slow:
+        print("\n(no slow frames — skipping near-slow GPU split)")
+        return
+
+    def near_slow(t: float) -> bool:
+        j = bisect.bisect_left(slow, t)
+        return any(
+            0 <= k < len(slow) and abs(slow[k] - t) < 0.5e9 for k in (j - 1, j)
+        )
+
+    print("\n=== GPU zones near slow frames (±0.5s) vs calm ===")
+    for name, spans in sorted(gpu.items(), key=lambda kv: -sum(d for _, d in kv[1])):
+        stats(f"{name} (near slow)", [int(d) for t, d in spans if near_slow(t)])
+        stats(f"{name} (calm)", [int(d) for t, d in spans if not near_slow(t)])
 
 
 def main() -> None:
@@ -175,6 +244,11 @@ def main() -> None:
         metavar="PLOT",
         help="bucket frame exec times by this Tracy plot (e.g. bg_chunks.target_lod)",
     )
+    ap.add_argument(
+        "--gpu",
+        action="store_true",
+        help="also report GPU zone stats, split by proximity to slow frames",
+    )
     args = ap.parse_args()
 
     if not os.path.exists(args.trace):
@@ -191,12 +265,17 @@ def main() -> None:
             f"\n(no '{args.frame_zone}' zone found — wrong backend? "
             f"try --frame-zone winit::frame)"
         )
+        if args.gpu:
+            report_gpu(csvexport, args.trace, None)
         return
     report_cadence([t for t, _ in frames])
 
     if args.bucket_by:
         plot = parse_plot(export(csvexport, args.trace, ["-u", "-p"]), args.bucket_by)
         report_buckets(frames, plot, args.bucket_by)
+
+    if args.gpu:
+        report_gpu(csvexport, args.trace, frames)
 
 
 if __name__ == "__main__":

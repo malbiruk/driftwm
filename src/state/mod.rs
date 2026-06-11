@@ -523,6 +523,11 @@ pub struct DriftWm {
     /// a 90-140 Hz pan/momentum stream doesn't re-render a hover-reactive client
     /// per event. See [`DriftWm::warp_pointer`].
     pub pending_pointer_resync: bool,
+    /// wl_surface commits since the last rendered frame. Tracy diagnostic
+    /// counter (plotted as `frame.commits`); sampled and reset on every
+    /// render_frame, so it's only meaningful on a single-output profiling
+    /// session — with multiple outputs the count splits across them.
+    pub commits_since_render: u32,
     /// Output the pointer is on (for input routing).
     pub focused_output: Option<Output>,
     /// Output a gesture started on (pinned for the gesture's duration).

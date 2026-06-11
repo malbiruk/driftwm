@@ -583,6 +583,8 @@ pub fn compose_frame(
 
     #[cfg(feature = "profile-with-tracy")]
     let _windows_span = tracy_client::span!("compose::windows");
+    #[cfg(feature = "profile-with-tracy")]
+    let (mut visible_windows, mut shadow_elems) = (0u32, 0u32);
     for window in state.space.elements().rev() {
         let Some(loc) = state.space.element_location(window) else {
             continue;
@@ -661,6 +663,14 @@ pub fn compose_frame(
         else {
             continue;
         };
+
+        #[cfg(feature = "profile-with-tracy")]
+        {
+            visible_windows += 1;
+            if effective_shadow {
+                shadow_elems += 1;
+            }
+        }
         let client_blur_rects = with_states(&wl_surface, |s| {
             crate::handlers::background_effect::get_cached_blur_region(s)
         });
@@ -1038,6 +1048,34 @@ pub fn compose_frame(
                     region_rects,
                 });
             }
+        }
+    }
+
+    #[cfg(feature = "profile-with-tracy")]
+    {
+        static VISIBLE_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        static SHADOW_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        static CAMERA_X_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        static CAMERA_Y_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        let visible = VISIBLE_PLOT
+            .get_or_init(|| tracy_client::PlotName::new_leak("frame.visible_windows".to_string()));
+        let shadows = SHADOW_PLOT
+            .get_or_init(|| tracy_client::PlotName::new_leak("frame.shadow_elems".to_string()));
+        // Camera position per composed frame: per-frame deltas of this measure
+        // motion uniformity (judder), independent of frame cadence.
+        let cam_x = CAMERA_X_PLOT
+            .get_or_init(|| tracy_client::PlotName::new_leak("frame.camera_x".to_string()));
+        let cam_y = CAMERA_Y_PLOT
+            .get_or_init(|| tracy_client::PlotName::new_leak("frame.camera_y".to_string()));
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(*visible, visible_windows as f64);
+            client.plot(*shadows, shadow_elems as f64);
+            client.plot(*cam_x, camera.x);
+            client.plot(*cam_y, camera.y);
         }
     }
 

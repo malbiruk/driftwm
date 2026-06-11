@@ -1357,6 +1357,18 @@ fn render_frame(
     #[cfg(feature = "profile-with-tracy")]
     let _span = tracy_client::span!("udev::render_frame");
 
+    #[cfg(feature = "profile-with-tracy")]
+    {
+        static COMMITS_PLOT: std::sync::OnceLock<tracy_client::PlotName> =
+            std::sync::OnceLock::new();
+        let commits = COMMITS_PLOT
+            .get_or_init(|| tracy_client::PlotName::new_leak("frame.commits".to_string()));
+        if let Some(client) = tracy_client::Client::running() {
+            client.plot(*commits, data.commits_since_render as f64);
+        }
+    }
+    data.commits_since_render = 0;
+
     data.redraws_needed.remove(output);
 
     // Flush Wayland clients

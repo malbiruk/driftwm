@@ -327,6 +327,7 @@ impl DriftWm {
             config_file_mtime: None,
             last_animation_tick: Instant::now(),
             pending_pointer_resync: false,
+            commits_since_render: 0,
             focused_output: None,
             gesture_output: None,
             gesture_exited_fullscreen: None,

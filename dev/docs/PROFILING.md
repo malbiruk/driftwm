@@ -66,10 +66,28 @@ times by it. The chunked tile-bg plots `bg_chunks.target_lod`, so:
 dev/scripts/tracy_analyze.py CAPTURE.tracy --bucket-by bg_chunks.target_lod
 ```
 
-gives per-LOD frame-time tables. Any future plot works the same way — add the
-plot in the code, pass its name to `--bucket-by`, no script change needed. For
-the winit backend, pass `--frame-zone winit::frame` (the default is
-`udev::render_frame`).
+gives per-LOD frame-time tables (both exec time and frame-to-frame interval —
+the interval table is the one that shows stutter). Any future plot works the
+same way — add the plot in the code, pass its name to `--bucket-by`, no script
+change needed. For the winit backend, pass `--frame-zone winit::frame` (the
+default is `udev::render_frame`).
+
+Per-frame diagnostic plots emitted by the compositor:
+
+- `frame.commits` — wl_surface commits since the previous rendered frame
+  (udev only; reset every render, so single-output sessions only). Bucketing
+  intervals by this tests whether stutter correlates with client rendering
+  activity (GPU contention from client work).
+- `frame.visible_windows` / `frame.shadow_elems` — composition load per frame,
+  emitted from compose_frame (both backends). Bucketing by these tests whether
+  stutter scales with window/shadow count.
+
+`--gpu` adds GPU zone stats (smithay's `tracy_gpu_profiling` timer queries),
+split by proximity to slow frames. Reading it: if *fixed-work* zones (`clear`,
+`draw_solid`) stretch near slow frames while their calm medians stay normal,
+the whole GPU is intermittently stalled/contended — pointing at GPU contention
+(e.g. client rendering) or power-state dips rather than any one expensive
+shader.
 
 The script finds `tracy-csvexport` via `$TRACY_CSVEXPORT`, then PATH, then
 `~/tracy/csvexport/build/`.
