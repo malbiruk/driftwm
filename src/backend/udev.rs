@@ -18,7 +18,11 @@ use smithay::{
         },
         egl::{EGLContext, EGLDevice, EGLDisplay},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        renderer::ImportDma,
+        renderer::{
+            ImportDma,
+            gles::GlesRenderer,
+            multigpu::{MultiFrame, MultiRenderer, gbm::GbmGlesBackend},
+        },
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{self, UdevBackend, UdevEvent},
     },
@@ -58,6 +62,25 @@ type GbmDrmCompositor = DrmCompositor<
     GbmFramebufferExporter<DrmDeviceFd>,
     smithay::desktop::utils::OutputPresentationFeedback,
     DrmDeviceFd,
+>;
+
+// Multi-GPU rendering: render on the primary GPU, scan out (with an implicit
+// PRIME copy) on outputs that live on other GPUs. Both type params are the same
+// GBM-GLES backend; the render and target nodes differ at call time.
+pub type MultiGpuRenderer<'render> = MultiRenderer<
+    'render,
+    'render,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
+>;
+
+pub type MultiGpuFrame<'render, 'frame, 'buffer> = MultiFrame<
+    'render,
+    'render,
+    'frame,
+    'buffer,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
+    GbmGlesBackend<GlesRenderer, DrmDeviceFd>,
 >;
 
 struct DeviceData {

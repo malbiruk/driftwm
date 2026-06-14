@@ -7,6 +7,7 @@ mod elements;
 mod error_bar;
 mod layers;
 mod lifecycle;
+mod renderer;
 mod screenshot;
 mod shader_chunks;
 mod shaders;
@@ -27,6 +28,9 @@ pub use lifecycle::{
     post_render, refresh_foreign_toplevels, take_presentation_feedback,
     update_primary_scanout_output,
 };
+// TODO(multi-gpu): drop the allow once the render path consumes these.
+#[allow(unused_imports)]
+pub use renderer::{AsGlesFrame, AsGlesRenderer, DriftRenderer};
 pub use screenshot::capture_region_to_png;
 pub use shader_chunks::ShaderChunkCache;
 pub use shaders::{

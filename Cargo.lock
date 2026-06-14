@@ -31,6 +31,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "aliasable"
+version = "0.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "250f629c0161ad8107cf89319e990051fae62832fd343083bea452d93e2205fd"
+
+[[package]]
 name = "android-activity"
 version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2076,6 +2082,7 @@ name = "smithay"
 version = "0.7.0"
 source = "git+https://github.com/Smithay/smithay.git?rev=5312d5caedd0c2ce563a63719d38ae2183149210#5312d5caedd0c2ce563a63719d38ae2183149210"
 dependencies = [
+ "aliasable",
  "appendlist",
  "atomic_float",
  "bitflags 2.11.0",
