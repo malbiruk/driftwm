@@ -34,12 +34,36 @@ impl DriftWm {
         &self,
         pos: Point<f64, smithay::utils::Logical>,
     ) -> BindingContext {
-        let over_window = self.space.element_under(pos).is_some();
-        if over_window || self.canvas_layer_under(pos).is_some() {
+        // SSD chrome and the CSD resize margin sit outside the surface bbox, so
+        // `element_under` misses them; count them as OnWindow so on-window bindings
+        // apply over the chrome, not just the client surface.
+        let over_window = self.space.element_under(pos).is_some()
+            || self.canvas_layer_under(pos).is_some()
+            || self.decoration_under(pos).is_some();
+        if over_window {
             BindingContext::OnWindow
         } else {
             BindingContext::OnCanvas
         }
+    }
+
+    /// Look up the mouse-button binding for `mods`/`button`/`context`, paired with
+    /// whether it's a *held-modifier* binding. The bool gates SSD chrome: a chrome
+    /// margin's context is OnCanvas where bare LMB is also bound (pan), so "a binding
+    /// matched" can't suppress chrome on its own — only a held modifier should. That
+    /// keeps Mod+LMB panning over a border while a plain click still drives the chrome.
+    fn modifier_button_binding(
+        &self,
+        mods: &smithay::input::keyboard::ModifiersState,
+        button: u32,
+        context: BindingContext,
+    ) -> (Option<MouseAction>, bool) {
+        let binding = self
+            .config
+            .mouse_button_lookup_ctx(mods, button, context)
+            .cloned();
+        let has_modifier = binding.is_some() && !config::Modifiers::from_state(mods).is_empty();
+        (binding, has_modifier)
     }
 
     /// Priority order when button pressed:
@@ -176,18 +200,9 @@ impl DriftWm {
                 return;
             }
 
-            // A held-modifier combo (e.g. Mod+LMB pan) must win over the resize
-            // border or title bar it lands on. The chrome margin sits outside the
-            // surface, so its context is OnCanvas where bare LMB is also bound
-            // (pan) — only skip chrome when a modifier is held, so a plain click
-            // still drives title-bar move / close / resize.
+            // `modifier_binding` gates the chrome paths below.
             let context = self.pointer_context(pos);
-            let binding = self
-                .config
-                .mouse_button_lookup_ctx(&mods, button, context)
-                .cloned();
-            let modifier_binding =
-                binding.is_some() && !config::Modifiers::from_state(&mods).is_empty();
+            let (binding, modifier_binding) = self.modifier_button_binding(&mods, button, context);
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
             if !modifier_binding
@@ -451,7 +466,12 @@ impl DriftWm {
         }
         let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
 
-        if button == config::BTN_LEFT
+        // `modifier_binding` gates the pinned chrome path below, as on the canvas path.
+        let (binding, modifier_binding) =
+            self.modifier_button_binding(&mods, button, BindingContext::OnWindow);
+
+        if !modifier_binding
+            && button == config::BTN_LEFT
             && let Some((window, hit)) = self.pinned_decoration_under(screen_pos)
         {
             let is_widget = window
@@ -489,10 +509,7 @@ impl DriftWm {
             return false;
         };
         let pinned_window = self.window_for_surface(&focus.0);
-        if let Some(action) = self
-            .config
-            .mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow)
-            .cloned()
+        if let Some(action) = binding
             && let Some(ref window) = pinned_window
             && !window.is_widget()
         {
@@ -520,6 +537,8 @@ impl DriftWm {
                     self.execute_action(&a);
                     return true;
                 }
+                // Viewport actions aren't pinned-specific — defer to normal dispatch.
+                MouseAction::PanViewport | MouseAction::CenterNearest => return false,
                 _ => {}
             }
         }

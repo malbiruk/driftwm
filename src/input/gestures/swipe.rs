@@ -588,7 +588,15 @@ impl DriftWm {
             let loc = self.space.element_location(&window).unwrap_or_default();
             return Some((window, loc));
         }
-        self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+        // SSD chrome (title bar / border) lies outside the surface bbox, so
+        // `element_under` misses it; fall back to a decoration hit-test.
+        self.space
+            .element_under(pos)
+            .map(|(w, l)| (w.clone(), l))
+            .or_else(|| {
+                self.decoration_under(pos)
+                    .and_then(|(w, _)| self.space.element_location(&w).map(|l| (w, l)))
+            })
     }
 
     fn forward_swipe_begin(&mut self, fingers: u32, time: u32) {
