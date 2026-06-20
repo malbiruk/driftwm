@@ -968,19 +968,22 @@ impl DriftWm {
                 if crate::decorations::title_bar_contains(screen_pos, loc, size.w, bar_height) {
                     return Some((window.clone(), DecorationHit::TitleBar));
                 }
-                if let Some(edge) = crate::decorations::resize_edge_at(
-                    screen_pos,
-                    loc,
-                    size,
-                    bar_height,
-                    border_width,
-                ) {
+                if self.config.resize_on_border
+                    && let Some(edge) = crate::decorations::resize_edge_at(
+                        screen_pos,
+                        loc,
+                        size,
+                        bar_height,
+                        border_width,
+                    )
+                {
                     return Some((window.clone(), DecorationHit::ResizeBorder(edge)));
                 }
             } else {
                 let is_widget =
                     driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
-                if !is_widget
+                if self.config.resize_on_border
+                    && !is_widget
                     && let Some(edge) =
                         crate::decorations::resize_edge_at(screen_pos, loc, size, 0, border_width)
                 {
@@ -1119,8 +1122,9 @@ impl DriftWm {
                 if crate::decorations::title_bar_contains(pos, loc, size.w, bar_height) {
                     return Some((window.clone(), DecorationHit::TitleBar));
                 }
-                if let Some(edge) =
-                    crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width)
+                if self.config.resize_on_border
+                    && let Some(edge) =
+                        crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width)
                 {
                     return Some((window.clone(), DecorationHit::ResizeBorder(edge)));
                 }
@@ -1129,7 +1133,8 @@ impl DriftWm {
                 let is_widget =
                     driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
                 let is_fullscreen = self.fullscreen.values().any(|fs| &fs.window == window);
-                if !is_widget
+                if self.config.resize_on_border
+                    && !is_widget
                     && !is_fullscreen
                     && let Some(edge) =
                         crate::decorations::resize_edge_at(pos, loc, size, 0, border_width)

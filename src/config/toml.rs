@@ -239,6 +239,9 @@ pub(super) struct WindowRuleFile {
 #[derive(Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct MouseFileConfig {
+    /// Enable dragging a window's edge/corner to resize it.
+    /// See [`super::Config::resize_on_border`].
+    pub resize_on_border: Option<bool>,
     /// Propagate edge-drag resize to snapped neighbors.
     /// See [`super::Config::decoration_resize_snapped`].
     pub decoration_resize_snapped: Option<bool>,

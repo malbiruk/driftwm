@@ -280,6 +280,22 @@ fn toml_auto_navigate_on_close_can_be_disabled() {
 }
 
 #[test]
+fn toml_resize_on_border_defaults_true() {
+    let config = Config::from_toml("").unwrap();
+    assert!(config.resize_on_border);
+}
+
+#[test]
+fn toml_resize_on_border_can_be_disabled() {
+    let toml = r#"
+        [mouse]
+        resize_on_border = false
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert!(!config.resize_on_border);
+}
+
+#[test]
 fn toml_invalid_keybinding_is_skipped() {
     let toml = r#"
         [keybindings]

@@ -124,6 +124,11 @@ pub struct Config {
     /// key on top. Keyed by the exact modifier set.
     tap_bindings: HashMap<Modifiers, Action>,
     pub mouse: ContextBindings<MouseBinding, MouseAction>,
+    /// When `true` (default), dragging a window's edge or corner resizes it
+    /// via the invisible resize border (SSD frame or CSD margin). When `false`,
+    /// that border is inert — resize only through explicit bindings (e.g.
+    /// `alt+RMB`) or gestures.
+    pub resize_on_border: bool,
     /// When `true`, resizing a window by dragging its edge (SSD or CSD
     /// border) propagates to every window connected to it via snap
     /// adjacency. Keybinding and gesture resize are unaffected — bind
@@ -369,6 +374,7 @@ impl Config {
             }
         }
 
+        let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
         let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
         let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
         let mut mouse_bindings = default_mouse_bindings(mod_key);
@@ -744,6 +750,7 @@ impl Config {
             bindings,
             tap_bindings,
             mouse: mouse_bindings,
+            resize_on_border,
             decoration_resize_snapped,
             decoration_fit_snapped,
             gestures: gesture_bindings,

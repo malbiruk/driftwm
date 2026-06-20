@@ -176,17 +176,21 @@ impl DriftWm {
                 return;
             }
 
-            // Configured modifier mouse-bindings take precedence over no-modifier
-            // SSD chrome: a bound combo (e.g. Mod+LMB pan) must win over a resize
-            // border or title bar it happens to land on.
+            // A held-modifier combo (e.g. Mod+LMB pan) must win over the resize
+            // border or title bar it lands on. The chrome margin sits outside the
+            // surface, so its context is OnCanvas where bare LMB is also bound
+            // (pan) — only skip chrome when a modifier is held, so a plain click
+            // still drives title-bar move / close / resize.
             let context = self.pointer_context(pos);
             let binding = self
                 .config
                 .mouse_button_lookup_ctx(&mods, button, context)
                 .cloned();
+            let modifier_binding =
+                binding.is_some() && !config::Modifiers::from_state(&mods).is_empty();
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
-            if binding.is_none()
+            if !modifier_binding
                 && let Some((window, hit)) = self.decoration_under(pos)
             {
                 // Decoration interactions must only apply to the topmost window.

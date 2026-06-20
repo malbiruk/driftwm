@@ -322,6 +322,12 @@
 # connected to the focused one via snap adjacency
 
 [mouse]
+# When true (default), dragging a window's edge or corner resizes it via the
+# invisible resize border (SSD frame or CSD margin). Set false to make that
+# border inert — resize only through explicit bindings (e.g. alt+right) or
+# gestures.
+# resize_on_border = true
+
 # When true, resizing a window by dragging its edge (SSD or CSD border)
 # propagates to every window connected to it via snap adjacency.
 # Keybinding/gesture resize is unaffected — bind `resize-window-snapped`
