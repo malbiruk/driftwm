@@ -205,9 +205,7 @@ impl DriftWm {
             let (binding, modifier_binding) = self.modifier_button_binding(&mods, button, context);
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
-            if !modifier_binding
-                && let Some((window, hit)) = self.decoration_under(pos)
-            {
+            if !modifier_binding && let Some((window, hit)) = self.decoration_under(pos) {
                 // Decoration interactions must only apply to the topmost window.
                 // Otherwise a lower SSD title bar/border can steal clicks through
                 // an overlapping window.
