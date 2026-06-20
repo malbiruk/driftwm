@@ -1,175 +1,83 @@
-# driftwm — personal config (symlink to ~/.config/driftwm/config.toml)
+# driftwm — example "home dashboard" rice
+#
+# An opinionated starting point: a single Astal dashboard pinned at the canvas
+# origin (your "home"), plus power-canvas defaults. Install with
+# `extras/install.sh`. Everything here is optional — `config.reference.toml`
+# documents every setting, and partial configs merge with built-in defaults, so
+# trim this to taste.
 
 autostart = [
-    # gnome-keyring is started+unlocked by PAM (pam_gnome_keyring auto_start in
-    # /etc/pam.d/gdm-password and gdm-autologin) with the secrets component only;
-    # driftwm-session imports the PAM env into systemd/D-Bus before driftwm
-    # launches. This line attaches the ssh component to the already-unlocked
-    # daemon and propagates SSH_AUTH_SOCK (PAM doesn't set it for ssh-only).
-    "eval $(gnome-keyring-daemon --start --components=ssh) && systemctl --user import-environment SSH_AUTH_SOCK && dbus-update-activation-environment SSH_AUTH_SOCK",
-    "/usr/libexec/polkit-gnome-authentication-agent-1",
-    "swayosd-server --top-margin 0.95",
-    "swaync",
-     "waybar -c ~/.config/waybar/taskbar.jsonc -s ~/.config/waybar/taskbar.css",
-     "sleep 1 && waybar -c ~/.config/waybar/tray.jsonc -s ~/.config/waybar/tray.css",
-     "vorta -d",
-     "~/Documents/work/scripts/driftwm/extras/widgets/launch.sh",
-     "~/Documents/work/scripts/driftwm/extras/scripts/battery_notify.sh",
-     "~/Documents/work/scripts/driftwm/extras/scripts/theme-watch.sh",
-     "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 330 '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh' timeout 600 'systemctl suspend' before-sleep '~/Documents/work/scripts/driftwm/extras/scripts/lock.sh'",
-     "sway-audio-idle-inhibit",
+    "swaync",                                      # notification daemon
+    "swayosd-server --top-margin 0.95",            # volume/brightness OSD
+    "ags run ~/.config/driftwm/astal",             # the home dashboard (Astal)
+    "~/.config/driftwm/scripts/battery_notify.sh", # low-battery alert
+    "swayidle -w timeout 300 'brightnessctl -s set 10%' resume 'brightnessctl -r' timeout 600 'systemctl suspend' before-sleep 'swaylock'",
+    "sway-audio-idle-inhibit",                     # don't idle while audio plays
+    # polkit agent (binary path varies by distro), e.g.:
+    # "/usr/lib/polkit-gnome/polkit-gnome-authentication-agent-1",
 ]
 
+# Sloppy focus: windows don't overlap, so a cursor over a window is deliberate.
+# Pairs with hover -> `mod+c` / 4-finger hold to target windows when zoomed out.
 focus_follows_mouse = true
+
+# Place a new window adjacent to the focused window's cluster.
 window_placement = "auto"
 
-[env]
-QT_QPA_PLATFORMTHEME = "qt6ct"
+# Background defaults to the dot-grid shader. To set a wallpaper instead:
+# [background]
+# type = "wallpaper"   # screen-fixed image (cheapest); or "tile" / "shader"
+# path = "~/Pictures/wallpaper.jpg"
 
 [snap]
 corners = true
 centers = true
 
-[input.keyboard]
-layout = "us,ru"
-options = "grp:caps_toggle,grp_led:caps,altwin:ctrl_alt_win"
-
 [zoom]
 reset_on_new_window = false
-
-[cursor]
-theme = "elementary"
-
-[decorations]
-bg_color = "#FDF6E3"
-fg_color = "#5C6A72"
-
-[background]
-type = "shader"
-path = "/usr/local/share/driftwm/wallpapers/static/pink_cloud.glsl"
-
-[output.outline]
-color="#FDF6E3"
 
 [mouse]
 decoration_resize_snapped = true
 decoration_fit_snapped = true
 
+[decorations]
+# Borders over shadows: a soft shadow is low-contrast on the dark grid, where a
+# crisp border reads more clearly.
+shadow = false
+border_width = 2
+border_color = "#303030"          # unfocused: subtle, matches the title bar
+border_color_focused = "#ffffff"  # focused: pops against the dark grid
+
+# Multiple layouts make the dashboard's layout indicator meaningful. Example:
+# [input.keyboard]
+# layout = "us,ru"
+# options = "grp:caps_toggle,grp_led:caps"
+
 [keybindings]
-"mod+return" = "exec ptyxis -s"
-"mod+d" = "exec fuzzel"
-"mod+shift+d" = "spawn ~/Documents/work/scripts/driftwm/extras/scripts/theme-toggle.sh"
-"mod+l" = "spawn ~/Documents/work/scripts/driftwm/extras/scripts/lock.sh"
 "mod+n" = "spawn swaync-client -t"
-# swayosd instead of default wpctl/brightnessctl
+"mod+s" = "exec ~/.config/driftwm/scripts/window-search.sh"
+# Cluster-first: the unshifted key acts on the snapped cluster (the defaults are
+# single-window).
+"mod+m" = "fit-window-snapped"
+"mod+shift+m" = "fit-window"
+# Route media keys through swayosd for on-screen feedback.
 "XF86AudioRaiseVolume" = "spawn swayosd-client --output-volume raise"
 "XF86AudioLowerVolume" = "spawn swayosd-client --output-volume lower"
 "XF86AudioMute" = "spawn swayosd-client --output-volume mute-toggle"
 "XF86MonBrightnessUp" = "spawn swayosd-client --brightness raise"
 "XF86MonBrightnessDown" = "spawn swayosd-client --brightness lower"
-"mod+s" = "exec ~/Documents/work/scripts/driftwm/extras/scripts/window-search.sh"
-"mod+m" = "fit-window-snapped"
-"mod+shift+m" = "fit-window"
 
 [gestures.on-window]
+# Cluster-first, matching the keybindings above.
 "alt+3-finger-swipe" = "resize-window-snapped"
 "alt+shift+3-finger-swipe" = "resize-window"
 
-[[outputs]]
-name = "HDMI-A-1"
-transform = "90"
-
-[effects]
-blur_radius = 3
-
-# Dashboard widgets — positioned around origin for home view (1920x1080)
-
-# Shared defaults for all drift-* widgets (sticky-on flags, last-wins scalars)
+# The Astal home dashboard, pinned at the canvas origin. `position` is the window
+# center (Y-up); tune once you see the dashboard's actual size.
 [[window_rules]]
-app_id = "drift-*"
+app_id = "drift-dashboard"
+position = [0, 0]
 widget = true
+# No compositor chrome — the dashboard draws its own cards, and the transparent
+# gaps between them let the canvas show through.
 decoration = "none"
-
-[[window_rules]]
-app_id = "drift-clock"
-position = [-93, 205]
-
-[[window_rules]]
-app_id = "drift-stats"
-position = [-93, 0]
-
-[[window_rules]]
-app_id = "drift-canvas"
-position = [-129, -185]
-
-[[window_rules]]
-app_id = "drift-layout"
-position = [42, -185]
-
-[[window_rules]]
-app_id = "drift-calendar"
-position = [186, 0]
-
-[[window_rules]]
-app_id = "drift-weather"
-position = [186, 205]
-
-[[window_rules]]
-app_id = "drift-notif"
-position = [190, -185]
-
-[[window_rules]]
-app_id = "drift-power"
-position = [274, -259]
-
-[[window_rules]]
-app_id = "drift-power-menu"
-position = [274, -370]
-decoration = "server"
-
-# Waybar: layer-shell uses match_window_rule_nth (Nth instance → Nth rule
-# with `position`), so these must stay as separate fully-specified rules.
-[[window_rules]]
-app_id = "waybar"
-position = [-289, 21]
-widget = true
-decoration = "none"
-
-[[window_rules]]
-app_id = "waybar"
-position = [126, -259]
-widget = true
-decoration = "none"
-
-# Cosmic settings: hide winit window helper and apply fixed window size
-[[window_rules]]
-title = "winit window"
-widget = true
-
-[[window_rules]]
-app_id = "com.system76.CosmicSettings"
-size=[500, 725]
-
-# Server side decoration
-[[window_rules]]
-app_id = "org.telegram.desktop"
-decoration = "server"
-blur = true
-
-# Blur shell-overlay popups (notifications + launcher)
-[[window_rules]]
-app_id = "swaync-control-center"
-blur = true
-
-[[window_rules]]
-app_id = "swaync-notification-window"
-blur = true
-
-[[window_rules]]
-app_id = "launcher"
-blur = true
-
-[[window_rules]]
-app_id = "Alacritty"
-opacity = 0.8
-blur = true

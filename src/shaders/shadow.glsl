@@ -1,10 +1,10 @@
-// shadow.glsl — ERF-based analytical Gaussian shadow (Zed's algorithm)
+// shadow.glsl — ERF-based analytical Gaussian shadow
 precision mediump float;
 varying vec2 v_coords;
 uniform float alpha;
-uniform vec2 size;        // element size in pixels
+uniform vec2 size; // element size in pixels
 uniform vec4 u_window_rect; // (x, y, w, h) window rect within element
-uniform float u_radius;     // shadow extent (= 3σ)
+uniform float u_radius; // shadow extent (= 3σ)
 uniform vec4 u_color;
 uniform float u_corner_radius;
 
@@ -33,7 +33,7 @@ void main() {
     // Window center and half-size
     vec2 center = u_window_rect.xy + u_window_rect.zw * 0.5;
     vec2 half_size = u_window_rect.zw * 0.5;
-    vec2 p = pixel - center;  // center-relative position
+    vec2 p = pixel - center; // center-relative position
 
     float sigma = u_radius / 3.0;
     float corner = u_corner_radius;

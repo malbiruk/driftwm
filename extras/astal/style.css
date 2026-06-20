@@ -1,0 +1,63 @@
+/* i3bar-style text status on a near-black panel with a thin gray border. White
+   text, dim labels; no icons, no hardcoded font (GTK's default sans degrades
+   cleanly). Plain CSS (not SCSS) so the rice needs no `sass` binary to run. */
+window.Dashboard {
+  background-color: transparent;
+  color: #ffffff;
+}
+
+.dashboard {
+  background-color: #0a0a0a;
+  border: 1px solid #3a3a3a;
+  border-radius: 14px;
+  padding: 18px 22px;
+}
+
+.clock {
+  margin-bottom: 6px;
+}
+
+.clock .time {
+  font-size: 44px;
+  font-weight: bold;
+}
+
+.clock .date {
+  font-size: 13px;
+  opacity: 0.5;
+}
+
+.stat-label {
+  opacity: 0.5;
+  min-width: 34px;
+}
+
+.player .title {
+  font-weight: bold;
+}
+
+.player .artist {
+  font-size: 12px;
+  opacity: 0.55;
+}
+
+.controls button {
+  font-size: 16px;
+  padding: 2px 10px;
+}
+
+button {
+  background-color: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 6px 8px;
+  border-radius: 8px;
+}
+
+button:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+}
+
+.menu-item {
+  padding: 6px 10px;
+}

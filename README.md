@@ -360,7 +360,20 @@ gesture bindings, mouse bindings, and window rules.
 ## Example setup
 
 driftwm is just a compositor — everything else is standard Wayland tooling.
-Here are some tools that work well with it:
+A few ways to get a desktop going on top of it:
+
+**[`extras/`](extras/)** is an installable starting point — a driftwm
+config, an [Astal](https://aylur.github.io/astal/) "home dashboard" (time, battery,
+network, audio, CPU/RAM, tray, power menu) pinned at the canvas origin, GLSL shader
+wallpapers, and helper scripts, wired together as a curated setup. Run
+`extras/install.sh` to try it, or steal pieces.
+
+**Full Wayland shells** like **noctalia**, **wayle**, and **dank-material-shell**
+are compositor-agnostic and give you a complete desktop out of the box (`driftwm`
+supports the `wlr-layer-shell` protocol), just without compositor-specific features
+— a good newcomer-friendly option.
+
+**Or assemble your own** from standard pieces:
 
 - **waybar** — Status bar / taskbar
 - **crystal-dock** — macOS-style dock
@@ -372,13 +385,6 @@ Here are some tools that work well with it:
 - **grim + slurp** — Screenshots (or the built-in canvas/DPI capture: [IPC › Screenshots](docs/ipc.md#screenshots))
 - **wlr-randr / wdisplays** — Output configuration
 - **COSMIC Settings** — Wi-Fi, Bluetooth, sound (or **nm-applet** + **blueman** + **pavucontrol**)
-
-Compositor-agnostic full Wayland shells like **noctalia**, **wayle**, and **dank-material-shell** should work too (`driftwm` supports `wlr-layer-shell` protocol) but without compositor-specific features.
-
-The [`extras/`](extras/) directory contains a complete setup — driftwm config,
-GLSL shader wallpapers, Python widgets (clock, calendar, system stats, power
-menu), waybar with taskbar/tray, fuzzel window-search script, and window rules
-tying it all together. Use it as a starting point or steal pieces.
 
 ## Community
 
