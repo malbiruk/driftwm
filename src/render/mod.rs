@@ -535,6 +535,10 @@ pub fn compose_frame(
 
     let name = output.name();
     let output_fullscreen = state.is_output_fullscreen(output);
+    // The fullscreen window fully occludes its output: only it, the overlay
+    // layer, and the cursor render; everything beneath is culled below. Pinned
+    // windows count as top-tier toplevels and get covered like the top layer.
+    let fullscreen_window = state.fullscreen.get(output).map(|fs| fs.window.clone());
     if output_fullscreen {
         // Fullscreen fully occludes the canvas: free its chunk caches and skip
         // the background. Maximize is NOT fullscreen, so it keeps its background.
@@ -586,6 +590,9 @@ pub fn compose_frame(
         let Some(loc) = state.space.element_location(window) else {
             continue;
         };
+        if output_fullscreen && fullscreen_window.as_ref() != Some(window) {
+            continue;
+        }
         let geom_loc = window.geometry().loc;
         let geom_size = window.geometry().size;
         let Some(wl_surface) = window.wl_surface() else {
@@ -1079,11 +1086,18 @@ pub fn compose_frame(
     #[cfg(feature = "profile-with-tracy")]
     drop(_windows_span);
 
-    let canvas_layer_elements =
-        build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect);
+    // Both sit below the windows, so the fullscreen window fully occludes them.
+    let canvas_layer_elements = if output_fullscreen {
+        Vec::new()
+    } else {
+        build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect)
+    };
 
-    let outline_elements =
-        build_output_outline_elements(state, renderer, output, camera, zoom, viewport_size);
+    let outline_elements = if output_fullscreen {
+        Vec::new()
+    } else {
+        build_output_outline_elements(state, renderer, output, camera, zoom, viewport_size)
+    };
 
     let bg_elements: Vec<OutputRenderElements> = if output_fullscreen {
         vec![]
@@ -1130,8 +1144,11 @@ pub fn compose_frame(
     } else {
         (vec![], vec![])
     };
-    let (background_layer_elements, _) =
-        build_layer_elements(state, output, renderer, WlrLayer::Background, None);
+    let (background_layer_elements, _) = if !is_fullscreen {
+        build_layer_elements(state, output, renderer, WlrLayer::Background, None)
+    } else {
+        (vec![], vec![])
+    };
     #[cfg(feature = "profile-with-tracy")]
     drop(_layers_span);
 

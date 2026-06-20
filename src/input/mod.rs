@@ -863,6 +863,10 @@ impl DriftWm {
             return None;
         }
         let output = self.active_output()?;
+        // Fullscreen covers pinned windows on that output (like the top layer).
+        if self.is_output_fullscreen(&output) {
+            return None;
+        }
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
@@ -945,6 +949,10 @@ impl DriftWm {
             return None;
         }
         let output = self.active_output()?;
+        // Fullscreen covers pinned windows on that output (like the top layer).
+        if self.is_output_fullscreen(&output) {
+            return None;
+        }
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
