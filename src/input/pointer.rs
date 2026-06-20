@@ -176,8 +176,19 @@ impl DriftWm {
                 return;
             }
 
+            // Configured modifier mouse-bindings take precedence over no-modifier
+            // SSD chrome: a bound combo (e.g. Mod+LMB pan) must win over a resize
+            // border or title bar it happens to land on.
+            let context = self.pointer_context(pos);
+            let binding = self
+                .config
+                .mouse_button_lookup_ctx(&mods, button, context)
+                .cloned();
+
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
-            if let Some((window, hit)) = self.decoration_under(pos) {
+            if binding.is_none()
+                && let Some((window, hit)) = self.decoration_under(pos)
+            {
                 // Decoration interactions must only apply to the topmost window.
                 // Otherwise a lower SSD title bar/border can steal clicks through
                 // an overlapping window.
@@ -267,13 +278,8 @@ impl DriftWm {
                 }
             }
 
-            // Check configured mouse bindings (context-aware)
-            let context = self.pointer_context(pos);
-            if let Some(action) = self
-                .config
-                .mouse_button_lookup_ctx(&mods, button, context)
-                .cloned()
-            {
+            // Dispatch the matched mouse binding (move, resize, pan, etc.)
+            if let Some(action) = binding {
                 match action {
                     MouseAction::MoveWindow | MouseAction::MoveSnappedWindows => {
                         let want_cluster = matches!(action, MouseAction::MoveSnappedWindows);
