@@ -205,7 +205,7 @@ impl DriftWm {
                     Some(NavTarget::Anchor(p)) => {
                         // Unfocus so next CenterNearest searches from viewport center (= this anchor)
                         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                        self.set_keyboard_focus(None, serial);
+                        self.set_window_focus(None, serial);
                         self.with_output_state(|os| os.momentum.stop());
                         let vc = self.usable_center_screen();
                         let zoom = self.zoom();

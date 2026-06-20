@@ -102,12 +102,13 @@ impl DriftWm {
         self.enforce_below_windows();
         self.update_output_from_camera();
 
-        // Ensure keyboard AND pointer focus are on the fullscreen window.
-        // Without pointer focus, pointer constraints (e.g. game cursor lock)
-        // activate on whatever surface had focus before — not the game.
+        // Make the fullscreen window the keyboard-focus intent (the recompute
+        // still yields to an exclusive layer if one is mapped) and force
+        // pointer focus below. Without pointer focus, pointer constraints (e.g.
+        // game cursor lock) activate on whatever surface had focus before.
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
-        self.set_keyboard_focus(focus, serial);
+        self.set_window_focus(focus, serial);
 
         if let Some(wl_surface) = window.wl_surface() {
             let pointer = self.seat.get_pointer().unwrap();

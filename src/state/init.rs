@@ -316,6 +316,8 @@ impl DriftWm {
             stable_snap_rects: HashMap::new(),
             focus_history: Vec::new(),
             cycle_state: None,
+            window_focus: None,
+            on_demand_layer: None,
             held_action: None,
             tap: TapTracker::default(),
             pending_tap_action: None,

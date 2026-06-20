@@ -6,9 +6,7 @@ use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, PinnedSta
 use driftwm::window_ext::WindowExt;
 use smithay::desktop::layer_map_for_output;
 use smithay::utils::{Logical, Point, Rectangle};
-use smithay::wayland::shell::wlr_layer::{
-    Anchor, KeyboardInteractivity, LayerSurfaceCachedState, LayerSurfaceData,
-};
+use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData};
 use smithay::{
     delegate_compositor, delegate_shm,
     reexports::{
@@ -500,7 +498,7 @@ impl CompositorHandler for DriftWm {
                             if let Some(prev) = self.focus_history.first().cloned() {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 let focus = prev.wl_surface().map(|s| FocusTarget(s.into_owned()));
-                                self.set_keyboard_focus(focus, serial);
+                                self.set_window_focus(focus, serial);
                             }
                         }
                     }
@@ -643,21 +641,6 @@ fn ensure_initial_configure(
 }
 
 impl DriftWm {
-    fn focus_exclusive_layer(
-        &mut self,
-        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
-    ) {
-        let keyboard = self.seat.get_keyboard().unwrap();
-        let already_focused = keyboard
-            .current_focus()
-            .as_ref()
-            .is_some_and(|f| f.0 == *surface);
-        if !already_focused {
-            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            self.set_keyboard_focus(Some(FocusTarget(surface.clone())), serial);
-        }
-    }
-
     /// Returns true if the surface belonged to a canvas layer.
     fn handle_canvas_layer_commit(
         &mut self,
@@ -688,11 +671,6 @@ impl DriftWm {
             }
         }
 
-        let interactivity = self.canvas_layers[idx]
-            .surface
-            .cached_state()
-            .keyboard_interactivity;
-
         let initial_configure_sent = with_states(&root, |states| {
             states
                 .data_map
@@ -708,9 +686,7 @@ impl DriftWm {
                 .send_configure();
         }
 
-        if interactivity == KeyboardInteractivity::Exclusive {
-            self.focus_exclusive_layer(&root);
-        }
+        self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());
 
         self.popups.commit(surface);
         true
@@ -754,25 +730,18 @@ impl DriftWm {
                 .unwrap_or(true)
         });
 
-        let layer_info = map
+        let layer_surface = map
             .layer_for_surface(&root, smithay::desktop::WindowSurfaceType::ALL)
-            .map(|l| {
-                let interactivity = l.cached_state().keyboard_interactivity;
-                let layer_surface = l.layer_surface().clone();
-                (interactivity, layer_surface)
-            });
+            .map(|l| l.layer_surface().clone());
 
         // Drop the map guard before set_focus reenters SeatHandler.
         drop(map);
 
-        if let Some((interactivity, layer_surface)) = layer_info {
+        if let Some(layer_surface) = layer_surface {
             if !initial_configure_sent {
                 layer_surface.send_configure();
             }
-
-            if interactivity == KeyboardInteractivity::Exclusive {
-                self.focus_exclusive_layer(&root);
-            }
+            self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());
         }
 
         true

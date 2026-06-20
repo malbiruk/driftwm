@@ -312,16 +312,18 @@ impl DriftWm {
             .or(Some(window))
             .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
 
-        let keyboard = self.seat.get_keyboard().unwrap();
+        // Compare against the window-focus intent, not the live keyboard focus:
+        // while a layer surface owns focus the latter never matches, which would
+        // re-run the focus recompute on every motion event.
         let already_focused = focus_surface
             .as_ref()
-            .is_some_and(|target| keyboard.current_focus().is_some_and(|f| f.0 == target.0));
+            .is_some_and(|target| self.window_focus.as_ref().is_some_and(|f| f.0 == target.0));
         if already_focused {
             return;
         }
 
         let serial = SERIAL_COUNTER.next_serial();
-        self.set_keyboard_focus(focus_surface, serial);
+        self.set_window_focus(focus_surface, serial);
     }
 
     /// Deactivate the constraint on the previous focus if focus changed,

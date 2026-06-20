@@ -113,6 +113,15 @@ impl SeatHandler for DriftWm {
         {
             self.update_focus_history(&focus.0);
         }
+
+        // Track the last window that actually held focus so the recompute can
+        // restore it after a layer surface (launcher) or lock screen goes away.
+        // Layer / lock surfaces aren't windows, so they never overwrite it.
+        if let Some(focus) = focused
+            && self.window_for_surface(&focus.0).is_some()
+        {
+            self.window_focus = Some(focus.clone());
+        }
     }
 }
 
@@ -1036,12 +1045,8 @@ impl SessionLockHandler for DriftWm {
         tracing::info!("Session unlocked");
         self.session_lock = SessionLock::Unlocked;
         self.lock_surfaces.clear();
-        // Restore focus to the most recent window
-        if let Some(window) = self.focus_history.first().cloned() {
-            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
-            self.set_keyboard_focus(focus, serial);
-        }
+        // Restore focus to the window (or layer) that owned it before locking.
+        self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());
         self.mark_all_dirty();
     }
 

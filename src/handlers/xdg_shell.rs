@@ -54,15 +54,15 @@ impl XdgShellHandler for DriftWm {
             })
             .unwrap_or((0, 0));
 
-        // Snapshot the keyboard's current focus *before* we override it —
-        // `auto_placement_pos` reads this to anchor against whatever the
-        // user was working with. `None` here means the user explicitly
-        // had no focused window (e.g. clicked empty canvas), so auto
-        // placement falls back to center instead of digging up the
-        // previous focus_history entry.
-        let keyboard = self.seat.get_keyboard().unwrap();
-        let prev_focus_window = keyboard
-            .current_focus()
+        // Snapshot the last focused *window* so `auto_placement_pos` can anchor
+        // against whatever the user was working with — `window_focus` survives
+        // even when a launcher (an exclusive layer surface) currently holds the
+        // live keyboard focus. `None` here means the user explicitly had no
+        // focused window (e.g. clicked empty canvas), so auto placement falls
+        // back to center.
+        let prev_focus_window = self
+            .window_focus
+            .as_ref()
             .and_then(|t| self.window_for_surface(&t.0));
         self.auto_anchor_snapshot
             .insert(wl_surface.clone(), prev_focus_window);
@@ -323,7 +323,7 @@ impl XdgShellHandler for DriftWm {
                     if let Some(target) = target {
                         self.raise_and_focus(&target, serial);
                     } else {
-                        self.set_keyboard_focus(None, serial);
+                        self.set_window_focus(None, serial);
                     }
                 }
             }

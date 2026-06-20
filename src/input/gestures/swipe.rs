@@ -418,7 +418,7 @@ impl DriftWm {
         let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
-        self.set_keyboard_focus(Some(FocusTarget(surface)), serial);
+        self.set_window_focus(Some(FocusTarget(surface)), serial);
         self.enforce_below_windows();
 
         // Screen-pinned windows move in screen space via the same grab as
@@ -472,7 +472,7 @@ impl DriftWm {
             return;
         };
         self.space.raise_element(&window, true);
-        self.set_keyboard_focus(Some(FocusTarget(wl_surface.clone())), serial);
+        self.set_window_focus(Some(FocusTarget(wl_surface.clone())), serial);
         self.enforce_below_windows();
 
         // Pinned windows resize in screen space; reuse the pointer resize path,

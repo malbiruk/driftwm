@@ -170,8 +170,13 @@ impl DriftWm {
                 }
             }
 
-            // Layer surfaces: just forward (no compositor grabs)
+            // Layer surfaces: just forward (no compositor grabs). A press grants
+            // keyboard focus to an `OnDemand` layer under the pointer.
             if self.pointer_over_layer {
+                if button_state == ButtonState::Pressed {
+                    let layer = pointer.current_focus().map(|f| f.0);
+                    self.focus_layer_if_on_demand(layer, serial);
+                }
                 pointer.button(
                     self,
                     &ButtonEvent {
@@ -288,7 +293,7 @@ impl DriftWm {
                             }
                             _ => {
                                 // Widget title bar or other — just focus
-                                self.set_keyboard_focus(Some(FocusTarget(wl_surface)), serial);
+                                self.set_window_focus(Some(FocusTarget(wl_surface)), serial);
                             }
                         }
                     }
@@ -418,17 +423,18 @@ impl DriftWm {
                     // Normal window: raise + focus (with modal redirect)
                     self.raise_and_focus(window, serial);
                 } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
-                    // Widget window but canvas layer is above it: focus the layer
-                    self.set_keyboard_focus(Some(focus), serial);
+                    // Widget window but a canvas layer is above it: grant the
+                    // layer keyboard focus only if it requests it (on-demand).
+                    self.focus_layer_if_on_demand(Some(focus.0), serial);
                 } else {
                     // Widget window with no canvas layer above: focus the widget
-                    self.set_keyboard_focus(
+                    self.set_window_focus(
                         window.wl_surface().map(|s| FocusTarget(s.into_owned())),
                         serial,
                     );
                 }
             } else if let Some((focus, _)) = self.canvas_layer_under(pos) {
-                self.set_keyboard_focus(Some(focus), serial);
+                self.focus_layer_if_on_demand(Some(focus.0), serial);
             }
         }
 
@@ -496,7 +502,7 @@ impl DriftWm {
                 }
                 _ => {
                     if let Some(s) = window.wl_surface() {
-                        self.set_keyboard_focus(Some(FocusTarget(s.into_owned())), serial);
+                        self.set_window_focus(Some(FocusTarget(s.into_owned())), serial);
                     }
                 }
             }

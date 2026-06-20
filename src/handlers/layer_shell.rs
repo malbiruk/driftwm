@@ -6,7 +6,6 @@ use smithay::{
     utils::SERIAL_COUNTER,
     wayland::{
         compositor::with_states,
-        seat::WaylandFocus,
         shell::{
             wlr_layer::{Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState},
             xdg::PopupSurface,
@@ -21,7 +20,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// set full anchors before smithay's validation hook runs on orphaned commits.
 pub(crate) struct LayerDestroyedMarker(pub AtomicBool);
 
-use crate::state::{CanvasLayer, DriftWm, FocusTarget};
+use crate::state::{CanvasLayer, DriftWm};
 
 impl WlrLayerShellHandler for DriftWm {
     fn shell_state(&mut self) -> &mut WlrLayerShellState {
@@ -150,18 +149,12 @@ impl WlrLayerShellHandler for DriftWm {
                 .store(true, Ordering::Relaxed);
         });
 
-        // If this surface had exclusive keyboard focus, return focus to the top window
-        let wl_surface = surface.wl_surface().clone();
-        let keyboard = self.seat.get_keyboard().unwrap();
-        let current_focus = keyboard.current_focus();
-        if current_focus.as_ref().is_some_and(|f| f.0 == wl_surface) {
-            let serial = SERIAL_COUNTER.next_serial();
-            let new_focus = self
-                .focus_history
-                .first()
-                .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
-            self.set_keyboard_focus(new_focus, serial);
+        // Drop on-demand tracking if it pointed at this surface, then recompute
+        // focus — it falls back to the next layer or the focused window.
+        if self.on_demand_layer.as_ref() == Some(surface.wl_surface()) {
+            self.on_demand_layer = None;
         }
+        self.update_keyboard_focus(SERIAL_COUNTER.next_serial());
     }
 
     fn new_popup(&mut self, _parent: LayerSurface, popup: PopupSurface) {
