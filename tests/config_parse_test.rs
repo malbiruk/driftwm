@@ -112,6 +112,18 @@ fn parse_action_exec_with_arguments() {
 }
 
 #[test]
+fn parse_action_exec_terminal() {
+    let result = parse_action("exec-terminal").unwrap();
+    assert!(matches!(result, Action::ExecTerminal));
+}
+
+#[test]
+fn parse_action_exec_launcher() {
+    let result = parse_action("exec-launcher").unwrap();
+    assert!(matches!(result, Action::ExecLauncher));
+}
+
+#[test]
 fn parse_action_close_window() {
     let result = parse_action("close-window").unwrap();
     assert!(matches!(result, Action::CloseWindow));

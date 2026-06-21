@@ -37,16 +37,27 @@ fn no_mods() -> ModifiersState {
     ModifiersState::default()
 }
 
-// ── Super+Return → Exec ──────────────────────────────────────────────────
+// ── Super+Return → ExecTerminal, Super+d → ExecLauncher ─────────────────
 
 #[test]
-fn super_return_resolves_to_exec() {
+fn super_return_resolves_to_exec_terminal() {
     let config = Config::default();
     let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_Return));
     assert!(result.is_some(), "Super+Return should be bound");
     assert!(
-        matches!(result.unwrap(), Action::Exec(_)),
-        "Super+Return should resolve to Exec"
+        matches!(result.unwrap(), Action::ExecTerminal),
+        "Super+Return should resolve to ExecTerminal"
+    );
+}
+
+#[test]
+fn super_d_resolves_to_exec_launcher() {
+    let config = Config::default();
+    let result = config.lookup(&logo(), Keysym::from(keysyms::KEY_d));
+    assert!(result.is_some(), "Super+d should be bound");
+    assert!(
+        matches!(result.unwrap(), Action::ExecLauncher),
+        "Super+d should resolve to ExecLauncher"
     );
 }
 

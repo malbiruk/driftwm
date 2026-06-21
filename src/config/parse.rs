@@ -108,6 +108,8 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let cmd = arg.ok_or("spawn requires a command argument")?;
             Ok(Action::Spawn(cmd.to_string()))
         }
+        "exec-terminal" => Ok(Action::ExecTerminal),
+        "exec-launcher" => Ok(Action::ExecLauncher),
         "close-window" => Ok(Action::CloseWindow),
         "nudge-window" => {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
@@ -300,6 +302,8 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
     match s {
         "center-nearest" => Ok(Some(ThresholdAction::CenterNearest)),
         "center-window"
+        | "exec-terminal"
+        | "exec-launcher"
         | "focus-center"
         | "home-toggle"
         | "zoom-to-fit"

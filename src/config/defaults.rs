@@ -8,9 +8,6 @@ pub(super) fn default_bindings(
     mod_key: ModKey,
     cycle_mod: CycleModifier,
 ) -> HashMap<KeyCombo, Action> {
-    let terminal = detect_terminal();
-    let launcher = detect_launcher();
-
     let m = mod_key.base();
     let m_shift = Modifiers {
         shift: true,
@@ -32,14 +29,14 @@ pub(super) fn default_bindings(
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_Return),
             },
-            Action::Exec(terminal),
+            Action::ExecTerminal,
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_d),
             },
-            Action::Exec(launcher),
+            Action::ExecLauncher,
         ),
         (
             KeyCombo {
@@ -742,44 +739,4 @@ pub(super) fn default_gesture_bindings(
         on_canvas,
         anywhere,
     }
-}
-
-fn detect_terminal() -> String {
-    if let Ok(term) = std::env::var("TERMINAL")
-        && !term.is_empty()
-    {
-        return term;
-    }
-    for cmd in ["foot", "alacritty", "ptyxis", "kitty", "wezterm"] {
-        if std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return cmd.to_string();
-        }
-    }
-    "foot".to_string()
-}
-
-fn detect_launcher() -> String {
-    if let Ok(launcher) = std::env::var("LAUNCHER")
-        && !launcher.is_empty()
-    {
-        return launcher;
-    }
-    for cmd in ["fuzzel", "wofi", "bemenu-run", "tofi"] {
-        if std::process::Command::new("which")
-            .arg(cmd)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .is_ok_and(|s| s.success())
-        {
-            return cmd.to_string();
-        }
-    }
-    "fuzzel".to_string()
 }

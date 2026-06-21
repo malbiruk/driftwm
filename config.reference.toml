@@ -220,6 +220,8 @@
 #
 # Actions:
 #   exec <cmd>              — launch an app (shows loading cursor until window appears, exits fullscreen)
+#   exec-terminal           — launch the auto-detected terminal (see [keybindings] below; override with $TERMINAL)
+#   exec-launcher           — launch the auto-detected app launcher (see [keybindings] below; override with $LAUNCHER)
 #   spawn <cmd>             — run a command without loading cursor and exiting fullscreen (toggles, OSD, screenshots)
 #   close-window            — close the focused window
 #   nudge-window <dir>      — move focused window by nudge_step px
@@ -248,8 +250,8 @@
 # Directions: up, down, left, right, up-left, up-right, down-left, down-right
 
 [keybindings]
-# "mod+return" = "exec <detected terminal>"
-# "mod+d" = "exec <detected launcher>"
+# "mod+return" = "exec-terminal"   # $TERMINAL, else first of: foot, alacritty, ptyxis, kitty, wezterm, gnome-terminal, konsole
+# "mod+d" = "exec-launcher"        # $LAUNCHER, else first of: fuzzel, wofi, rofi, bemenu-run, wmenu-run, tofi-drun, mew-run
 # "mod+q" = "close-window"
 # "mod+e" = "toggle-cursor-pan"     # toggle cursor edge-pan (see [navigation.edge_pan])
 # "mod+f" = "toggle-fullscreen"
