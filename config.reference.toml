@@ -77,8 +77,8 @@
 # natural_scroll = false      # reverse scroll direction
 
 [cursor]
-# theme = "default"           # sets XCURSOR_THEME
-# size = 24                   # sets XCURSOR_SIZE
+# theme = "none"             # XCURSOR_THEME; "none" = inherit from environment (e.g. "Adwaita")
+# size = 0                    # XCURSOR_SIZE; 0 = inherit from environment (e.g. 24)
 # inactive_opacity = 0.5      # cursor opacity on non-active outputs (0.0–1.0)
 
 [navigation]
@@ -170,9 +170,9 @@
                                  # only refreshed when geometry/camera/static bg change)
 
 [background]
-# # Four background types: "shader", "tile", "wallpaper", "none". `path` is the source.
-# type = "shader"
-# path = "/usr/local/share/driftwm/wallpapers/dot_grid.glsl"
+# # Five types: "default" (built-in dot-grid — the default), "shader", "tile",
+# # "wallpaper", "none". For shader/tile/wallpaper, `path` is the source.
+# type = "default"
 # # Example:
 # # type = "shader" — procedural GLSL (scrolls with canvas)
 # # path = "/usr/local/share/driftwm/wallpapers/animated/fast_smoke.glsl"

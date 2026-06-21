@@ -45,7 +45,7 @@ impl Direction {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Exec(String),
     ExecTerminal,
@@ -248,7 +248,7 @@ pub struct MouseBinding {
     pub trigger: MouseTrigger,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum MouseAction {
     MoveWindow,
     /// Drag every window connected to the focused one via snap adjacency
@@ -303,14 +303,14 @@ pub enum ContinuousAction {
 }
 
 /// Actions for threshold gesture triggers (fire once after accumulation).
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ThresholdAction {
     CenterNearest,
     Fixed(Action),
 }
 
 /// Resolved at parse time from trigger + action combination.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum GestureConfigEntry {
     Continuous(ContinuousAction),
     Threshold(ThresholdAction),
@@ -318,6 +318,7 @@ pub enum GestureConfigEntry {
 
 // ── Context bindings container ───────────────────────────────────────
 
+#[derive(Debug, PartialEq)]
 pub struct ContextBindings<K: Eq + Hash, V> {
     pub on_window: HashMap<K, V>,
     pub on_canvas: HashMap<K, V>,
@@ -492,6 +493,18 @@ impl Pattern {
     }
 }
 
+// `regex::Regex` isn't `PartialEq`; compare by source so `Pattern` (hence
+// `WindowRule`/`Config`) can derive equality.
+impl PartialEq for Pattern {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Pattern::Glob(a), Pattern::Glob(b)) => a == b,
+            (Pattern::Regex(a), Pattern::Regex(b)) => a.as_str() == b.as_str(),
+            _ => false,
+        }
+    }
+}
+
 /// Simple glob match — `*` matches any sequence of characters (including empty).
 /// Multiple `*` wildcards are supported. Case-sensitive.
 pub fn glob_matches(pat: &str, val: &str) -> bool {
@@ -531,7 +544,7 @@ pub fn glob_matches(pat: &str, val: &str) -> bool {
 /// - `None`  — default; compositor handles everything.
 /// - `All`   — all keys forwarded (game/fullscreen-friendly).
 /// - `Only`  — only the listed combos are forwarded; all others stay active.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub enum PassKeys {
     #[default]
     None,
@@ -579,7 +592,7 @@ impl PassKeys {
 }
 
 /// Parsed window rule from config.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct WindowRule {
     // ── Match criteria (all that are Some must match) ─────────────────
     /// Wayland `app_id`. X11 apps proxied via xwayland-satellite arrive
@@ -897,7 +910,7 @@ impl DecorationConfig {
 }
 
 /// Settings for drawing outlines of other monitors' viewports.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OutputOutlineSettings {
     pub color: [u8; 4],
     pub thickness: i32,
@@ -915,7 +928,7 @@ impl Default for OutputOutlineSettings {
 }
 
 /// Per-output configuration from `[[outputs]]` config sections.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct OutputConfig {
     pub name: String,
     pub scale: Option<f64>,

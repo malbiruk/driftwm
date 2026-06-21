@@ -39,6 +39,7 @@ const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
     ("ELECTRON_OZONE_PLATFORM_HINT", "wayland"),
 ];
 
+#[derive(Debug, PartialEq)]
 pub struct Config {
     pub mod_key: ModKey,
     pub focus_follows_mouse: bool,
@@ -474,7 +475,8 @@ impl Config {
                     &mut errors,
                 ),
                 accel_profile,
-                click_method: t.click_method.clone(),
+                // `"none"` means "use the libinput device default", same as unset.
+                click_method: t.click_method.clone().filter(|m| m.as_str() != "none"),
                 disable_while_typing: t.disable_while_typing.unwrap_or(true),
             }
         };
@@ -619,14 +621,20 @@ impl Config {
             );
         }
 
+        // `"none"` (theme) and `0` (size) are explicit "inherit from the
+        // environment" sentinels — normalize them to unset so a config that
+        // spells out the default still round-trips to omitting the field.
+        let cursor_theme = raw.cursor.theme.filter(|t| t.as_str() != "none");
+        let cursor_size = raw.cursor.size.filter(|s| *s != 0);
+
         let mut child_env: HashMap<String, String> = TOOLKIT_DEFAULTS
             .iter()
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect();
-        if let Some(theme) = &raw.cursor.theme {
+        if let Some(theme) = &cursor_theme {
             child_env.insert("XCURSOR_THEME".into(), theme.clone());
         }
-        if let Some(size) = raw.cursor.size {
+        if let Some(size) = cursor_size {
             child_env.insert("XCURSOR_SIZE".into(), size.to_string());
         }
         for (k, v) in &raw.env {
@@ -719,8 +727,8 @@ impl Config {
                 .keyboard
                 .remember_layout_per_window
                 .unwrap_or(false),
-            cursor_theme: raw.cursor.theme,
-            cursor_size: raw.cursor.size,
+            cursor_theme,
+            cursor_size,
             inactive_cursor_opacity: clamp_warn(
                 raw.cursor.inactive_opacity.unwrap_or(0.5),
                 0.0,
@@ -900,6 +908,7 @@ fn resolve_background_kind(
             },
             ("tile", Some(p)) => BackgroundKind::Tile(expand_tilde(&p)),
             ("wallpaper", Some(p)) => BackgroundKind::Wallpaper(expand_tilde(&p)),
+            ("default", _) => BackgroundKind::Default,
             // `path` is inapplicable here and silently ignored — like `texture`
             // on the tile/wallpaper types. Not worth a persistent error-bar
             // warning, since the background renders exactly as asked (nothing).

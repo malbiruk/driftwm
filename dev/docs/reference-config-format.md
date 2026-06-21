@@ -62,3 +62,10 @@ For that to work the file follows a small, strict grammar. This is the contract.
   environment), so `[keybindings]` / `[mouse.*]` / `[gestures.*]` reconstruct to a
   fixed map. Runtime-detected values (terminal/launcher) are actions
   (`exec-terminal` / `exec-launcher`), not baked-in commands.
+- **Inherit sentinels.** A field whose real default is "unset / inherit from the
+  environment" still gets a concrete, uncomment-able default by spelling that
+  state explicitly and having the code normalize it back to unset: `theme = "none"`
+  / `size = 0` (cursor), `click_method = "none"` (trackpad), `type = "default"`
+  (background). These reconstruct to the same `Config` as omitting the field, so
+  they satisfy the reconstruction invariant — don't "correct" them to a literal
+  value.
