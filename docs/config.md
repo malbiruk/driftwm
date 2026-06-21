@@ -342,17 +342,17 @@ Default: `32.0`
 
 screen px past snap to break free
 
-### `same_edge`
+### `corners`
 
 Default: `false`
 
-also snap same edges (left-to-left, top-to-top)
+also align corners (parallel edges line up: top-to-top, left-to-left)
 
-### `edge_center`
+### `centers`
 
 Default: `false`
 
-also snap edge midpoints (centers align along the moved axis)
+also align centers (midpoints line up along the moved axis)
 
 ## `[decorations]`
 

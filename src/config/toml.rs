@@ -144,7 +144,13 @@ pub(super) struct SnapConfig {
     pub gap: Option<f64>,
     pub distance: Option<f64>,
     pub break_force: Option<f64>,
+    pub corners: Option<bool>,
+    pub centers: Option<bool>,
+    /// Renamed to `corners`; kept only so a stale value yields a migration
+    /// warning instead of failing the whole parse via `deny_unknown_fields`.
     pub same_edge: Option<bool>,
+    /// Renamed to `centers`; kept only so a stale value yields a migration
+    /// warning instead of failing the whole parse via `deny_unknown_fields`.
     pub edge_center: Option<bool>,
 }
 

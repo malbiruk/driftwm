@@ -90,8 +90,8 @@ pub struct Config {
     pub snap_gap: f64,
     pub snap_distance: f64,
     pub snap_break_force: f64,
-    pub snap_same_edge: bool,
-    pub snap_edge_center: bool,
+    pub snap_corners: bool,
+    pub snap_centers: bool,
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
     pub mouse_device: MouseDeviceSettings,
@@ -626,6 +626,12 @@ impl Config {
                 "config: [navigation] friction was renamed to drift — use 0 (off) to 1 (floatiest), default 0.5"
             );
         }
+        if raw.snap.same_edge.is_some() {
+            warn_and_collect!("config: [snap] same_edge was renamed to corners");
+        }
+        if raw.snap.edge_center.is_some() {
+            warn_and_collect!("config: [snap] edge_center was renamed to centers");
+        }
 
         // `"none"` (theme) and `0` (size) are explicit "inherit from the
         // environment" sentinels — normalize them to unset so a config that
@@ -717,8 +723,8 @@ impl Config {
                 "snap.break_force",
                 &mut errors,
             ),
-            snap_same_edge: raw.snap.same_edge.unwrap_or(false),
-            snap_edge_center: raw.snap.edge_center.unwrap_or(false),
+            snap_corners: raw.snap.corners.unwrap_or(false),
+            snap_centers: raw.snap.centers.unwrap_or(false),
             background,
             decorations,
             effects,
@@ -965,7 +971,7 @@ mod tests {
 
         const REFERENCE: &str = include_str!("../../config.reference.toml");
         // Deprecated, migration-only — intentionally undocumented.
-        const ALLOWLIST: &[&str] = &["navigation.friction"];
+        const ALLOWLIST: &[&str] = &["navigation.friction", "snap.same_edge", "snap.edge_center"];
 
         // Each `[a.b]` header is itself a documented path and sets the section
         // for the `key = …` lines under it (→ `a.b.key`).
@@ -976,7 +982,10 @@ mod tests {
                 let line = raw.trim_start();
                 let line = line.strip_prefix("# ").unwrap_or(line);
                 let line = line.strip_prefix("# ").unwrap_or(line).trim();
-                if line.starts_with('[') {
+                // A real header is a bracketed token with nothing trailing, so
+                // prose that merely opens with `[` isn't mistaken for a section
+                // (mirrors the single-token key guard below).
+                if line.starts_with('[') && line.ends_with(']') {
                     section = line
                         .trim_matches(|c: char| c == '[' || c == ']')
                         .trim()

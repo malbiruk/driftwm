@@ -280,7 +280,7 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                 data.config.snap_gap,
                 data.config.snap_distance,
                 data.config.snap_break_force,
-                data.config.snap_same_edge,
+                data.config.snap_corners,
             );
         }
 

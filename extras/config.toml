@@ -27,8 +27,8 @@ window_placement = "auto"
 QT_QPA_PLATFORMTHEME = "qt6ct"
 
 [snap]
-same_edge = true
-edge_center = true
+corners = true
+centers = true
 
 [input.keyboard]
 layout = "us,ru"
