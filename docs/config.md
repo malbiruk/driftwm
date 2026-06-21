@@ -552,6 +552,7 @@ Actions:
 - `fit-window-snapped` — fit-window for the focused window's whole snap cluster
 - `toggle-pin-to-screen` — pin/unpin the focused window to the screen (ignores pan/zoom, floats above)
 - `reload-config` — hot-reload config file
+- `toggle-cursor-pan` — toggle cursor edge-pan (see [navigation.edge_pan])
 - `quit` — exit the compositor
 - `send-to-output <dir>` — move focused window to adjacent output
 - `switch-layout <target>` — cycle keyboard layout: next, prev, or a 0-based index

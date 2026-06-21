@@ -83,3 +83,96 @@ fn reference_defaults_match_code_defaults() {
         debug_diff(&from_reference, &from_code)
     );
 }
+
+/// True for a `"combo" = "action"` line, distinguishing real bindings from
+/// prose that merely opens with a quoted word.
+fn is_binding_line(body: &str) -> bool {
+    let Some(rest) = body.strip_prefix('"') else {
+        return false;
+    };
+    let Some(close) = rest.find('"') else {
+        return false;
+    };
+    rest[close + 1..].trim_start().starts_with("= \"")
+}
+
+/// Every documented binding — active default or `# #` example — must parse
+/// without warnings, so a renamed or removed action lingering in an example
+/// surfaces here (a bad action is collected as a warning, not a hard error).
+#[test]
+fn reference_documented_bindings_parse() {
+    let mut by_section: BTreeMap<&str, String> = BTreeMap::new();
+    let mut section: Option<&str> = None;
+    for line in REFERENCE.lines() {
+        if line.starts_with('[') {
+            section = Some(line);
+            continue;
+        }
+        // Filters out prose that opens with a quoted word (`"wallpaper", "none"...`),
+        // which lacks the `= "` of a real binding's quoted LHS.
+        let body = line.trim_start_matches(['#', ' ']);
+        if is_binding_line(body)
+            && let Some(sec) = section
+        {
+            let buf = by_section.entry(sec).or_default();
+            buf.push_str(body);
+            buf.push('\n');
+        }
+    }
+
+    for (sec, body) in &by_section {
+        let toml = format!("{sec}\n{body}");
+        let (_, warnings) = Config::from_toml_collect(&toml).unwrap_or_else(|e| {
+            panic!("documented bindings under {sec} failed to parse: {e}\n\n{toml}")
+        });
+        assert!(
+            warnings.is_empty(),
+            "documented bindings under {sec} produced warnings:\n{warnings:#?}\n\n{toml}"
+        );
+    }
+}
+
+/// The TOML body of each `# # Example[: label]` block: `# #`-prefixed lines
+/// running until the next marker, a real blank line, an active default, or a
+/// section header.
+fn example_blocks(reference: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut current: Option<String> = None;
+    for line in reference.lines() {
+        let is_comment = line.starts_with("# #");
+        let is_marker = is_comment && line.trim_start_matches(['#', ' ']).starts_with("Example");
+        if is_marker {
+            blocks.extend(current.take());
+            current = Some(String::new());
+        } else if is_comment {
+            if let Some(b) = current.as_mut() {
+                let toml = line.strip_prefix("# #").unwrap();
+                b.push_str(toml.strip_prefix(' ').unwrap_or(toml));
+                b.push('\n');
+            }
+        } else {
+            blocks.extend(current.take());
+        }
+    }
+    blocks.extend(current.take());
+    blocks
+}
+
+/// Every `# # Example:` block that is a complete config fragment (declares
+/// `[[window_rules]]` or `[[outputs]]`) must parse without warnings, so the
+/// gnarliest snippets (globs, regex, pass_keys, output modes) can't silently
+/// drift into invalid config.
+#[test]
+fn reference_example_blocks_parse() {
+    for block in example_blocks(REFERENCE) {
+        if !block.contains("[[window_rules]]") && !block.contains("[[outputs]]") {
+            continue;
+        }
+        let (_, warnings) = Config::from_toml_collect(&block)
+            .unwrap_or_else(|e| panic!("example block failed to parse: {e}\n\n{block}"));
+        assert!(
+            warnings.is_empty(),
+            "example block produced warnings:\n{warnings:#?}\n\n{block}"
+        );
+    }
+}
