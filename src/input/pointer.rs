@@ -892,6 +892,7 @@ impl DriftWm {
             from_empty_canvas,
             dragged: false,
             output: self.active_output()?,
+            last_clamped_location: canvas_pos,
         })
     }
 }

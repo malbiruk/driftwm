@@ -7,8 +7,8 @@ use smithay::{
     utils::{Logical, Point, SERIAL_COUNTER},
 };
 
-use crate::state::{DriftWm, output_state};
-use driftwm::canvas::{CanvasPos, canvas_to_screen};
+use crate::state::{DriftWm, output_logical_size, output_state};
+use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
 
 /// Max squared screen-pixel distance for a press-release to count as a
 /// "click" (deselect) rather than a "drag" (pan). 5px → 25.
@@ -27,6 +27,9 @@ pub struct PanGrab {
     pub dragged: bool,
     /// Output this grab is pinned to; uses its camera/zoom throughout.
     pub output: Output,
+    /// Last cursor canvas position clamped to `output`'s bounds. Re-dispatched
+    /// when input routing momentarily crosses to another output mid-pan.
+    pub last_clamped_location: Point<f64, Logical>,
 }
 
 impl PointerGrab<DriftWm> for PanGrab {
@@ -37,11 +40,39 @@ impl PointerGrab<DriftWm> for PanGrab {
         _focus: Option<(<DriftWm as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
+        // If input routing crossed to another output mid-pan, event.location is
+        // expressed in that output's canvas frame; running it through this
+        // output's camera yields a bogus delta that runs the camera away. Snap
+        // the pointer back to the last in-bounds position and drop the event.
+        if data
+            .focused_output
+            .as_ref()
+            .is_some_and(|fo| *fo != self.output)
+        {
+            data.focused_output = Some(self.output.clone());
+            let clamped_event = MotionEvent {
+                location: self.last_clamped_location,
+                serial: event.serial,
+                time: event.time,
+            };
+            handle.motion(data, None, &clamped_event);
+            return;
+        }
+
         let (camera, zoom) = {
             let os = output_state(&self.output);
             (os.camera, os.zoom)
         };
-        let current_screen_pos = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
+
+        // Clamp the cursor to this output's bounds so a drag-pan stays anchored
+        // to the output it began on and can't wander onto a neighbour.
+        let output_size = output_logical_size(&self.output);
+        let screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
+        let current_screen_pos: Point<f64, Logical> = (
+            screen.x.clamp(0.0, output_size.w as f64 - 1.0),
+            screen.y.clamp(0.0, output_size.h as f64 - 1.0),
+        )
+            .into();
         let screen_delta = current_screen_pos - self.last_screen_pos;
 
         let mouse_speed = data.config.mouse_speed;
@@ -61,8 +92,11 @@ impl PointerGrab<DriftWm> for PanGrab {
         }
 
         // Shift pointer canvas position so the cursor stays at the same screen spot.
+        let location =
+            screen_to_canvas(ScreenPos(current_screen_pos), camera, zoom).0 + camera_delta;
+        self.last_clamped_location = location;
         let adjusted = MotionEvent {
-            location: event.location + camera_delta,
+            location,
             serial: event.serial,
             time: event.time,
         };
