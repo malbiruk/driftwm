@@ -72,8 +72,9 @@ pub struct Config {
     /// On close, pan the camera to the newly focused window (true). When false,
     /// focus only moves to an already-visible window — never off-screen.
     pub auto_navigate_on_close: bool,
-    /// Modifier held during window cycling. Release commits selection.
-    pub cycle_modifier: CycleModifier,
+    /// Modifiers held during Alt-Tab window cycling, derived from the
+    /// `cycle-windows forward` binding. Releasing them commits the selection.
+    pub cycle_hold: Modifiers,
     /// Zoom step multiplier per keypress. 1.1 = 10% per press.
     pub zoom_step: f64,
     /// Padding (viewport/screen pixels) around the bounding box for ZoomToFit.
@@ -303,15 +304,6 @@ impl Config {
             }
         };
 
-        let cycle_modifier = match raw.cycle_modifier.as_deref() {
-            Some("ctrl") => CycleModifier::Ctrl,
-            Some("alt") | None => CycleModifier::Alt,
-            Some(other) => {
-                warn_and_collect!("config: unknown cycle_modifier '{other}', using alt");
-                CycleModifier::Alt
-            }
-        };
-
         let window_placement = match raw.window_placement.as_deref() {
             Some("cursor") => WindowPlacement::Cursor,
             Some("auto") => WindowPlacement::Auto,
@@ -322,7 +314,7 @@ impl Config {
             }
         };
 
-        let mut bindings: HashMap<KeyCombo, Action> = default_bindings(mod_key, cycle_modifier)
+        let mut bindings: HashMap<KeyCombo, Action> = default_bindings(mod_key)
             .into_iter()
             .map(|(mut k, v)| {
                 k.normalize();
@@ -374,6 +366,20 @@ impl Config {
                 }
             }
         }
+
+        // The cycle "hold" modifier — released to commit an Alt-Tab cycle — is
+        // whatever `cycle-windows forward` is bound to, so rebinding the cycle
+        // key moves the hold modifier with it. Reading the forward binding (not
+        // backward) keeps the backward binding's extra shift out of the set.
+        let cycle_hold = bindings
+            .iter()
+            .find(|(_, action)| matches!(action, Action::CycleWindows { backward: false }))
+            .map(|(combo, _)| combo.modifiers.clone())
+            .filter(|m| !m.is_empty())
+            .unwrap_or(Modifiers {
+                alt: true,
+                ..Modifiers::EMPTY
+            });
 
         let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
         let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
@@ -690,7 +696,7 @@ impl Config {
             ),
             animation_speed,
             auto_navigate_on_close: raw.navigation.auto_navigate_on_close.unwrap_or(true),
-            cycle_modifier,
+            cycle_hold,
             zoom_step: non_negative(raw.zoom.step.unwrap_or(1.1), "zoom.step", &mut errors),
             zoom_fit_padding: non_negative(
                 raw.zoom.fit_padding.unwrap_or(80.0),
@@ -941,6 +947,99 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #1 of the reference-config contract (#2/#3 live in
+    /// `tests/config_reference_test.rs`): every config field the code defines is
+    /// documented in `config.reference.toml`. Serializing a defaulted
+    /// `ConfigFile` to JSON honors serde renames (`type`, `on-window`), and each
+    /// leaf's full dotted path (`cursor.theme`, `input.keyboard.repeat_rate`) is
+    /// matched under its section, so a field documented under the wrong section
+    /// is still caught.
+    ///
+    /// Not covered: the inner fields of `[[window_rules]]` / `[[outputs]]` —
+    /// those are documented in prose (`field — description`), not `key =` lines,
+    /// so there is nothing to match a dotted path against.
+    #[test]
+    fn every_config_field_is_documented() {
+        use std::collections::BTreeSet;
+
+        const REFERENCE: &str = include_str!("../../config.reference.toml");
+        // Deprecated, migration-only — intentionally undocumented.
+        const ALLOWLIST: &[&str] = &["navigation.friction"];
+
+        // Each `[a.b]` header is itself a documented path and sets the section
+        // for the `key = …` lines under it (→ `a.b.key`).
+        fn documented_paths(reference: &str) -> BTreeSet<String> {
+            let mut paths = BTreeSet::new();
+            let mut section = String::new();
+            for raw in reference.lines() {
+                let line = raw.trim_start();
+                let line = line.strip_prefix("# ").unwrap_or(line);
+                let line = line.strip_prefix("# ").unwrap_or(line).trim();
+                if line.starts_with('[') {
+                    section = line
+                        .trim_matches(|c: char| c == '[' || c == ']')
+                        .trim()
+                        .to_string();
+                    paths.insert(section.clone());
+                } else if let Some((key, _)) = line.split_once('=') {
+                    // A real config key is a single token; skip illustrative prose
+                    // with `=` (shell `export FOO=1`, GLSL `vec2 c = ...`).
+                    let key = key.trim().trim_matches('"');
+                    if !key.is_empty() && !key.contains(char::is_whitespace) {
+                        paths.insert(if section.is_empty() {
+                            key.to_string()
+                        } else {
+                            format!("{section}.{key}")
+                        });
+                    }
+                }
+            }
+            paths
+        }
+
+        // Dotted path of every leaf; an empty object counts as a leaf, not a
+        // section to recurse into.
+        fn collect_paths(value: &serde_json::Value, prefix: &str, out: &mut BTreeSet<String>) {
+            if let serde_json::Value::Object(map) = value {
+                for (key, child) in map {
+                    let path = if prefix.is_empty() {
+                        key.clone()
+                    } else {
+                        format!("{prefix}.{key}")
+                    };
+                    match child {
+                        serde_json::Value::Object(inner) if !inner.is_empty() => {
+                            collect_paths(child, &path, out)
+                        }
+                        _ => {
+                            out.insert(path);
+                        }
+                    }
+                }
+            }
+        }
+
+        // The one Option<table> that defaults to None — populate it so its
+        // fields are walked individually, not hidden behind a null.
+        let mut raw = ConfigFile::default();
+        raw.output.outline = Some(Default::default());
+        let default_json = serde_json::to_value(&raw).expect("ConfigFile should serialize");
+        let mut code_paths = BTreeSet::new();
+        collect_paths(&default_json, "", &mut code_paths);
+
+        let documented = documented_paths(REFERENCE);
+        let undocumented: Vec<&str> = code_paths
+            .iter()
+            .map(String::as_str)
+            .filter(|p| !documented.contains(*p) && !ALLOWLIST.contains(p))
+            .collect();
+
+        assert!(
+            undocumented.is_empty(),
+            "config fields defined in code but undocumented in config.reference.toml: {undocumented:?}"
+        );
+    }
 
     #[test]
     fn rejections_sort_before_clamps_for_error_bar() {

@@ -129,6 +129,15 @@ impl Modifiers {
             logo: self.logo || other.logo,
         }
     }
+
+    /// True if every modifier set in `self` is currently held in `state`. The
+    /// Alt-Tab cycle commits once its hold modifier is no longer all held.
+    pub fn all_held(&self, state: &ModifiersState) -> bool {
+        (!self.ctrl || state.ctrl)
+            && (!self.alt || state.alt)
+            && (!self.shift || state.shift)
+            && (!self.logo || state.logo)
+    }
 }
 
 /// Which physical key acts as the window-manager modifier.
@@ -173,35 +182,6 @@ impl ModKey {
         match self {
             ModKey::Alt => state.alt,
             ModKey::Super => state.logo,
-        }
-    }
-}
-
-/// Which modifier must be held during window cycling (Alt-Tab style).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CycleModifier {
-    Alt,
-    Ctrl,
-}
-
-impl CycleModifier {
-    pub fn is_pressed(self, state: &ModifiersState) -> bool {
-        match self {
-            CycleModifier::Alt => state.alt,
-            CycleModifier::Ctrl => state.ctrl,
-        }
-    }
-
-    pub(crate) fn base(self) -> Modifiers {
-        match self {
-            CycleModifier::Alt => Modifiers {
-                alt: true,
-                ..Modifiers::EMPTY
-            },
-            CycleModifier::Ctrl => Modifiers {
-                ctrl: true,
-                ..Modifiers::EMPTY
-            },
         }
     }
 }

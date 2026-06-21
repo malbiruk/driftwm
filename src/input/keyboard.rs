@@ -85,9 +85,7 @@ impl DriftWm {
                     state.pending_tap_action = Some(action.clone());
                 }
 
-                // If cycling is active and the cycle modifier was released, end cycle
-                if state.cycle_state.is_some() && !state.config.cycle_modifier.is_pressed(modifiers)
-                {
+                if state.cycle_state.is_some() && !state.config.cycle_hold.all_held(modifiers) {
                     state.end_cycle();
                     return FilterResult::Forward;
                 }

@@ -1,6 +1,6 @@
 use driftwm::config::{
     Action, BTN_RIGHT, BackgroundKind, BindingContext, Config, ContinuousAction,
-    GestureConfigEntry, GestureTrigger, MouseAction,
+    GestureConfigEntry, GestureTrigger, Modifiers, MouseAction,
 };
 use smithay::backend::input::AxisSource;
 use smithay::input::keyboard::{Keysym, ModifiersState, keysyms};
@@ -23,10 +23,6 @@ fn logo() -> ModifiersState {
 
 fn alt() -> ModifiersState {
     mods(true, false, false, false)
-}
-
-fn ctrl() -> ModifiersState {
-    mods(false, true, false, false)
 }
 
 // ── TOML round-trip integration tests ─────────────────────────────────────
@@ -335,19 +331,32 @@ fn toml_deny_unknown_fields() {
 }
 
 #[test]
-fn toml_cycle_modifier_ctrl() {
-    let config = Config::from_toml("cycle_modifier = \"ctrl\"").unwrap();
-    // Cycle bindings should now use Ctrl
-    let result = config.lookup(&ctrl(), Keysym::from(keysyms::KEY_Tab));
-    assert!(
-        matches!(result, Some(Action::CycleWindows { backward: false })),
-        "cycle_modifier=ctrl should bind Ctrl+Tab"
+fn cycle_hold_modifier_follows_forward_binding() {
+    // Default Alt+Tab cycling → the hold modifier (released to commit) is Alt.
+    let config = Config::from_toml("").unwrap();
+    assert_eq!(
+        config.cycle_hold,
+        Modifiers {
+            alt: true,
+            ..Modifiers::EMPTY
+        }
     );
-    // Alt+Tab should no longer be bound for cycling
-    let result = config.lookup(&alt(), Keysym::from(keysyms::KEY_Tab));
-    assert!(
-        result.is_none(),
-        "Alt+Tab should not be bound when cycle_modifier=ctrl"
+
+    // Rebinding cycle-windows forward moves the hold modifier with it — any
+    // modifier works now, not just alt/ctrl. (Unbind the default so there's a
+    // single forward binding.)
+    let toml = r#"
+        [keybindings]
+        "alt+tab" = "none"
+        "super+grave" = "cycle-windows forward"
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert_eq!(
+        config.cycle_hold,
+        Modifiers {
+            logo: true,
+            ..Modifiers::EMPTY
+        }
     );
 }
 

@@ -4,10 +4,7 @@ use smithay::input::keyboard::{Keysym, keysyms};
 
 use super::types::*;
 
-pub(super) fn default_bindings(
-    mod_key: ModKey,
-    cycle_mod: CycleModifier,
-) -> HashMap<KeyCombo, Action> {
+pub(super) fn default_bindings(mod_key: ModKey) -> HashMap<KeyCombo, Action> {
     let m = mod_key.base();
     let m_shift = Modifiers {
         shift: true,
@@ -17,7 +14,12 @@ pub(super) fn default_bindings(
         ctrl: true,
         ..m.clone()
     };
-    let cyc = cycle_mod.base();
+    // The hold modifier follows whatever the user binds `cycle-windows forward`
+    // to (see `Config::cycle_hold`); this default matches that binding's default.
+    let cyc = Modifiers {
+        alt: true,
+        ..Modifiers::EMPTY
+    };
     let cyc_shift = Modifiers {
         shift: true,
         ..cyc.clone()
