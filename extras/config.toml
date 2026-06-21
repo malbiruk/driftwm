@@ -24,10 +24,12 @@ focus_follows_mouse = true
 # Place a new window adjacent to the focused window's cluster.
 window_placement = "auto"
 
-# Background defaults to the dot-grid shader. To set a wallpaper instead:
-# [background]
-# type = "wallpaper"   # screen-fixed image (cheapest); or "tile" / "shader"
-# path = "~/Pictures/wallpaper.jpg"
+# A soft procedural backdrop that scrolls with the canvas (cached, so panning
+# stays cheap). Bundled with driftwm; swap the path for any other shader under
+# share/driftwm/wallpapers/, or point at your own image with type = "tile".
+[background]
+type = "shader"
+path = "/usr/local/share/driftwm/wallpapers/static/pink_cloud.glsl"
 
 [snap]
 corners = true
@@ -41,12 +43,10 @@ decoration_resize_snapped = true
 decoration_fit_snapped = true
 
 [decorations]
-# Borders over shadows: a soft shadow is low-contrast on the dark grid, where a
-# crisp border reads more clearly.
-shadow = false
-border_width = 2
-border_color = "#303030"          # unfocused: subtle, matches the title bar
-border_color_focused = "#ffffff"  # focused: pops against the dark grid
+# Light SSD title bars to match light apps; the shell chrome (dashboard,
+# launcher) is a separate dark layer.
+bg_color = "#ffffff"
+fg_color = "#333333"
 
 # Multiple layouts make the dashboard's layout indicator meaningful. Example:
 # [input.keyboard]
@@ -78,6 +78,19 @@ border_color_focused = "#ffffff"  # focused: pops against the dark grid
 app_id = "drift-dashboard"
 position = [0, 0]
 widget = true
-# No compositor chrome — the dashboard draws its own cards, and the transparent
-# gaps between them let the canvas show through.
 decoration = "none"
+
+# Frost the transient shell overlays: their themes are translucent, so the
+# compositor blurs the canvas behind them. (The dashboard stays solid — it's
+# always on screen, where blur would be a constant cost.)
+[[window_rules]]
+app_id = "swaync-control-center"
+blur = true
+
+[[window_rules]]
+app_id = "swaync-notification-window"
+blur = true
+
+[[window_rules]]
+app_id = "launcher"
+blur = true

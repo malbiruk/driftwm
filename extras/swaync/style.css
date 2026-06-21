@@ -1,0 +1,8 @@
+/* swaync's default style, but square just the outer control-center panel corners;
+   everything inside keeps its default rounding. The default is already dark and
+   translucent, so the compositor blur shows through it as-is. */
+@import url("file:///etc/xdg/swaync/style.css");
+
+.control-center {
+  border-radius: 0;
+}

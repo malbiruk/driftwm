@@ -36,6 +36,21 @@ if [ -d "$src/astal" ]; then
     cp -r -- "$src/astal" "$cfg/astal"
 fi
 
+# Fuzzel + swaync themes matching the dashboard. These live in their own config
+# dirs, so they're copied (and backed up) separately from the driftwm dir.
+install_themed() {
+    [ -f "$src/$1" ] || return 0
+    dir="${XDG_CONFIG_HOME:-$HOME/.config}/$2"
+    mkdir -p "$dir"
+    if [ -e "$dir/$3" ]; then
+        mv -- "$dir/$3" "$dir/$3.$ts.bak"
+        echo "backed up existing $2/$3 -> $3.$ts.bak"
+    fi
+    cp -- "$src/$1" "$dir/$3"
+}
+install_themed fuzzel/fuzzel.ini fuzzel fuzzel.ini
+install_themed swaync/style.css swaync style.css
+
 echo "installed driftwm rice -> $cfg"
 
 # The rice still runs without these — missing pieces just no-op — but warn so the
