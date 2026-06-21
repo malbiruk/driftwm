@@ -253,7 +253,10 @@ fn toml_snap_renamed_keys_are_migration_errors_not_fatal() {
     "#;
     let (config, warnings) =
         Config::from_toml_collect(toml).expect("renamed snap keys should not fail the parse");
-    assert_eq!(config.snap_gap, 20.0, "rest of the config should still apply");
+    assert_eq!(
+        config.snap_gap, 20.0,
+        "rest of the config should still apply"
+    );
     assert!(
         !config.snap_corners && !config.snap_centers,
         "corners/centers fall back to default (off)"
