@@ -12,6 +12,7 @@
 # # For bindings, use `= "none"` to remove a default entirely.
 # # Validate with: driftwm --check-config
 
+# ## General
 # # Window manager modifier key: "super" (default) or "alt"
 # mod_key = "super"
 
@@ -20,7 +21,7 @@
 # focus_follows_mouse = false
 
 # # Where new windows spawn when no window rule positions them:
-# #   "center" (default) — viewport center; camera animates to the new window.
+# #   "center"  — viewport center; camera animates to the new window.
 # #   "cursor"           — centered on the cursor (clamped to the active output's
 # #                        usable area); camera stays put unless zoomed out and
 # #                        zoom.reset_on_new_window is true.
@@ -142,17 +143,14 @@
                                  # centers short titles and left-aligns +
                                  # ellipsizes long ones
 
-# default_mode = "client"        # decoration mode for windows without a rule.
-                                 # "client":  CSD — client draws its own titlebar (default)
-                                 # "minimal": SSD — no titlebar; shadow, corners, and border
-                                 #            still apply via [decorations] + per-window rules
-                                 # "none":    bare client surface — compositor adds zero chrome;
-                                 #            per-window border/corner/shadow rules are ignored
-                                 #
-                                 # "server" (driftwm titlebar) is intentionally not allowed as a
-                                 # global default: many toolkits (GTK, Electron) ignore
-                                 # xdg-decoration and keep drawing CSD, producing a misaligned
-                                 # double titlebar. Use it per-app via [[window_rules]] instead.
+# # Decoration mode for windows without a rule:
+# #   "client"  — CSD: client draws its own titlebar (default)
+# #   "minimal" — SSD: no titlebar; shadow, corners, and border still apply via [decorations] + per-window rules
+# #   "none"    — bare client surface: compositor adds zero chrome; per-window border/corner/shadow rules are ignored
+# # "server" (driftwm titlebar) is intentionally not allowed as a global default: many toolkits (GTK, Electron)
+# # ignore xdg-decoration and keep drawing CSD, producing a misaligned double titlebar. Use it per-app via
+# # [[window_rules]] instead.
+# default_mode = "client"
 
 # # Borders apply to "client", "server", and "minimal" modes. "none" mode has
 # # no border unless one is set per-app in [[window_rules]].
@@ -186,36 +184,34 @@
 # # type = "none" — render no built-in background (path ignored), so a
 # #   wlr-layer-shell wallpaper daemon (swaybg, swww, mpvpaper for live video)
 # #   is the wallpaper. Launch it yourself; see docs/shaders.md.
-# #
+
 # # A "shader" can also sample an image via `texture` (bound to the shader's
 # # `tex` sampler) — a procedural effect *on* your image. See docs/shaders.md.
 # # Example: shader sampling an image
 # # type = "shader"
 # # path = "/usr/local/share/driftwm/wallpapers/textured/ripple.glsl"
 # # texture = "~/Pictures/Wallpapers/photo.jpg"
-# #
+
+# # Bake a heavy static shader to a texture once, then pan that — so it pans as
+# # cheaply as an image instead of recomputing every frame.
+# # ONLY correct for shaders that slide rigidly with the camera: u_camera used
+# # once, at full scale, as the only camera term. In GLSL:
+# #     vec2 canvas = v_coords * size + u_camera;   // pan shifts the image 1:1
+# # Parallax (u_camera * factor) renders WRONG; animated (u_time) and
+# # zoom-dependent (u_zoom) shaders are never cached and render live.
 # cache_shader = false
-# #   Bake a heavy static shader to a texture once, then pan that — so it pans as
-# #   cheaply as an image instead of recomputing every frame.
-# #   ONLY correct for shaders that slide rigidly with the camera: u_camera used
-# #   once, at full scale, as the only camera term. In GLSL:
-# #       vec2 canvas = v_coords * size + u_camera;   // pan shifts the image 1:1
-# #   Parallax (u_camera * factor) renders WRONG; animated (u_time) and
-# #   zoom-dependent (u_zoom) shaders are never cached and render live.
-# #
+# # Honor a shader's output alpha so transparent pixels reveal whatever sits
+# # below the background — e.g. a wlr-layer-shell Background surface from an
+# # external wallpaper engine. Forces the shader onto the live path, so
+# # cache_shader has no effect while this is on. Image backgrounds ignore it:
+# # tile/wallpaper PNGs with an alpha channel become see-through automatically.
+# # See docs/shaders.md.
 # transparent_shader = false
-# #   Honor a shader's output alpha so transparent pixels reveal whatever sits
-# #   below the background — e.g. a wlr-layer-shell Background surface from an
-# #   external wallpaper engine. Forces the shader onto the live path, so
-# #   cache_shader has no effect while this is on. Image backgrounds ignore it:
-# #   tile/wallpaper PNGs with an alpha channel become see-through automatically.
-# #   See docs/shaders.md.
-# #
+# # Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers,
+# # with LRU eviction. Raise it for sharper revisits on large / HiDPI displays;
+# # lower it on memory-constrained machines (too low just keeps the background
+# # blurrier).
 # cache_budget_mb = 128
-# #   Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers,
-# #   with LRU eviction. Raise it for sharper revisits on large / HiDPI displays;
-# #   lower it on memory-constrained machines (too low just keeps the background
-# #   blurrier).
 
 [keybindings]
 # # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
@@ -462,6 +458,7 @@
 # thickness = 1               # pixels (0 to disable)
 # opacity = 0.5               # 0.0–1.0
 
+# ## Outputs
 # # Per-output configuration. Each [[outputs]] entry matches by connector name.
 # # Find connector names with wlr-randr or check driftwm logs at startup.
 # # Outputs without a matching entry default to scale 1.0.
@@ -480,6 +477,7 @@
 # # scale = 1.0
 # # mode = "1920x1080@60"
 
+# ## Window rules
 # # Window rules: match windows and apply per-window overrides.
 # # ALL matching rules are merged in config order (later rules override earlier
 # # ones for scalar fields; boolean flags are sticky-on). This lets you compose
@@ -496,7 +494,7 @@
 # #   Regex         — wrap in /…/: "/^steam_app_\\d+$/"
 # #
 # # To find a window's identifiers, run while the window is open:
-# #   cat $XDG_RUNTIME_DIR/driftwm/state   (see the "windows=" line)
+# #   `driftwm msg state`
 # #
 # # Effect fields:
 # #   position   — [x, y] coordinates (window center, Y-up). Canvas coords, or
@@ -532,56 +530,52 @@
 # #   shadow               — per-window shadow toggle. Overrides [decorations]
 # #                          shadow. Ignored for decoration = "none".
 # #   pass_keys  — controls which compositor keybindings are forwarded to the app:
-# #                  pass_keys = true           → forward ALL keys (game-friendly)
-# #                  pass_keys = ["mod+q",      → forward ONLY these combos; all other
-# #                               "ctrl+q"]       compositor shortcuts stay active
-# #                  pass_keys = false / omit   → compositor handles everything (default)
-# #                VT switching (Ctrl+Alt+F1–F12) always stays in the compositor.
+# #                  pass_keys = true — forward ALL keys (game-friendly)
+# #                  pass_keys = ["mod+q", "ctrl+q"] — forward ONLY these combos; all other compositor shortcuts stay active
+# #                  pass_keys = false / omit — compositor handles everything (default)
+# #                  VT switching (Ctrl+Alt+F1–F12) — always stays in the compositor
 # #
 # # Layer-shell surfaces (panels, notifications, bars like waybar):
-# #   `decoration` is ignored — layers have no decoration mode. Chrome
-# #   (border_width, corner_radius, shadow) is field-by-field opt-in on the rule
-# #   and does NOT inherit from [decorations]. Without explicit values on the
-# #   rule, a layer surface has no border, no shadow, and no corner clip.
+# # `decoration` is ignored — layers have no decoration mode. Chrome
+# # (border_width, corner_radius, shadow) is field-by-field opt-in on the rule
+# # and does NOT inherit from [decorations]. Without explicit values on the
+# # rule, a layer surface has no border, no shadow, and no corner clip.
 # #
-# # Example:
-# #
-# # Desktop widget (pinned clock/calendar)
+# # Example: Desktop widget (pinned clock/calendar)
 # # [[window_rules]]
 # # app_id     = "my-widget"
 # # position   = [0, 0]
 # # widget     = true
 # # decoration = "none"
 # #
-# # Picture-in-Picture: pinned to the screen, stays put while you pan/zoom.
-# # Movable/resizable; drop `position` to center it on the active output.
+# # Example: Picture-in-Picture, pinned to the screen, stays put while you pan/zoom
 # # [[window_rules]]
 # # title            = "Picture-in-Picture"
 # # pinned_to_screen = true
-# # position         = [0, -300]   # output-relative: 300px below center
+# # position         = [0, -300]   # output-relative: 300px below center; movable, drop to center on the output
 # #
-# # Blurred transparent terminal
+# # Example: Blurred transparent terminal
 # # [[window_rules]]
 # # app_id  = "kitty"
 # # opacity = 0.85
 # # blur    = true
 # #
-# # Game: pass ALL keys to the app (mod+q, ctrl+q etc. reach the game)
+# # Example: Game, pass ALL keys to the app (mod+q, ctrl+q etc. reach the game)
 # # [[window_rules]]
 # # app_id    = "steam_app_*"
 # # pass_keys = true
 # #
-# # Game: only let ctrl+q through, keep everything else (mod+q still closes)
+# # Example: Game, only let ctrl+q through, keep everything else (mod+q still closes)
 # # [[window_rules]]
 # # app_id    = "factorio"
 # # pass_keys = ["ctrl+q"]
 # #
-# # Regex match: any Steam game app
+# # Example: Regex match, any Steam game app
 # # [[window_rules]]
 # # app_id    = "/^steam_app_\\d+$/"
 # # pass_keys = true
 # #
-# # Compose rules: blur from first rule, opacity from second (both apply)
+# # Example: Compose rules, blur from first rule, opacity from second (both apply)
 # # [[window_rules]]
 # # app_id = "Alacritty"
 # # blur   = true
@@ -590,7 +584,7 @@
 # # app_id  = "Alacritty"
 # # opacity = 0.9
 # #
-# # Iced/libcosmic utility windows that share the main window's app_id
+# # Example: Iced/libcosmic utility windows that share the main window's app_id
 # # [[window_rules]]
 # # title  = "winit window"
 # # widget = true

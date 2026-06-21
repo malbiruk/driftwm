@@ -18,6 +18,7 @@ For that to work the file follows a small, strict grammar. This is the contract.
 | `# key = value  # note`                   | Inline gloss — the default's terse description.                                                          |
 | `<spaces># …` (leading whitespace)        | Gloss **continuation** — wraps the inline gloss above it, aligned under its `#`.                         |
 | `# # …`                                   | **Description** prose — describes the section (right after the header) or the default(s) that follow it. |
+| `# ## <text>` / `# ### <text>`            | **Doc heading** — a markdown heading in the generated page. TOML- and test-invisible (it's `# #` prose). |
 | `# # Example:` / `# # Example: <label>`   | Start of an **example** block.                                                                           |
 | `# # …` after a marker                    | Example **body** — rendered verbatim, never TOML-parsed.                                                 |
 | blank line (no `#`)                       | Hard separator between units.                                                                            |
@@ -50,7 +51,16 @@ For that to work the file follows a small, strict grammar. This is the contract.
 5. **Header-less doc blocks.** Arrays-of-tables with no scalar defaults
    (`[[outputs]]`, `[[window_rules]]`) have no `[section]` header — they exist
    only in examples. They are documented as a standalone `# #` prose +
-   `# # Example:` block and rendered as their own doc sections.
+   `# # Example:` block, introduced by a `# ## <title>` doc heading (since there
+   is no `[section]` line for the generator to title them from), and rendered as
+   their own doc sections.
+
+6. **Doc headings.** A `# ## <text>` (or `# ### <text>`) line is a markdown
+   heading emitted into the generated docs page only. It is `# #` prose, so TOML
+   never sees it and the reconstruction tests skip it. Use it to title the
+   header-less doc blocks; a real `[[outputs]]` / `[[window_rules]]` header can't
+   serve that role because an empty one would spawn a phantom output/rule when
+   the file is copied.
 
 ## Invariants
 

@@ -352,9 +352,10 @@ Validate without starting: `driftwm --check-config`.
 autostart = ["waybar", "swaync", "swayosd-server"]
 ```
 
-See [`config.reference.toml`](config.reference.toml) for all options: input
-settings, scroll/momentum tuning, snap behavior, decorations, effects,
-per-output config, gesture bindings, mouse bindings, and window rules.
+Every option is documented in **[docs/config.md](docs/config.md)** (generated
+from [`config.reference.toml`](config.reference.toml)): input settings,
+scroll/momentum tuning, snap behavior, decorations, effects, per-output config,
+gesture bindings, mouse bindings, and window rules.
 
 ## Example setup
 
