@@ -248,6 +248,48 @@ in
 }
 ```
 
+A **Home Manager** module is included for declarative configuration. Add it to
+your Home Manager config:
+
+```nix
+{
+  imports = [ inputs.driftwm.homeManagerModules.driftwm ];
+
+  programs.driftwm = {
+    enable = true;
+    # Only set values you want to change from defaults.
+    # Every field is optional — omitted fields use driftwm's built-in defaults.
+
+    modKey = "alt";
+    windowPlacement = "auto";
+
+    input.keyboard = {
+      layout = "us,ru";
+      options = "grp:win_space_toggle";
+    };
+
+    decorations = {
+      borderWidth = 2;
+      borderColorFocused = "#5294e2";
+    };
+
+    keybindings = {
+      "mod+return"    = "exec foot";
+      "mod+q"         = "close-window";
+      "XF86AudioMute" = "spawn wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle";
+    };
+
+    windowRules = [
+      { appId = "Alacritty"; opacity = 0.85; blur = true; }
+      { appId = "steam_app_*"; passKeys = true; }
+    ];
+  };
+}
+```
+
+This generates `~/.config/driftwm/config.toml` automatically. See
+[`nix/hm-module.nix`](nix/hm-module.nix) for all available options.
+
 ### Build from source
 
 Requires Rust 1.88+ (edition 2024).
