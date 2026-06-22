@@ -68,6 +68,7 @@ pub enum Action {
     FitWindow,
     FitWindowSnapped,
     SendToOutput(Direction),
+    SendCursorToOutput(Direction),
     FocusCenter,
     TogglePinToScreen,
     SwitchLayout(LayoutSwitch),

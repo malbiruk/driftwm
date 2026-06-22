@@ -162,6 +162,10 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let dir = parse_direction(arg.ok_or("send-to-output requires a direction")?)?;
             Ok(Action::SendToOutput(dir))
         }
+        "send-cursor-to-output" => {
+            let dir = parse_direction(arg.ok_or("send-cursor-to-output requires a direction")?)?;
+            Ok(Action::SendCursorToOutput(dir))
+        }
         "switch-layout" => {
             let arg = arg.ok_or("switch-layout requires next, prev, or a layout index")?;
             let target = match arg.trim().to_lowercase().as_str() {
@@ -325,6 +329,7 @@ fn parse_threshold_action(s: &str) -> Result<Option<ThresholdAction>, String> {
         s if s.starts_with("exec ")
             || s.starts_with("spawn ")
             || s.starts_with("send-to-output ")
+            || s.starts_with("send-cursor-to-output ")
             || s.starts_with("switch-layout ") =>
         {
             let action = parse_action(s)?;
