@@ -539,6 +539,7 @@ pub fn compose_frame(
     // layer, and the cursor render; everything beneath is culled below. Pinned
     // windows count as top-tier toplevels and get covered like the top layer.
     let fullscreen_window = state.fullscreen.get(output).map(|fs| fs.window.clone());
+    let mut did_init_bg = false;
     if output_fullscreen {
         // Fullscreen fully occludes the canvas: free its chunk caches and skip
         // the background. Maximize is NOT fullscreen, so it keeps its background.
@@ -549,6 +550,7 @@ pub fn compose_frame(
     {
         let output_size = crate::state::output_logical_size(output);
         init_background(state, renderer, output_size, &name);
+        did_init_bg = true;
     }
 
     // Read per-output state directly — active_output() follows the pointer,
@@ -557,6 +559,22 @@ pub fn compose_frame(
         let os = crate::state::output_state(output);
         (os.camera, os.zoom)
     };
+
+    // A just-re-created `cached_bg` carries placeholder camera=(0,0)/zoom=1.0
+    // (see `init_background`), so without this it renders one frame at the wrong
+    // offset. NaN "last" values force the uniform push (same sentinel as
+    // `OutputState`'s initial values). No-op for the chunk caches, which derive
+    // geometry from the live camera each frame.
+    if did_init_bg {
+        update_background_element(
+            state,
+            output,
+            camera,
+            zoom,
+            Point::from((f64::NAN, f64::NAN)),
+            f64::NAN,
+        );
+    }
 
     let viewport_size = crate::state::output_logical_size(output);
     let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom);
