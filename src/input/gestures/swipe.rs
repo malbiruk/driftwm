@@ -414,7 +414,7 @@ impl DriftWm {
             return;
         }
         let serial = SERIAL_COUNTER.next_serial();
-        self.space.raise_element(&window, true);
+        self.raise_with_children(&window);
         let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
@@ -471,7 +471,7 @@ impl DriftWm {
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
-        self.space.raise_element(&window, true);
+        self.raise_with_children(&window);
         self.set_window_focus(Some(FocusTarget(wl_surface.clone())), serial);
         self.enforce_below_windows();
 

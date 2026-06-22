@@ -647,19 +647,23 @@ impl DriftWm {
             self.space.raise_element(&w, false);
         }
 
-        // Raise children after parents so nested hierarchies stack correctly.
-        let parented: Vec<Window> = self
-            .space
-            .elements()
-            .filter(|w| w.parent_surface().is_some())
-            .cloned()
-            .collect();
-        for child in parented {
-            self.space.raise_element(&child, false);
-        }
-
         for fs in self.fullscreen.values() {
             self.space.raise_element(&fs.window, false);
+        }
+    }
+
+    /// Raise `window`, then its child windows, so a child/modal dialog stays
+    /// directly above its own parent without jumping over unrelated windows
+    /// that sit higher in the stack.
+    pub fn raise_with_children(&mut self, window: &Window) {
+        let stack: Vec<Window> = self.space.elements().cloned().collect();
+        let order = subtree_raise_order(&stack, window, |child, parent| {
+            parent
+                .wl_surface()
+                .is_some_and(|s| child.parent_surface().as_ref() == Some(&*s))
+        });
+        for w in &order {
+            self.space.raise_element(w, true);
         }
     }
 
@@ -732,7 +736,7 @@ impl DriftWm {
 
     /// Raise a window and focus it (or its innermost modal child).
     pub fn raise_and_focus(&mut self, window: &Window, serial: smithay::utils::Serial) {
-        self.space.raise_element(window, true);
+        self.raise_with_children(window);
         self.enforce_below_windows();
 
         let focus_surface = self
@@ -1803,6 +1807,29 @@ impl DriftWm {
     }
 }
 
+/// Order in which to raise `target` and its descendants so each child ends up
+/// directly above its own parent: `target` first, then descendants breadth-first,
+/// leaving unrelated windows below the subtree untouched. `is_child(a, b)` reports
+/// whether `a`'s parent is `b`. Already-visited windows are skipped, so cyclic
+/// parent links still terminate.
+fn subtree_raise_order<T>(stack: &[T], target: &T, is_child: impl Fn(&T, &T) -> bool) -> Vec<T>
+where
+    T: Clone + PartialEq,
+{
+    let mut order = vec![target.clone()];
+    let mut i = 0;
+    while i < order.len() {
+        let parent = order[i].clone();
+        for w in stack {
+            if !order.contains(w) && is_child(w, &parent) {
+                order.push(w.clone());
+            }
+        }
+        i += 1;
+    }
+    order
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1831,6 +1858,46 @@ mod tests {
             home_return: None,
             frame_callback_sequence: 0,
         }
+    }
+
+    #[derive(Clone, PartialEq, Debug)]
+    struct StackWin {
+        id: u32,
+        parent: Option<u32>,
+    }
+
+    fn win(id: u32, parent: Option<u32>) -> StackWin {
+        StackWin { id, parent }
+    }
+
+    fn raise(stack: &[StackWin], target: u32) -> Vec<u32> {
+        let target = stack.iter().find(|w| w.id == target).unwrap();
+        subtree_raise_order(stack, target, |c, p| c.parent == Some(p.id))
+            .iter()
+            .map(|w| w.id)
+            .collect()
+    }
+
+    #[test]
+    fn raise_lifts_only_own_children() {
+        // 0 has child 1; 2 is unrelated.
+        let stack = [win(0, None), win(1, Some(0)), win(2, None)];
+        assert_eq!(raise(&stack, 0), vec![0, 1]);
+        assert_eq!(raise(&stack, 2), vec![2]);
+    }
+
+    #[test]
+    fn raise_follows_nested_modal_chain() {
+        // 0 -> 1 -> 2 (dialog of a dialog), plus unrelated 3.
+        let stack = [win(0, None), win(1, Some(0)), win(2, Some(1)), win(3, None)];
+        assert_eq!(raise(&stack, 0), vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn raise_terminates_on_cyclic_parents() {
+        // 0 and 1 claim each other as parent; must not loop forever.
+        let stack = [win(0, Some(1)), win(1, Some(0))];
+        assert_eq!(raise(&stack, 0), vec![0, 1]);
     }
 
     #[test]

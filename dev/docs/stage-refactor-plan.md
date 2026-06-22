@@ -147,6 +147,7 @@ The list to assert after every op. Start with these; add as bugs surface.
 - A fullscreen window's saved pre-fullscreen geometry is non-zero.
 - A fit window's saved pre-fit size is non-zero.
 - Z-order has no duplicates and contains exactly the window-list set.
+- Every child window is stacked above its own parent, and a child is never above a window unrelated to its parent chain (guards the #153 modal-dialog regression).
 - The focused window (if any) is in the window list.
 - A closed window appears nowhere: not in `focus_history`, `cycle_state` target, `fullscreen`, fit state, or z-order.
 - For every window in `Stage`, there is exactly one entry in the `decorations` HashMap (key parity, checked at end-of-tick).
