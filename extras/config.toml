@@ -52,6 +52,7 @@ fg_color = "#333333"
 # [input.keyboard]
 # layout = "us,ru"
 # options = "grp:caps_toggle,grp_led:caps"
+# remember_layout_per_window = true
 
 [keybindings]
 "mod+n" = "spawn swaync-client -t"
@@ -93,4 +94,8 @@ blur = true
 
 [[window_rules]]
 app_id = "launcher"
+blur = true
+
+[[window_rules]]
+app_id = "swayosd"
 blur = true
