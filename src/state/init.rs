@@ -354,6 +354,7 @@ impl DriftWm {
             last_titlebar_click: None,
             errors: init_errors,
             cursor_edge_pan: edge_pan_cursor,
+            cursor_edge_pan_zone_entered_at: None,
         }
     }
 }
