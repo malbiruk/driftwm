@@ -182,6 +182,38 @@ Default: `false`
 
 reverse scroll direction
 
+## `[input.touch]`
+
+### `enable`
+
+Default: `true`
+
+enable touchscreen support
+
+### `enable_canvas_gestures`
+
+Default: `true`
+
+enable 1-finger drag pan and 2-finger pinch zoom on empty canvas
+
+### `zoom_speed`
+
+Default: `1.0`
+
+touchscreen gesture zoom speed multiplier
+
+### `pan_speed`
+
+Default: `1.0`
+
+touchscreen gesture pan speed multiplier
+
+### `touch_to_focus`
+
+Default: `true`
+
+focus and raise a window when touching it
+
 ## `[cursor]`
 
 ### `theme`
