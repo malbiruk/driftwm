@@ -52,6 +52,17 @@ pub(super) struct InputConfig {
     pub keyboard: KeyboardConfig,
     pub trackpad: TrackpadConfig,
     pub mouse: MouseDeviceFileConfig,
+    pub touch: TouchDeviceFileConfig,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct TouchDeviceFileConfig {
+    pub enable: Option<bool>,
+    pub enable_canvas_gestures: Option<bool>,
+    pub zoom_speed: Option<f64>,
+    pub pan_speed: Option<f64>,
+    pub touch_to_focus: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

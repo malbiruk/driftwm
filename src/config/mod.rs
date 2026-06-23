@@ -95,6 +95,7 @@ pub struct Config {
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
     pub mouse_device: MouseDeviceSettings,
+    pub touch: TouchSettings,
     pub gesture_thresholds: GestureThresholds,
     pub layout_independent: bool,
     pub keyboard_layout: KeyboardLayout,
@@ -511,6 +512,17 @@ impl Config {
             }
         };
 
+        let touch = {
+            let t = &raw.input.touch;
+            TouchSettings {
+                enable: t.enable.unwrap_or(true),
+                enable_canvas_gestures: t.enable_canvas_gestures.unwrap_or(true),
+                zoom_speed: t.zoom_speed.unwrap_or(1.0),
+                pan_speed: t.pan_speed.unwrap_or(1.0),
+                touch_to_focus: t.touch_to_focus.unwrap_or(true),
+            }
+        };
+
         let gesture_thresholds = GestureThresholds {
             swipe_distance: non_negative(
                 raw.gestures.swipe_threshold.unwrap_or(12.0),
@@ -732,6 +744,7 @@ impl Config {
             backend,
             trackpad,
             mouse_device,
+            touch,
             gesture_thresholds,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),
             keyboard_layout,

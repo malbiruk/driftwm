@@ -238,6 +238,7 @@ impl DriftWm {
             ..Default::default()
         });
         seat.add_pointer();
+        seat.add_touch();
 
         let autostart = config.autostart.clone();
         let edge_pan_cursor = config.edge_pan_cursor;
@@ -354,6 +355,7 @@ impl DriftWm {
             last_titlebar_click: None,
             errors: init_errors,
             cursor_edge_pan: edge_pan_cursor,
+            touch_state: crate::input::touch::TouchState::new(),
         }
     }
 }

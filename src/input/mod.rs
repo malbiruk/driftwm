@@ -2,6 +2,7 @@ mod actions;
 pub(crate) mod gestures;
 pub(crate) mod keyboard;
 mod pointer;
+pub(crate) mod touch;
 
 use smithay::{
     backend::input::{
@@ -181,6 +182,11 @@ impl DriftWm {
                     pointer.axis(self, frame);
                     pointer.frame(self);
                 }
+                InputEvent::TouchDown { event } => self.on_touch_down::<I>(event),
+                InputEvent::TouchMotion { event } => self.on_touch_motion::<I>(event),
+                InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
+                InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
+                InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
                 _ => {}
             }
             return;
@@ -196,6 +202,8 @@ impl DriftWm {
                 | InputEvent::GestureSwipeBegin { .. }
                 | InputEvent::GesturePinchBegin { .. }
                 | InputEvent::GestureHoldBegin { .. }
+                | InputEvent::TouchDown { .. }
+                | InputEvent::TouchMotion { .. }
         ) {
             self.tap.taint();
         }
@@ -216,6 +224,11 @@ impl DriftWm {
             InputEvent::GesturePinchEnd { event } => self.on_gesture_pinch_end::<I>(event),
             InputEvent::GestureHoldBegin { event } => self.on_gesture_hold_begin::<I>(event),
             InputEvent::GestureHoldEnd { event } => self.on_gesture_hold_end::<I>(event),
+            InputEvent::TouchDown { event } => self.on_touch_down::<I>(event),
+            InputEvent::TouchMotion { event } => self.on_touch_motion::<I>(event),
+            InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
+            InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
+            InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
             _ => {}
         }
     }
