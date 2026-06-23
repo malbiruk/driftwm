@@ -235,16 +235,47 @@ cargo build
 cargo run
 ```
 
-To add driftwm as a session in your NixOS config:
+To enable `driftwm` on NixOS, you can import and use the provided NixOS module in your configuration.
+
+Using Flakes:
+
+```nix
+# flake.nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    driftwm.url = "github:malbiruk/driftwm";
+  };
+
+  outputs = { self, nixpkgs, driftwm, ... }: {
+    nixosConfigurations.myHost = nixpkgs.lib.nixosSystem {
+      modules = [
+        driftwm.nixosModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
+
+Then, enable it in your configuration:
+
+```nix
+# configuration.nix
+{
+  programs.driftwm.enable = true;
+}
+```
+
+Alternatively, without flakes (by importing the flake's output directly):
 
 ```nix
 let
   driftwm-flake = builtins.getFlake "github:malbiruk/driftwm";
-  driftwm = driftwm-flake.packages.x86_64-linux.default;
 in
 {
-  services.displayManager.sessionPackages = [ driftwm ];
-  environment.systemPackages = [ driftwm ];
+  imports = [ driftwm-flake.nixosModules.default ];
+  programs.driftwm.enable = true;
 }
 ```
 
