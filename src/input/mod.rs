@@ -26,7 +26,6 @@ use crate::decorations::DecorationHit;
 use crate::state::{DriftWm, FocusTarget};
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use driftwm::protocols::output_power::OutputPowerHandler;
-use std::time::{Duration, Instant};
 
 /// Constant-speed edge-pan velocity for the bare cursor: a steady glide
 /// whenever the cursor sits within `zone` px of a screen edge, directed away
@@ -768,19 +767,6 @@ impl DriftWm {
             self.config.edge_pan_cursor_zone,
             self.config.edge_pan_max,
         );
-        let now = Instant::now();
-        let latency = Duration::from_millis(self.config.edge_pan_latency_ms);
-        let velocity = if velocity.is_some() {
-            let entered_at = self.cursor_edge_pan_zone_entered_at.get_or_insert(now);
-            if now.duration_since(*entered_at) >= latency {
-                velocity
-            } else {
-                None
-            }
-        } else {
-            self.cursor_edge_pan_zone_entered_at = None;
-            None
-        };
         crate::state::output_state(&output).edge_pan_velocity = velocity;
     }
 

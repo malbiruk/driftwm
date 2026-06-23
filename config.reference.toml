@@ -107,10 +107,6 @@
                               # so it doesn't trigger by accident.
                               # Pans at a constant speed_max within the zone (steady,
                               # push-speed independent); speed_min is unused here.
-# latency_ms = 120            # delay before pan starts once cursor enters the
-                              # activation zone (ms). Helps avoid accidental pan
-                              # when crossing between monitors during a window
-                              # drag. 0 disables.
 
 [zoom]
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
