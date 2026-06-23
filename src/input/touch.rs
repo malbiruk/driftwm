@@ -157,53 +157,26 @@ impl DriftWm {
         // Update/Transition gesture states based on active count
         if self.config.touch.enable_canvas_gestures {
             let active_count = self.touch_state.active_touches.len();
-            if active_count == 3 {
-                // Determine starting average of the 3 touches
-                let sum_screen = self.touch_state.active_touches.values()
-                    .map(|tp| tp.last_screen_pos)
-                    .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
-                self.touch_state.swipe_start_pos = Point::from((sum_screen.x / 3.0, sum_screen.y / 3.0));
-                self.touch_state.swipe_triggered = false;
-                self.touch_state.gesture_active = TouchGestureMode::CanvasSwipe;
+            let any_on_window = self.touch_state.active_touches.values().any(|tp| tp.focus.is_some());
 
-                // Cancel client touches
-                let mut needs_cancel = false;
-                for tp in self.touch_state.active_touches.values() {
-                    if tp.focus.is_some() {
-                        needs_cancel = true;
-                        break;
-                    }
+            if !any_on_window {
+                if active_count == 3 {
+                    let sum_screen = self.touch_state.active_touches.values()
+                        .map(|tp| tp.last_screen_pos)
+                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                    self.touch_state.swipe_start_pos = Point::from((sum_screen.x / 4.0, sum_screen.y / 4.0));
+                    self.touch_state.swipe_triggered = false;
+                    self.touch_state.gesture_active = TouchGestureMode::CanvasSwipe;
+                } else if active_count == 2 {
+                    self.touch_state.gesture_active = TouchGestureMode::CanvasPinch;
+                    self.touch_state.initial_zoom = self.zoom();
+                } else if active_count == 1 {
+                    self.touch_state.gesture_active = TouchGestureMode::CanvasPan;
+                } else {
+                    self.touch_state.gesture_active = TouchGestureMode::None;
                 }
-                if needs_cancel {
-                    if let Some(touch_handle) = self.seat.get_touch() {
-                        touch_handle.cancel(self);
-                    }
-                    for tp in self.touch_state.active_touches.values_mut() {
-                        tp.focus = None;
-                    }
-                }
-            } else if active_count == 2 {
-                self.touch_state.gesture_active = TouchGestureMode::CanvasPinch;
-                self.touch_state.initial_zoom = self.zoom();
-
-                // Cancel client touches
-                let mut needs_cancel = false;
-                for tp in self.touch_state.active_touches.values() {
-                    if tp.focus.is_some() {
-                        needs_cancel = true;
-                        break;
-                    }
-                }
-                if needs_cancel {
-                    if let Some(touch_handle) = self.seat.get_touch() {
-                        touch_handle.cancel(self);
-                    }
-                    for tp in self.touch_state.active_touches.values_mut() {
-                        tp.focus = None;
-                    }
-                }
-            } else if active_count == 1 && under.is_none() {
-                self.touch_state.gesture_active = TouchGestureMode::CanvasPan;
+            } else {
+                self.touch_state.gesture_active = TouchGestureMode::None;
             }
         }
     }
@@ -254,30 +227,49 @@ impl DriftWm {
         // 2. Unlocked session handling
         match self.touch_state.gesture_active {
             TouchGestureMode::CanvasPan => {
+                let active_count = self.touch_state.active_touches.len() as f64;
                 let delta = screen_pos - touch_point.last_screen_pos;
                 let pan_speed = self.config.touch.pan_speed;
                 let zoom = self.zoom();
                 let mut camera = self.camera();
-                camera.x -= (delta.x * pan_speed) / zoom;
-                camera.y -= (delta.y * pan_speed) / zoom;
+                camera.x -= (delta.x * pan_speed) / (zoom * active_count);
+                camera.y -= (delta.y * pan_speed) / (zoom * active_count);
                 self.set_camera(camera);
                 self.mark_all_dirty();
             }
             TouchGestureMode::CanvasPinch => {
-                let slots: Vec<TouchSlot> = self.touch_state.active_touches.keys().copied().collect();
-                if slots.len() >= 2 {
-                    let s1 = slots[0];
-                    let s2 = slots[1];
-                    let p1_start = self.touch_state.active_touches[&s1].start_screen_pos;
-                    let p2_start = self.touch_state.active_touches[&s2].start_screen_pos;
-                    let p1_curr = if s1 == slot { screen_pos } else { self.touch_state.active_touches[&s1].last_screen_pos };
-                    let p2_curr = if s2 == slot { screen_pos } else { self.touch_state.active_touches[&s2].last_screen_pos };
+                let active_touches: Vec<&ActiveTouchPoint> = self.touch_state.active_touches.values().collect();
+                let count = active_touches.len() as f64;
+                if count >= 2.0 {
+                    // Current midpoint (screen)
+                    let sum_screen_curr = active_touches.iter()
+                        .map(|tp| if tp.slot == slot { screen_pos } else { tp.last_screen_pos })
+                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                    let midpoint_screen_curr = Point::from((sum_screen_curr.x / count, sum_screen_curr.y / count));
 
-                    let start_dist = distance(p1_start, p2_start);
-                    let curr_dist = distance(p1_curr, p2_curr);
+                    // Start midpoint (screen)
+                    let sum_screen_start = active_touches.iter()
+                        .map(|tp| tp.start_screen_pos)
+                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                    let midpoint_screen_start = Point::from((sum_screen_start.x / count, sum_screen_start.y / count));
 
-                    if start_dist > 0.0 {
-                        let scale = curr_dist / start_dist;
+                    // Current average distance to current midpoint
+                    let sum_dist_curr = active_touches.iter()
+                        .map(|tp| {
+                            let p = if tp.slot == slot { screen_pos } else { tp.last_screen_pos };
+                            distance(p, midpoint_screen_curr)
+                        })
+                        .sum::<f64>();
+                    let avg_dist_curr = sum_dist_curr / count;
+
+                    // Start average distance to start midpoint
+                    let sum_dist_start = active_touches.iter()
+                        .map(|tp| distance(tp.start_screen_pos, midpoint_screen_start))
+                        .sum::<f64>();
+                    let avg_dist_start = sum_dist_start / count;
+
+                    if avg_dist_start > 0.0 {
+                        let scale = avg_dist_curr / avg_dist_start;
                         let initial_zoom = self.touch_state.initial_zoom;
                         let zoom_speed = self.config.touch.zoom_speed;
                         let min_zoom = self.min_zoom();
@@ -285,13 +277,13 @@ impl DriftWm {
                         let mut new_zoom = initial_zoom * (1.0 + (scale - 1.0) * zoom_speed);
                         new_zoom = new_zoom.clamp(min_zoom, canvas::MAX_ZOOM);
 
-                        let sum_screen = p1_curr + p2_curr;
-                        let midpoint_screen = Point::from((sum_screen.x / 2.0, sum_screen.y / 2.0));
+                        // Start midpoint (canvas)
+                        let sum_canvas_start = active_touches.iter()
+                            .map(|tp| tp.start_canvas_pos)
+                            .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                        let midpoint_canvas_start = Point::from((sum_canvas_start.x / count, sum_canvas_start.y / count));
 
-                        let sum_canvas = self.touch_state.active_touches[&s1].start_canvas_pos + self.touch_state.active_touches[&s2].start_canvas_pos;
-                        let midpoint_canvas_start = Point::from((sum_canvas.x / 2.0, sum_canvas.y / 2.0));
-
-                        let new_camera = canvas::zoom_anchor_camera(midpoint_canvas_start, midpoint_screen, new_zoom);
+                        let new_camera = canvas::zoom_anchor_camera(midpoint_canvas_start, midpoint_screen_curr, new_zoom);
                         self.set_zoom(new_zoom);
                         self.set_camera(new_camera);
                         self.mark_all_dirty();
@@ -308,7 +300,7 @@ impl DriftWm {
                         let current_avg = Point::from((sum_screen.x / count, sum_screen.y / count));
                         let dist = distance(current_avg, self.touch_state.swipe_start_pos);
                         if dist >= self.config.touch.swipe_threshold {
-                            let dir = direction_from_vector(current_avg - self.touch_state.swipe_start_pos);
+                            let dir = direction_from_vector(self.touch_state.swipe_start_pos - current_avg);
                             self.execute_action(&Action::CenterNearest(dir));
                             self.touch_state.swipe_triggered = true;
                         }
