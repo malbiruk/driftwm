@@ -106,5 +106,6 @@
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
       };
+      homeManagerModules.driftwm = import ./nix/hm-module.nix;
     };
 }
