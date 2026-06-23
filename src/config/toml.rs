@@ -63,6 +63,7 @@ pub(super) struct TouchDeviceFileConfig {
     pub zoom_speed: Option<f64>,
     pub pan_speed: Option<f64>,
     pub touch_to_focus: Option<bool>,
+    pub swipe_threshold: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

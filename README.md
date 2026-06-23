@@ -61,6 +61,7 @@ with no window there — useful for areas with pinned widgets.
 | Input                        | Action                                     |
 | ---------------------------- | ------------------------------------------ |
 | 4-finger swipe               | Jump to nearest window (natural direction) |
+| Touchscreen 3-finger swipe   | Jump to nearest window (natural direction) |
 | `Mod+Ctrl` + LMB drag        | Jump to nearest window (natural direction) |
 | `Mod` + arrow                | Jump to nearest window in direction        |
 | `Alt-Tab` / `Alt-Shift-Tab`  | Cycle windows (MRU)                        |
@@ -202,7 +203,7 @@ window-search script that lets you search and jump to any open window.
 
 - New window placement: in viewport center (default), under cursor, or snapped adjacent to the focused window's cluster
 - Click-to-focus (default), focus-follows-mouse (sloppy focus), or touch-to-focus
-- Touchscreen support: 1-finger canvas drag-panning and 2-finger anchor pinch-to-zoom
+- Touchscreen support: 1-finger canvas drag-panning, 2-finger anchor pinch-to-zoom, and 3-finger swipe navigation
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screen capture: screencasting (OBS, Firefox, Discord) and screenshots, incl. built-in [canvas/DPI capture](docs/ipc.md#screenshots)
 - 40+ Wayland protocols

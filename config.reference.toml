@@ -79,10 +79,11 @@
 
 [input.touch]
 # enable = true               # enable touchscreen support
-# enable_canvas_gestures = true # enable 1-finger drag pan and 2-finger pinch zoom on empty canvas
+# enable_canvas_gestures = true # enable 1-finger drag pan, 2-finger pinch zoom, and 3-finger swipe navigation
 # zoom_speed = 1.0            # touchscreen gesture zoom speed multiplier
 # pan_speed = 1.0             # touchscreen gesture pan speed multiplier
 # touch_to_focus = true       # focus and raise a window when touching it
+# swipe_threshold = 100.0     # distance (px) before 3-finger navigation swipe triggers
 
 [cursor]
 # theme = "none"             # XCURSOR_THEME; "none" = inherit from environment (e.g. "Adwaita")

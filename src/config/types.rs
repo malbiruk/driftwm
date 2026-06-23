@@ -379,6 +379,7 @@ pub struct TouchSettings {
     pub zoom_speed: f64,
     pub pan_speed: f64,
     pub touch_to_focus: bool,
+    pub swipe_threshold: f64,
 }
 
 impl Default for TouchSettings {
@@ -389,6 +390,7 @@ impl Default for TouchSettings {
             zoom_speed: 1.0,
             pan_speed: 1.0,
             touch_to_focus: true,
+            swipe_threshold: 100.0,
         }
     }
 }

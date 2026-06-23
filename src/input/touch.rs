@@ -8,6 +8,8 @@ use smithay::{
 };
 use crate::state::{DriftWm, FocusTarget};
 use driftwm::canvas::{self, ScreenPos, screen_to_canvas};
+use driftwm::config::Action;
+use crate::input::gestures::direction_from_vector;
 
 #[derive(Debug, Clone)]
 pub struct ActiveTouchPoint {
@@ -24,6 +26,7 @@ pub enum TouchGestureMode {
     None,
     CanvasPan,
     CanvasPinch,
+    CanvasSwipe,
 }
 
 #[derive(Debug, Clone)]
@@ -31,6 +34,8 @@ pub struct TouchState {
     pub active_touches: HashMap<TouchSlot, ActiveTouchPoint>,
     pub gesture_active: TouchGestureMode,
     pub initial_zoom: f64,
+    pub swipe_start_pos: Point<f64, Logical>,
+    pub swipe_triggered: bool,
 }
 
 impl TouchState {
@@ -39,6 +44,8 @@ impl TouchState {
             active_touches: HashMap::new(),
             gesture_active: TouchGestureMode::None,
             initial_zoom: 1.0,
+            swipe_start_pos: Point::from((0.0, 0.0)),
+            swipe_triggered: false,
         }
     }
 }
@@ -131,14 +138,6 @@ impl DriftWm {
             if self.config.touch.enable_canvas_gestures {
                 // Cancel existing animations (stop slide)
                 self.cancel_animations();
-
-                let active_count = self.touch_state.active_touches.len();
-                if active_count == 0 {
-                    self.touch_state.gesture_active = TouchGestureMode::CanvasPan;
-                } else if active_count == 1 {
-                    self.touch_state.gesture_active = TouchGestureMode::CanvasPinch;
-                    self.touch_state.initial_zoom = self.zoom();
-                }
             }
         }
 
@@ -151,9 +150,62 @@ impl DriftWm {
                 last_screen_pos: screen_pos,
                 start_canvas_pos: canvas_pos,
                 last_canvas_pos: canvas_pos,
-                focus: under,
+                focus: under.clone(),
             },
         );
+
+        // Update/Transition gesture states based on active count
+        if self.config.touch.enable_canvas_gestures {
+            let active_count = self.touch_state.active_touches.len();
+            if active_count == 3 {
+                // Determine starting average of the 3 touches
+                let sum_screen = self.touch_state.active_touches.values()
+                    .map(|tp| tp.last_screen_pos)
+                    .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                self.touch_state.swipe_start_pos = Point::from((sum_screen.x / 3.0, sum_screen.y / 3.0));
+                self.touch_state.swipe_triggered = false;
+                self.touch_state.gesture_active = TouchGestureMode::CanvasSwipe;
+
+                // Cancel client touches
+                let mut needs_cancel = false;
+                for tp in self.touch_state.active_touches.values() {
+                    if tp.focus.is_some() {
+                        needs_cancel = true;
+                        break;
+                    }
+                }
+                if needs_cancel {
+                    if let Some(touch_handle) = self.seat.get_touch() {
+                        touch_handle.cancel(self);
+                    }
+                    for tp in self.touch_state.active_touches.values_mut() {
+                        tp.focus = None;
+                    }
+                }
+            } else if active_count == 2 {
+                self.touch_state.gesture_active = TouchGestureMode::CanvasPinch;
+                self.touch_state.initial_zoom = self.zoom();
+
+                // Cancel client touches
+                let mut needs_cancel = false;
+                for tp in self.touch_state.active_touches.values() {
+                    if tp.focus.is_some() {
+                        needs_cancel = true;
+                        break;
+                    }
+                }
+                if needs_cancel {
+                    if let Some(touch_handle) = self.seat.get_touch() {
+                        touch_handle.cancel(self);
+                    }
+                    for tp in self.touch_state.active_touches.values_mut() {
+                        tp.focus = None;
+                    }
+                }
+            } else if active_count == 1 && under.is_none() {
+                self.touch_state.gesture_active = TouchGestureMode::CanvasPan;
+            }
+        }
     }
 
     pub fn on_touch_motion<I: InputBackend>(&mut self, event: I::TouchMotionEvent) {
@@ -243,6 +295,23 @@ impl DriftWm {
                         self.set_zoom(new_zoom);
                         self.set_camera(new_camera);
                         self.mark_all_dirty();
+                    }
+                }
+            }
+            TouchGestureMode::CanvasSwipe => {
+                if !self.touch_state.swipe_triggered {
+                    let sum_screen = self.touch_state.active_touches.values()
+                        .map(|tp| if tp.slot == slot { screen_pos } else { tp.last_screen_pos })
+                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
+                    let count = self.touch_state.active_touches.len() as f64;
+                    if count > 0.0 {
+                        let current_avg = Point::from((sum_screen.x / count, sum_screen.y / count));
+                        let dist = distance(current_avg, self.touch_state.swipe_start_pos);
+                        if dist >= self.config.touch.swipe_threshold {
+                            let dir = direction_from_vector(current_avg - self.touch_state.swipe_start_pos);
+                            self.execute_action(&Action::CenterNearest(dir));
+                            self.touch_state.swipe_triggered = true;
+                        }
                     }
                 }
             }

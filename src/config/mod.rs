@@ -520,6 +520,7 @@ impl Config {
                 zoom_speed: t.zoom_speed.unwrap_or(1.0),
                 pan_speed: t.pan_speed.unwrap_or(1.0),
                 touch_to_focus: t.touch_to_focus.unwrap_or(true),
+                swipe_threshold: t.swipe_threshold.unwrap_or(100.0),
             }
         };
 

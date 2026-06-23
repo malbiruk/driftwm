@@ -194,7 +194,7 @@ enable touchscreen support
 
 Default: `true`
 
-enable 1-finger drag pan and 2-finger pinch zoom on empty canvas
+enable 1-finger drag pan, 2-finger pinch zoom, and 3-finger swipe navigation
 
 ### `zoom_speed`
 
@@ -213,6 +213,12 @@ touchscreen gesture pan speed multiplier
 Default: `true`
 
 focus and raise a window when touching it
+
+### `swipe_threshold`
+
+Default: `100.0`
+
+distance (px) before 3-finger navigation swipe triggers
 
 ## `[cursor]`
 
