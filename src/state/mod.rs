@@ -443,6 +443,8 @@ pub struct DriftWm {
     #[allow(dead_code)]
     pub background_effect_state: BackgroundEffectState,
     pub session_lock_manager_state: SessionLockManagerState,
+    #[allow(dead_code)]
+    pub tablet_state: smithay::wayland::tablet_manager::TabletManagerState,
     pub gamma_control_manager_state: driftwm::protocols::gamma_control::GammaControlManagerState,
     pub session_lock: SessionLock,
     pub lock_surfaces: HashMap<Output, LockSurface>,

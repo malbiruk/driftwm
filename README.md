@@ -201,6 +201,7 @@ window-search script that lets you search and jump to any open window.
 - New window placement: in viewport center (default), under cursor, or snapped adjacent to the focused window's cluster
 - Click-to-focus (default) or focus-follows-mouse (sloppy focus)
 - Session lock (swaylock), idle notify (swayidle/hypridle)
+- **Graphics tablet support**: Full `wp_tablet_manager_v2` integration (for Krita, GIMP, etc.) with absolute coordinates mapped to the infinite canvas, tilt/pressure/rotation axes, and legacy application pointer emulation.
 - Screen capture: screencasting (OBS, Firefox, Discord) and screenshots, incl. built-in [canvas/DPI capture](docs/ipc.md#screenshots)
 - 40+ Wayland protocols
 - [IPC control](docs/ipc.md): script the compositor over a Unix socket with `driftwm msg`

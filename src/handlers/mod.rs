@@ -18,7 +18,7 @@ use smithay::{
     delegate_keyboard_shortcuts_inhibit, delegate_output, delegate_pointer_constraints,
     delegate_pointer_gestures, delegate_presentation, delegate_primary_selection,
     delegate_relative_pointer, delegate_seat, delegate_security_context,
-    delegate_single_pixel_buffer, delegate_text_input_manager, delegate_viewporter,
+    delegate_single_pixel_buffer, delegate_tablet_manager, delegate_text_input_manager, delegate_viewporter,
     delegate_virtual_keyboard_manager, delegate_xdg_activation,
     input::{
         Seat, SeatHandler, SeatState,
@@ -185,7 +185,17 @@ impl OutputHandler for DriftWm {}
 
 delegate_output!(DriftWm);
 
-impl TabletSeatHandler for DriftWm {}
+impl TabletSeatHandler for DriftWm {
+    fn tablet_tool_image(
+        &mut self,
+        _tool: &smithay::backend::input::TabletToolDescriptor,
+        image: CursorImageStatus,
+    ) {
+        self.cursor.cursor_status = image;
+    }
+}
+
+delegate_tablet_manager!(DriftWm);
 
 delegate_cursor_shape!(DriftWm);
 

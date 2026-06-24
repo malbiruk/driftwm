@@ -102,7 +102,7 @@
       };
 
       devShells.${system}.default = pkgs.mkShell {
-        inherit nativeBuildInputs buildInputs;
+        inputsFrom = [ self.packages.${system}.default ];
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
       };
