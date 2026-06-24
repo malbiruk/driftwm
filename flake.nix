@@ -106,5 +106,17 @@
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
       };
+
+      checks.${system}.default = pkgs.callPackage ./nix/test.nix {
+        driftwm-module = self.nixosModules.default;
+        driftwm-package = self.packages.${system}.default;
+      };
+
+      nixosModules.driftwm = { config, lib, pkgs, ... }: {
+        imports = [ ./nix/nixos-module.nix ];
+        programs.driftwm.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+      };
+
+      nixosModules.default = self.nixosModules.driftwm;
     };
 }
