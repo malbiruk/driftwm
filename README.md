@@ -279,6 +279,19 @@ in
 }
 ```
 
+#### NixOS Module Options
+
+The NixOS module provides the following options under `programs.driftwm`:
+
+- `enable`: Whether to enable `driftwm` (defaults to `false`).
+- `package`: The package containing the `driftwm` compositor binary.
+
+By default, the module enables XWayland support via `xwayland-satellite` by defaulting `programs.xwayland.enable` to `true`. If you want to disable or explicitly enable it, configure:
+
+```nix
+programs.xwayland.enable = true; # or false to disable XWayland and xwayland-satellite
+```
+
 ### Build from source
 
 Requires Rust 1.88+ (edition 2024).
