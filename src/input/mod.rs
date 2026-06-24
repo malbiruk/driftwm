@@ -3,6 +3,7 @@ pub(crate) mod gestures;
 pub(crate) mod keyboard;
 mod pointer;
 pub(crate) mod touch;
+pub(crate) mod tablet;
 
 use smithay::{
     backend::input::{
@@ -352,6 +353,12 @@ impl DriftWm {
             InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
             InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
             InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
+            InputEvent::DeviceAdded { device } => self.on_device_added::<I>(&device),
+            InputEvent::DeviceRemoved { device } => self.on_device_removed::<I>(&device),
+            InputEvent::TabletToolAxis { event } => self.on_tablet_tool_axis::<I>(event),
+            InputEvent::TabletToolProximity { event } => self.on_tablet_tool_proximity::<I>(event),
+            InputEvent::TabletToolTip { event } => self.on_tablet_tool_tip::<I>(event),
+            InputEvent::TabletToolButton { event } => self.on_tablet_tool_button::<I>(event),
             _ => {}
         }
     }
