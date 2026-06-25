@@ -173,3 +173,13 @@ The list to assert after every op. Start with these; add as bugs surface.
 - Forcing `CanvasLayerSurface` through `StageElement`. Canvas-positioned layer surfaces stay as a separate `Vec` on `DriftWm`.
 - Any "while I'm here" cleanups in handlers/, input/, render/.
 - Multi-monitor canvas state restructuring (today: one canvas, many viewports — stays).
+
+---
+
+## Follow-up this unlocks: id-based IPC (post-refactor, separate PR)
+
+`Stage`'s `ElementId` (`StageElement::id`) is the stable per-window handle external tools currently lack — a minimap can't target one of three same-`app_id` windows (#168). Once `Stage` lands, a small separate PR surfaces it:
+
+- Add `id` to `WindowInfo` → flows to both `msg state` and the state file for free (shared struct).
+- Add id-targeted IPC variants: `focus <id>`, `move <id>`, `close <id>`. **Additive** — keep the existing `focus <app_id>` (substring) and focused-window `move`/`close` forms; they're the right ergonomics for keybinds and "focus my browser"-style scripts, where an id is the wrong handle. CLI disambiguates id vs app_id with a flag (`focus --id 7`); a bare integer is ambiguous.
+- Extend the `focus` no-arg query (`Response::Focused`) to also report the focused window's id — no separate "get focused id" command needed (consumers can also read `state.windows[0]`, which is focused-first).
