@@ -77,6 +77,9 @@
 # accel_profile = "flat"      # "flat" or "adaptive"
 # natural_scroll = false      # reverse scroll direction
 
+[input.tablet]
+# map_to_output = "none"      # map tablet absolute coordinates to a specific output by name (e.g., "eDP-1")
+
 [cursor]
 # theme = "none"             # XCURSOR_THEME; "none" = inherit from environment (e.g. "Adwaita")
 # size = 0                    # XCURSOR_SIZE; 0 = inherit from environment (e.g. 24)

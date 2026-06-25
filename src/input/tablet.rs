@@ -5,6 +5,7 @@ use smithay::{
         TabletToolTipEvent, TabletToolTipState,
     },
     input::pointer::MotionEvent,
+    output::Output,
     utils::SERIAL_COUNTER,
     wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait},
 };
@@ -13,6 +14,25 @@ use crate::state::DriftWm;
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 
 impl DriftWm {
+    pub fn tablet_output(&self, device_name: &str) -> Option<Output> {
+        // 1. Check specific mappings first
+        for mapping in &self.config.tablet.mappings {
+            if device_name.to_lowercase().contains(&mapping.name.to_lowercase()) {
+                if let Some(output) = self.space.outputs().find(|o| o.name() == mapping.map_to_output) {
+                    return Some(output.clone());
+                }
+            }
+        }
+        // 2. Fall back to global map_to_output
+        if let Some(ref target) = self.config.tablet.map_to_output {
+            if let Some(output) = self.space.outputs().find(|o| o.name() == *target) {
+                return Some(output.clone());
+            }
+        }
+        // 3. Fall back to active output
+        self.active_output()
+    }
+
     pub fn on_device_added<I: InputBackend>(&mut self, device: &I::Device) {
         if device.has_capability(DeviceCapability::TabletTool) {
             let tablet_seat = self.seat.tablet_seat();
@@ -33,7 +53,7 @@ impl DriftWm {
     }
 
     pub fn on_tablet_tool_axis<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent) {
-        let output = match self.active_output() {
+        let output = match self.tablet_output(&event.device().name()) {
             Some(o) => o,
             None => return,
         };
@@ -108,7 +128,7 @@ impl DriftWm {
     }
 
     pub fn on_tablet_tool_proximity<I: InputBackend>(&mut self, event: I::TabletToolProximityEvent) {
-        let output = match self.active_output() {
+        let output = match self.tablet_output(&event.device().name()) {
             Some(o) => o,
             None => return,
         };

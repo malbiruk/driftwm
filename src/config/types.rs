@@ -390,6 +390,18 @@ impl Default for MouseDeviceSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct TabletMappingSettings {
+    pub name: String,
+    pub map_to_output: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabletSettings {
+    pub map_to_output: Option<String>,
+    pub mappings: Vec<TabletMappingSettings>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct GestureThresholds {
     pub swipe_distance: f64,
     pub pinch_in_scale: f64,
