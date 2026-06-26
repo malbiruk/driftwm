@@ -318,6 +318,7 @@ impl DriftWm {
             cycle_state: None,
             window_focus: None,
             on_demand_layer: None,
+            popup_grab: None,
             held_action: None,
             tap: TapTracker::default(),
             pending_tap_action: None,

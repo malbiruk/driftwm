@@ -2,7 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::{DriftWm, FocusTarget, output_state};
+use crate::state::{DriftWm, FocusTarget, PopupGrabState, output_state};
 use crate::surface_tree::focus_belongs_to_toplevel;
 use driftwm::window_ext::WindowExt;
 use smithay::{
@@ -22,9 +22,11 @@ use smithay::{
     utils::{Point, Rectangle, Serial},
     wayland::{
         compositor::with_states,
+        input_method::InputMethodSeat,
         seat::WaylandFocus,
-        shell::xdg::{
-            PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState,
+        shell::{
+            wlr_layer::KeyboardInteractivity,
+            xdg::{PopupSurface, PositionerState, ToplevelSurface, XdgShellHandler, XdgShellState},
         },
     },
 };
@@ -109,7 +111,7 @@ impl XdgShellHandler for DriftWm {
             return;
         }
 
-        let root_focus = FocusTarget(root);
+        let root_focus = FocusTarget(root.clone());
         let Ok(mut grab) = self.popups.grab_popup(root_focus, kind, &self.seat, serial) else {
             return;
         };
@@ -117,16 +119,37 @@ impl XdgShellHandler for DriftWm {
         let keyboard = self.seat.get_keyboard().unwrap();
         let pointer = self.seat.get_pointer().unwrap();
 
-        if keyboard.is_grabbed()
+        // Give a pointer grab only when the root can't hold the keyboard — a
+        // layer surface with no keyboard interactivity, or any popup while an
+        // input method owns the keyboard. A keyboard grab there would be torn
+        // down on the next focus recompute, since focus can't land on the root.
+        let has_keyboard_grab = !self.seat.input_method().keyboard_grabbed()
+            && self.layer_interactivity(&root) != Some(KeyboardInteractivity::None);
+
+        // Refuse a grab that would clobber an unrelated live grab. A nested
+        // submenu is fine — its serial (or its parent's, via previous_serial)
+        // matches the existing grab.
+        let keyboard_mismatch = has_keyboard_grab
+            && keyboard.is_grabbed()
             && !(keyboard.has_grab(serial)
-                || grab.previous_serial().is_none_or(|s| keyboard.has_grab(s)))
-        {
+                || grab.previous_serial().is_none_or(|s| keyboard.has_grab(s)));
+        let pointer_mismatch = pointer.is_grabbed()
+            && !(pointer.has_grab(serial)
+                || grab.previous_serial().is_none_or(|s| pointer.has_grab(s)));
+        if keyboard_mismatch || pointer_mismatch {
             grab.ungrab(PopupUngrabStrategy::All);
             return;
         }
 
-        keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        if has_keyboard_grab {
+            keyboard.set_grab(self, PopupKeyboardGrab::new(&grab), serial);
+        }
         pointer.set_grab(self, PopupPointerGrab::new(&grab), serial, Focus::Keep);
+        self.popup_grab = Some(PopupGrabState {
+            root,
+            grab,
+            has_keyboard_grab,
+        });
     }
 
     fn reposition_request(

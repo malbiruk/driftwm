@@ -18,7 +18,7 @@ pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
 
 use smithay::{
-    desktop::{PopupManager, Space, Window},
+    desktop::{PopupGrab, PopupManager, PopupUngrabStrategy, Space, Window},
     input::{Seat, SeatState},
     output::Output,
     reexports::{
@@ -340,6 +340,19 @@ pub struct PinnedState {
     pub screen_pos: Point<i32, Logical>,
 }
 
+/// An active xdg-popup grab and the toplevel/layer surface it is rooted on.
+/// Kept so focus changes can tear the grab down explicitly: smithay leaves the
+/// grab attached to the keyboard after the popup is gone, so without this the
+/// keyboard would stay pinned to `root` while navigation moves the camera.
+pub struct PopupGrabState {
+    pub root: WlSurface,
+    pub grab: PopupGrab<DriftWm>,
+    /// False = pointer-only grab, for a root that takes no keyboard focus. Gates
+    /// the focus-change teardown: focus can never reach such a root, so tearing
+    /// down there would just dismiss the popup.
+    pub has_keyboard_grab: bool,
+}
+
 /// Central compositor state.
 pub struct DriftWm {
     pub start_time: Instant,
@@ -487,6 +500,8 @@ pub struct DriftWm {
     /// Layer surface granted keyboard focus on click via `OnDemand`
     /// interactivity. Cleared when a window takes focus or it unmaps.
     pub on_demand_layer: Option<WlSurface>,
+    /// The active popup keyboard/pointer grab, if any. See [`PopupGrabState`].
+    pub popup_grab: Option<PopupGrabState>,
 
     pub held_action: Option<(u32, driftwm::config::Action, Instant)>,
 
@@ -764,15 +779,37 @@ impl DriftWm {
         if !matches!(self.session_lock, SessionLock::Unlocked) {
             return;
         }
-        // A popup keyboard grab owns focus; don't fight it.
-        if self.seat.get_keyboard().unwrap().is_grabbed() {
-            return;
-        }
 
         let target = self
             .exclusive_layer_focus()
             .or_else(|| self.on_demand_layer_focus())
             .or_else(|| self.focused_window_target());
+
+        // Focus left the grab root: tear the stale grab down ourselves (see PopupGrabState).
+        let leaving_grab_root = self
+            .popup_grab
+            .as_ref()
+            .is_some_and(|g| g.has_keyboard_grab && target.as_ref().map(|t| &t.0) != Some(&g.root));
+        if leaving_grab_root && let Some(mut g) = self.popup_grab.take() {
+            g.grab.ungrab(PopupUngrabStrategy::All);
+            let time = self.start_time.elapsed().as_millis() as u32;
+            self.seat.get_keyboard().unwrap().unset_grab(self);
+            self.seat
+                .get_pointer()
+                .unwrap()
+                .unset_grab(self, serial, time);
+        }
+
+        // Focus staying on the grab root: a live grab keeps ownership (it rejects
+        // the change), and an ended-but-still-attached grab releases on this
+        // set_focus. Route through the keyboard directly, skipping the per-window
+        // layout swap the live grab would otherwise trigger spuriously.
+        let keyboard = self.seat.get_keyboard().unwrap();
+        if keyboard.is_grabbed() {
+            keyboard.set_focus(self, target, serial);
+            return;
+        }
+
         self.set_keyboard_focus(target, serial);
     }
 
@@ -840,7 +877,7 @@ impl DriftWm {
             .then(|| FocusTarget(surface.clone()))
     }
 
-    fn layer_interactivity(
+    pub(crate) fn layer_interactivity(
         &self,
         surface: &WlSurface,
     ) -> Option<smithay::wayland::shell::wlr_layer::KeyboardInteractivity> {

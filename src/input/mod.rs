@@ -285,6 +285,11 @@ impl DriftWm {
         {
             return;
         }
+        // A pointer grab (popup menu, window move/resize) owns input. Letting
+        // hover change focus under it would tear down a live popup grab.
+        if self.seat.get_pointer().unwrap().is_grabbed() {
+            return;
+        }
         // Pinned windows render above the canvas and hit-test in screen space,
         // so they take focus priority — mirror the pointer-focus ordering
         // (pinned_window_under sits above the canvas in pointer_focus_under).
