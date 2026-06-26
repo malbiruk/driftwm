@@ -1,45 +1,109 @@
 # Touchscreen plan
 
-Tracks touchscreen work beyond the initial input PR (#163, "feat: touchscreen
-support and multi-touch canvas gestures"). That PR lands raw touch input +
-canvas gestures + the config surface; everything below is deliberately deferred
-to maintainer-owned follow-ups so the contributor PR stays scoped to touch
-*input*.
+Touchscreen is built on an integration branch (`touchscreen`), not directly on
+main. PR #163 contributes the input foundation (retargeted onto this branch);
+the full experience — grab-based gestures, window management on touch, momentum,
+cursor handling, on-screen-keyboard positioning — is built on the branch and
+merged to main as one feature, so main never ships a half-working touch UX.
 
-## What's already in place
+## Status (2026-06-26, real-hardware udev test)
 
-- Touch seat capability (`seat.add_touch()`), slot-based multi-touch tracking
-  (`input/touch.rs`), Wayland client forwarding (screen → surface coords).
-- Canvas gestures: 1-finger drag pans (empty canvas), 2-finger pinch zooms,
-  3-finger swipe navigates.
-- **OSK protocol stack is wired already** — `input-method-v2`
-  (`InputMethodHandler`, `handlers/mod.rs`), `text-input-v3`, and
-  `virtual-keyboard-v1` are all delegated, plus wlr-layer-shell. An external OSK
-  (squeekboard via input-method, wvkbd via virtual-keyboard) can connect, render
-  as a bottom layer surface, type into apps, and auto show/hide via smithay's
-  text-input↔input-method bridge. The OSK stays an external program (same
-  philosophy as launcher / lock / screenshot).
+Works:
+- Canvas 1-finger pan + 2-finger pinch-zoom.
+- 1/2-finger touches forward to apps.
 
-## Config surface (final shape — done in #163)
+Broken / missing (drives the follow-ups below):
+- 3-finger gestures: bad and inconsistent. Pulled from #163; rebuilt as a grab.
+- No pan momentum — 1-finger pan has no flick-to-coast.
+- Titlebar drag and the SSD close button do nothing on touch.
+- Double-tap (e.g. open a folder in thunar) doesn't register — a forwarding bug;
+  likely dissolves with the grab rework (see Architecture).
+- Multi-output: touches map to `active_output()` instead of the output under the
+  touch point — mis-maps on secondary outputs.
+- OSK: untested.
 
-Principle: `[input.*]` is device config; compositor behavior lives in its own
-sections. driftwm already follows this (`[input.mouse]` device vs `[mouse]`
-bindings); niri does the same (`input.touch` = off/calibration/map-to-output,
-behavior in a top-level `gestures` block).
+## Architecture: grab-based, not a state machine
+
+Both niri and cosmic-comp implement touch gestures / move / resize as smithay
+`TouchGrab`s, not a hand-rolled state machine:
+
+- cosmic-comp's `MoveGrab` implements **both** `PointerGrab` and `TouchGrab` on
+  one struct (`shell/grabs/moving.rs`); its resize grabs likewise.
+- niri shares `MoveGrab` across pointer/touch (`PointerOrTouchStartData`) plus a
+  dedicated `TouchOverviewGrab` / `touch_resize_grab`. On touch-down it
+  conditionally `set_grab`s, then **always** calls `handle.down(under.surface, …)`
+  and lets grab routing decide who consumes the event.
+
+The #163 implementation instead hand-rolls a `TouchGestureMode` state machine
+with an `any_on_window` kill-switch tangled into the input handler, and never
+uses `set_grab`.
+
+Keep from #163 (correct, matches the references):
+- `seat.add_touch()`.
+- `FocusTarget: TouchTarget` (already in `state/focus.rs`) — the forwarding target.
+- Basic down/motion/up/frame forwarding to the surface-under.
+
+Rework on the branch:
+- **Gestures + move + resize → `TouchGrab`s.** Add `TouchGrab` impls to the
+  existing `MoveSurfaceGrab` / `ResizeSurfaceGrab` (mirroring cosmic's dual-impl
+  `MoveGrab`) and add a canvas-gesture grab (parallel to `PanGrab`). Reuses the
+  existing grab logic instead of duplicating move/resize into an enum.
+- **Forwarding → unconditional** — `handle.down(under.surface, …)` always; grabs
+  intercept. Removes the `any_on_window` kill-switch (3-finger-over-window just
+  works) and likely fixes the double-tap bug (the up was only forwarded when no
+  gesture was active).
+- **Output mapping → output-under-touch**, not `active_output()`.
+- Hide the pointer on touch-down (niri sets `pointer_visibility = Disabled`) —
+  see the cursor follow-up.
+
+## #163 scope (lands on the `touchscreen` branch)
+
+Contributor PR, kept minimal:
+- `cargo fmt` (CI gates on `cargo fmt --check`).
+- Config surface split (below).
+- Remove the 3-finger swipe path (tested badly; rebuilt as a grab here).
+
+Everything behavioral — double-tap, decorations, momentum, the gesture model,
+cursor, OSK — is maintainer work on the branch.
+
+## Config surface (final shape)
+
+Principle: `[input.*]` is device config; behavior lives in its own sections
+(driftwm already does this — `[input.mouse]` device vs `[mouse]` bindings; niri's
+`input.touch` is off/calibration/map-to-output with behavior in a top-level
+`gestures` block).
 
 - `[input.touch] enable` — keep (device on/off; future home for
-  `calibration_matrix`, `map_to_output`).
+  `calibration_matrix`, `map_to_output`). Ends up the only field here.
 - `[navigation] touch_speed` — pan multiplier, sibling of `trackpad_speed` /
   `mouse_speed`.
-- `[zoom] touch_speed` — pinch multiplier. Joins the future `trackpad_speed`
-  (pinch) / `mouse_speed` (wheel) zoom multipliers from the separate zoom-speed
-  issue.
-- top-level `touch_to_focus` — focus-model behavior, sibling of
-  `focus_follows_mouse`.
-- `enable_canvas_gestures` and `swipe_threshold` — dropped / hardcoded. Both are
-  gesture-model knobs that the bindable rework below subsumes; shipping them now
-  just means deprecating them later. `enable` (whole-device off) is the only
-  touch toggle until the bindable model lands.
+- `[zoom] touch_speed` — pinch multiplier; joins the future trackpad (pinch) /
+  mouse (wheel) zoom multipliers from the separate zoom-speed issue.
+- **Drop `touch_to_focus`** — touch focuses + raises unconditionally, same as the
+  (hardcoded) click-to-focus; niri activates on touch-down with no gate, and the
+  `widget` rule already covers the don't-raise case. Honor the widget exclusion
+  in the hardcoded path.
+- **Drop `enable_canvas_gestures` + `swipe_threshold`** — gesture-model knobs the
+  bindable rework subsumes; shipping them just means deprecating them later.
+  `enable` (whole-device off) is the only touch toggle until the bindable model
+  lands.
+
+## Follow-up: SSD decoration interaction on touch
+
+Titlebar drag → move, and the close button, do nothing on touch because the
+touch path never hit-tests decorations the way `input/pointer.rs` does. Falls
+out of the grab rework: on touch-down, hit-test decorations; a titlebar hit
+`set_grab`s the (now touch-capable) move grab; a close-button hit closes on
+release if the finger is still inside. Arguably required before announcing touch
+support, since a window manager you can't move or close windows on reads as
+broken.
+
+## Follow-up: pan momentum
+
+1-finger pan does `set_camera` per motion with no velocity tracking, so there's
+no flick-to-coast. Sample velocity over the last few motion events and kick the
+existing `drift` momentum animation on last-finger-up — the same coast
+mouse/trackpad pan already gets.
 
 ## Follow-up: bindable `[touch]` model + interaction rework
 
@@ -58,8 +122,8 @@ Target interaction model (escalation: fingers go content → system):
   viewport.
 - **3 finger** — compositor pan + pinch, **anywhere incl. over a window** (apps
   don't claim 3-finger touches, so it's unambiguous). Fixes the current
-  limitation where any finger on a window kills gestures, so you can't
-  pan/zoom over a dense canvas.
+  limitation where any finger on a window kills gestures, so you can't pan/zoom
+  over a dense canvas.
 - **4 finger** — global navigation: swipe = navigate-nearest, pinch-in/out =
   overview / home-toggle. Position-independent.
 - **3-finger tap** — center-window (position-aware: centers the tapped window;
@@ -99,15 +163,15 @@ Notes:
 - Touch's absolute position makes on-window/on-canvas/anywhere contexts cleaner
   than the trackpad (no cursor-derived ambiguity).
 - The gesture-internals bugs in the #163 state machine (swipe-origin divisor,
-  stale pinch baseline on finger-count change) are subsumed by this rework — fix
-  in #163 only what's needed for it to merge correctly; the rest gets rewritten
-  here.
+  stale pinch baseline on finger-count change) are moot — the state machine is
+  replaced by grabs, not patched.
 
 ## Follow-up: cursor hide-on-touch
 
 Hide the pointer when touch starts, restore on next pointer (mouse/trackpad)
-motion — standard mutter behavior. #163 does none of this, so a stale arrow sits
-mid-screen during touch use.
+motion — standard mutter behavior (niri sets `pointer_visibility = Disabled` in
+`on_touch_down`). #163 does none of this, so a stale arrow sits mid-screen during
+touch use.
 
 Shape:
 - A separate `hidden_by_touch` bool on `CursorState` — do NOT overwrite
@@ -125,20 +189,27 @@ Shape:
 
 ## Follow-up: OSK camera-positioning (biggest lever for tablet usability)
 
-Protocols are wired (above); the gap is positioning. When a bottom-anchored OSK
-appears it occludes the lower screen and the focused text field disappears
-behind it. The infinite-canvas-native fix:
+Protocols are wired already — `input-method-v2` (`InputMethodHandler`,
+`handlers/mod.rs`), `text-input-v3`, and `virtual-keyboard-v1` are delegated,
+plus wlr-layer-shell. An external OSK (squeekboard via input-method, wvkbd via
+virtual-keyboard) can connect, render as a bottom layer surface, type into apps,
+and auto show/hide via smithay's text-input↔input-method bridge. The OSK stays an
+external program (same philosophy as launcher / lock / screenshot).
 
-- Read the text-input **cursor rectangle** (`set_cursor_rectangle`,
-  surface-local), transform to screen space via window canvas-pos → camera/zoom,
-  and if it lands in the OSK-occluded band, **animate the camera up** so the caret
-  clears — reusing the existing focus-to-window animation. This beats the mobile
-  "shrink the fullscreen app" and desktop "exclusive-zone reserve" models: an
-  exclusive zone only shrinks where new/maximized windows go, not where a
-  floating focused window currently sits.
+The gap is positioning. When a bottom-anchored OSK appears it occludes the lower
+screen and the focused text field disappears behind it. The infinite-canvas-
+native fix:
+
+- Read the text-input **cursor rectangle** (`set_cursor_rectangle`, surface-
+  local), transform to screen space via window canvas-pos → camera/zoom, and if
+  it lands in the OSK-occluded band, **animate the camera up** so the caret clears
+  — reusing the existing focus-to-window animation. This beats the mobile "shrink
+  the fullscreen app" and desktop "exclusive-zone reserve" models: an exclusive
+  zone only shrinks where new/maximized windows go, not where a floating focused
+  window currently sits.
 - `parent_geometry` (`handlers/mod.rs`) returns raw `window.geometry()` (window-
-  local size, not camera-transformed) — this positions IME candidate popups
-  (CJK completion, emoji). Verify they land correctly at non-1.0 zoom /
-  off-origin camera.
+  local size, not camera-transformed) — this positions IME candidate popups (CJK
+  completion, emoji). Verify they land correctly at non-1.0 zoom / off-origin
+  camera.
 - Cursor rect arrives in surface-local px; at zoom ≠ 1.0 the on-screen caret is
   scaled, so both the popup positioning and the camera-pan must multiply by zoom.
