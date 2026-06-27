@@ -491,3 +491,43 @@ fn pinned_to_screen_sticky_across_two_toml_rules() {
     let applied = config.resolve_window_rules("myapp", "title").unwrap();
     assert!(applied.pinned_to_screen);
 }
+
+#[test]
+fn output_parses_from_toml() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "myapp"
+        output = "DP-1"
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    let applied = config.resolve_window_rules("myapp", "title").unwrap();
+    assert_eq!(applied.output.as_deref(), Some("DP-1"));
+}
+
+#[test]
+fn output_omitted_in_toml_defaults_none() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "myapp"
+        blur = true
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    let applied = config.resolve_window_rules("myapp", "title").unwrap();
+    assert_eq!(applied.output, None);
+}
+
+#[test]
+fn output_last_wins_across_two_toml_rules() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "*"
+        output = "DP-1"
+
+        [[window_rules]]
+        app_id = "myapp"
+        output = "HDMI-A-1"
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    let applied = config.resolve_window_rules("myapp", "title").unwrap();
+    assert_eq!(applied.output.as_deref(), Some("HDMI-A-1"));
+}
