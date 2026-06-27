@@ -8,7 +8,15 @@
 //! `title`, `position` ([x, y]), `size` ([w, h]), and booleans
 //! `is_focused`/`is_widget`. Position/size match the window-rules format in
 //! config.toml: position is the **window center** with **Y-up** convention.
+//!
+//! `windows=` is canvas-space only. Screen-space windows are reported under
+//! their owning output instead: `outputs.{name}.fullscreen` is a JSON
+//! `{app_id, title}` object, and `outputs.{name}.pinned` a JSON array of
+//! `{app_id, title, position, size}` (position = output-relative top-left, in
+//! screen pixels, Y-down).
 
+use serde::Serialize;
+use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point};
 use smithay::wayland::seat::WaylandFocus;
 use std::collections::HashMap;
@@ -19,6 +27,42 @@ use driftwm::window_ext::WindowExt;
 use crate::ipc::protocol::WindowInfo;
 
 use super::{DriftWm, output_state};
+
+/// A fullscreen window in the state file's per-output section.
+#[derive(Serialize)]
+struct FullscreenInfo {
+    app_id: String,
+    title: String,
+}
+
+/// A screen-pinned window in the state file's per-output section. `position` is
+/// the output-relative top-left in screen pixels (Y-down); `size` in pixels.
+#[derive(Serialize)]
+struct PinnedInfo {
+    app_id: String,
+    title: String,
+    position: [i32; 2],
+    size: [i32; 2],
+}
+
+/// `(app_id, title)` for a toplevel surface; empty strings when unavailable.
+fn window_app_id_title(
+    surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+) -> (String, String) {
+    smithay::wayland::compositor::with_states(surface, |states| {
+        states
+            .data_map
+            .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
+            .and_then(|d| d.lock().ok())
+            .map(|g| {
+                (
+                    g.app_id.clone().unwrap_or_default(),
+                    g.title.clone().unwrap_or_default(),
+                )
+            })
+            .unwrap_or_default()
+    })
+}
 
 // Title is intentionally excluded from change detection: apps update their title
 // on every keystroke / tab switch, and a write per title change would spam
@@ -45,24 +89,15 @@ impl DriftWm {
             let Some(surface) = window.wl_surface() else {
                 continue;
             };
-            // Pinned windows have no canvas position; omit from the inventory
-            // (state file + IPC `state`), whose `position` is a canvas coord.
-            if self.is_pinned(window) {
+            // Pinned and fullscreen windows live in screen space, not on the
+            // canvas — they're reported under `outputs.{name}.{pinned,fullscreen}`
+            // instead. Omit them from this inventory, whose `position` is a
+            // canvas coord (a fullscreen window's is the transient camera-origin).
+            if self.is_pinned(window) || self.find_fullscreen_output_for_surface(&surface).is_some()
+            {
                 continue;
             }
-            let (app_id, title) = smithay::wayland::compositor::with_states(&surface, |states| {
-                states
-                    .data_map
-                    .get::<smithay::wayland::shell::xdg::XdgToplevelSurfaceData>()
-                    .and_then(|d| d.lock().ok())
-                    .map(|g| {
-                        (
-                            g.app_id.clone().unwrap_or_default(),
-                            g.title.clone().unwrap_or_default(),
-                        )
-                    })
-                    .unwrap_or_default()
-            });
+            let (app_id, title) = window_app_id_title(&surface);
             if app_id.is_empty() {
                 continue;
             }
@@ -179,14 +214,60 @@ impl DriftWm {
             content += &format!("layers={}\n", layers.join(","));
         }
 
-        // Per-output camera/zoom state
+        // Screen-pinned windows, grouped per owning output. Screen-space, so
+        // absent from `windows=`; surfaced here instead.
+        let mut pinned_by_output: HashMap<String, Vec<PinnedInfo>> = HashMap::new();
+        for window in self.space.elements() {
+            let Some(surface) = window.wl_surface() else {
+                continue;
+            };
+            let Some(p) = self.pinned.get(&surface.id()) else {
+                continue;
+            };
+            let (app_id, title) = window_app_id_title(&surface);
+            if app_id.is_empty() {
+                continue;
+            }
+            let size = window.geometry().size;
+            pinned_by_output
+                .entry(p.output.name())
+                .or_default()
+                .push(PinnedInfo {
+                    app_id,
+                    title,
+                    position: [p.screen_pos.x, p.screen_pos.y],
+                    size: [size.w, size.h],
+                });
+        }
+
+        // Per-output camera/zoom + screen-space (fullscreen, pinned) inventory.
         for output in self.space.outputs() {
-            let os = output_state(output);
             let name = output.name();
+            let (cam, z) = {
+                let os = output_state(output);
+                (os.camera, os.zoom)
+            };
             content += &format!(
-                "outputs.{name}.camera_x={:.1}\noutputs.{name}.camera_y={:.1}\noutputs.{name}.zoom={:.3}\n",
-                os.camera.x, os.camera.y, os.zoom
+                "outputs.{name}.camera_x={:.1}\noutputs.{name}.camera_y={:.1}\noutputs.{name}.zoom={z:.3}\n",
+                cam.x, cam.y
             );
+
+            if let Some(fs) = self.fullscreen.get(output)
+                && let Some(surface) = fs.window.wl_surface()
+            {
+                let (app_id, title) = window_app_id_title(&surface);
+                if !app_id.is_empty()
+                    && let Ok(json) = serde_json::to_string(&FullscreenInfo { app_id, title })
+                {
+                    content += &format!("outputs.{name}.fullscreen={json}\n");
+                }
+            }
+
+            if let Some(pins) = pinned_by_output.get(&name)
+                && let Ok(json) = serde_json::to_string(pins)
+            {
+                content += &format!("outputs.{name}.pinned={json}\n");
+            }
         }
 
         // Update content caches only after a successful atomic rename, so a
