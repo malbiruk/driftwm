@@ -71,6 +71,7 @@ impl DriftWm {
     /// 2. Normal click on window → focus + raise + forward to client
     /// 3. Left-click on empty canvas → pan canvas
     pub(super) fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
+        self.cursor.tablet_active = false;
         // Outputs can transiently disappear (cable unplug, GPU resume race);
         // bail out so downstream active_output() / element_location() can't panic.
         if self.space.outputs().next().is_none() {

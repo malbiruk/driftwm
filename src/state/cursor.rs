@@ -33,6 +33,8 @@ pub struct CursorState {
     pub exec_cursor_show_at: Option<Instant>,
     /// Loading cursor deadline.
     pub exec_cursor_deadline: Option<Instant>,
+    /// True if the last input was from a tablet and the pen is in proximity.
+    pub tablet_active: bool,
 }
 
 impl CursorState {
@@ -44,6 +46,7 @@ impl CursorState {
             cursor_buffers: HashMap::new(),
             exec_cursor_show_at: None,
             exec_cursor_deadline: None,
+            tablet_active: false,
         }
     }
 
@@ -71,13 +74,18 @@ impl CursorState {
         target_size: u32,
     ) -> Option<&CursorFrames> {
         if !self.cursor_buffers.contains_key(name) {
-            let from_theme = load_from_theme(name, theme_name, target_size);
-            let frames = match from_theme {
-                Some(f) => f,
-                None if name == "default" => fallback_frames(),
-                None => return None,
-            };
-            self.cursor_buffers.insert(name.to_string(), frames);
+            if name == "tablet_dot" {
+                let frames = dot_frames();
+                self.cursor_buffers.insert(name.to_string(), frames);
+            } else {
+                let from_theme = load_from_theme(name, theme_name, target_size);
+                let frames = match from_theme {
+                    Some(f) => f,
+                    None if name == "default" => fallback_frames(),
+                    None => return None,
+                };
+                self.cursor_buffers.insert(name.to_string(), frames);
+            }
         }
         self.cursor_buffers.get(name)
     }
@@ -139,6 +147,47 @@ fn fallback_frames() -> CursorFrames {
         None,
     );
     let hotspot = Point::from(FALLBACK_CURSOR_HOTSPOT);
+    CursorFrames {
+        frames: vec![(buffer, hotspot, 0)],
+        total_duration_ms: 0,
+    }
+}
+
+fn dot_frames() -> CursorFrames {
+    let mut pixels = vec![0u8; 16 * 16 * 4];
+    for y in 0..16 {
+        for x in 0..16 {
+            let dx = x as f32 - 7.5;
+            let dy = y as f32 - 7.5;
+            let dist = (dx * dx + dy * dy).sqrt();
+            let idx = (y * 16 + x) * 4;
+            if dist <= 2.5 {
+                pixels[idx] = 255;     // B
+                pixels[idx + 1] = 255; // G
+                pixels[idx + 2] = 255; // R
+                pixels[idx + 3] = 255; // A
+            } else if dist <= 4.0 {
+                pixels[idx] = 0;       // B
+                pixels[idx + 1] = 0;   // G
+                pixels[idx + 2] = 0;   // R
+                pixels[idx + 3] = 255; // A
+            } else {
+                pixels[idx] = 0;
+                pixels[idx + 1] = 0;
+                pixels[idx + 2] = 0;
+                pixels[idx + 3] = 0;
+            }
+        }
+    }
+    let buffer = MemoryRenderBuffer::from_slice(
+        &pixels,
+        Fourcc::Argb8888,
+        (16, 16),
+        1,
+        Transform::Normal,
+        None,
+    );
+    let hotspot = Point::from((8, 8));
     CursorFrames {
         frames: vec![(buffer, hotspot, 0)],
         total_duration_ms: 0,

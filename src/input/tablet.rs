@@ -53,6 +53,7 @@ impl DriftWm {
     }
 
     pub fn on_tablet_tool_axis<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent) {
+        self.cursor.tablet_active = true;
         let output = match self.tablet_output(&event.device().name()) {
             Some(o) => o,
             None => return,
@@ -152,6 +153,7 @@ impl DriftWm {
         if let Some(tablet) = tablet {
             match event.state() {
                 ProximityState::In => {
+                    self.cursor.tablet_active = true;
                     if let Some((focus_target, relative_pos)) = under {
                         tool.proximity_in(
                             canvas_pos,
@@ -163,6 +165,7 @@ impl DriftWm {
                     }
                 }
                 ProximityState::Out => {
+                    self.cursor.tablet_active = false;
                     tool.proximity_out(time);
                 }
             }
