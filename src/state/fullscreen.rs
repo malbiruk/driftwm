@@ -79,8 +79,8 @@ impl DriftWm {
         }
 
         // A different window is taking over this output's fullscreen: exit first.
-        // Must target `output`, not the active output — they can differ now that
-        // fullscreen can be requested on a specific monitor.
+        // Must target `output`, not the active output — they can differ when
+        // fullscreen is requested on a specific monitor.
         if self.fullscreen.contains_key(&output) {
             self.exit_fullscreen_on(&output);
         }
