@@ -375,23 +375,11 @@ impl Default for TrackpadSettings {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TouchSettings {
     pub enable: bool,
-    pub enable_canvas_gestures: bool,
-    pub zoom_speed: f64,
-    pub pan_speed: f64,
-    pub touch_to_focus: bool,
-    pub swipe_threshold: f64,
 }
 
 impl Default for TouchSettings {
     fn default() -> Self {
-        Self {
-            enable: true,
-            enable_canvas_gestures: true,
-            zoom_speed: 1.0,
-            pan_speed: 1.0,
-            touch_to_focus: true,
-            swipe_threshold: 100.0,
-        }
+        Self { enable: true }
     }
 }
 

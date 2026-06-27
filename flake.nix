@@ -103,6 +103,7 @@
 
       devShells.${system}.default = pkgs.mkShell {
         inputsFrom = [ self.packages.${system}.default ];
+        packages = [ pkgs.rustfmt ];
 
         LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
       };

@@ -190,36 +190,6 @@ Default: `true`
 
 enable touchscreen support
 
-### `enable_canvas_gestures`
-
-Default: `true`
-
-enable 1-finger drag pan, 2-finger pinch zoom, and 3-finger swipe navigation
-
-### `zoom_speed`
-
-Default: `1.0`
-
-touchscreen gesture zoom speed multiplier
-
-### `pan_speed`
-
-Default: `1.0`
-
-touchscreen gesture pan speed multiplier
-
-### `touch_to_focus`
-
-Default: `true`
-
-focus and raise a window when touching it
-
-### `swipe_threshold`
-
-Default: `100.0`
-
-distance (px) before 3-finger navigation swipe triggers
-
 ## `[cursor]`
 
 ### `theme`
@@ -253,6 +223,12 @@ trackpad (scroll/gestures) pan multiplier
 Default: `1.0`
 
 mouse (drag) pan multiplier (1.0 = direct)
+
+### `touch_speed`
+
+Default: `1.0`
+
+touchscreen gesture pan speed multiplier
 
 ### `drift`
 
@@ -335,6 +311,12 @@ cursor edge-pan activation zone (px) — kept small so it doesn't trigger by acc
 Default: `1.1`
 
 multiplier per keypress (1.1 = 10% per press)
+
+### `touch_speed`
+
+Default: `1.0`
+
+touchscreen gesture zoom speed multiplier
 
 ### `fit_padding`
 

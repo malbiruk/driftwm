@@ -59,11 +59,6 @@ pub(super) struct InputConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct TouchDeviceFileConfig {
     pub enable: Option<bool>,
-    pub enable_canvas_gestures: Option<bool>,
-    pub zoom_speed: Option<f64>,
-    pub pan_speed: Option<f64>,
-    pub touch_to_focus: Option<bool>,
-    pub swipe_threshold: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -118,6 +113,7 @@ pub(super) struct NavigationConfig {
     pub pan_step: Option<f64>,
     pub trackpad_speed: Option<f64>,
     pub mouse_speed: Option<f64>,
+    pub touch_speed: Option<f64>,
     pub drift: Option<f64>,
     /// Renamed to `drift`; kept only so a stale value yields a migration error
     /// instead of failing the whole parse via `deny_unknown_fields`.
@@ -147,6 +143,7 @@ pub(super) struct ZoomConfig {
     pub fit_padding: Option<f64>,
     pub reset_on_new_window: Option<bool>,
     pub reset_on_activation: Option<bool>,
+    pub touch_speed: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
