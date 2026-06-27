@@ -787,6 +787,7 @@ impl DriftWm {
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
+        let active_output = self.active_output();
 
         for window in self.space.elements().rev() {
             let Some(wl_surface) = window.wl_surface() else {
@@ -795,6 +796,15 @@ impl DriftWm {
             // Pinned windows live in screen space — hit-tested by
             // `pinned_window_under`, never by the canvas-space path.
             if self.is_pinned(window) {
+                continue;
+            }
+            // A window fullscreen on a *different* output isn't visible here.
+            // Cameras can overlap on the canvas, so without this the active
+            // output's hit-test could reach another output's fullscreen window.
+            // On its own output the path below still hit-tests it.
+            if let Some(fs_output) = self.find_fullscreen_output_for_surface(&wl_surface)
+                && active_output.as_ref() != Some(&fs_output)
+            {
                 continue;
             }
             let rule = driftwm::config::applied_rule(&wl_surface);

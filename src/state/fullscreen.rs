@@ -41,6 +41,18 @@ impl DriftWm {
             return;
         }
 
+        // This window is already fullscreen on a *different* output: tear that
+        // down first. Exiting restores its real windowed geometry, so the
+        // `saved_size` captured below is honest rather than the fullscreen
+        // viewport size (the same hazard the idempotent guard above dodges).
+        if let Some(other) = window
+            .wl_surface()
+            .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+            && other != output
+        {
+            self.exit_fullscreen_on(&other);
+        }
+
         // A different window is taking over this output's fullscreen: exit first.
         if self.fullscreen.contains_key(&output) {
             self.exit_fullscreen();
@@ -67,7 +79,7 @@ impl DriftWm {
             .and_then(|s| self.pinned.remove(&s.id()));
 
         self.fullscreen.insert(
-            output,
+            output.clone(),
             FullscreenState {
                 window: window.clone(),
                 saved_location,
@@ -92,9 +104,13 @@ impl DriftWm {
         // Top/Bottom layers are hidden during fullscreen — reset stale pointer state
         self.pointer_over_layer = false;
 
-        // Snap camera to integer for pixel-perfect alignment
+        // Snap camera to integer for pixel-perfect alignment. Write the
+        // output's state directly: `set_camera` refuses to move a fullscreen
+        // output (the window is pinned to its camera-origin), and this output's
+        // FullscreenState is already inserted above.
         let camera_i32 = self.camera().to_i32_round();
-        self.set_camera(Point::from((camera_i32.x as f64, camera_i32.y as f64)));
+        super::output_state(&output).camera =
+            Point::from((camera_i32.x as f64, camera_i32.y as f64));
 
         // Place window at viewport origin and raise
         self.space.map_element(window.clone(), camera_i32, true);

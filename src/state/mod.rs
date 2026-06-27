@@ -1253,6 +1253,19 @@ impl DriftWm {
     ) -> Option<(Point<f64, Logical>, f64)> {
         let loc = self.space.element_location(window)?;
         let geom_loc = window.geometry().loc;
+        // A fullscreen window is visible only on its own output. For any other
+        // output — and for the off-screen capture pass (`output == None`) — it
+        // must not render: it keeps a real canvas coord at its output's
+        // camera origin, so another monitor's camera would otherwise pan over
+        // it. On its own output it falls through to the canvas branch below,
+        // which yields (0,0) at zoom 1 thanks to the camera-park.
+        if let Some(fs_output) = window
+            .wl_surface()
+            .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+            && output != Some(&fs_output)
+        {
+            return None;
+        }
         let pinned = window.wl_surface().and_then(|s| {
             self.pinned
                 .get(&s.id())
@@ -1392,6 +1405,14 @@ impl DriftWm {
     }
     pub fn set_camera(&mut self, val: Point<f64, Logical>) {
         if let Some(o) = self.active_output() {
+            // The fullscreen window is pinned to this output's camera-origin at
+            // zoom 1; moving the camera would slide it off (0,0) and re-expose
+            // it to other cameras. Every nav path already exits fullscreen
+            // first, so a set_camera here means one slipped through — refuse it.
+            // (`enter_fullscreen` snaps via output_state directly to bypass this.)
+            if self.fullscreen.contains_key(&o) {
+                return;
+            }
             output_state(&o).camera = val;
         }
     }
