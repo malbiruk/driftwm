@@ -1262,9 +1262,10 @@ impl DriftWm {
         // camera origin, so another monitor's camera would otherwise pan over
         // it. On its own output it falls through to the canvas branch below,
         // which yields (0,0) at zoom 1 thanks to the camera-park.
-        if let Some(fs_output) = window
-            .wl_surface()
-            .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+        if !self.fullscreen.is_empty()
+            && let Some(fs_output) = window
+                .wl_surface()
+                .and_then(|s| self.find_fullscreen_output_for_surface(&s))
             && output != Some(&fs_output)
         {
             return None;
@@ -1408,11 +1409,12 @@ impl DriftWm {
     }
     pub fn set_camera(&mut self, val: Point<f64, Logical>) {
         if let Some(o) = self.active_output() {
-            // The fullscreen window is pinned to this output's camera-origin at
-            // zoom 1; moving the camera would slide it off (0,0) and re-expose
-            // it to other cameras. Every nav path already exits fullscreen
-            // first, so a set_camera here means one slipped through — refuse it.
-            // (`enter_fullscreen` snaps via output_state directly to bypass this.)
+            // Invariant: a fullscreen window is parked at its output's
+            // camera-origin at zoom 1, so the camera must not move or it slides
+            // off (0,0) and re-exposes to other cameras. Nav paths that reach
+            // set_camera already exit fullscreen first; this is a backstop so a
+            // future set_camera caller can't silently reintroduce the bleed.
+            // (`enter_fullscreen` snaps via output_state directly to bypass it.)
             if self.fullscreen.contains_key(&o) {
                 return;
             }

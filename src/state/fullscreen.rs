@@ -79,8 +79,10 @@ impl DriftWm {
         }
 
         // A different window is taking over this output's fullscreen: exit first.
+        // Must target `output`, not the active output — they can differ now that
+        // fullscreen can be requested on a specific monitor.
         if self.fullscreen.contains_key(&output) {
-            self.exit_fullscreen();
+            self.exit_fullscreen_on(&output);
         }
 
         let viewport_size = super::output_logical_size(&output);
@@ -157,7 +159,12 @@ impl DriftWm {
         let focus = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
         self.set_window_focus(focus, serial);
 
-        if let Some(wl_surface) = window.wl_surface() {
+        // Pointer focus + constraint (game cursor-lock) only apply when the
+        // cursor is on the fullscreen output. For a fullscreen on a different
+        // monitor, don't lock the pointer to a surface it isn't over — the
+        // constraint activates naturally when the pointer arrives there.
+        let on_active_output = self.active_output().as_ref() == Some(&output);
+        if on_active_output && let Some(wl_surface) = window.wl_surface() {
             let pointer = self.seat.get_pointer().unwrap();
             // Deactivate any constraint on the old focused surface
             if let Some(old) = pointer.current_focus() {
