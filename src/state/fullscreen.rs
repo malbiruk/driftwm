@@ -9,8 +9,28 @@ use super::{DriftWm, FocusTarget, FullscreenState};
 use driftwm::window_ext::WindowExt;
 
 impl DriftWm {
-    /// Enter fullscreen for the given window: lock viewport, expand window to fill screen.
-    pub fn enter_fullscreen(&mut self, window: &Window) {
+    /// Resolve which output a window should fullscreen onto: a window-rule
+    /// `output` wins, then the client-requested output, then the active output.
+    /// Unknown output names fall through to the next choice.
+    pub fn resolve_fullscreen_output(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        client_output: Option<smithay::output::Output>,
+    ) -> Option<smithay::output::Output> {
+        driftwm::config::applied_rule(surface)
+            .and_then(|r| r.output)
+            .and_then(|name| self.space.outputs().find(|o| o.name() == name).cloned())
+            .or(client_output)
+            .or_else(|| self.active_output())
+    }
+
+    /// Enter fullscreen for the given window on `target_output` (falling back to
+    /// the active output): lock that output's viewport, expand window to fill it.
+    pub fn enter_fullscreen(
+        &mut self,
+        window: &Window,
+        target_output: Option<smithay::output::Output>,
+    ) {
         // Widgets (immovable canvas layers) never fullscreen. Pinned windows
         // do: they temporarily unpin into a normal fullscreen and re-pin on
         // exit (saved_pinned), so a PiP video can fill the screen and snap back.
@@ -22,7 +42,12 @@ impl DriftWm {
         {
             return;
         }
-        let Some(output) = self.active_output() else {
+        // A stale requested output (disconnected between request and now) falls
+        // back to the active output.
+        let Some(output) = target_output
+            .filter(|o| self.space.outputs().any(|x| x == o))
+            .or_else(|| self.active_output())
+        else {
             return;
         };
 
@@ -37,7 +62,7 @@ impl DriftWm {
             .get(&output)
             .is_some_and(|fs| &fs.window == window)
         {
-            window.enter_fullscreen_configure(self.get_viewport_size());
+            window.enter_fullscreen_configure(super::output_logical_size(&output));
             return;
         }
 
@@ -58,7 +83,7 @@ impl DriftWm {
             self.exit_fullscreen();
         }
 
-        let viewport_size = self.get_viewport_size();
+        let viewport_size = super::output_logical_size(&output);
         let saved_location = self.space.element_location(window).unwrap_or_default();
 
         // If the window is fit, capture the fit-era geometry so exit_fullscreen
@@ -78,13 +103,18 @@ impl DriftWm {
             .wl_surface()
             .and_then(|s| self.pinned.remove(&s.id()));
 
+        let (saved_camera, saved_zoom) = {
+            let os = super::output_state(&output);
+            (os.camera, os.zoom)
+        };
+
         self.fullscreen.insert(
             output.clone(),
             FullscreenState {
                 window: window.clone(),
                 saved_location,
-                saved_camera: self.camera(),
-                saved_zoom: self.zoom(),
+                saved_camera,
+                saved_zoom,
                 saved_size,
                 saved_pinned,
             },
@@ -92,15 +122,16 @@ impl DriftWm {
 
         window.enter_fullscreen_configure(viewport_size);
 
-        // Lock viewport: stop all animations and momentum
-        self.with_output_state(|os| {
+        // Lock the target output's viewport: stop all animations and momentum
+        {
+            let mut os = super::output_state(&output);
             os.zoom = 1.0;
             os.zoom_target = None;
             os.zoom_animation_center = None;
             os.camera_target = None;
             os.momentum.stop();
             os.overview_return = None;
-        });
+        }
         // Top/Bottom layers are hidden during fullscreen — reset stale pointer state
         self.pointer_over_layer = false;
 
@@ -108,7 +139,7 @@ impl DriftWm {
         // output's state directly: `set_camera` refuses to move a fullscreen
         // output (the window is pinned to its camera-origin), and this output's
         // FullscreenState is already inserted above.
-        let camera_i32 = self.camera().to_i32_round();
+        let camera_i32 = super::output_state(&output).camera.to_i32_round();
         super::output_state(&output).camera =
             Point::from((camera_i32.x as f64, camera_i32.y as f64));
 

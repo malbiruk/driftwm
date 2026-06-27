@@ -317,7 +317,7 @@ impl DriftWm {
             pending_center: HashSet::new(),
             pending_size: HashSet::new(),
             pending_fit: HashSet::new(),
-            pending_fullscreen: HashSet::new(),
+            pending_fullscreen: HashMap::new(),
             auto_anchor_snapshot: HashMap::new(),
             pending_recenter: HashMap::new(),
             stable_snap_rects: HashMap::new(),

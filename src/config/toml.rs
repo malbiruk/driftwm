@@ -241,6 +241,9 @@ pub(super) struct WindowRuleFile {
     pub border_color_focused: Option<String>,
     pub corner_radius: Option<i32>,
     pub shadow: Option<bool>,
+    /// Output name (e.g. `"DP-1"`) this window should fullscreen onto, overriding
+    /// the client-requested output.
+    pub output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

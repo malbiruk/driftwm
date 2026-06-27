@@ -413,6 +413,7 @@ pub(super) fn parse_window_rule(
         border_color_focused,
         corner_radius,
         shadow: r.shadow,
+        output: r.output,
     })
 }
 

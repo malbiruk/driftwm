@@ -168,14 +168,15 @@ impl XdgShellHandler for DriftWm {
     fn fullscreen_request(
         &mut self,
         surface: ToplevelSurface,
-        _output: Option<wl_output::WlOutput>,
+        output: Option<wl_output::WlOutput>,
     ) {
         let wl_surface = surface.wl_surface().clone();
+        let client_output = output.and_then(|wo| smithay::output::Output::from_resource(&wo));
         // Defer until the first sized commit — geometry is still (0,0)
         // here, which would poison `saved_size`, and the initial-commit
         // positioning block would clobber the fullscreen map.
         if self.pending_center.contains(&wl_surface) {
-            self.pending_fullscreen.insert(wl_surface);
+            self.pending_fullscreen.insert(wl_surface, client_output);
             return;
         }
         let window = self
@@ -184,7 +185,8 @@ impl XdgShellHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.enter_fullscreen(&window);
+            let target = self.resolve_fullscreen_output(&wl_surface, client_output);
+            self.enter_fullscreen(&window, target);
         }
     }
 

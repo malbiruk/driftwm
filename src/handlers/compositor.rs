@@ -525,7 +525,7 @@ impl CompositorHandler for DriftWm {
                         // /focus — skip navigate_to_window then. Pinned windows
                         // have no canvas position to navigate the camera to.
                         let deferred_fit_or_fs = self.pending_fit.contains(&root)
-                            || self.pending_fullscreen.contains(&root);
+                            || self.pending_fullscreen.contains_key(&root);
                         if !is_widget
                             && !is_fullscreen
                             && !deferred_fit_or_fs
@@ -559,8 +559,9 @@ impl CompositorHandler for DriftWm {
                         // rect; non-snapped fit and fullscreen keep this.
                         self.refresh_stable_snap_rect(&window);
 
-                        if self.pending_fullscreen.remove(&root) {
-                            self.enter_fullscreen(&window);
+                        if let Some(client_output) = self.pending_fullscreen.remove(&root) {
+                            let target = self.resolve_fullscreen_output(&root, client_output);
+                            self.enter_fullscreen(&window, target);
                         } else if self.pending_fit.remove(&root) {
                             self.decoration_fit(&window);
                         }

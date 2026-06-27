@@ -86,6 +86,7 @@ differently — see [Layer-shell surfaces](#layer-shell-surfaces) below.
 | `border_color_focused` | `"#rrggbb[aa]"`          | inherited | Per-window focused border color                                                                                                              |
 | `corner_radius`        | px                       | inherited | Per-window corner radius override. Affects content clip, border shape, and shadow. Ignored for `decoration = "none"`.                        |
 | `shadow`               | `bool`                   | inherited | Per-window shadow toggle. Overrides `[decorations] shadow`. Ignored for `decoration = "none"`.                                               |
+| `output`               | string                   | —         | Output name (e.g. `"DP-1"`) this window fullscreens onto — see [Fullscreen output](#fullscreen-output)                                       |
 | `pass_keys`            | `bool` or `["combo", …]` | `false`   | Forward keys to the app — see below                                                                                                          |
 
 > [!WARNING]
@@ -162,6 +163,24 @@ not on the canvas, so — like layer-shell panels — they're deliberately absen
 from `driftwm msg state` and canvas screenshots. If you run top/bottom bars,
 `Mod+A` centers the _usable_ area rather than the raw output, so the result can
 sit a little off — nudge `position` to taste.
+
+### Fullscreen output
+
+On a multi-monitor setup, `output` chooses which monitor a window fullscreens
+onto, by output name (e.g. `"DP-1"` — find names under `outputs.*` in
+`driftwm msg state`):
+
+```toml
+[[window_rules]]
+app_id = "steam_app_*"
+output = "DP-1"
+```
+
+Precedence when a window goes fullscreen: the rule's `output` wins; otherwise the
+output the client itself requested; otherwise the active output (where the
+pointer is). An unknown or disconnected output name falls through to the next
+choice. `output` only affects fullscreen — it does not move a windowed or
+screen-pinned window.
 
 ### Layer-shell surfaces
 

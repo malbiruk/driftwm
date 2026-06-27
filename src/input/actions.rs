@@ -266,7 +266,7 @@ impl DriftWm {
                             // Set camera/zoom directly — enter_fullscreen locks the viewport
                             self.set_camera(ret.camera);
                             self.set_zoom(ret.zoom);
-                            self.enter_fullscreen(ret.fullscreen_window.as_ref().unwrap());
+                            self.enter_fullscreen(ret.fullscreen_window.as_ref().unwrap(), None);
                         } else {
                             let vc = self.usable_center_screen();
                             self.set_zoom_animation_center(Some(Point::from((
@@ -381,7 +381,10 @@ impl DriftWm {
                 } else if was_fullscreen.is_some() {
                     // Gesture already exited fullscreen — don't re-enter
                 } else if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
-                    self.enter_fullscreen(&window);
+                    let target = window
+                        .wl_surface()
+                        .and_then(|s| self.resolve_fullscreen_output(&s, None));
+                    self.enter_fullscreen(&window, target);
                 }
             }
             Action::FitWindow => {

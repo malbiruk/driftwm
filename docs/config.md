@@ -903,6 +903,7 @@ Effect fields:
 - `border_color_focused` — per-window focused border color hex.
 - `corner_radius` — per-window corner radius override (px). Affects content clip, border shape, and shadow. Ignored for decoration = "none".
 - `shadow` — per-window shadow toggle. Overrides [decorations] shadow. Ignored for decoration = "none".
+- `output` — output name (e.g. "DP-1") this window fullscreens onto. Takes precedence over the output the client itself requests. Omit to honor the client's request, then the active output. Find names under `outputs.*` in `driftwm msg state`. (default: unset)
 - `pass_keys` — controls which compositor keybindings are forwarded to the app:
   - pass_keys = true — forward ALL keys (game-friendly)
   - pass_keys = ["mod+q", "ctrl+q"] — forward ONLY these combos; all other compositor shortcuts stay active
@@ -961,6 +962,14 @@ pass_keys = ["ctrl+q"]
 [[window_rules]]
 app_id    = "/^steam_app_\\d+$/"
 pass_keys = true
+```
+
+**Example: Always open this game fullscreen on a specific monitor**
+
+```toml
+[[window_rules]]
+app_id = "steam_app_*"
+output = "DP-1"
 ```
 
 **Example: Compose rules, blur from first rule, opacity from second (both apply)**

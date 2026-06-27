@@ -473,7 +473,10 @@ pub struct DriftWm {
     /// first sized commit. Deferred until after first-commit positioning so
     /// `restore_size` / `saved_size` capture the client's preferred geometry.
     pub pending_fit: HashSet<WlSurface>,
-    pub pending_fullscreen: HashSet<WlSurface>,
+    /// Surfaces that requested fullscreen before their first sized commit,
+    /// mapped to the client-requested output (if any). Resolved against window
+    /// rules + active output when the deferred fullscreen fires on first commit.
+    pub pending_fullscreen: HashMap<WlSurface, Option<Output>>,
     /// Keyboard focus snapshot captured at `new_toplevel` time, keyed by the
     /// new surface. `Some(None)` means user had no focus (e.g. clicked empty
     /// canvas); missing entry means snapshot was already consumed.
