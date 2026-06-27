@@ -67,9 +67,9 @@ impl DriftWm {
         }
 
         // This window is already fullscreen on a *different* output: tear that
-        // down first. Exiting restores its real windowed geometry, so the
-        // `saved_size` captured below is honest rather than the fullscreen
-        // viewport size (the same hazard the idempotent guard above dodges).
+        // down first, so `saved_size` below is captured from its windowed
+        // geometry (preferring the stored restore size) rather than the
+        // fullscreen viewport — same best-effort basis as the idempotent guard.
         if let Some(other) = window
             .wl_surface()
             .and_then(|s| self.find_fullscreen_output_for_surface(&s))

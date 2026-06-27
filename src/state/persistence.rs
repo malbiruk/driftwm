@@ -147,6 +147,60 @@ impl DriftWm {
             }
         }
 
+        // Screen-space windows (pinned + fullscreen) live outside `windows=`, so
+        // they need their own change detection or the per-output sections go
+        // stale — e.g. dragging a pinned window, or a window opening straight
+        // into fullscreen on an untouched monitor (no camera move, never in the
+        // canvas list).
+        let mut pinned_by_output: HashMap<String, Vec<PinnedInfo>> = HashMap::new();
+        for window in self.space.elements() {
+            let Some(surface) = window.wl_surface() else {
+                continue;
+            };
+            let Some(p) = self.pinned.get(&surface.id()) else {
+                continue;
+            };
+            let (app_id, title) = window_app_id_title(&surface);
+            if app_id.is_empty() {
+                continue;
+            }
+            let size = window.geometry().size;
+            pinned_by_output
+                .entry(p.output.name())
+                .or_default()
+                .push(PinnedInfo {
+                    app_id,
+                    title,
+                    position: [p.screen_pos.x, p.screen_pos.y],
+                    size: [size.w, size.h],
+                });
+        }
+
+        let mut fullscreen_by_output: HashMap<String, FullscreenInfo> = HashMap::new();
+        for (output, fs) in &self.fullscreen {
+            if let Some(surface) = fs.window.wl_surface() {
+                let (app_id, title) = window_app_id_title(&surface);
+                if !app_id.is_empty() {
+                    fullscreen_by_output.insert(output.name(), FullscreenInfo { app_id, title });
+                }
+            }
+        }
+
+        // Sorted signatures for change detection (HashMap order is
+        // nondeterministic; title excluded, matching the windows= title policy).
+        let mut pinned_sig: Vec<(String, [i32; 2], [i32; 2])> = Vec::new();
+        for (name, pins) in &pinned_by_output {
+            for p in pins {
+                pinned_sig.push((name.clone(), p.position, p.size));
+            }
+        }
+        pinned_sig.sort();
+        let mut fullscreen_sig: Vec<(String, String)> = fullscreen_by_output
+            .iter()
+            .map(|(name, f)| (name.clone(), f.app_id.clone()))
+            .collect();
+        fullscreen_sig.sort();
+
         let layout_dirty = self.state_file_layout != self.active_layout;
         let mut any_output_dirty = false;
         for output in self.space.outputs() {
@@ -169,8 +223,10 @@ impl DriftWm {
         }
         let windows_dirty = window_list_changed(&window_fps, &self.state_file_windows)
             || layers.len() != self.state_file_layer_count;
+        let screen_space_dirty =
+            pinned_sig != self.state_file_pinned || fullscreen_sig != self.state_file_fullscreen;
 
-        if !layout_dirty && !any_output_dirty && !windows_dirty {
+        if !layout_dirty && !any_output_dirty && !windows_dirty && !screen_space_dirty {
             return;
         }
         self.state_file_last_write = Instant::now();
@@ -214,32 +270,6 @@ impl DriftWm {
             content += &format!("layers={}\n", layers.join(","));
         }
 
-        // Screen-pinned windows, grouped per owning output. Screen-space, so
-        // absent from `windows=`; surfaced here instead.
-        let mut pinned_by_output: HashMap<String, Vec<PinnedInfo>> = HashMap::new();
-        for window in self.space.elements() {
-            let Some(surface) = window.wl_surface() else {
-                continue;
-            };
-            let Some(p) = self.pinned.get(&surface.id()) else {
-                continue;
-            };
-            let (app_id, title) = window_app_id_title(&surface);
-            if app_id.is_empty() {
-                continue;
-            }
-            let size = window.geometry().size;
-            pinned_by_output
-                .entry(p.output.name())
-                .or_default()
-                .push(PinnedInfo {
-                    app_id,
-                    title,
-                    position: [p.screen_pos.x, p.screen_pos.y],
-                    size: [size.w, size.h],
-                });
-        }
-
         // Per-output camera/zoom + screen-space (fullscreen, pinned) inventory.
         for output in self.space.outputs() {
             let name = output.name();
@@ -252,15 +282,10 @@ impl DriftWm {
                 cam.x, cam.y
             );
 
-            if let Some(fs) = self.fullscreen.get(output)
-                && let Some(surface) = fs.window.wl_surface()
+            if let Some(info) = fullscreen_by_output.get(&name)
+                && let Ok(json) = serde_json::to_string(info)
             {
-                let (app_id, title) = window_app_id_title(&surface);
-                if !app_id.is_empty()
-                    && let Ok(json) = serde_json::to_string(&FullscreenInfo { app_id, title })
-                {
-                    content += &format!("outputs.{name}.fullscreen={json}\n");
-                }
+                content += &format!("outputs.{name}.fullscreen={json}\n");
             }
 
             if let Some(pins) = pinned_by_output.get(&name)
@@ -282,6 +307,8 @@ impl DriftWm {
             }
             self.state_file_layout = self.active_layout.clone();
             self.state_file_windows = window_fps;
+            self.state_file_pinned = pinned_sig;
+            self.state_file_fullscreen = fullscreen_sig;
         }
     }
 }
