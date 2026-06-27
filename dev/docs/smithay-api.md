@@ -124,6 +124,27 @@ delegate_cursor_shape!(DriftWm);
 // Also need: impl TabletSeatHandler for DriftWm {}
 ```
 
+### TabletSeat / TabletSeatHandler (`tablet-v2` protocol)
+
+`wp_tablet_manager_v2` is used to expose high-definition graphics tablet pen input (pressure, tilt, rotation) to drawing tools like Krita.
+
+```rust
+// Init:
+let tablet_state = TabletManagerState::new::<DriftWm>(&dh);
+delegate_tablet_manager!(DriftWm);
+
+// Impl:
+impl TabletSeatHandler for DriftWm {
+    fn tablet_tool_image(
+        &mut self,
+        _tool: &smithay::backend::input::TabletToolDescriptor,
+        image: CursorImageStatus,
+    ) {
+        self.cursor.cursor_status = image;
+    }
+}
+```
+
 ### MemoryRenderBuffer
 Source: `src/backend/renderer/element/memory.rs`
 ```rust

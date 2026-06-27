@@ -52,6 +52,21 @@ pub(super) struct InputConfig {
     pub keyboard: KeyboardConfig,
     pub trackpad: TrackpadConfig,
     pub mouse: MouseDeviceFileConfig,
+    pub tablet: TabletFileConfig,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct TabletFileConfig {
+    pub map_to_output: Option<String>,
+    pub mappings: Option<Vec<TabletMappingFileConfig>>,
+}
+
+#[derive(Serialize, Deserialize, Default, Clone)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct TabletMappingFileConfig {
+    pub name: String,
+    pub map_to_output: String,
 }
 
 #[derive(Serialize, Deserialize, Default)]

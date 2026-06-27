@@ -2,6 +2,7 @@ mod actions;
 pub(crate) mod gestures;
 pub(crate) mod keyboard;
 mod pointer;
+pub(crate) mod tablet;
 
 use smithay::{
     backend::input::{
@@ -216,6 +217,12 @@ impl DriftWm {
             InputEvent::GesturePinchEnd { event } => self.on_gesture_pinch_end::<I>(event),
             InputEvent::GestureHoldBegin { event } => self.on_gesture_hold_begin::<I>(event),
             InputEvent::GestureHoldEnd { event } => self.on_gesture_hold_end::<I>(event),
+            InputEvent::DeviceAdded { device } => self.on_device_added::<I>(&device),
+            InputEvent::DeviceRemoved { device } => self.on_device_removed::<I>(&device),
+            InputEvent::TabletToolAxis { event } => self.on_tablet_tool_axis::<I>(event),
+            InputEvent::TabletToolProximity { event } => self.on_tablet_tool_proximity::<I>(event),
+            InputEvent::TabletToolTip { event } => self.on_tablet_tool_tip::<I>(event),
+            InputEvent::TabletToolButton { event } => self.on_tablet_tool_button::<I>(event),
             _ => {}
         }
     }
@@ -420,6 +427,7 @@ impl DriftWm {
         &mut self,
         event: I::PointerMotionAbsoluteEvent,
     ) {
+        self.cursor.tablet_active = false;
         let output = match self.active_output() {
             Some(o) => o,
             None => return,
@@ -483,6 +491,7 @@ impl DriftWm {
     /// Multi-monitor aware: converts to layout space for output crossing,
     /// then to target output's canvas coords.
     fn on_pointer_motion_relative<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+        self.cursor.tablet_active = false;
         // When locked, pointer only targets the lock surface
         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
             let pointer = self.seat.get_pointer().unwrap();

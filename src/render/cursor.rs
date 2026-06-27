@@ -33,41 +33,46 @@ pub fn build_cursor_elements(
     let physical_pos: Point<f64, Physical> = screen_pos.to_physical_precise_round(scale);
 
     let status = state.cursor.cursor_status.clone();
-    let mut result = match status {
-        CursorImageStatus::Hidden => vec![],
-        CursorImageStatus::Surface(ref surface) => {
-            if !surface.alive() {
-                state.cursor.cursor_status = CursorImageStatus::default_named();
-                return build_xcursor_elements(state, renderer, physical_pos, "default", alpha);
+    let mut result = if state.cursor.tablet_active && status != CursorImageStatus::Hidden {
+        build_xcursor_elements(state, renderer, physical_pos, "tablet_dot", alpha)
+    } else {
+        match status {
+            CursorImageStatus::Hidden => vec![],
+            CursorImageStatus::Surface(ref surface) => {
+                if !surface.alive() {
+                    state.cursor.cursor_status = CursorImageStatus::default_named();
+                    build_xcursor_elements(state, renderer, physical_pos, "default", alpha)
+                } else {
+                    let hotspot = with_states(surface, |states| {
+                        states
+                            .data_map
+                            .get::<CursorImageSurfaceData>()
+                            .map(|d| d.lock().unwrap().hotspot)
+                            .unwrap_or_default()
+                    });
+                    let pos: Point<i32, Physical> = (
+                        (physical_pos.x - hotspot.x as f64) as i32,
+                        (physical_pos.y - hotspot.y as f64) as i32,
+                    )
+                        .into();
+                    let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                        smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                            renderer,
+                            surface,
+                            pos,
+                            Scale::from(1.0),
+                            alpha,
+                            Kind::Cursor,
+                        );
+                    elems
+                        .into_iter()
+                        .map(|e| OutputRenderElements::CursorSurface(e.into()))
+                        .collect()
+                }
             }
-            let hotspot = with_states(surface, |states| {
-                states
-                    .data_map
-                    .get::<CursorImageSurfaceData>()
-                    .map(|d| d.lock().unwrap().hotspot)
-                    .unwrap_or_default()
-            });
-            let pos: Point<i32, Physical> = (
-                (physical_pos.x - hotspot.x as f64) as i32,
-                (physical_pos.y - hotspot.y as f64) as i32,
-            )
-                .into();
-            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
-                    renderer,
-                    surface,
-                    pos,
-                    Scale::from(1.0),
-                    alpha,
-                    Kind::Cursor,
-                );
-            elems
-                .into_iter()
-                .map(|e| OutputRenderElements::CursorSurface(e.into()))
-                .collect()
-        }
-        CursorImageStatus::Named(icon) => {
-            build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
+            CursorImageStatus::Named(icon) => {
+                build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
+            }
         }
     };
 

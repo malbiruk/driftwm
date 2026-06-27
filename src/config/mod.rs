@@ -95,6 +95,7 @@ pub struct Config {
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
     pub mouse_device: MouseDeviceSettings,
+    pub tablet: TabletSettings,
     pub gesture_thresholds: GestureThresholds,
     pub layout_independent: bool,
     pub keyboard_layout: KeyboardLayout,
@@ -511,6 +512,22 @@ impl Config {
             }
         };
 
+        let tablet = TabletSettings {
+            map_to_output: raw.input.tablet.map_to_output.clone().filter(|o| o.as_str() != "none"),
+            mappings: raw
+                .input
+                .tablet
+                .mappings
+                .clone()
+                .unwrap_or_default()
+                .into_iter()
+                .map(|m| TabletMappingSettings {
+                    name: m.name,
+                    map_to_output: m.map_to_output,
+                })
+                .collect(),
+        };
+
         let gesture_thresholds = GestureThresholds {
             swipe_distance: non_negative(
                 raw.gestures.swipe_threshold.unwrap_or(12.0),
@@ -732,6 +749,7 @@ impl Config {
             backend,
             trackpad,
             mouse_device,
+            tablet,
             gesture_thresholds,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),
             keyboard_layout,
