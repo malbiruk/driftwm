@@ -47,6 +47,8 @@ pub struct Config {
     pub trackpad_speed: f64,
     /// Multiplier for mouse drag pan (Mod+LMB or LMB on canvas). 1.0 = direct.
     pub mouse_speed: f64,
+    /// Multiplier for touchscreen pan gestures.
+    pub touch_speed: f64,
     /// Scroll momentum on a 0–1 scale: 0 = off, 0.5 = default, 1 = floatiest.
     pub drift: f64,
     /// Pixels per keyboard nudge (Mod+Shift+Arrow).
@@ -77,6 +79,8 @@ pub struct Config {
     pub cycle_hold: Modifiers,
     /// Zoom step multiplier per keypress. 1.1 = 10% per press.
     pub zoom_step: f64,
+    /// Touchscreen gesture zoom speed multiplier.
+    pub zoom_touch_speed: f64,
     /// Padding (viewport/screen pixels) around the bounding box for ZoomToFit.
     /// Screen-space so the gutter is consistent regardless of the resulting zoom.
     pub zoom_fit_padding: f64,
@@ -95,6 +99,7 @@ pub struct Config {
     pub background: BackgroundConfig,
     pub trackpad: TrackpadSettings,
     pub mouse_device: MouseDeviceSettings,
+    pub touch: TouchSettings,
     pub gesture_thresholds: GestureThresholds,
     pub layout_independent: bool,
     pub keyboard_layout: KeyboardLayout,
@@ -511,6 +516,13 @@ impl Config {
             }
         };
 
+        let touch = {
+            let t = &raw.input.touch;
+            TouchSettings {
+                enable: t.enable.unwrap_or(true),
+            }
+        };
+
         let gesture_thresholds = GestureThresholds {
             swipe_distance: non_negative(
                 raw.gestures.swipe_threshold.unwrap_or(12.0),
@@ -597,6 +609,11 @@ impl Config {
             "navigation.mouse_speed",
             &mut errors,
         );
+        let touch_speed = non_negative(
+            raw.navigation.touch_speed.unwrap_or(1.0),
+            "navigation.touch_speed",
+            &mut errors,
+        );
         let drift = clamp_warn(
             raw.navigation.drift.unwrap_or(0.5),
             0.0,
@@ -659,6 +676,7 @@ impl Config {
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
             trackpad_speed,
             mouse_speed,
+            touch_speed,
             drift,
             nudge_step: non_negative(
                 raw.navigation.nudge_step.unwrap_or(20),
@@ -705,6 +723,11 @@ impl Config {
             auto_navigate_on_close: raw.navigation.auto_navigate_on_close.unwrap_or(true),
             cycle_hold,
             zoom_step: non_negative(raw.zoom.step.unwrap_or(1.1), "zoom.step", &mut errors),
+            zoom_touch_speed: non_negative(
+                raw.zoom.touch_speed.unwrap_or(1.0),
+                "zoom.touch_speed",
+                &mut errors,
+            ),
             zoom_fit_padding: non_negative(
                 raw.zoom.fit_padding.unwrap_or(80.0),
                 "zoom.fit_padding",
@@ -732,6 +755,7 @@ impl Config {
             backend,
             trackpad,
             mouse_device,
+            touch,
             gesture_thresholds,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),
             keyboard_layout,

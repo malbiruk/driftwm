@@ -182,6 +182,14 @@ Default: `false`
 
 reverse scroll direction
 
+## `[input.touch]`
+
+### `enable`
+
+Default: `true`
+
+enable touchscreen support
+
 ## `[cursor]`
 
 ### `theme`
@@ -215,6 +223,12 @@ trackpad (scroll/gestures) pan multiplier
 Default: `1.0`
 
 mouse (drag) pan multiplier (1.0 = direct)
+
+### `touch_speed`
+
+Default: `1.0`
+
+touchscreen gesture pan speed multiplier
 
 ### `drift`
 
@@ -297,6 +311,12 @@ cursor edge-pan activation zone (px) — kept small so it doesn't trigger by acc
 Default: `1.1`
 
 multiplier per keypress (1.1 = 10% per press)
+
+### `touch_speed`
+
+Default: `1.0`
+
+touchscreen gesture zoom speed multiplier
 
 ### `fit_padding`
 

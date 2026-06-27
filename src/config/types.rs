@@ -373,6 +373,17 @@ impl Default for TrackpadSettings {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+pub struct TouchSettings {
+    pub enable: bool,
+}
+
+impl Default for TouchSettings {
+    fn default() -> Self {
+        Self { enable: true }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct MouseDeviceSettings {
     pub accel_speed: f64,
     pub accel_profile: AccelProfile,

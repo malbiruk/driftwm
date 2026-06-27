@@ -598,6 +598,8 @@ pub struct DriftWm {
     /// touches a screen edge. Toggled by
     /// [`Action::ToggleCursorPan`](driftwm::config::Action::ToggleCursorPan).
     pub cursor_edge_pan: bool,
+
+    pub touch_state: crate::input::touch::TouchState,
 }
 
 #[derive(Default)]

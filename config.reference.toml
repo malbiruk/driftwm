@@ -77,6 +77,9 @@
 # accel_profile = "flat"      # "flat" or "adaptive"
 # natural_scroll = false      # reverse scroll direction
 
+[input.touch]
+# enable = true               # enable touchscreen support
+
 [cursor]
 # theme = "none"             # XCURSOR_THEME; "none" = inherit from environment (e.g. "Adwaita")
 # size = 0                    # XCURSOR_SIZE; 0 = inherit from environment (e.g. 24)
@@ -85,6 +88,7 @@
 [navigation]
 # trackpad_speed = 1.5        # trackpad (scroll/gestures) pan multiplier
 # mouse_speed = 1.0           # mouse (drag) pan multiplier (1.0 = direct)
+# touch_speed = 1.0           # touchscreen gesture pan speed multiplier
 # drift = 0.5                 # momentum coast: 0 = off, 0.5 = default, 1 = floatiest
 # animation_speed = 0.3       # camera lerp factor (higher = faster)
 # auto_navigate_on_close = true  # on close, pan to the newly focused window if off-screen
@@ -110,6 +114,7 @@
 
 [zoom]
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
+# touch_speed = 1.0           # touchscreen gesture zoom speed multiplier
 # fit_padding = 80.0          # viewport px padding for zoom-to-fit (screen space)
 # reset_on_new_window = true  # animate zoom to 1.0 when a new window is mapped
                               # (false = keep current zoom, pan only)
