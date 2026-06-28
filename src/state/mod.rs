@@ -598,6 +598,12 @@ pub struct DriftWm {
     /// touches a screen edge. Toggled by
     /// [`Action::ToggleCursorPan`](driftwm::config::Action::ToggleCursorPan).
     pub cursor_edge_pan: bool,
+
+    /// Cursor edge-pan: instant the cursor entered the activation zone.
+    /// `None` while the cursor is outside the zone. Used to gate the pan
+    /// behind `config.edge_pan_latency_ms` so it doesn't kick in the moment
+    /// the cursor grazes the edge.
+    pub cursor_edge_pan_zone_entered_at: Option<Instant>,
 }
 
 #[derive(Default)]

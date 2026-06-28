@@ -66,6 +66,11 @@ pub struct Config {
     pub edge_pan_cursor: bool,
     /// Cursor edge-pan activation zone, px from the edge.
     pub edge_pan_cursor_zone: f64,
+    /// Edge auto-pan: delay before pan actually starts after the cursor enters
+    /// the activation zone (ms). Gives a brief grace period so crossing between
+    /// monitors during a window drag doesn't immediately push the canvas.
+    /// Applies to both window-drag edge-pan and bare-cursor edge-pan.
+    pub edge_pan_latency_ms: u64,
     /// Base lerp factor for camera animation (frame-rate independent), in (0, 1].
     /// Lower = smoother; 1 = instant; 0 would freeze the camera.
     pub animation_speed: f64,
@@ -701,6 +706,7 @@ impl Config {
                 "navigation.edge_pan.cursor_zone",
                 &mut errors,
             ),
+            edge_pan_latency_ms: raw.navigation.edge_pan.latency_ms.unwrap_or(120),
             animation_speed,
             auto_navigate_on_close: raw.navigation.auto_navigate_on_close.unwrap_or(true),
             cycle_hold,
