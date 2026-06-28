@@ -28,8 +28,9 @@ use smithay::{
         relative_pointer::RelativePointerManagerState,
         security_context::SecurityContextState,
         selection::{
-            data_device::DataDeviceState, primary_selection::PrimarySelectionState,
-            wlr_data_control::DataControlState,
+            data_device::DataDeviceState,
+            ext_data_control::DataControlState as ExtDataControlState,
+            primary_selection::PrimarySelectionState, wlr_data_control::DataControlState,
         },
         session_lock::SessionLockManagerState,
         shell::{
@@ -100,6 +101,11 @@ impl DriftWm {
         SinglePixelBufferState::new::<Self>(&dh);
         let primary_selection_state = PrimarySelectionState::new::<Self>(&dh);
         let data_control_state = DataControlState::new::<Self, _>(
+            &dh,
+            Some(&primary_selection_state),
+            client_is_unrestricted,
+        );
+        let ext_data_control_state = ExtDataControlState::new::<Self, _>(
             &dh,
             Some(&primary_selection_state),
             client_is_unrestricted,
@@ -274,6 +280,7 @@ impl DriftWm {
             xdg_activation_state,
             primary_selection_state,
             data_control_state,
+            ext_data_control_state,
             pointer_constraints_state,
             relative_pointer_state,
             keyboard_shortcuts_inhibit_state,

@@ -56,6 +56,7 @@ use smithay::wayland::pointer_constraints::PointerConstraintsState;
 use smithay::wayland::presentation::PresentationState;
 use smithay::wayland::relative_pointer::RelativePointerManagerState;
 use smithay::wayland::security_context::SecurityContextState;
+use smithay::wayland::selection::ext_data_control::DataControlState as ExtDataControlState;
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
@@ -409,6 +410,7 @@ pub struct DriftWm {
     pub xdg_activation_state: XdgActivationState,
     pub primary_selection_state: PrimarySelectionState,
     pub data_control_state: DataControlState,
+    pub ext_data_control_state: ExtDataControlState,
     #[allow(dead_code)]
     pub pointer_constraints_state: PointerConstraintsState,
     #[allow(dead_code)]
