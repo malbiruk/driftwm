@@ -1,4 +1,5 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 
 use smithay::{
     backend::input::TouchSlot,
@@ -10,7 +11,8 @@ use smithay::{
         },
     },
     output::Output,
-    utils::{Logical, Point, Serial, SERIAL_COUNTER},
+    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
+    utils::{Logical, Point, SERIAL_COUNTER, Serial, Size},
 };
 
 use driftwm::canvas::{self, CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
@@ -28,6 +30,52 @@ const DEAD_ZONE_PX: f64 = 8.0;
 const TAP_MAX_MS: u32 = 250;
 /// Window for a second 3-finger tap to count as a double-tap.
 const DOUBLE_TAP_MS: u32 = 300;
+/// Dwell (ms) before a drag commits that turns a 3-finger drag into a hold
+/// gesture: resize (no prior tap) or cluster move (after a double-tap). Long
+/// enough that a normal pan, which drags promptly, never trips it.
+const HOLD_MS: u32 = 350;
+/// Per-frame pinch-zoom deadzone (on the spread ratio). The 3-finger spread
+/// metric is noisy, so a pure pan would wobble the zoom; ignore scale changes
+/// inside this band. The baseline only advances on a committed zoom, so a
+/// deliberate pinch still accumulates past it.
+const ZOOM_DEADZONE: f64 = 0.02;
+
+/// Map where the fingers landed within a window to a resize edge via a 3×3 grid
+/// (`origin` is canvas-space, `loc`/`size` are the window's canvas rect). The
+/// center cell — and any window too small for the fingers to land off-center —
+/// falls back to the bottom-right corner.
+fn edge_from_origin(
+    origin: Point<f64, Logical>,
+    loc: Point<i32, Logical>,
+    size: Size<i32, Logical>,
+) -> xdg_toplevel::ResizeEdge {
+    use xdg_toplevel::ResizeEdge;
+    let fx = if size.w > 0 {
+        (origin.x - loc.x as f64) / size.w as f64
+    } else {
+        0.5
+    };
+    let fy = if size.h > 0 {
+        (origin.y - loc.y as f64) / size.h as f64
+    } else {
+        0.5
+    };
+    let left = fx < 1.0 / 3.0;
+    let right = fx > 2.0 / 3.0;
+    let top = fy < 1.0 / 3.0;
+    let bottom = fy > 2.0 / 3.0;
+    match (left, right, top, bottom) {
+        (true, _, true, _) => ResizeEdge::TopLeft,
+        (_, true, true, _) => ResizeEdge::TopRight,
+        (true, _, _, true) => ResizeEdge::BottomLeft,
+        (_, true, _, true) => ResizeEdge::BottomRight,
+        (_, _, true, _) => ResizeEdge::Top,
+        (_, _, _, true) => ResizeEdge::Bottom,
+        (true, _, _, _) => ResizeEdge::Left,
+        (_, true, _, _) => ResizeEdge::Right,
+        _ => ResizeEdge::BottomRight,
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 enum Mode {
@@ -167,18 +215,20 @@ impl TouchGestureGrab {
         if self.points.len() >= 2 && self.last_spread > 1.0 {
             let spread = self.spread(centroid);
             let scale = spread / self.last_spread;
-            let new_zoom = (zoom * (1.0 + (scale - 1.0) * data.config.zoom_touch_speed))
-                .clamp(data.min_zoom(), canvas::MAX_ZOOM);
-            let camera_after = output_state(&self.output).camera;
-            let anchor = screen_to_canvas(ScreenPos(centroid), camera_after, zoom).0;
-            let new_camera = canvas::zoom_anchor_camera(anchor, centroid, new_zoom);
-            {
-                let mut os = output_state(&self.output);
-                os.camera = new_camera;
-                os.zoom = new_zoom;
+            if (scale - 1.0).abs() > ZOOM_DEADZONE {
+                let new_zoom = (zoom * (1.0 + (scale - 1.0) * data.config.zoom_touch_speed))
+                    .clamp(data.min_zoom(), canvas::MAX_ZOOM);
+                let camera_after = output_state(&self.output).camera;
+                let anchor = screen_to_canvas(ScreenPos(centroid), camera_after, zoom).0;
+                let new_camera = canvas::zoom_anchor_camera(anchor, centroid, new_zoom);
+                {
+                    let mut os = output_state(&self.output);
+                    os.camera = new_camera;
+                    os.zoom = new_zoom;
+                }
+                data.update_output_from_camera();
+                self.last_spread = spread;
             }
-            data.update_output_from_camera();
-            self.last_spread = spread;
         }
         self.last_centroid = centroid;
     }
@@ -189,15 +239,18 @@ impl TouchGestureGrab {
         self.nav_cumulative += Point::from((-centroid_delta.x, -centroid_delta.y));
 
         let threshold = data.config.gesture_thresholds.swipe_distance;
-        let cum_sq =
-            self.nav_cumulative.x * self.nav_cumulative.x + self.nav_cumulative.y * self.nav_cumulative.y;
-        if !self.nav_fired_swipe && cum_sq >= threshold * threshold {
+        let cum_sq = self.nav_cumulative.x * self.nav_cumulative.x
+            + self.nav_cumulative.y * self.nav_cumulative.y;
+        // Swipe and pinch are mutually exclusive: the first to cross its
+        // threshold claims the gesture so a 4-finger swipe's natural splay can't
+        // also fire zoom-to-fit.
+        if !self.nav_fired_swipe && !self.nav_fired_pinch && cum_sq >= threshold * threshold {
             self.nav_fired_swipe = true;
             let dir = direction_from_vector(self.nav_cumulative);
             data.execute_action(&Action::CenterNearest(dir));
         }
 
-        if !self.nav_fired_pinch && self.start_spread > 1.0 {
+        if !self.nav_fired_pinch && !self.nav_fired_swipe && self.start_spread > 1.0 {
             let scale = self.spread(centroid) / self.start_spread;
             if scale < data.config.gesture_thresholds.pinch_in_scale {
                 self.nav_fired_pinch = true;
@@ -211,13 +264,15 @@ impl TouchGestureGrab {
     }
 
     /// Double-tap-drag: hand off to a touch move grab on the window under the
-    /// dragging finger. Returns false (and keeps panning) if there's no window.
+    /// dragging finger. `cluster` extends the move to the window's snap-cluster
+    /// (the hold variant). Returns false (and keeps panning) if there's no window.
     fn try_start_move(
         &mut self,
         data: &mut DriftWm,
         handle: &mut TouchInnerHandle<'_, DriftWm>,
         event: &MotionEvent,
         seq: Serial,
+        cluster: bool,
     ) -> bool {
         let Some((window, loc)) = data
             .space
@@ -232,6 +287,11 @@ impl TouchGestureGrab {
         let serial = SERIAL_COUNTER.next_serial();
         data.raise_and_focus(&window, serial);
         let initial = data.space.element_location(&window).unwrap_or(loc);
+        let (members, surfaces) = if cluster {
+            data.cluster_snapshot_for_drag(&window, initial)
+        } else {
+            (Vec::new(), HashSet::new())
+        };
         let start = TouchGrabStartData {
             focus: None,
             slot: event.slot,
@@ -240,7 +300,64 @@ impl TouchGestureGrab {
         // All current fingers are already down; seed the count so the move grab
         // stays alive until every one of them lifts.
         let slots = self.points.len();
-        let grab = MoveSurfaceGrab::new_touch(start, window, initial, self.output.clone(), slots);
+        let grab = MoveSurfaceGrab::new_touch(
+            start,
+            window,
+            initial,
+            self.output.clone(),
+            slots,
+            members,
+            surfaces,
+        );
+        handle.set_grab(self, data, seq, grab);
+        true
+    }
+
+    /// Hold-then-drag resize: pick the edge from where the fingers landed (a 3×3
+    /// grid over the window) and hand off to a touch resize grab. Returns false
+    /// (and keeps panning) if there's no canvas window under the landing point.
+    fn try_start_resize(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        event: &MotionEvent,
+        seq: Serial,
+    ) -> bool {
+        // Use the live finger centroid with the live camera (not the landing
+        // `start_centroid`, which is screen-space and goes stale if a momentum
+        // coast moves the camera during the hold). It's within the dead zone of
+        // the landing point, so the 3×3 cell is unchanged.
+        let (camera, zoom) = self.camera_zoom();
+        let origin = screen_to_canvas(ScreenPos(self.centroid()), camera, zoom).0;
+        let Some((window, _)) = data
+            .space
+            .element_under(origin)
+            .map(|(w, l)| (w.clone(), l))
+        else {
+            return false;
+        };
+        if !data.is_canvas_window(&window) {
+            return false;
+        }
+        let Some(loc) = data.space.element_location(&window) else {
+            return false;
+        };
+        let edges = edge_from_origin(origin, loc, window.geometry().size);
+        let start = TouchGrabStartData {
+            focus: None,
+            slot: event.slot,
+            location: event.location,
+        };
+        let slots = self.points.len();
+        // Build before raising/focusing so a failed build leaves no stray focus
+        // change (it falls through to pan).
+        let Some(grab) =
+            data.build_touch_resize_grab(&window, edges, start, self.output.clone(), slots)
+        else {
+            return false;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        data.raise_and_focus(&window, serial);
         handle.set_grab(self, data, seq, grab);
         true
     }
@@ -261,8 +378,9 @@ impl TouchGestureGrab {
         let (camera, zoom) = self.camera_zoom();
         let canvas = screen_to_canvas(ScreenPos(self.start_centroid), camera, zoom).0;
         let serial = SERIAL_COUNTER.next_serial();
-        if let Some((window, _)) = data.space.element_under(canvas).map(|(w, l)| (w.clone(), l)) {
-            data.raise_and_focus(&window, serial);
+        let under = data.space.element_under(canvas).map(|(w, _)| w.clone());
+        if let Some(window) = &under {
+            data.raise_and_focus(window, serial);
         }
         let double = data
             .touch_state
@@ -273,7 +391,14 @@ impl TouchGestureGrab {
             data.execute_action(&Action::FitWindow);
         } else {
             data.touch_state.last_three_finger_tap = Some(time);
-            data.execute_action(&Action::CenterWindow);
+            // Defer the center so a follow-up double-tap (fit) or double-tap-drag
+            // (move) doesn't flash a center first; a fresh interaction cancels it.
+            let target = under
+                .filter(|w| data.is_canvas_window(w))
+                .or_else(|| data.focused_window().filter(|w| data.is_canvas_window(w)));
+            if let Some(window) = target {
+                data.schedule_pending_center(window, Duration::from_millis(DOUBLE_TAP_MS as u64));
+            }
         }
     }
 }
@@ -409,11 +534,19 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             self.start_spread = self.last_spread;
             self.nav_cumulative = Point::from((0.0, 0.0));
 
-            if self.armed_for_move
-                && self.max_fingers == 3
-                && self.try_start_move(data, handle, event, seq)
-            {
-                return;
+            // At drag commit, the time since the fingers settled selects the
+            // hold variants: armed (recent tap) → move, hold-move → cluster;
+            // unarmed → pan, hold → resize. A failed move/resize (no window)
+            // falls through to pan.
+            if self.max_fingers == 3 {
+                let held = event.time.saturating_sub(self.tap_start_time) >= HOLD_MS;
+                if self.armed_for_move {
+                    if self.try_start_move(data, handle, event, seq, held) {
+                        return;
+                    }
+                } else if held && self.try_start_resize(data, handle, event, seq) {
+                    return;
+                }
             }
             return;
         }
@@ -425,11 +558,21 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         }
     }
 
-    fn frame(&mut self, data: &mut DriftWm, handle: &mut TouchInnerHandle<'_, DriftWm>, seq: Serial) {
+    fn frame(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
         handle.frame(data, seq);
     }
 
-    fn cancel(&mut self, data: &mut DriftWm, handle: &mut TouchInnerHandle<'_, DriftWm>, seq: Serial) {
+    fn cancel(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
         handle.cancel(data, seq);
         handle.unset_grab(self, data);
     }

@@ -1,14 +1,26 @@
+use std::cell::RefCell;
+use std::collections::HashSet;
+use std::time::Duration;
+
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveSurfaceGrab, TouchGestureGrab};
+use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab, TouchGestureGrab};
 use crate::state::{DriftWm, FocusTarget, SessionLock, output_state};
-use driftwm::window_ext::WindowExt;
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
+use driftwm::window_ext::WindowExt;
 use smithay::{
     backend::input::{AbsolutePositionEvent, Event, InputBackend, TouchEvent, TouchSlot},
     desktop::Window,
     input::touch::{DownEvent, GrabStartData as TouchGrabStartData, MotionEvent, UpEvent},
     output::Output,
-    utils::{Logical, Point, SERIAL_COUNTER},
+    reexports::{
+        calloop::{
+            RegistrationToken,
+            timer::{TimeoutAction, Timer},
+        },
+        wayland_protocols::xdg::shell::server::xdg_toplevel,
+    },
+    utils::{IsAlive, Logical, Point, SERIAL_COUNTER},
+    wayland::{compositor::with_states, seat::WaylandFocus},
 };
 
 /// A close-button press awaiting release. Fires only if the finger lifts while
@@ -25,6 +37,10 @@ pub struct TouchState {
     /// Timestamp of the last clean 3-finger tap, for double-tap detection.
     pub last_three_finger_tap: Option<u32>,
     pub pending_close: Option<PendingClose>,
+    /// Single-tap center deferred until the double-tap window elapses, so a
+    /// follow-up double-tap (fit) / double-tap-drag (move) doesn't flash a
+    /// center first. Cancelled when a second 3-finger gesture supersedes it.
+    pub pending_center_timer: Option<RegistrationToken>,
 }
 
 impl TouchState {
@@ -32,6 +48,7 @@ impl TouchState {
         Self {
             last_three_finger_tap: None,
             pending_close: None,
+            pending_center_timer: None,
         }
     }
 }
@@ -40,8 +57,82 @@ impl DriftWm {
     /// Output a touch maps to. No per-device mapping yet (future
     /// `[input.touch] map_to_output`); use the first output — the touch panel —
     /// rather than the keyboard-focused one, which may be a non-touch monitor.
-    fn touch_output(&self) -> Option<Output> {
+    pub(crate) fn touch_output(&self) -> Option<Output> {
         self.space.outputs().next().cloned()
+    }
+
+    /// Schedule a deferred single-tap center for `window` after `delay`. Any
+    /// prior pending center is cancelled first.
+    pub(crate) fn schedule_pending_center(&mut self, window: Window, delay: Duration) {
+        self.cancel_pending_center();
+        let timer = Timer::from_duration(delay);
+        let token = self
+            .loop_handle
+            .insert_source(timer, move |_, _, data: &mut DriftWm| {
+                data.touch_state.pending_center_timer = None;
+                if window.alive() && data.is_canvas_window(&window) {
+                    data.navigate_to_window(&window, true);
+                }
+                TimeoutAction::Drop
+            })
+            .ok();
+        self.touch_state.pending_center_timer = token;
+    }
+
+    /// Cancel a pending deferred center, if any.
+    pub(crate) fn cancel_pending_center(&mut self) {
+        if let Some(token) = self.touch_state.pending_center_timer.take() {
+            self.loop_handle.remove(token);
+        }
+    }
+
+    /// Set up a touch resize grab on `window` for `edges`: clear fit state, mark
+    /// the surface/toplevel resizing (for commit-time top/left repositioning),
+    /// and build the grab. Single-window, canvas-space only (no pinned path).
+    pub(crate) fn build_touch_resize_grab(
+        &mut self,
+        window: &Window,
+        edges: xdg_toplevel::ResizeEdge,
+        touch_start: TouchGrabStartData<DriftWm>,
+        output: Output,
+        slots: usize,
+    ) -> Option<ResizeSurfaceGrab> {
+        let initial_window_location = self.space.element_location(window)?;
+        let initial_window_size = window.geometry().size;
+        let wl_surface = window.wl_surface().map(|s| s.into_owned())?;
+
+        crate::state::fit::clear_fit_state(&wl_surface);
+
+        with_states(&wl_surface, |states| {
+            states
+                .data_map
+                .get_or_insert(|| RefCell::new(ResizeState::Idle))
+                .replace(ResizeState::Resizing {
+                    edges,
+                    initial_window_location,
+                    initial_window_size,
+                    initial_screen_pos: None,
+                });
+        });
+
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.set(xdg_toplevel::State::Resizing);
+                state.states.unset(xdg_toplevel::State::Maximized);
+            });
+        }
+
+        let constraints = crate::grabs::SizeConstraints::for_window(window);
+        Some(ResizeSurfaceGrab::new_touch(
+            touch_start,
+            window.clone(),
+            edges,
+            initial_window_location,
+            initial_window_size,
+            output,
+            constraints,
+            slots,
+        ))
     }
 
     pub fn on_touch_down<I: InputBackend>(&mut self, event: I::TouchDownEvent) {
@@ -106,6 +197,11 @@ impl DriftWm {
             );
             return;
         }
+
+        // Any fresh touch supersedes a deferred single-tap center. A real
+        // double-tap still re-resolves to fit in `detect_tap`, so this doesn't
+        // break double-tap-to-fit.
+        self.cancel_pending_center();
 
         // Fresh interaction. The first finger hit-tests SSD decorations.
         match self.decoration_under(canvas_pos) {
@@ -180,7 +276,15 @@ impl DriftWm {
         };
         // One finger down (the titlebar press); the grab intercepts its motion
         // and up directly, so no `down` forward is needed.
-        let grab = MoveSurfaceGrab::new_touch(start, window.clone(), initial, output, 1);
+        let grab = MoveSurfaceGrab::new_touch(
+            start,
+            window.clone(),
+            initial,
+            output,
+            1,
+            Vec::new(),
+            HashSet::new(),
+        );
         self.seat.get_touch().unwrap().set_grab(self, grab, serial);
     }
 

@@ -733,6 +733,8 @@ impl DriftWm {
             constraints,
             cluster_resize,
             pinned_initial_screen_pos,
+            touch_start: None,
+            touch_slots: 0,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

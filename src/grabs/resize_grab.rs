@@ -5,10 +5,14 @@ use smithay::{
     input::{
         SeatHandler,
         pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
+        touch::{
+            DownEvent, GrabStartData as TouchGrabStartData, MotionEvent as TouchMotionEvent,
+            OrientationEvent, ShapeEvent, TouchGrab, TouchInnerHandle, UpEvent,
+        },
     },
     output::Output,
     reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
-    utils::{Logical, Point, Size},
+    utils::{Logical, Point, Serial, Size},
     wayland::{compositor::with_states, seat::WaylandFocus, shell::xdg::SurfaceCachedState},
 };
 
@@ -116,6 +120,13 @@ pub struct ResizeSurfaceGrab {
     /// and top/left-edge repositioning targets `screen_pos`. Holds the
     /// window's `screen_pos` at grab start.
     pub pinned_initial_screen_pos: Option<Point<i32, Logical>>,
+    /// Touch grab start data, present only for touch-initiated resizes. Mirrors
+    /// `MoveSurfaceGrab`; `apply_resize` reads `start_data.location` so the
+    /// pointer and touch paths share one resize core.
+    pub touch_start: Option<TouchGrabStartData<DriftWm>>,
+    /// Fingers down for a touch resize; the grab unsets when this reaches zero,
+    /// so a stray finger doesn't leak out of grab routing.
+    pub touch_slots: usize,
 }
 
 /// Check if `edges` includes a horizontal/vertical component via raw bit values.
@@ -229,7 +240,114 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
         let clamped = canvas::screen_to_canvas(canvas::ScreenPos(clamped_screen), camera, zoom).0;
         self.last_clamped_location = clamped;
 
-        let delta = clamped - self.start_data.location;
+        self.apply_resize(data, clamped);
+
+        // Warp pointer to clamped position so it visually stops at output edge
+        let clamped_event = MotionEvent {
+            location: clamped,
+            serial: event.serial,
+            time: event.time,
+        };
+        handle.motion(data, None, &clamped_event);
+    }
+
+    fn button(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut PointerInnerHandle<'_, DriftWm>,
+        event: &ButtonEvent,
+    ) {
+        handle.button(data, event);
+        if handle.current_pressed().is_empty() {
+            handle.unset_grab(self, data, event.serial, event.time, true);
+        }
+    }
+
+    fn unset(&mut self, data: &mut DriftWm) {
+        self.finalize(data);
+        data.cursor.grab_cursor = false;
+        data.cursor.cursor_status = CursorImageStatus::default_named();
+    }
+
+    crate::grabs::forward_pointer_grab_methods!();
+}
+
+impl ResizeSurfaceGrab {
+    /// Wind down a resize: drop the Wayland `Resizing` state and arm the
+    /// commit-time reposition (`WaitingForLastCommit`) so a top/left-edge
+    /// resize keeps its opposite edge fixed (see `handle_resize_commit`).
+    /// Runs from `unset`, so the mouse button-release and the gesture-end
+    /// paths finalize identically — gestures deliver no button release.
+    fn finalize(&self, data: &mut DriftWm) {
+        if let Some(toplevel) = self.window.toplevel() {
+            toplevel.with_pending_state(|state| {
+                state.states.unset(xdg_toplevel::State::Resizing);
+            });
+            toplevel.send_pending_configure();
+        }
+
+        if let Some(surface) = self.window.wl_surface().map(|s| s.into_owned()) {
+            with_states(&surface, |states| {
+                states
+                    .data_map
+                    .get_or_insert(|| RefCell::new(ResizeState::Idle))
+                    .replace(ResizeState::WaitingForLastCommit {
+                        edges: self.edges,
+                        initial_window_location: self.initial_window_location,
+                        initial_window_size: self.initial_window_size,
+                        initial_screen_pos: self.pinned_initial_screen_pos,
+                    });
+            });
+        }
+
+        for member in &self.cluster_resize.members {
+            if smithay::utils::IsAlive::alive(&member.window) {
+                data.refresh_stable_snap_rect(&member.window);
+            }
+        }
+    }
+
+    /// Touch-initiated resize. The edge is fixed at grab start (chosen by where
+    /// the fingers landed); the drag drives the size from `touch_start.location`.
+    /// Single-window only — no cluster reflow, no screen-pinned path.
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_touch(
+        touch_start: TouchGrabStartData<DriftWm>,
+        window: Window,
+        edges: xdg_toplevel::ResizeEdge,
+        initial_window_location: Point<i32, Logical>,
+        initial_window_size: Size<i32, Logical>,
+        output: Output,
+        constraints: SizeConstraints,
+        slots: usize,
+    ) -> Self {
+        Self {
+            start_data: GrabStartData {
+                focus: None,
+                button: 0,
+                location: touch_start.location,
+            },
+            window,
+            edges,
+            initial_window_location,
+            initial_window_size,
+            last_window_size: initial_window_size,
+            output,
+            last_clamped_location: touch_start.location,
+            snap: SnapState::default(),
+            constraints,
+            cluster_resize: ClusterResizeSnapshot::empty(),
+            pinned_initial_screen_pos: None,
+            touch_start: Some(touch_start),
+            touch_slots: slots,
+        }
+    }
+
+    /// Apply a resize for canvas (non-pinned) windows from a canvas-space
+    /// pointer/finger `location`, cascading to cluster members. Shared by the
+    /// pointer and touch resize paths.
+    fn apply_resize(&mut self, data: &mut DriftWm, location: Point<f64, Logical>) {
+        let delta = location - self.start_data.location;
 
         let mut new_w = self.initial_window_size.w;
         let mut new_h = self.initial_window_size.h;
@@ -307,69 +425,102 @@ impl PointerGrab<DriftWm> for ResizeSurfaceGrab {
                 toplevel.send_pending_configure();
             }
         }
-
-        // Warp pointer to clamped position so it visually stops at output edge
-        let clamped_event = MotionEvent {
-            location: clamped,
-            serial: event.serial,
-            time: event.time,
-        };
-        handle.motion(data, None, &clamped_event);
     }
+}
 
-    fn button(
+impl TouchGrab<DriftWm> for ResizeSurfaceGrab {
+    fn down(
         &mut self,
         data: &mut DriftWm,
-        handle: &mut PointerInnerHandle<'_, DriftWm>,
-        event: &ButtonEvent,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        _focus: Option<(<DriftWm as SeatHandler>::TouchFocus, Point<f64, Logical>)>,
+        event: &DownEvent,
+        seq: Serial,
     ) {
-        handle.button(data, event);
-        if handle.current_pressed().is_empty() {
-            handle.unset_grab(self, data, event.serial, event.time, true);
+        // Extra fingers during a touch resize are ignored — single-window only.
+        self.touch_slots += 1;
+        handle.down(data, None, event, seq);
+    }
+
+    fn up(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        event: &UpEvent,
+        seq: Serial,
+    ) {
+        handle.up(data, event, seq);
+        self.touch_slots = self.touch_slots.saturating_sub(1);
+        // Keep the grab alive until every finger lifts so stray fingers don't
+        // leak out of grab routing; `unset` finalizes the resize.
+        if self.touch_slots == 0 {
+            handle.unset_grab(self, data);
         }
+    }
+
+    fn motion(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        _focus: Option<(<DriftWm as SeatHandler>::TouchFocus, Point<f64, Logical>)>,
+        event: &TouchMotionEvent,
+        seq: Serial,
+    ) {
+        if event.slot != self.touch_start.as_ref().expect("touch resize grab").slot {
+            handle.motion(data, None, event, seq);
+            return;
+        }
+        self.apply_resize(data, event.location);
+        handle.motion(data, None, event, seq);
+    }
+
+    fn frame(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
+        handle.frame(data, seq);
+    }
+
+    fn cancel(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
+        handle.cancel(data, seq);
+        handle.unset_grab(self, data);
+    }
+
+    fn shape(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        event: &ShapeEvent,
+        seq: Serial,
+    ) {
+        handle.shape(data, event, seq);
+    }
+
+    fn orientation(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        event: &OrientationEvent,
+        seq: Serial,
+    ) {
+        handle.orientation(data, event, seq);
+    }
+
+    fn start_data(&self) -> &TouchGrabStartData<DriftWm> {
+        self.touch_start.as_ref().expect("touch resize grab")
     }
 
     fn unset(&mut self, data: &mut DriftWm) {
+        // Touch never set the grab cursor (it's hidden during touch), so don't
+        // reset `cursor_status` — that field is client-owned and clobbering it
+        // would lose the app's shape when the pointer next reappears.
         self.finalize(data);
-        data.cursor.grab_cursor = false;
-        data.cursor.cursor_status = CursorImageStatus::default_named();
-    }
-
-    crate::grabs::forward_pointer_grab_methods!();
-}
-
-impl ResizeSurfaceGrab {
-    /// Wind down a resize: drop the Wayland `Resizing` state and arm the
-    /// commit-time reposition (`WaitingForLastCommit`) so a top/left-edge
-    /// resize keeps its opposite edge fixed (see `handle_resize_commit`).
-    /// Runs from `unset`, so the mouse button-release and the gesture-end
-    /// paths finalize identically — gestures deliver no button release.
-    fn finalize(&self, data: &mut DriftWm) {
-        if let Some(toplevel) = self.window.toplevel() {
-            toplevel.with_pending_state(|state| {
-                state.states.unset(xdg_toplevel::State::Resizing);
-            });
-            toplevel.send_pending_configure();
-        }
-
-        if let Some(surface) = self.window.wl_surface().map(|s| s.into_owned()) {
-            with_states(&surface, |states| {
-                states
-                    .data_map
-                    .get_or_insert(|| RefCell::new(ResizeState::Idle))
-                    .replace(ResizeState::WaitingForLastCommit {
-                        edges: self.edges,
-                        initial_window_location: self.initial_window_location,
-                        initial_window_size: self.initial_window_size,
-                        initial_screen_pos: self.pinned_initial_screen_pos,
-                    });
-            });
-        }
-
-        for member in &self.cluster_resize.members {
-            if smithay::utils::IsAlive::alive(&member.window) {
-                data.refresh_stable_snap_rect(&member.window);
-            }
-        }
     }
 }

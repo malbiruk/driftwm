@@ -553,6 +553,8 @@ impl DriftWm {
             constraints,
             cluster_resize,
             pinned_initial_screen_pos: None,
+            touch_start: None,
+            touch_slots: 0,
         };
         let pointer = self.seat.get_pointer().unwrap();
         pointer.set_grab(self, grab, serial, Focus::Clear);

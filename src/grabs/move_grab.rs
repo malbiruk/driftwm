@@ -99,15 +99,20 @@ impl MoveSurfaceGrab {
         }
     }
 
-    /// Touch-initiated single-window move. No cluster (no `Shift` on touch),
-    /// no screen-pinned path; reuses the same snap/map core as the pointer move.
-    /// `slots` is the number of fingers already down at grab start.
+    /// Touch-initiated move. `slots` is the number of fingers already down at
+    /// grab start. Cluster members may be supplied for a hold-extended cluster
+    /// move (the touch analogue of `Shift`-drag); pass empty collections for a
+    /// single-window move. No screen-pinned path; reuses the same snap/map core
+    /// as the pointer move.
+    #[allow(clippy::too_many_arguments)]
     pub fn new_touch(
         touch_start: TouchGrabStartData<DriftWm>,
         window: Window,
         initial_window_location: Point<i32, Logical>,
         output: Output,
         slots: usize,
+        cluster_members: Vec<(Window, Point<i32, Logical>)>,
+        cluster_member_surfaces: HashSet<WlSurface>,
     ) -> Self {
         Self {
             start_canvas: touch_start.location,
@@ -123,8 +128,8 @@ impl MoveSurfaceGrab {
             snap: SnapState::default(),
             output,
             inhibited_edge: None,
-            cluster_members: Vec::new(),
-            cluster_member_surfaces: HashSet::new(),
+            cluster_members,
+            cluster_member_surfaces,
             last_mapped_loc: None,
             pinned_grab_offset: None,
         }
@@ -612,6 +617,11 @@ impl TouchGrab<DriftWm> for MoveSurfaceGrab {
         // leak out of grab routing.
         if event.slot == self.touch_start.as_ref().expect("touch move grab").slot {
             data.refresh_stable_snap_rect(&self.window);
+            for (member, _) in &self.cluster_members {
+                if member.alive() {
+                    data.refresh_stable_snap_rect(member);
+                }
+            }
         }
         if self.touch_slots == 0 {
             handle.unset_grab(self, data);
@@ -635,11 +645,21 @@ impl TouchGrab<DriftWm> for MoveSurfaceGrab {
         }
     }
 
-    fn frame(&mut self, data: &mut DriftWm, handle: &mut TouchInnerHandle<'_, DriftWm>, seq: Serial) {
+    fn frame(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
         handle.frame(data, seq);
     }
 
-    fn cancel(&mut self, data: &mut DriftWm, handle: &mut TouchInnerHandle<'_, DriftWm>, seq: Serial) {
+    fn cancel(
+        &mut self,
+        data: &mut DriftWm,
+        handle: &mut TouchInnerHandle<'_, DriftWm>,
+        seq: Serial,
+    ) {
         output_state(&self.output).edge_pan_velocity = None;
         handle.cancel(data, seq);
         handle.unset_grab(self, data);
