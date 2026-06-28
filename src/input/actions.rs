@@ -229,21 +229,42 @@ impl DriftWm {
                 }
 
                 let len = self.focus_history.len();
-                if let Some(ref mut idx) = self.cycle_state {
+                let step = |i: usize| {
                     if *backward {
-                        *idx = (*idx + len - 1) % len;
+                        (i + len - 1) % len
                     } else {
-                        *idx = (*idx + 1) % len;
+                        (i + 1) % len
                     }
-                } else {
-                    // First Tab press: jump to previous window (index 1)
-                    self.cycle_state = Some(1 % len);
+                };
+                // First Tab press jumps to the previous window (index 1).
+                let mut idx = match self.cycle_state {
+                    Some(cur) => step(cur),
+                    None => 1 % len,
+                };
+                // The active output's fullscreen was already exited above (not
+                // allowlisted), so any fullscreen entry left here is on another
+                // output — shown only on its own monitor, never a target here.
+                // Bounded by `len` so an all-fullscreen history can't loop.
+                let mut steps = 0;
+                while steps < len
+                    && self
+                        .focus_history
+                        .get(idx)
+                        .is_some_and(|w| self.is_window_fullscreen(w))
+                {
+                    idx = step(idx);
+                    steps += 1;
                 }
-
-                let idx = self.cycle_state.unwrap();
-                if let Some(window) = self.focus_history.get(idx).cloned() {
-                    self.navigate_to_window(&window, false);
-                }
+                let Some(window) = self
+                    .focus_history
+                    .get(idx)
+                    .filter(|w| !self.is_window_fullscreen(w))
+                    .cloned()
+                else {
+                    return;
+                };
+                self.cycle_state = Some(idx);
+                self.navigate_to_window(&window, false);
             }
             Action::HomeToggle => {
                 let viewport_size = self.get_viewport_size();

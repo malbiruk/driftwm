@@ -21,6 +21,22 @@ impl DriftWm {
     /// Otherwise preserves current zoom, or restores saved zoom if leaving overview.
     pub fn navigate_to_window(&mut self, window: &Window, reset_zoom: bool) {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+
+        // A fullscreen window lives in screen space, shown only on its own
+        // output. From any other output it's invisible and parked at that
+        // output's camera origin, so it isn't a navigation target there at all —
+        // don't focus or pan to it (mirrors the hit-test isolation). On its own
+        // output, focus it but leave the locked camera put.
+        if let Some(fs_output) = window
+            .wl_surface()
+            .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+        {
+            if self.active_output().as_ref() == Some(&fs_output) {
+                self.raise_and_focus(window, serial);
+            }
+            return;
+        }
+
         self.raise_and_focus(window, serial);
 
         let target_zoom = if reset_zoom {
@@ -64,13 +80,7 @@ impl DriftWm {
         driftwm::canvas::dynamic_min_zoom(
             self.space
                 .elements()
-                .filter(|w| {
-                    !w.wl_surface()
-                        .and_then(|s| driftwm::config::applied_rule(&s))
-                        .is_some_and(|r| r.widget)
-                        && !self.is_pinned(w)
-                        && !self.is_window_fullscreen(w)
-                })
+                .filter(|w| self.is_canvas_window(w))
                 .map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
                     let size = w.geometry().size;
@@ -169,7 +179,9 @@ impl DriftWm {
     }
 
     /// Nearest window (by canvas distance from `from_center`) that is at least
-    /// partially visible on `output`. Excludes `exclude` and widgets.
+    /// partially visible on `output`. Excludes `exclude`; widgets, pinned, and
+    /// fullscreen windows have no canvas snap rect, so `window_intersects_viewport_on`
+    /// skips them.
     pub fn nearest_visible_window_on(
         &self,
         from_center: Point<f64, Logical>,
@@ -178,15 +190,7 @@ impl DriftWm {
     ) -> Option<Window> {
         self.space
             .elements()
-            .filter(|w| {
-                *w != exclude
-                    && !w
-                        .wl_surface()
-                        .and_then(|s| driftwm::config::applied_rule(&s))
-                        .is_some_and(|r| r.widget)
-                    && !self.is_window_fullscreen(w)
-                    && self.window_intersects_viewport_on(w, output)
-            })
+            .filter(|w| *w != exclude && self.window_intersects_viewport_on(w, output))
             .min_by(|a, b| {
                 let dist = |w: &Window| {
                     self.window_visual_center(w)

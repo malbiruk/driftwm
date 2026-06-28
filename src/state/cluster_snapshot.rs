@@ -183,28 +183,43 @@ pub type ClusterDragSnapshot = (Vec<(Window, Point<i32, Logical>)>, HashSet<WlSu
 impl DriftWm {
     /// Snap target rects for all windows except `primary` and
     /// `cluster_excludes` (latter used during multi-window cluster drags to
-    /// stop members snapping against each other). Widgets always skipped.
+    /// stop members snapping against each other). Widgets, pinned, and
+    /// fullscreen windows are never snap targets (see `snap_rect_for`).
     pub fn snap_targets(
         &self,
         primary: &WlSurface,
         cluster_excludes: &HashSet<WlSurface>,
     ) -> (Vec<driftwm::layout::snap::SnapRect>, i32, i32) {
-        // A fullscreen window fills its own output and is parked at that
-        // output's camera origin — never a snap target, on any output.
-        let fullscreen_excludes: HashSet<_> = self
-            .fullscreen
-            .values()
-            .filter_map(|fs| fs.window.wl_surface().map(|s| s.id()))
-            .collect();
-        snap_targets_impl(
-            &self.space,
-            &self.decorations,
-            &self.config.decorations,
-            &self.pinned,
-            &fullscreen_excludes,
-            primary,
-            cluster_excludes,
-        )
+        let dc = &self.config.decorations;
+        let self_bar = if self.decorations.contains_key(&primary.id()) {
+            dc.title_bar_height
+        } else {
+            0
+        };
+        let primary_rule = driftwm::config::applied_rule(primary);
+        let primary_mode = driftwm::config::effective_decoration_mode(
+            primary_rule.as_ref().and_then(|r| r.decoration.as_ref()),
+            &dc.default_mode,
+        );
+        let self_bw =
+            driftwm::config::effective_border_width(primary_rule.as_ref(), primary_mode, dc);
+
+        // `snap_rect_for` is the single definition of a snappable window — it
+        // already drops widgets, pinned, and fullscreen windows; here we only
+        // additionally skip the primary itself and its frozen cluster.
+        let mut others = Vec::new();
+        for w in self.space.elements() {
+            let Some(surface) = w.wl_surface() else {
+                continue;
+            };
+            if &*surface == primary || cluster_excludes.contains(&*surface) {
+                continue;
+            }
+            if let Some(rect) = self.snap_rect_for(w) {
+                others.push(rect);
+            }
+        }
+        (others, self_bar, self_bw)
     }
 
     /// Every non-widget window with its `SnapRect`. Feeds `cluster_of` at
@@ -212,20 +227,17 @@ impl DriftWm {
     pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::layout::snap::SnapRect)> {
         self.space
             .elements()
-            .filter(|w| !self.is_pinned(w) && !self.is_window_fullscreen(w))
-            .filter_map(|w| {
-                window_snap_rect(&self.space, &self.decorations, &self.config.decorations, w)
-                    .map(|(_, rect)| (w.clone(), rect))
-            })
+            .filter_map(|w| self.snap_rect_for(w).map(|rect| (w.clone(), rect)))
             .collect()
     }
 
     /// Border + title-bar inflated `SnapRect`. `None` for widgets / pinned /
-    /// unmapped. Pinned windows live in screen space, so they have no canvas
-    /// snap rect — this excludes them from snapping, clustering, and all the
-    /// viewport-relation queries built on top of it.
+    /// fullscreen / unmapped. Pinned and fullscreen windows live in screen space
+    /// (a fullscreen window is parked at its output's camera origin), so they
+    /// have no canvas snap rect — this excludes them from snapping, clustering,
+    /// and all the viewport-relation queries built on top of it.
     pub fn snap_rect_for(&self, w: &Window) -> Option<driftwm::layout::snap::SnapRect> {
-        if self.is_pinned(w) {
+        if self.is_pinned(w) || self.is_window_fullscreen(w) {
             return None;
         }
         window_snap_rect(&self.space, &self.decorations, &self.config.decorations, w)
@@ -441,50 +453,6 @@ impl DriftWm {
             resize_edges: edges as u32,
         }
     }
-}
-
-/// Free-function form of `DriftWm::snap_targets` for callers holding a
-/// mutable borrow on another `DriftWm` field (disjoint borrow workaround).
-pub(crate) fn snap_targets_impl(
-    space: &Space<Window>,
-    decorations: &HashMap<smithay::reexports::wayland_server::backend::ObjectId, WindowDecoration>,
-    decoration_config: &driftwm::config::DecorationConfig,
-    pinned: &HashMap<smithay::reexports::wayland_server::backend::ObjectId, super::PinnedState>,
-    fullscreen_excludes: &HashSet<smithay::reexports::wayland_server::backend::ObjectId>,
-    primary: &WlSurface,
-    cluster_excludes: &HashSet<WlSurface>,
-) -> (Vec<driftwm::layout::snap::SnapRect>, i32, i32) {
-    let self_bar = if decorations.contains_key(&primary.id()) {
-        decoration_config.title_bar_height
-    } else {
-        0
-    };
-    let primary_rule = driftwm::config::applied_rule(primary);
-    let primary_mode = driftwm::config::effective_decoration_mode(
-        primary_rule.as_ref().and_then(|r| r.decoration.as_ref()),
-        &decoration_config.default_mode,
-    );
-    let self_bw = driftwm::config::effective_border_width(
-        primary_rule.as_ref(),
-        primary_mode,
-        decoration_config,
-    );
-    let mut others = Vec::new();
-    for w in space.elements() {
-        let Some((surface, rect)) = window_snap_rect(space, decorations, decoration_config, w)
-        else {
-            continue;
-        };
-        if surface == *primary
-            || cluster_excludes.contains(&surface)
-            || pinned.contains_key(&surface.id())
-            || fullscreen_excludes.contains(&surface.id())
-        {
-            continue;
-        }
-        others.push(rect);
-    }
-    (others, self_bar, self_bw)
 }
 
 /// `(surface, snap_rect)` for one window. Y-low includes title-bar height
