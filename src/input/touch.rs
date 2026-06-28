@@ -1,317 +1,244 @@
-use crate::state::{DriftWm, FocusTarget};
-use driftwm::canvas::{self, ScreenPos, screen_to_canvas};
+use crate::decorations::DecorationHit;
+use crate::grabs::{MoveSurfaceGrab, TouchGestureGrab};
+use crate::state::{DriftWm, FocusTarget, SessionLock, output_state};
+use driftwm::window_ext::WindowExt;
+use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use smithay::{
     backend::input::{AbsolutePositionEvent, Event, InputBackend, TouchEvent, TouchSlot},
-    input::touch::{DownEvent, MotionEvent, UpEvent},
+    desktop::Window,
+    input::touch::{DownEvent, GrabStartData as TouchGrabStartData, MotionEvent, UpEvent},
+    output::Output,
     utils::{Logical, Point, SERIAL_COUNTER},
 };
-use std::collections::HashMap;
 
-#[derive(Debug, Clone)]
-pub struct ActiveTouchPoint {
-    pub slot: TouchSlot,
-    pub start_screen_pos: Point<f64, Logical>,
-    pub last_screen_pos: Point<f64, Logical>,
-    pub start_canvas_pos: Point<f64, Logical>,
-    pub last_canvas_pos: Point<f64, Logical>,
-    pub focus: Option<(FocusTarget, Point<f64, Logical>)>,
+/// A close-button press awaiting release. Fires only if the finger lifts while
+/// still inside the button — touch's analogue of the pointer close path.
+pub struct PendingClose {
+    slot: TouchSlot,
+    window: Window,
+    last_canvas: Point<f64, Logical>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TouchGestureMode {
-    None,
-    CanvasPan,
-    CanvasPinch,
-}
-
-#[derive(Debug, Clone)]
+/// Coordinator-side touch state. Per-gesture state lives in `TouchGestureGrab`;
+/// this only holds what must survive across grab lifetimes.
 pub struct TouchState {
-    pub active_touches: HashMap<TouchSlot, ActiveTouchPoint>,
-    pub gesture_active: TouchGestureMode,
-    pub initial_zoom: f64,
+    /// Timestamp of the last clean 3-finger tap, for double-tap detection.
+    pub last_three_finger_tap: Option<u32>,
+    pub pending_close: Option<PendingClose>,
 }
 
 impl TouchState {
     pub fn new() -> Self {
         Self {
-            active_touches: HashMap::new(),
-            gesture_active: TouchGestureMode::None,
-            initial_zoom: 1.0,
+            last_three_finger_tap: None,
+            pending_close: None,
         }
     }
 }
 
-fn distance(p1: Point<f64, Logical>, p2: Point<f64, Logical>) -> f64 {
-    let dx = p1.x - p2.x;
-    let dy = p1.y - p2.y;
-    (dx * dx + dy * dy).sqrt()
-}
-
 impl DriftWm {
+    /// Output a touch maps to. No per-device mapping yet (future
+    /// `[input.touch] map_to_output`); use the first output — the touch panel —
+    /// rather than the keyboard-focused one, which may be a non-touch monitor.
+    fn touch_output(&self) -> Option<Output> {
+        self.space.outputs().next().cloned()
+    }
+
     pub fn on_touch_down<I: InputBackend>(&mut self, event: I::TouchDownEvent) {
         if !self.config.touch.enable {
             return;
         }
-        let output = match self.active_output() {
-            Some(o) => o,
-            None => return,
+        let Some(output) = self.touch_output() else {
+            return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
+        // Touch acts on its own output and hides the pointer.
+        self.focused_output = Some(output.clone());
+        self.cursor.hidden_by_touch = true;
 
         let screen_pos = event.position_transformed(output_geo.size);
-        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+        let (camera, zoom) = {
+            let os = output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
         let slot = event.slot();
         let time = Event::time_msec(&event);
         let serial = SERIAL_COUNTER.next_serial();
 
-        // 1. Locked session handling
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+        // Locked session: forward straight to the lock surface, no gestures.
+        if !matches!(self.session_lock, SessionLock::Unlocked) {
             let Some(ls) = self.lock_surfaces.get(&output) else {
                 return;
             };
             let focus = FocusTarget(ls.wl_surface().clone());
-            let touch_handle = self.seat.get_touch().unwrap();
-            let raw_event = DownEvent {
-                slot,
-                location: screen_pos,
-                serial,
-                time,
-            };
-            touch_handle.down(
+            let touch = self.seat.get_touch().unwrap();
+            touch.down(
                 self,
-                Some((focus.clone(), Point::from((0.0, 0.0)))),
-                &raw_event,
-            );
-            touch_handle.frame(self);
-
-            // Record active touch point
-            self.touch_state.active_touches.insert(
-                slot,
-                ActiveTouchPoint {
+                Some((focus, Point::from((0.0, 0.0)))),
+                &DownEvent {
                     slot,
-                    start_screen_pos: screen_pos,
-                    last_screen_pos: screen_pos,
-                    start_canvas_pos: screen_pos,
-                    last_canvas_pos: screen_pos,
-                    focus: Some((focus, Point::from((0.0, 0.0)))),
+                    location: screen_pos,
+                    serial,
+                    time,
+                },
+            );
+            touch.frame(self);
+            return;
+        }
+
+        // An active grab (canvas-gesture or move) owns routing — forward the
+        // new finger into it and let it decide.
+        let touch = self.seat.get_touch().unwrap();
+        if touch.is_grabbed() {
+            let under = self.pointer_focus_under(screen_pos, canvas_pos);
+            self.seat.get_touch().unwrap().down(
+                self,
+                under,
+                &DownEvent {
+                    slot,
+                    location: canvas_pos,
+                    serial,
+                    time,
                 },
             );
             return;
         }
 
-        // 2. Unlocked session handling
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        // Fresh interaction. The first finger hit-tests SSD decorations.
+        match self.decoration_under(canvas_pos) {
+            Some((window, DecorationHit::TitleBar)) => {
+                self.start_touch_move(&window, slot, canvas_pos, serial);
+                return;
+            }
+            Some((window, DecorationHit::CloseButton)) => {
+                self.touch_state.pending_close = Some(PendingClose {
+                    slot,
+                    window,
+                    last_canvas: canvas_pos,
+                });
+                return;
+            }
+            // Resize borders aren't touch-draggable (8px ≪ a fingertip); fall
+            // through to the canvas-gesture grab.
+            _ => {}
+        }
 
-        if let Some((ref target, ref origin)) = under {
-            // Touch landed on a window or layer surface: unconditionally focus + raise
+        // Otherwise start the canvas-gesture grab. A content touch focuses +
+        // raises (same as click-to-focus); empty canvas stops any coast.
+        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        if let Some((ref target, _)) = under {
             if let Some(window) = self.window_for_surface(&target.0) {
                 self.raise_and_focus(&window, serial);
             } else {
                 self.set_window_focus(Some(target.clone()), serial);
             }
-
-            // Forward to Wayland client
-            if let Some(touch_handle) = self.seat.get_touch() {
-                let raw_event = DownEvent {
-                    slot,
-                    location: canvas_pos,
-                    serial,
-                    time,
-                };
-                touch_handle.down(self, Some((target.clone(), *origin)), &raw_event);
-            }
         } else {
-            // Touch landed on empty background. Cancel existing animations (stop slide)
             self.cancel_animations();
         }
 
-        // Record touch state
-        self.touch_state.active_touches.insert(
+        let start_data = TouchGrabStartData {
+            focus: under.clone(),
             slot,
-            ActiveTouchPoint {
+            location: canvas_pos,
+        };
+        let grab = TouchGestureGrab::new(start_data, output);
+        let touch = self.seat.get_touch().unwrap();
+        touch.set_grab(self, grab, serial);
+        self.seat.get_touch().unwrap().down(
+            self,
+            under,
+            &DownEvent {
                 slot,
-                start_screen_pos: screen_pos,
-                last_screen_pos: screen_pos,
-                start_canvas_pos: canvas_pos,
-                last_canvas_pos: canvas_pos,
-                focus: under.clone(),
+                location: canvas_pos,
+                serial,
+                time,
             },
         );
+    }
 
-        // Update/Transition gesture states based on active count
-        let active_count = self.touch_state.active_touches.len();
-        let any_on_window = self
-            .touch_state
-            .active_touches
-            .values()
-            .any(|tp| tp.focus.is_some());
-
-        if !any_on_window {
-            if active_count == 2 {
-                self.touch_state.gesture_active = TouchGestureMode::CanvasPinch;
-                self.touch_state.initial_zoom = self.zoom();
-            } else if active_count == 1 {
-                self.touch_state.gesture_active = TouchGestureMode::CanvasPan;
-            } else {
-                self.touch_state.gesture_active = TouchGestureMode::None;
-            }
-        } else {
-            self.touch_state.gesture_active = TouchGestureMode::None;
-        }
+    fn start_touch_move(
+        &mut self,
+        window: &Window,
+        slot: TouchSlot,
+        location: Point<f64, Logical>,
+        serial: smithay::utils::Serial,
+    ) {
+        let Some(output) = self.touch_output() else {
+            return;
+        };
+        let Some(initial) = self.space.element_location(window) else {
+            return;
+        };
+        self.raise_and_focus(window, serial);
+        let start = TouchGrabStartData {
+            focus: None,
+            slot,
+            location,
+        };
+        // One finger down (the titlebar press); the grab intercepts its motion
+        // and up directly, so no `down` forward is needed.
+        let grab = MoveSurfaceGrab::new_touch(start, window.clone(), initial, output, 1);
+        self.seat.get_touch().unwrap().set_grab(self, grab, serial);
     }
 
     pub fn on_touch_motion<I: InputBackend>(&mut self, event: I::TouchMotionEvent) {
         if !self.config.touch.enable {
             return;
         }
-        let output = match self.active_output() {
-            Some(o) => o,
-            None => return,
+        let Some(output) = self.touch_output() else {
+            return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
-
+        self.cursor.hidden_by_touch = true;
         let screen_pos = event.position_transformed(output_geo.size);
-        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+        let (camera, zoom) = {
+            let os = output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
         let slot = event.slot();
         let time = Event::time_msec(&event);
 
-        // Retrieve recorded touch point
-        let Some(touch_point) = self.touch_state.active_touches.get(&slot).cloned() else {
-            return;
-        };
-
-        // 1. Locked session handling
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
-            if let Some(ref focus) = touch_point.focus {
-                let touch_handle = self.seat.get_touch().unwrap();
-                let raw_event = MotionEvent {
+        if !matches!(self.session_lock, SessionLock::Unlocked) {
+            let touch = self.seat.get_touch().unwrap();
+            touch.motion(
+                self,
+                None,
+                &MotionEvent {
                     slot,
                     location: screen_pos,
                     time,
-                };
-                touch_handle.motion(self, Some((focus.0.clone(), focus.1)), &raw_event);
-                touch_handle.frame(self);
-            }
-
-            // Update touch point coordinates
-            if let Some(tp) = self.touch_state.active_touches.get_mut(&slot) {
-                tp.last_screen_pos = screen_pos;
-                tp.last_canvas_pos = screen_pos;
-            }
+                },
+            );
+            touch.frame(self);
             return;
         }
 
-        // 2. Unlocked session handling
-        match self.touch_state.gesture_active {
-            TouchGestureMode::CanvasPan => {
-                let active_count = self.touch_state.active_touches.len() as f64;
-                let delta = screen_pos - touch_point.last_screen_pos;
-                let pan_speed = self.config.touch_speed;
-                let zoom = self.zoom();
-                let mut camera = self.camera();
-                camera.x -= (delta.x * pan_speed) / (zoom * active_count);
-                camera.y -= (delta.y * pan_speed) / (zoom * active_count);
-                self.set_camera(camera);
-                self.mark_all_dirty();
-            }
-            TouchGestureMode::CanvasPinch => {
-                let active_touches: Vec<&ActiveTouchPoint> =
-                    self.touch_state.active_touches.values().collect();
-                let count = active_touches.len() as f64;
-                if count >= 2.0 {
-                    // Current midpoint (screen)
-                    let sum_screen_curr = active_touches
-                        .iter()
-                        .map(|tp| {
-                            if tp.slot == slot {
-                                screen_pos
-                            } else {
-                                tp.last_screen_pos
-                            }
-                        })
-                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
-                    let midpoint_screen_curr =
-                        Point::from((sum_screen_curr.x / count, sum_screen_curr.y / count));
-
-                    // Start midpoint (screen)
-                    let sum_screen_start = active_touches
-                        .iter()
-                        .map(|tp| tp.start_screen_pos)
-                        .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
-                    let midpoint_screen_start =
-                        Point::from((sum_screen_start.x / count, sum_screen_start.y / count));
-
-                    // Current average distance to current midpoint
-                    let sum_dist_curr = active_touches
-                        .iter()
-                        .map(|tp| {
-                            let p = if tp.slot == slot {
-                                screen_pos
-                            } else {
-                                tp.last_screen_pos
-                            };
-                            distance(p, midpoint_screen_curr)
-                        })
-                        .sum::<f64>();
-                    let avg_dist_curr = sum_dist_curr / count;
-
-                    // Start average distance to start midpoint
-                    let sum_dist_start = active_touches
-                        .iter()
-                        .map(|tp| distance(tp.start_screen_pos, midpoint_screen_start))
-                        .sum::<f64>();
-                    let avg_dist_start = sum_dist_start / count;
-
-                    if avg_dist_start > 0.0 {
-                        let scale = avg_dist_curr / avg_dist_start;
-                        let initial_zoom = self.touch_state.initial_zoom;
-                        let zoom_speed = self.config.zoom_touch_speed;
-                        let min_zoom = self.min_zoom();
-
-                        let mut new_zoom = initial_zoom * (1.0 + (scale - 1.0) * zoom_speed);
-                        new_zoom = new_zoom.clamp(min_zoom, canvas::MAX_ZOOM);
-
-                        // Start midpoint (canvas)
-                        let sum_canvas_start = active_touches
-                            .iter()
-                            .map(|tp| tp.start_canvas_pos)
-                            .fold(Point::from((0.0, 0.0)), |acc, p| acc + p);
-                        let midpoint_canvas_start =
-                            Point::from((sum_canvas_start.x / count, sum_canvas_start.y / count));
-
-                        let new_camera = canvas::zoom_anchor_camera(
-                            midpoint_canvas_start,
-                            midpoint_screen_curr,
-                            new_zoom,
-                        );
-                        self.set_zoom(new_zoom);
-                        self.set_camera(new_camera);
-                        self.mark_all_dirty();
-                    }
-                }
-            }
-            TouchGestureMode::None => {
-                if let Some(ref focus) = touch_point.focus {
-                    if let Some(touch_handle) = self.seat.get_touch() {
-                        let raw_event = MotionEvent {
-                            slot,
-                            location: canvas_pos,
-                            time,
-                        };
-                        touch_handle.motion(self, Some((focus.0.clone(), focus.1)), &raw_event);
-                    }
-                }
-            }
+        // A close-button press just tracks its finger so the up event knows
+        // whether it's still inside.
+        if let Some(pc) = self.touch_state.pending_close.as_mut()
+            && pc.slot == slot
+        {
+            pc.last_canvas = canvas_pos;
+            return;
         }
 
-        // Update recorded touch point coordinates
-        if let Some(tp) = self.touch_state.active_touches.get_mut(&slot) {
-            tp.last_screen_pos = screen_pos;
-            tp.last_canvas_pos = canvas_pos;
+        let touch = self.seat.get_touch().unwrap();
+        if touch.is_grabbed() {
+            touch.motion(
+                self,
+                None,
+                &MotionEvent {
+                    slot,
+                    location: canvas_pos,
+                    time,
+                },
+            );
         }
     }
 
@@ -323,43 +250,44 @@ impl DriftWm {
         let time = Event::time_msec(&event);
         let serial = SERIAL_COUNTER.next_serial();
 
-        let Some(touch_point) = self.touch_state.active_touches.remove(&slot) else {
-            return;
-        };
-
-        // 1. Locked session handling
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
-            let touch_handle = self.seat.get_touch().unwrap();
-            let raw_event = UpEvent { slot, serial, time };
-            touch_handle.up(self, &raw_event);
-            touch_handle.frame(self);
+        if !matches!(self.session_lock, SessionLock::Unlocked) {
+            let touch = self.seat.get_touch().unwrap();
+            touch.up(self, &UpEvent { slot, serial, time });
+            touch.frame(self);
             return;
         }
 
-        // 2. Unlocked session handling
-        if self.touch_state.gesture_active != TouchGestureMode::None {
-            if self.touch_state.active_touches.is_empty() {
-                self.touch_state.gesture_active = TouchGestureMode::None;
+        if let Some(pc) = self.touch_state.pending_close.take() {
+            if pc.slot == slot {
+                let still_inside = matches!(
+                    self.decoration_under(pc.last_canvas),
+                    Some((ref w, DecorationHit::CloseButton)) if *w == pc.window
+                );
+                if still_inside {
+                    pc.window.send_close();
+                }
+                return;
             }
-        } else if let Some(ref _focus) = touch_point.focus {
-            if let Some(touch_handle) = self.seat.get_touch() {
-                let raw_event = UpEvent { slot, serial, time };
-                touch_handle.up(self, &raw_event);
-            }
+            // Different slot — leave the pending close in place.
+            self.touch_state.pending_close = Some(pc);
+        }
+
+        let touch = self.seat.get_touch().unwrap();
+        if touch.is_grabbed() {
+            touch.up(self, &UpEvent { slot, serial, time });
         }
     }
 
     pub fn on_touch_cancel<I: InputBackend>(&mut self, _event: I::TouchCancelEvent) {
-        if let Some(touch_handle) = self.seat.get_touch() {
-            touch_handle.cancel(self);
+        if let Some(touch) = self.seat.get_touch() {
+            touch.cancel(self);
         }
-        self.touch_state.active_touches.clear();
-        self.touch_state.gesture_active = TouchGestureMode::None;
+        self.touch_state.pending_close = None;
     }
 
     pub fn on_touch_frame<I: InputBackend>(&mut self, _event: I::TouchFrameEvent) {
-        if let Some(touch_handle) = self.seat.get_touch() {
-            touch_handle.frame(self);
+        if let Some(touch) = self.seat.get_touch() {
+            touch.frame(self);
         }
     }
 }

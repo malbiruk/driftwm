@@ -1,5 +1,5 @@
 <h1 align="center"><img alt="driftwm" src="assets/logo.jpg" width="500"></h1>
-<p align="center">A trackpad-first and touchscreen-friendly infinite canvas Wayland compositor.</p>
+<p align="center">A trackpad-first infinite canvas Wayland compositor.</p>
 <p align="center">
     <a href="https://github.com/malbiruk/driftwm/blob/main/LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
     <a href="https://github.com/malbiruk/driftwm/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/malbiruk/driftwm?logo=github"></a>
@@ -13,7 +13,7 @@ Traditional window managers arrange windows to fit your screen. Stacking composi
 
 `driftwm` is an infinite-canvas compositor: windows live at their native size on an infinite 2D canvas, and your display is a camera viewing it. When two windows come close, they snap together, forming implicit groups that can be moved, resized, and viewed together. No tiling, no workspaces, window overlaps happen only on purpose.
 
-Designed with laptops and touch screens in mind: navigation and window management are trackpad-first (with native touchscreen support); the infinite canvas makes the most of a small screen.
+Designed with laptops in mind: navigation and window management are trackpad-first; the infinite canvas makes the most of a small screen.
 
 Built on [smithay](https://github.com/Smithay/smithay). Inspired by [vxwm](https://codeberg.org/wh1tepearl/vxwm); borrows implementation details from [niri](https://github.com/YaLTeR/niri).
 
@@ -42,8 +42,6 @@ flick carries the viewport smoothly until friction stops it.
 | `Mod` + scroll     | Zoom at cursor    | anywhere  |
 | `Mod+=` / `Mod+-`  | Zoom in / out     | —         |
 | `Mod+0` / `Mod+Z`  | Reset zoom to 1.0 | —         |
-| Touchscreen drag   | Pan viewport      | on-canvas |
-| Touchscreen pinch  | Zoom              | on-canvas |
 
 </details>
 
@@ -61,7 +59,6 @@ with no window there — useful for areas with pinned widgets.
 | Input                        | Action                                     |
 | ---------------------------- | ------------------------------------------ |
 | 4-finger swipe               | Jump to nearest window (natural direction) |
-| Touchscreen 3-finger swipe   | Jump to nearest window (natural direction) |
 | `Mod+Ctrl` + LMB drag        | Jump to nearest window (natural direction) |
 | `Mod` + arrow                | Jump to nearest window in direction        |
 | `Alt-Tab` / `Alt-Shift-Tab`  | Cycle windows (MRU)                        |
@@ -202,8 +199,8 @@ window-search script that lets you search and jump to any open window.
 ### Everything else
 
 - New window placement: in viewport center (default), under cursor, or snapped adjacent to the focused window's cluster
-- Click-to-focus (default), focus-follows-mouse (sloppy focus), or touch-to-focus
-- Touchscreen support: 1-finger canvas drag-panning, 2-finger anchor pinch-to-zoom, and 3-finger swipe navigation
+- Click-to-focus (default) or focus-follows-mouse (sloppy focus)
+- Touchscreen support
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screen capture: screencasting (OBS, Firefox, Discord) and screenshots, incl. built-in [canvas/DPI capture](docs/ipc.md#screenshots)
 - 40+ Wayland protocols

@@ -28,6 +28,10 @@ pub struct CursorState {
     pub grab_cursor: bool,
     /// True while the pointer is over an SSD decoration area.
     pub decoration_cursor: bool,
+    /// Hidden because touch input is in use. Kept separate from `cursor_status`
+    /// (which is client-owned) so the app's requested shape survives until the
+    /// next real pointer motion restores it.
+    pub hidden_by_touch: bool,
     pub cursor_buffers: HashMap<String, CursorFrames>,
     /// Loading cursor show time.
     pub exec_cursor_show_at: Option<Instant>,
@@ -41,6 +45,7 @@ impl CursorState {
             cursor_status: CursorImageStatus::default_named(),
             grab_cursor: false,
             decoration_cursor: false,
+            hidden_by_touch: false,
             cursor_buffers: HashMap::new(),
             exec_cursor_show_at: None,
             exec_cursor_deadline: None,

@@ -433,6 +433,8 @@ impl DriftWm {
         &mut self,
         event: I::PointerMotionAbsoluteEvent,
     ) {
+        // Real pointer motion restores the cursor that touch input hid.
+        self.cursor.hidden_by_touch = false;
         let output = match self.active_output() {
             Some(o) => o,
             None => return,
@@ -496,6 +498,8 @@ impl DriftWm {
     /// Multi-monitor aware: converts to layout space for output crossing,
     /// then to target output's canvas coords.
     fn on_pointer_motion_relative<I: InputBackend>(&mut self, event: I::PointerMotionEvent) {
+        // Real pointer motion restores the cursor that touch input hid.
+        self.cursor.hidden_by_touch = false;
         // When locked, pointer only targets the lock surface
         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
             let pointer = self.seat.get_pointer().unwrap();
