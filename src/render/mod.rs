@@ -1276,6 +1276,11 @@ fn build_output_outline_elements(
         if *other == *output {
             continue;
         }
+        // A fullscreen output shows a screen-space window, not a canvas
+        // viewport, so it has no outline to project onto other monitors.
+        if state.is_output_fullscreen(other) {
+            continue;
+        }
 
         let (other_camera, other_zoom) = {
             let os = crate::state::output_state(other);
