@@ -142,7 +142,7 @@ impl DriftWm {
                 let pos = pointer.current_location();
                 // Pinned windows live in screen space (no canvas position to
                 // center the camera on) — skip them here.
-                if let Some((window, _)) = self.space.element_under(pos) {
+                if let Some((window, _)) = self.element_under(pos) {
                     let window = window.clone();
                     if !self.is_pinned(&window) {
                         self.navigate_to_window(&window, true);

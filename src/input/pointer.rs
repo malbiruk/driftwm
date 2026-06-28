@@ -37,7 +37,7 @@ impl DriftWm {
         // SSD chrome and the CSD resize margin sit outside the surface bbox, so
         // `element_under` misses them; count them as OnWindow so on-window bindings
         // apply over the chrome, not just the client surface.
-        let over_window = self.space.element_under(pos).is_some()
+        let over_window = self.element_under(pos).is_some()
             || self.canvas_layer_under(pos).is_some()
             || self.decoration_under(pos).is_some();
         if over_window {
@@ -306,7 +306,7 @@ impl DriftWm {
                     MouseAction::MoveWindow | MouseAction::MoveSnappedWindows => {
                         let want_cluster = matches!(action, MouseAction::MoveSnappedWindows);
                         if let Some((window, _)) =
-                            self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            self.element_under(pos).map(|(w, l)| (w.clone(), l))
                             && let Some(surface) = window.wl_surface()
                             && !config::applied_rule(&surface).is_some_and(|r| r.widget)
                             && !self.is_pinned(&window)
@@ -353,7 +353,7 @@ impl DriftWm {
                         // grab behaves like pre-slice-2 single-window resize.
                         let want_cluster = matches!(action, MouseAction::ResizeWindowSnapped);
                         if let Some((window, _)) =
-                            self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            self.element_under(pos).map(|(w, l)| (w.clone(), l))
                             && !window
                                 .wl_surface()
                                 .and_then(|s| config::applied_rule(&s))
@@ -400,7 +400,7 @@ impl DriftWm {
                     }
                     MouseAction::Action(ref action) => {
                         if let Some((window, _)) =
-                            self.space.element_under(pos).map(|(w, l)| (w.clone(), l))
+                            self.element_under(pos).map(|(w, l)| (w.clone(), l))
                         {
                             self.raise_and_focus(&window, serial);
                         }
@@ -412,7 +412,7 @@ impl DriftWm {
             }
 
             // Hardcoded fallbacks: click-to-focus, empty-canvas-pan
-            let element_under = self.space.element_under(pos).map(|(w, _)| w.clone());
+            let element_under = self.element_under(pos).map(|(w, _)| w.clone());
 
             if let Some(ref window) = element_under {
                 let is_widget = window

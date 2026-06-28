@@ -69,6 +69,7 @@ impl DriftWm {
                         .and_then(|s| driftwm::config::applied_rule(&s))
                         .is_some_and(|r| r.widget)
                         && !self.is_pinned(w)
+                        && !self.is_window_fullscreen(w)
                 })
                 .map(|w| {
                     let loc = self.space.element_location(w).unwrap_or_default();
@@ -183,6 +184,7 @@ impl DriftWm {
                         .wl_surface()
                         .and_then(|s| driftwm::config::applied_rule(&s))
                         .is_some_and(|r| r.widget)
+                    && !self.is_window_fullscreen(w)
                     && self.window_intersects_viewport_on(w, output)
             })
             .min_by(|a, b| {

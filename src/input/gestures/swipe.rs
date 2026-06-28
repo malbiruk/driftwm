@@ -590,8 +590,7 @@ impl DriftWm {
         }
         // SSD chrome (title bar / border) lies outside the surface bbox, so
         // `element_under` misses it; fall back to a decoration hit-test.
-        self.space
-            .element_under(pos)
+        self.element_under(pos)
             .map(|(w, l)| (w.clone(), l))
             .or_else(|| {
                 self.decoration_under(pos)

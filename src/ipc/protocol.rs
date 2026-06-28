@@ -76,6 +76,12 @@ pub enum Response {
         camera: (f64, f64),
         zoom: f64,
         windows: Vec<WindowInfo>,
+        /// Fullscreen + screen-pinned windows, which live in screen space and
+        /// are therefore excluded from `windows` (canvas coords). Empty when none.
+        #[serde(default)]
+        fullscreen: Vec<OutputFullscreen>,
+        #[serde(default)]
+        pinned: Vec<OutputPinned>,
     },
     Focused(Option<String>),
     /// Window-center, Y-up coordinates.
@@ -107,6 +113,25 @@ pub struct WindowInfo {
     pub size: [i32; 2],
     pub is_focused: bool,
     pub is_widget: bool,
+}
+
+/// A fullscreen window in the IPC `state` reply — one per fullscreened output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputFullscreen {
+    pub output: String,
+    pub app_id: String,
+    pub title: String,
+}
+
+/// A screen-pinned window in the IPC `state` reply. `position` is the
+/// output-relative top-left in screen pixels (Y-down); `size` in pixels.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct OutputPinned {
+    pub output: String,
+    pub app_id: String,
+    pub title: String,
+    pub position: [i32; 2],
+    pub size: [i32; 2],
 }
 
 /// Path to the IPC socket for a given `WAYLAND_DISPLAY` name:
@@ -190,6 +215,18 @@ mod tests {
                 camera: (0.0, 0.0),
                 zoom: 1.0,
                 windows,
+                fullscreen: vec![OutputFullscreen {
+                    output: "DP-1".into(),
+                    app_id: "mpv".into(),
+                    title: "video".into(),
+                }],
+                pinned: vec![OutputPinned {
+                    output: "HDMI-A-1".into(),
+                    app_id: "pavucontrol".into(),
+                    title: "Volume".into(),
+                    position: [20, 40],
+                    size: [320, 240],
+                }],
             }),
             Ok(Response::Focused(None)),
             Ok(Response::Ok),

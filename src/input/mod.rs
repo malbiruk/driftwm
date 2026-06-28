@@ -15,6 +15,7 @@ use smithay::{
 };
 
 use smithay::desktop::Window;
+use smithay::desktop::space::SpaceElement;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 use smithay::wayland::seat::WaylandFocus;
@@ -301,7 +302,7 @@ impl DriftWm {
         .0;
         let window = match self.pinned_window_under(screen_pos, canvas_pos) {
             Some((focus, _)) => self.window_for_surface(&focus.0),
-            None => self.space.element_under(canvas_pos).map(|(w, _)| w.clone()),
+            None => self.element_under(canvas_pos).map(|(w, _)| w.clone()),
         };
         let Some(window) = window else { return };
         let is_widget = window
@@ -775,6 +776,60 @@ impl DriftWm {
         crate::state::output_state(&output).edge_pan_velocity = velocity;
     }
 
+    /// True when `surface`'s window is fullscreen on an output *other* than the
+    /// active one. Cameras overlap on the canvas, so the active output's
+    /// canvas-space hit-tests must ignore such a window — it is visible only on
+    /// its own output (mirrors the render isolation in `window_render_transform`).
+    fn fullscreen_on_other_output(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+        active: &Option<smithay::output::Output>,
+    ) -> bool {
+        self.find_fullscreen_output_for_surface(surface)
+            .is_some_and(|fs| active.as_ref() != Some(&fs))
+    }
+
+    /// Isolation-aware `Space::element_under`: the same hit-test, but skips a
+    /// window fullscreen on another output (see `fullscreen_on_other_output`).
+    /// Every canvas-space pointer path must use this rather than
+    /// `self.space.element_under`, or an off-output fullscreen window leaks into
+    /// focus / grab / binding-context lookups on the other monitor.
+    pub(crate) fn element_under(
+        &self,
+        point: Point<f64, Logical>,
+    ) -> Option<(&Window, Point<i32, Logical>)> {
+        let active = self.active_output();
+        // Fast path: smithay's native O(n) hit-test. Reuse it verbatim unless
+        // the top hit is an off-output fullscreen window — the only case the
+        // skip matters (and only possible while some output is fullscreen).
+        let hit = self.space.element_under(point);
+        let needs_skip = matches!(&hit, Some((w, _))
+            if w.wl_surface().is_some_and(|s| self.fullscreen_on_other_output(&s, &active)));
+        if !needs_skip {
+            return hit;
+        }
+        // Rare: redo the hit-test skipping off-output fullscreen windows, so a
+        // window beneath one on this output is still found. Mirrors smithay's
+        // `Space::element_under` (bbox filter, render_location, input region).
+        self.space
+            .elements()
+            .rev()
+            .filter(|w| {
+                w.wl_surface()
+                    .is_none_or(|s| !self.fullscreen_on_other_output(&s, &active))
+            })
+            .filter(|w| {
+                self.space
+                    .element_bbox(w)
+                    .is_some_and(|bbox| bbox.to_f64().contains(point))
+            })
+            .find_map(|w| {
+                let render_location = self.space.element_location(w)? - w.geometry().loc;
+                w.is_in_input_region(&(point - render_location.to_f64()))
+                    .then_some((w, render_location))
+            })
+    }
+
     /// Find the Wayland surface and local coordinates under the given canvas position.
     /// This is the foundation for all hit-testing — focus, gestures, resize grabs.
     /// Also checks SSD decoration areas (title bar, resize borders), interleaved
@@ -798,13 +853,9 @@ impl DriftWm {
             if self.is_pinned(window) {
                 continue;
             }
-            // A window fullscreen on a *different* output isn't visible here.
-            // Cameras can overlap on the canvas, so without this the active
-            // output's hit-test could reach another output's fullscreen window.
-            // On its own output the path below still hit-tests it.
-            if let Some(fs_output) = self.find_fullscreen_output_for_surface(&wl_surface)
-                && active_output.as_ref() != Some(&fs_output)
-            {
+            // A window fullscreen on a different output isn't visible here; on
+            // its own output the path below still hit-tests it.
+            if self.fullscreen_on_other_output(&wl_surface, &active_output) {
                 continue;
             }
             let rule = driftwm::config::applied_rule(&wl_surface);
@@ -851,7 +902,7 @@ impl DriftWm {
                 // on seeing our Tiled hint. Clients that kept their handles
                 // (Brave, Nautilus) own the inside; we own the outside — no overlap.
                 let is_widget = rule.as_ref().is_some_and(|r| r.widget);
-                let is_fullscreen = self.fullscreen.values().any(|fs| &fs.window == window);
+                let is_fullscreen = self.is_window_fullscreen(window);
                 if !is_widget
                     && !is_fullscreen
                     && crate::decorations::resize_edge_at(pos, loc, size, 0, border_width).is_some()
@@ -1124,6 +1175,7 @@ impl DriftWm {
     ) -> Option<(Window, DecorationHit)> {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
+        let active = self.active_output();
 
         // Iterate in z-order (topmost first, matching space.elements().rev())
         for window in self.space.elements().rev() {
@@ -1133,6 +1185,12 @@ impl DriftWm {
             // Pinned windows are screen-space; canvas-space decoration hit-test
             // doesn't apply (their SSD is handled via pinned_window_under).
             if self.is_pinned(window) {
+                continue;
+            }
+            // An off-output fullscreen window isn't visible here — and skipping
+            // it also prevents its surface from short-circuiting the loop below
+            // (the occlusion `return None`) over a window beneath it on this output.
+            if self.fullscreen_on_other_output(&wl_surface, &active) {
                 continue;
             }
             let Some(loc) = self.space.element_location(window) else {
@@ -1157,7 +1215,7 @@ impl DriftWm {
                 // CSD: only the outer resize margin (see surface_under).
                 let is_widget =
                     driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
-                let is_fullscreen = self.fullscreen.values().any(|fs| &fs.window == window);
+                let is_fullscreen = self.is_window_fullscreen(window);
                 if self.config.resize_on_border
                     && !is_widget
                     && !is_fullscreen

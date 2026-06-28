@@ -244,6 +244,8 @@ fn print_response(response: Response) {
             camera,
             zoom,
             windows,
+            fullscreen,
+            pinned,
         } => {
             println!("camera {} {}", camera.0, camera.1);
             println!("zoom {zoom}");
@@ -258,6 +260,27 @@ fn print_response(response: Response) {
                 println!(
                     "  {mark} {} [{}, {}] {}x{}{}",
                     w.app_id, w.position[0], w.position[1], w.size[0], w.size[1], title
+                );
+            }
+            println!("fullscreen {}", fullscreen.len());
+            for f in fullscreen {
+                let title = if f.title.is_empty() {
+                    String::new()
+                } else {
+                    format!("  \"{}\"", f.title)
+                };
+                println!("  {} {}{}", f.output, f.app_id, title);
+            }
+            println!("pinned {}", pinned.len());
+            for p in pinned {
+                let title = if p.title.is_empty() {
+                    String::new()
+                } else {
+                    format!("  \"{}\"", p.title)
+                };
+                println!(
+                    "  {} {} [{}, {}] {}x{}{}",
+                    p.output, p.app_id, p.position[0], p.position[1], p.size[0], p.size[1], title
                 );
             }
         }

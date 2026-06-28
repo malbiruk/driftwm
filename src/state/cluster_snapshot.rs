@@ -189,11 +189,19 @@ impl DriftWm {
         primary: &WlSurface,
         cluster_excludes: &HashSet<WlSurface>,
     ) -> (Vec<driftwm::layout::snap::SnapRect>, i32, i32) {
+        // A fullscreen window fills its own output and is parked at that
+        // output's camera origin — never a snap target, on any output.
+        let fullscreen_excludes: HashSet<_> = self
+            .fullscreen
+            .values()
+            .filter_map(|fs| fs.window.wl_surface().map(|s| s.id()))
+            .collect();
         snap_targets_impl(
             &self.space,
             &self.decorations,
             &self.config.decorations,
             &self.pinned,
+            &fullscreen_excludes,
             primary,
             cluster_excludes,
         )
@@ -204,7 +212,7 @@ impl DriftWm {
     pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::layout::snap::SnapRect)> {
         self.space
             .elements()
-            .filter(|w| !self.is_pinned(w))
+            .filter(|w| !self.is_pinned(w) && !self.is_window_fullscreen(w))
             .filter_map(|w| {
                 window_snap_rect(&self.space, &self.decorations, &self.config.decorations, w)
                     .map(|(_, rect)| (w.clone(), rect))
@@ -442,6 +450,7 @@ pub(crate) fn snap_targets_impl(
     decorations: &HashMap<smithay::reexports::wayland_server::backend::ObjectId, WindowDecoration>,
     decoration_config: &driftwm::config::DecorationConfig,
     pinned: &HashMap<smithay::reexports::wayland_server::backend::ObjectId, super::PinnedState>,
+    fullscreen_excludes: &HashSet<smithay::reexports::wayland_server::backend::ObjectId>,
     primary: &WlSurface,
     cluster_excludes: &HashSet<WlSurface>,
 ) -> (Vec<driftwm::layout::snap::SnapRect>, i32, i32) {
@@ -469,6 +478,7 @@ pub(crate) fn snap_targets_impl(
         if surface == *primary
             || cluster_excludes.contains(&surface)
             || pinned.contains_key(&surface.id())
+            || fullscreen_excludes.contains(&surface.id())
         {
             continue;
         }

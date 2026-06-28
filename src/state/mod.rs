@@ -1234,11 +1234,19 @@ impl DriftWm {
             .is_some_and(|s| self.pinned.contains_key(&s.id()))
     }
 
-    /// True if `window` is a real canvas window — neither a widget (wallpaper
-    /// layer, immovable) nor screen-pinned. The eligibility test for canvas
-    /// operations: navigation, centering, fitting, snapping, zoom-to-fit, etc.
+    /// True if `window` is currently fullscreen on some output.
+    pub fn is_window_fullscreen(&self, window: &Window) -> bool {
+        self.fullscreen.values().any(|fs| &fs.window == window)
+    }
+
+    /// True if `window` is a real canvas window — not a widget (wallpaper
+    /// layer, immovable), screen-pinned, or fullscreen. The eligibility test
+    /// for canvas operations: navigation, centering, fitting, snapping,
+    /// zoom-to-fit, etc. A fullscreen window fills its own output and is parked
+    /// at that output's camera origin, so it must never join another output's
+    /// snap/cluster/fit geometry.
     pub fn is_canvas_window(&self, window: &Window) -> bool {
-        !window.is_widget() && !self.is_pinned(window)
+        !window.is_widget() && !self.is_pinned(window) && !self.is_window_fullscreen(window)
     }
 
     /// Effective render transform for `window` in one pass: the pre-zoom,
@@ -1769,7 +1777,7 @@ impl DriftWm {
             .wl_surface()
             .and_then(|s| driftwm::config::applied_rule(&s))
             .is_some_and(|r| r.widget);
-        let is_fs = self.fullscreen.values().any(|fs| &fs.window == focused);
+        let is_fs = self.is_window_fullscreen(focused);
         if widget || is_fs || self.is_pinned(focused) {
             return None;
         }
@@ -1794,7 +1802,7 @@ impl DriftWm {
                 .wl_surface()
                 .and_then(|s| driftwm::config::applied_rule(&s))
                 .is_some_and(|r| r.widget);
-            let is_fs = self.fullscreen.values().any(|fs| &fs.window == w);
+            let is_fs = self.is_window_fullscreen(w);
             if widget || is_fs || self.is_pinned(w) {
                 continue;
             }

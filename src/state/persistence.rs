@@ -24,7 +24,7 @@ use std::time::Instant;
 
 use driftwm::window_ext::WindowExt;
 
-use crate::ipc::protocol::WindowInfo;
+use crate::ipc::protocol::{OutputFullscreen, OutputPinned, WindowInfo};
 
 use super::{DriftWm, output_state};
 
@@ -93,8 +93,7 @@ impl DriftWm {
             // canvas — they're reported under `outputs.{name}.{pinned,fullscreen}`
             // instead. Omit them from this inventory, whose `position` is a
             // canvas coord (a fullscreen window's is the transient camera-origin).
-            if self.is_pinned(window) || self.find_fullscreen_output_for_surface(&surface).is_some()
-            {
+            if self.is_pinned(window) || self.is_window_fullscreen(window) {
                 continue;
             }
             let (app_id, title) = window_app_id_title(&surface);
@@ -121,6 +120,53 @@ impl DriftWm {
             windows.insert(0, w);
         }
         windows
+    }
+
+    /// Screen-space windows (fullscreen + pinned) for the IPC `state` reply,
+    /// each tagged with its output. Mirrors the state file's per-output
+    /// `outputs.{name}.{fullscreen,pinned}` sections (same source fields), so a
+    /// consumer reading either representation sees the same windows. Sorted for
+    /// deterministic output (the underlying maps are unordered).
+    pub fn screen_space_inventory(&self) -> (Vec<OutputFullscreen>, Vec<OutputPinned>) {
+        let mut fullscreen: Vec<OutputFullscreen> = Vec::new();
+        for (output, fs) in &self.fullscreen {
+            if let Some(surface) = fs.window.wl_surface() {
+                let (app_id, title) = window_app_id_title(&surface);
+                if !app_id.is_empty() {
+                    fullscreen.push(OutputFullscreen {
+                        output: output.name(),
+                        app_id,
+                        title,
+                    });
+                }
+            }
+        }
+        fullscreen.sort_by(|a, b| (&a.output, &a.app_id).cmp(&(&b.output, &b.app_id)));
+
+        let mut pinned: Vec<OutputPinned> = Vec::new();
+        for window in self.space.elements() {
+            let Some(surface) = window.wl_surface() else {
+                continue;
+            };
+            let Some(p) = self.pinned.get(&surface.id()) else {
+                continue;
+            };
+            let (app_id, title) = window_app_id_title(&surface);
+            if app_id.is_empty() {
+                continue;
+            }
+            let size = window.geometry().size;
+            pinned.push(OutputPinned {
+                output: p.output.name(),
+                app_id,
+                title,
+                position: [p.screen_pos.x, p.screen_pos.y],
+                size: [size.w, size.h],
+            });
+        }
+        pinned.sort_by(|a, b| (&a.output, a.position).cmp(&(&b.output, b.position)));
+
+        (fullscreen, pinned)
     }
 
     /// Write viewport center + zoom to `$XDG_RUNTIME_DIR/driftwm/state` if changed.
