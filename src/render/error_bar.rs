@@ -12,7 +12,6 @@ use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
-use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::utils::{Logical, Physical, Point, Transform};
 
@@ -21,6 +20,7 @@ use driftwm::config::FontWeight;
 use crate::state::ErrorSource;
 
 use super::elements::{OutputRenderElements, PixelSnapRescaleElement};
+use super::renderer::DriftRenderer;
 
 const ERROR_BAR_FONT: &str = "monospace";
 /// Text size in logical pixels (supersampled by the output scale below).
@@ -39,11 +39,11 @@ pub struct ErrorBarCache {
 }
 
 /// Build the error bar element, or an empty vec when there are no errors.
-pub fn build_error_bar_elements(
+pub fn build_error_bar_elements<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     output: &Output,
-) -> Vec<OutputRenderElements> {
+) -> Vec<OutputRenderElements<R>> {
     let name = output.name();
     if state.errors.is_empty() {
         state.render.cached_error_bar.remove(&name);

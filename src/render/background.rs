@@ -72,7 +72,10 @@ impl BackgroundElement {
     }
 
     /// The render element for this frame, z-ordered as the canvas background.
-    pub fn render_element(&self, zoom: f64) -> Option<OutputRenderElements> {
+    pub fn render_element<R: super::renderer::DriftRenderer>(
+        &self,
+        zoom: f64,
+    ) -> Option<OutputRenderElements<R>> {
         let origin = Point::<i32, Physical>::from((0, 0));
         Some(match &self.kind {
             BgKind::None => return None,

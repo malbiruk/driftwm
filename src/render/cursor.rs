@@ -1,8 +1,5 @@
-use smithay::backend::renderer::{
-    element::{
-        Kind, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
-    },
-    gles::GlesRenderer,
+use smithay::backend::renderer::element::{
+    Kind, memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
 };
 use smithay::input::pointer::{CursorImageStatus, CursorImageSurfaceData};
 use smithay::utils::IsAlive;
@@ -12,18 +9,19 @@ use smithay::wayland::compositor::with_states;
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 
 use super::elements::OutputRenderElements;
+use super::renderer::DriftRenderer;
 
 /// Build the cursor render element(s) for the current frame.
 /// `camera` and `zoom` are from the output being rendered.
 /// Returns `OutputRenderElements` — either xcursor memory buffers or client surface elements.
-pub fn build_cursor_elements(
+pub fn build_cursor_elements<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     camera: Point<f64, smithay::utils::Logical>,
     zoom: f64,
     scale: f64,
     alpha: f32,
-) -> Vec<OutputRenderElements> {
+) -> Vec<OutputRenderElements<R>> {
     if alpha <= 0.0 {
         return vec![];
     }
@@ -52,7 +50,7 @@ pub fn build_cursor_elements(
                 (physical_pos.y - hotspot.y as f64) as i32,
             )
                 .into();
-            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+            let elems: Vec<WaylandSurfaceRenderElement<R>> =
                 smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
                     renderer,
                     surface,
@@ -81,7 +79,7 @@ pub fn build_cursor_elements(
             (physical_pos.y + icon.offset.y as f64 * scale) as i32,
         )
             .into();
-        let surface_elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+        let surface_elems: Vec<WaylandSurfaceRenderElement<R>> =
             smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
                 renderer,
                 &icon.surface,
@@ -101,13 +99,13 @@ pub fn build_cursor_elements(
 }
 
 /// Build xcursor memory buffer elements for a named cursor icon.
-fn build_xcursor_elements(
+fn build_xcursor_elements<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     physical_pos: Point<f64, Physical>,
     name: &'static str,
     alpha: f32,
-) -> Vec<OutputRenderElements> {
+) -> Vec<OutputRenderElements<R>> {
     let loaded = state.load_xcursor(name).is_some();
     if !loaded && state.load_xcursor("default").is_none() {
         return vec![];
