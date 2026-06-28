@@ -6,21 +6,85 @@ the full experience — grab-based gestures, window management on touch, momentu
 cursor handling, on-screen-keyboard positioning — is built on the branch and
 merged to main as one feature, so main never ships a half-working touch UX.
 
-## Status (2026-06-26, real-hardware udev test)
+## Status (2026-06-28, post-grab-rework hardware test)
 
-Works:
-- Canvas 1-finger pan + 2-finger pinch-zoom.
-- 1/2-finger touches forward to apps.
+The grab rework landed (commit a21153b). These follow-ups are now implemented:
+grab-based architecture (`TouchGestureGrab` + a `TouchGrab` impl on
+`MoveSurfaceGrab`), unconditional forwarding, SSD decoration interaction, pan
+momentum, and cursor hide-on-touch.
 
-Broken / missing (drives the follow-ups below):
-- 3-finger gestures: bad and inconsistent. Pulled from #163; rebuilt as a grab.
-- No pan momentum — 1-finger pan has no flick-to-coast.
-- Titlebar drag and the SSD close button do nothing on touch.
-- Double-tap (e.g. open a folder in thunar) doesn't register — a forwarding bug;
-  likely dissolves with the grab rework (see Architecture).
-- Multi-output: touches map to `active_output()` instead of the output under the
-  touch point — mis-maps on secondary outputs.
-- OSK: untested.
+Works on hardware:
+- Canvas 1-finger pan (+ flick-to-coast) and 2-finger pinch-zoom.
+- 1/2-finger forwarding to apps.
+- SSD titlebar drag → move; SSD/CSD close button.
+- 3-finger tap → center-window; 3-finger double-tap → fit-window;
+  3-finger double-tap + drag → move-window.
+
+Still rough (drives "Post-rework fixes" below):
+- 3-finger pan wobbles — pinch-zoom fires on noisy spread during a pan.
+- 4-finger swipe is eaten by zoom-to-fit — swipe and pinch both fire.
+- CSD titlebar drag → move does nothing (SSD works).
+- 3-finger double-tap + drag flashes a center before the move.
+- App double-tap inconsistent across toolkits (Nautilus ✓, Thunar content ✗,
+  Firefox ✗) — toolkit-side, not a compositor bug.
+
+Still open from the follow-ups below: full output-under-touch (today maps to the
+first / touch output, not per-touch-point), the bindable `[touch]` model, and
+OSK camera-positioning (untested).
+
+## Post-rework fixes (2026-06-28 hardware test)
+
+Root causes traced (A–D are fixes; E and F are additive gestures in this batch).
+All but the app-side double-tap are compositor-side gesture arbitration, not
+touch-panel sensitivity. Order: B/C first (usability, low-risk), then A
+(self-contained bug), then D (event-loop timer), then E and F (both build on D's
+hold timer).
+
+- **A. CSD titlebar drag → move.** `move_request` (`handlers/xdg_shell.rs`) only
+  checks the *pointer* grab (`check_grab` → `pointer.grab_start_data()`), so a
+  touch-initiated `xdg_toplevel.move` is dropped. Mirror niri: also match the
+  *touch* grab serial (`TouchHandle::grab_start_data` / `with_grab`) and start a
+  touch `MoveSurfaceGrab`. SSD works only because the compositor hit-tests its own
+  titlebar; mouse works because a pointer grab exists.
+- **B. 3-finger pan anti-wobble.** `apply_panzoom` applies pinch-zoom every frame
+  gated only on `last_spread > 1.0`; the 3-finger spread metric (mean distance to
+  centroid) is noisy, so zoom jitters during a pan. Deadzone the per-frame scale
+  and/or lock to the dominant axis (pan vs zoom).
+- **C. 4-finger swipe / pinch arbitration.** `apply_navigate` tests swipe (~12px)
+  and pinch (15% spread) independently; a 4-finger swipe splays >15% and fires
+  zoom-to-fit instead of the directional swipe. Decision: keep both on 4 fingers
+  but make them mutually exclusive — the first committed motion picks swipe *xor*
+  pinch and locks out the other for the gesture. (Rejected: moving pinch to 5
+  fingers — ergonomically unreliable, a late finger misfires as a 4-finger
+  swipe.)
+- **D. 3-finger double-tap + drag center flash.** A single 3-finger tap fires
+  `CenterWindow` immediately on lift (`detect_tap`), so the double-tap-drag-move
+  always flashes a center first. Defer the single-tap action by `DOUBLE_TAP_MS`
+  via a calloop timer; cancel it if a second down / drag arrives within the
+  window. Most involved (event-loop wiring) — land A/B/C first, then D.
+- **App double-tap (Thunar content / Firefox).** Forwarding is clean (real
+  libinput timestamps, fresh serials, frame events, surface-local coords). The
+  inconsistency *across toolkits* points to toolkit-level touch→double-click
+  emulation, not a compositor bug — no change.
+- **E. Cluster move — 3-finger double-tap + hold + drag.** Additive gesture (with
+  F). `hold` is the touch analogue of the desktop `Shift` cluster modifier:
+  `double-tap + drag` moves the window, holding before the drag extends the move to
+  its snap-cluster (reuse the pointer move's `cluster_members` path — `new_touch`
+  currently omits it, see `move_grab.rs`). Plain 3-finger drag (pan) is untouched,
+  so no misfire on the hot path; the new state is quarantined in the already-opt-in
+  double-tap branch, which gains a three-way exit (quick lift = fit, drag = move,
+  hold-then-drag = move-cluster). Needs D's timer. Full default vocabulary +
+  grammar under the bindable `[touch]` follow-up.
+- **F. Resize — 3-finger hold + drag, edge by origin.** Touch's absolute position
+  picks the edge: 3 fingers land on a window, hold (the dwell is the discriminator
+  that keeps plain 3-finger drag as pan), then drag. Map where the fingers landed
+  to a `ResizeEdge` via a 3×3 grid over the window (bottom-right region → BR
+  corner, right band → right edge, …); a small window where the fingers span the
+  frame falls back to the bottom-right corner. The chosen edge is fixed for the
+  gesture (opposite corner anchored); the drag drives a `ResizeSurfaceGrab`, which
+  needs a `TouchGrab` impl (still pointer-only — mirror the dual-impl
+  `MoveSurfaceGrab`). On-window only; empty canvas stays pan. Shares D's hold
+  timer, so it lands with E. Detail under the bindable `[touch]` resize section.
 
 ## Architecture: grab-based, not a state machine
 
@@ -136,23 +200,77 @@ Target interaction model (escalation: fingers go content → system):
   desktop double-click-titlebar-to-maximize.
 - **3-finger double-tap + drag** — move-window. Mirrors the existing trackpad
   `3-finger-doubletap-swipe = move-window` exactly.
+- **3-finger double-tap + hold + drag** — move-cluster. `hold` is the touch
+  `Shift`: the same move gesture, but holding before the drag extends it to the
+  window's snap-cluster. A *per-drag* choice (like desktop `Shift`-drag), not a
+  global flag — which is why it's a gesture and not a setting. Lands in the
+  current batch (fix E).
+- **3-finger hold + drag** (no double-tap) — resize-window. Touch is absolute, so
+  *where the fingers land* picks the edge (3×3 grid → `ResizeEdge`; small windows
+  default to the bottom-right corner) — one gesture, all 8 directions. The plain
+  hold keeps it distinct from move/cluster and off the pan path. Lands in the
+  current batch (fix F).
 
-### Window resize on touch — deliberately minimal
+### Default 3-finger vocabulary
 
-The canvas/zoom model demotes resize: window size and apparent size are
-decoupled, so "make this bigger" is served by pinch-zooming the *viewport*, not
-resizing the window. Precision resize (true content dimensions) is a power-user
-task and touch is the worst modality for it — leave it on keyboard/mouse
-(`resize-window`).
+The 3-finger band carries the window-management verbs. This is the default
+binding set (remappable via the grammar below):
+
+| 3-finger | action |
+|---|---|
+| drag | pan + pinch *(hot path — untouched)* |
+| tap | center window |
+| double-tap | fit window |
+| double-tap + drag | move window |
+| double-tap + hold + drag | move cluster |
+| hold + drag | resize window (edge chosen by origin) |
+
+### Trigger grammar (what `[touch]` exposes)
+
+Expose the grammar, not a fixed gesture list — same as `[gestures]` / `[mouse]`.
+A binding is a point in:
+
+- **fingers**: 1–4 (never 5 — panel max-contacts vary and a late finger misfires
+  as a 4-finger gesture).
+- **prefix**: none | double-tap (never triple, never *multi-finger* double-tap —
+  all-down → all-up → all-down with >1 finger inside ~300 ms misfires).
+- **terminal**: tap | drag | hold-then-drag (avoid hold-then-*release* — no
+  release-into-action idiom on glass; it occludes the screen).
+- **drag sub-type**: free (pan) | pinch | swipe⟨dir⟩.
+- **context**: on-window | on-canvas | anywhere (touch's superpower — absolute
+  position, no cursor-derived ambiguity).
+
+Everything in the table is a point in this grammar (`double-tap + hold + drag` =
+`{fingers: 3, prefix: double, terminal: hold-drag}`). Anything inside fingers ≤ 4
+× {none, double} × {tap, drag, hold-drag} is fair game; 5-finger and multi-finger
+double-tap are deliberately outside it.
+
+### Window resize on touch — one gesture, edge by origin
+
+The canvas/zoom model demotes resize: viewport pinch-zoom scales the *whole
+scene* (it is **not** a per-window magnifier), and `fit-window` (3-finger
+double-tap) handles "make this fill the screen." What's left is arbitrary
+in-between dimensions, which touch is a poor modality for — so resize gets
+exactly one gesture (`3-finger hold + drag`, fix F) and no more.
 
 - The discrete "fill the screen" intent is covered by `fit-window` (3-finger
   double-tap above), not a drag.
 - Don't make the 8px resize border touch-draggable (far below a ~40px fingertip;
   widening it conflicts with content drags near window edges) and don't use
-  2-finger-on-window (that's the app's own pinch).
-- Precision `resize-window` stays optional, exposed only via the bindable model
-  as a 3-finger on-window gesture variant if ever wanted. The action already
-  exists; it just needs a trigger.
+  2-finger-on-window (that's the app's own pinch). The `3-finger hold + drag`
+  gesture sidesteps both: it's compositor-only (apps never see 3 fingers) and the
+  hold keeps it off the pan path.
+- The edge is chosen by *where the fingers land* (touch is absolute, unlike the
+  trackpad's relative `modifier + swipe` resize): a 3×3 grid over the window maps
+  the landing centroid to a `ResizeEdge`; a small window where the fingers span
+  the frame falls back to the bottom-right corner. One gesture covers all 8
+  directions — no per-edge variants, no visible grip chrome.
+- A per-window magnifier (zoom one window without scaling the rest) is rejected —
+  it fights the single-camera invariant (everything in canvas space scales with
+  zoom together); `fit-window` is the right primitive instead.
+- Reuses `ResizeSurfaceGrab`, which needs a `TouchGrab` impl (still pointer-only;
+  mirror the dual-impl `MoveSurfaceGrab`). The `resize-window` action already
+  exists — this just gives it a touch trigger.
 
 Rule of thumb: 1–2 fingers over a window belong to the app; reserve 3+ for the
 compositor. This is the touchscreen analog of "scroll/pinch → apps, 3–4 finger
