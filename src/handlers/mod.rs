@@ -323,6 +323,11 @@ delegate_ext_data_control!(DriftWm);
 
 impl PointerConstraintsHandler for DriftWm {
     fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {
+        // Pointer constraints track pointer focus internally, so bring it up to
+        // date before activating: a client that re-creates a oneshot constraint
+        // (destroyed on deactivation) needs current focus for the new one to
+        // re-arm, e.g. a game whose cursor returns to its fullscreen surface.
+        self.refresh_pointer_focus();
         self.maybe_activate_pointer_constraint();
     }
 
