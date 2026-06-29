@@ -23,8 +23,9 @@ use crate::state::{DriftWm, FocusTarget, output_state};
 
 use super::MoveSurfaceGrab;
 
-/// Finger travel (screen px) before a touch commits to a viewport gesture.
-/// Below this it stays a candidate tap; above it pan/zoom/navigate begin.
+/// Centroid travel (screen px) before a `PanZoom` gesture leaves the dead zone
+/// and starts to pan. Below this — and below `ZOOM_SLOP_PX` of spread change — it
+/// stays a candidate tap.
 const DEAD_ZONE_PX: f64 = 8.0;
 /// Max duration of a 3-finger tap (center / fit trigger).
 const TAP_MAX_MS: u32 = 250;
@@ -39,19 +40,11 @@ const HOLD_MS: u32 = 350;
 /// band. The baseline only advances on a committed zoom, so a deliberate pinch
 /// still accumulates past it.
 const ZOOM_DEADZONE: f64 = 0.02;
-/// Spread-ratio change that signals a zoom (pinch) intent. A gesture stays a
-/// candidate tap until the centroid crosses `DEAD_ZONE_PX` (pan) or the spread
-/// crosses this (zoom); the winner locks the gesture touchpad-style for its
-/// lifetime, so a pan can't zoom-wobble and a pinch can't pan-drift. Well above
-/// resting finger jitter so a plain pan doesn't trip it.
-const ZOOM_LOCK_FRAC: f64 = 0.12;
-/// When both signals moved, a pinch must out-pace the pan by this factor to win.
-/// Pan is the safe default: a mis-locked zoom strands the pan for the whole
-/// gesture, and a leading-finger pan skews the spread without being a pinch.
-const ZOOM_DOMINANCE: f64 = 1.5;
-/// Centroid travel (in `DEAD_ZONE_PX` units) past which an undecided gesture
-/// commits to pan, so an ambiguous pan+spread can't freeze waiting to resolve.
-const PAN_LOCK_FORCE: f64 = 2.0;
+/// Change in finger spread (screen px) that engages pinch-zoom. Pan and zoom run
+/// simultaneously — the centroid always pans once active — but zoom only starts
+/// tracking the spread ratio after the pinch clears this slop, so a plain pan's
+/// finger jitter can't wobble the zoom.
+const ZOOM_SLOP_PX: f64 = 6.0;
 
 /// Map where the fingers landed within a window to a resize edge via a 3×3 grid
 /// (`origin` is canvas-space, `loc`/`size` are the window's canvas rect). The
@@ -94,21 +87,11 @@ fn edge_from_origin(
 enum Mode {
     /// 1–2 fingers with at least one on a window — forward to the app.
     Forward,
-    /// 1–2 fingers on empty canvas, or 3 fingers anywhere — viewport pan or
-    /// pinch-zoom (locked per gesture by `PanZoomLock`).
+    /// 1–2 fingers on empty canvas, or 3 fingers anywhere — viewport pan and
+    /// pinch-zoom, applied simultaneously (the centroid pans, the spread zooms).
     PanZoom,
     /// 4 fingers — global navigation (swipe-nearest, pinch overview/home).
     Navigate,
-}
-
-/// Pan-vs-zoom decision for a `PanZoom` gesture, locked at the dead-zone
-/// crossing and held for the gesture's lifetime (touchpad-style: a gesture is
-/// either a pan or a pinch, never both, so neither can wobble into the other).
-#[derive(Clone, Copy, PartialEq)]
-enum PanZoomLock {
-    Undecided,
-    Pan,
-    Zoom,
 }
 
 struct TouchPoint {
@@ -148,9 +131,9 @@ pub struct TouchGestureGrab {
     nav_cumulative: Point<f64, Logical>,
     nav_fired_swipe: bool,
     nav_fired_pinch: bool,
-    /// Pan-vs-zoom lock for the current `PanZoom` gesture (`Undecided` until the
-    /// dead-zone crossing picks one).
-    panzoom_lock: PanZoomLock,
+    /// Pinch-zoom is live for the current `PanZoom` gesture (set once the spread
+    /// clears `ZOOM_SLOP_PX`). Pan runs regardless; this only gates zoom.
+    zoom_engaged: bool,
 }
 
 impl TouchGestureGrab {
@@ -173,7 +156,7 @@ impl TouchGestureGrab {
             nav_cumulative: Point::from((0.0, 0.0)),
             nav_fired_swipe: false,
             nav_fired_pinch: false,
-            panzoom_lock: PanZoomLock::Undecided,
+            zoom_engaged: false,
         }
     }
 
@@ -243,7 +226,6 @@ impl TouchGestureGrab {
     }
 
     fn apply_zoom(&mut self, data: &mut DriftWm, centroid: Point<f64, Logical>) {
-        self.last_centroid = centroid;
         if self.points.len() < 2 || self.last_spread <= 1.0 {
             return;
         }
@@ -476,7 +458,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
     ) {
         let (camera, zoom) = self.camera_zoom();
         let screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
-        let was_system = self.max_fingers >= 3;
+        let prev_max = self.max_fingers;
         self.points.insert(
             event.slot,
             TouchPoint {
@@ -541,15 +523,22 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 }
                 handle.down(data, None, event, seq);
 
-                let now_system = self.max_fingers >= 3;
-                // Arm the dead zone at gesture start and again when crossing into
-                // 3-finger territory, so a clean 3-finger tap is distinguishable
-                // from a 3-finger drag.
-                if self.points.len() == 1 || (now_system && !was_system) {
+                // Re-arm the gesture at start and at each finger-count tier
+                // crossing (into 3-finger system gestures, into 4-finger
+                // navigation), so a clean tap stays distinguishable from a drag
+                // and the navigation recognizer measures from a fresh baseline.
+                let crossed_system = prev_max < 3 && self.max_fingers >= 3;
+                let crossed_nav = prev_max < 4 && self.max_fingers >= 4;
+                if self.points.len() == 1 || crossed_system || crossed_nav {
                     self.active = false;
-                    self.panzoom_lock = PanZoomLock::Undecided;
+                    self.zoom_engaged = false;
                     self.tap_start_time = event.time;
-                    self.start_centroid = self.centroid();
+                    let c = self.centroid();
+                    self.start_centroid = c;
+                    self.start_spread = self.spread(c);
+                    self.nav_cumulative = Point::from((0.0, 0.0));
+                    self.nav_fired_swipe = false;
+                    self.nav_fired_pinch = false;
                 }
                 self.rebaseline();
             }
@@ -570,8 +559,10 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
 
         if self.points.is_empty() {
             // Only PanZoom accumulates pan velocity; Navigate fires discrete
-            // actions, so there's nothing to coast.
-            if was_present && mode == Mode::PanZoom && self.ever_active {
+            // actions, so there's nothing to coast. A pinch must not fling the
+            // canvas either — pan runs through a zoom in the simultaneous model,
+            // so skip the coast for any gesture that engaged zoom.
+            if was_present && mode == Mode::PanZoom && self.ever_active && !self.zoom_engaged {
                 data.launch_momentum_on(&self.output);
             }
             if was_present {
@@ -612,63 +603,48 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         handle.motion(data, None, event, seq);
 
         let centroid = self.centroid();
+
+        // 4-finger navigation is a one-shot recognizer measured from the
+        // gesture's rest baseline — swipe vs pinch, fire the dominant one. No
+        // pan/zoom dead zone sits in front of it (that double threshold made a
+        // deliberate pinch barely register).
+        if mode == Mode::Navigate {
+            self.ever_active = true;
+            self.apply_navigate(data, centroid);
+            return;
+        }
+
+        // PanZoom: pan and zoom run simultaneously. The centroid pans, the finger
+        // spread zooms; neither excludes the other.
         if !self.active {
             let dx = centroid.x - self.start_centroid.x;
             let dy = centroid.y - self.start_centroid.y;
             let centroid_disp = (dx * dx + dy * dy).sqrt();
-            let pan_progress = centroid_disp / DEAD_ZONE_PX;
             // Spread deviation from the settle baseline (`last_spread`, untouched
             // while inactive). A pinch gathers the fingers without translating the
-            // centroid, so zoom must be able to break the dead zone on its own.
-            let spread_dev = if self.last_spread > 1.0 {
-                (self.spread(centroid) / self.last_spread - 1.0).abs()
+            // centroid, so the spread must be able to break the dead zone on its
+            // own.
+            let span_dev = if self.points.len() >= 2 && self.last_spread > 1.0 {
+                (self.spread(centroid) - self.last_spread).abs()
             } else {
                 0.0
             };
-            let zoom_progress = spread_dev / ZOOM_LOCK_FRAC;
-            if pan_progress < 1.0 && zoom_progress < 1.0 {
+            if centroid_disp < DEAD_ZONE_PX && span_dev < ZOOM_SLOP_PX {
                 return;
             }
-            // Past the dead zone — no longer a candidate tap, even if the pan/zoom
-            // decision needs another frame to resolve.
             self.ever_active = true;
-
-            // Touchpad-style lock, held for the gesture's lifetime. Pan is the
-            // default; a pinch must out-pace it by `ZOOM_DOMINANCE` to win. While
-            // neither is decisive, wait a frame — bounded by `PAN_LOCK_FORCE` so
-            // an ambiguous pan+spread can't freeze. Navigate ignores the lock and
-            // runs its own swipe/pinch arbitration.
-            let lock = if mode == Mode::Navigate {
-                PanZoomLock::Undecided
-            } else if zoom_progress >= 1.0 && zoom_progress >= pan_progress * ZOOM_DOMINANCE {
-                PanZoomLock::Zoom
-            } else if pan_progress >= 1.0
-                && (pan_progress >= zoom_progress || pan_progress >= PAN_LOCK_FORCE)
-            {
-                PanZoomLock::Pan
-            } else {
-                return;
-            };
-
             self.active = true;
-            let cur_spread = self.spread(centroid);
-            // Measure pinch scale from the settle-time spread, not the activation
-            // spread — an already-progressing pinch compares against rest.
-            self.start_spread = if self.last_spread > 1.0 {
-                self.last_spread
-            } else {
-                cur_spread
-            };
+            // Engage zoom right away if the gesture broke the dead zone by
+            // pinching; otherwise it engages later once the spread clears the slop.
+            self.zoom_engaged = self.points.len() >= 2 && span_dev >= ZOOM_SLOP_PX;
             self.last_centroid = centroid;
-            self.last_spread = cur_spread;
-            self.nav_cumulative = Point::from((0.0, 0.0));
-            self.panzoom_lock = lock;
+            self.last_spread = self.spread(centroid);
 
             // Hold variants belong to a translation gesture only: a held 3-finger
             // pan drag selects move (armed) / cluster-move (armed + held) / resize
             // (held). A pinch is a zoom, never a resize. A failed move/resize (no
             // window) falls through to pan.
-            if self.max_fingers == 3 && self.panzoom_lock == PanZoomLock::Pan {
+            if self.max_fingers == 3 && !self.zoom_engaged {
                 let held = event.time.saturating_sub(self.tap_start_time) >= HOLD_MS;
                 if self.armed_for_move {
                     if self.try_start_move(data, handle, event, seq, held) {
@@ -681,15 +657,21 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             return;
         }
 
-        match mode {
-            Mode::PanZoom => match self.panzoom_lock {
-                PanZoomLock::Zoom if self.points.len() >= 2 => self.apply_zoom(data, centroid),
-                // A zoom dropped to one finger keeps panning rather than freezing;
-                // the lock is always decided (Pan/Zoom) while active.
-                _ => self.apply_pan(data, centroid, event.time),
-            },
-            Mode::Navigate => self.apply_navigate(data, centroid),
-            Mode::Forward => {}
+        self.apply_pan(data, centroid, event.time);
+        if self.points.len() >= 2 {
+            let cur_spread = self.spread(centroid);
+            // Engage zoom once the spread has changed past the slop, consuming it
+            // so there's no jump on the first zoomed frame.
+            if !self.zoom_engaged
+                && self.last_spread > 1.0
+                && (cur_spread - self.last_spread).abs() >= ZOOM_SLOP_PX
+            {
+                self.zoom_engaged = true;
+                self.last_spread = cur_spread;
+            }
+            if self.zoom_engaged {
+                self.apply_zoom(data, centroid);
+            }
         }
     }
 
