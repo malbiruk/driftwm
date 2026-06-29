@@ -404,11 +404,26 @@ impl DriftWm {
                 }
             }
             Action::ToggleFullscreen => {
-                if self.is_fullscreen() {
+                let focused = self.focused_window().filter(|w| !w.is_widget());
+                if was_fullscreen.is_some() && !self.is_fullscreen() {
+                    // A gesture exited the active output's fullscreen before this
+                    // ran — the toggle is done; don't re-enter or reach into
+                    // another output's fullscreen.
+                } else if let Some(output) = focused
+                    .as_ref()
+                    .and_then(|w| w.wl_surface())
+                    .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+                {
+                    // Toggle the focused window, not the active output: Mod+F
+                    // exits a fullscreen window wherever it lives — keyboard focus
+                    // can be on it while the pointer is on another monitor, where
+                    // `is_fullscreen()` (active output) reads false.
+                    self.exit_fullscreen_on(&output);
+                } else if self.is_fullscreen() {
+                    // The focused window isn't fullscreen (focus on a layer, a
+                    // windowed window, or nothing) but the active output is.
                     self.exit_fullscreen();
-                } else if was_fullscreen.is_some() {
-                    // Gesture already exited fullscreen — don't re-enter
-                } else if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
+                } else if let Some(window) = focused {
                     let target = window
                         .wl_surface()
                         .and_then(|s| self.resolve_fullscreen_output(&s, None));

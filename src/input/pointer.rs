@@ -156,6 +156,22 @@ impl DriftWm {
                 } else if fs_lookup.is_some() {
                     pos = self.exit_fullscreen_remap_pointer(pos);
                 } else {
+                    // Reclaim keyboard focus for the fullscreen window before
+                    // forwarding — hover on another output may have moved focus
+                    // to its window, and a plain forward wouldn't restore it.
+                    // Skip when it already holds focus so a click doesn't re-emit
+                    // a keyboard enter (and a popup grab keeps its focus).
+                    if let Some(surface) = self
+                        .active_fullscreen()
+                        .and_then(|fs| fs.window.wl_surface())
+                        .map(|s| FocusTarget(s.into_owned()))
+                    {
+                        let already = self.window_focus.as_ref().is_some_and(|f| f.0 == surface.0);
+                        if !already {
+                            let focus_serial = SERIAL_COUNTER.next_serial();
+                            self.set_window_focus(Some(surface), focus_serial);
+                        }
+                    }
                     pointer.button(
                         self,
                         &ButtonEvent {

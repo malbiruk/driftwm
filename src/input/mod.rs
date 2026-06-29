@@ -266,15 +266,26 @@ impl DriftWm {
     /// Sloppy focus: when enabled, focus the non-widget window under the pointer
     /// without raising it. Skips layers, widgets, and empty canvas.
     fn maybe_hover_focus(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
-        if !self.config.focus_follows_mouse
-            || self.pointer_over_layer
-            || self.active_fullscreen().is_some()
-        {
+        if !self.config.focus_follows_mouse || self.pointer_over_layer {
             return;
         }
         // A pointer grab (popup menu, window move/resize) owns input. Letting
         // hover change focus under it would tear down a live popup grab.
         if self.seat.get_pointer().unwrap().is_grabbed() {
+            return;
+        }
+        // On a fullscreen output the window owns focus; re-assert it rather than
+        // hit-testing for a hover target. This reclaims focus that hover moved to
+        // another output's window, which nothing else here would restore.
+        if let Some(window) = self.active_fullscreen().map(|fs| fs.window.clone()) {
+            let focus_surface = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
+            let already_focused = focus_surface
+                .as_ref()
+                .is_some_and(|t| self.window_focus.as_ref().is_some_and(|f| f.0 == t.0));
+            if !already_focused {
+                let serial = SERIAL_COUNTER.next_serial();
+                self.set_window_focus(focus_surface, serial);
+            }
             return;
         }
         // Pinned windows render above the canvas and hit-test in screen space,
