@@ -23,10 +23,11 @@ use crate::state::{DriftWm, FocusTarget, output_state};
 
 use super::MoveSurfaceGrab;
 
-/// Centroid travel (screen px) before a `PanZoom` gesture leaves the dead zone
-/// and starts to pan. Below this — and below `ZOOM_SLOP_PX` of spread change — it
-/// stays a candidate tap.
-const DEAD_ZONE_PX: f64 = 8.0;
+/// Finger travel before a `PanZoom` gesture leaves the dead zone and starts to
+/// pan, in millimetres (converted to px per panel via `px_per_mm` so the feel is
+/// the same on any touchscreen). Below this — and below the zoom slop — it stays a
+/// candidate tap.
+const DEAD_ZONE_MM: f64 = 2.0;
 /// Max duration of a 3-finger tap (center / fit trigger).
 const TAP_MAX_MS: u32 = 250;
 /// Window for a second 3-finger tap to count as a double-tap.
@@ -40,22 +41,61 @@ const HOLD_MS: u32 = 350;
 /// band. The baseline only advances on a committed zoom, so a deliberate pinch
 /// still accumulates past it.
 const ZOOM_DEADZONE: f64 = 0.02;
-/// Change in finger spread (screen px) that engages pinch-zoom with two fingers.
-/// Pan and zoom run simultaneously — the centroid always pans once active — but
-/// zoom only starts tracking the spread ratio after the pinch clears this slop,
-/// so a plain pan's finger jitter can't wobble the zoom.
-const ZOOM_SLOP_PX: f64 = 6.0;
+/// Spread change that engages pinch-zoom with two fingers, as a fraction of the
+/// current finger spread. A pinch is multiplicative, so a ratio is naturally
+/// panel/scale/size-independent — no px or mm conversion needed. Pan and zoom run
+/// simultaneously; the centroid always pans once active, this only gates zoom, so
+/// a plain pan's finger jitter can't wobble it.
+const ZOOM_SLOP_RATIO: f64 = 0.08;
 /// Same slop for a 3-finger gesture. Three fingers can't translate uniformly
-/// during a pan, so the spread metric is far noisier than with two; a deliberate
-/// pinch must change the spread this much more before zoom engages, or a pan
-/// wobbles into it.
-const ZOOM_SLOP_PX_3F: f64 = 18.0;
+/// during a pan, so the spread metric is far noisier than with two; require a
+/// larger fraction before zoom engages, or a pan wobbles into it.
+const ZOOM_SLOP_RATIO_3F: f64 = 0.20;
+/// Minimum finger spread (mm) for pinch-zoom to engage. The slop is a ratio, so
+/// at a tiny spread a sliver of jitter is a large fraction; require a real
+/// physical separation first — the floor the old absolute-px slop had implicitly.
+const MIN_SPREAD_MM: f64 = 3.0;
+/// Centroid travel for a 4-finger directional navigation swipe, in millimetres
+/// (converted to px per panel via `px_per_mm`). A muscle-memory command gesture
+/// wants consistent physical travel across panels; a real mm-scale threshold also
+/// keeps a pinch-in's small centroid drift from being misread as a swipe.
+const NAV_SWIPE_MM: f64 = 15.0;
 /// During 4-finger navigation, a swipe won't fire once pinch progress reaches
-/// this fraction. A pinch-in contracts slowly (limited finger range) while the
-/// hand drifts the centroid, so without this the tiny swipe threshold steals it
-/// before the pinch completes; a clean directional swipe barely changes the
-/// spread and never reaches this.
-const SWIPE_BLOCK_PINCH: f64 = 0.6;
+/// this fraction. A natural pinch-in drags the thumb a long way toward the other
+/// fingers, drifting the centroid enough to read as a swipe, so the pinch has to
+/// claim the gesture early (here, ~6% spread change) before the tiny swipe
+/// threshold steals it. A clean directional swipe keeps its spread well below
+/// this.
+const SWIPE_BLOCK_PINCH: f64 = 0.4;
+
+/// Logical pixels per millimetre for `output`, used to convert physical gesture
+/// thresholds (dead zone, nav swipe) into the panel's pixel space. Touch points
+/// already arrive in logical px, so only the panel's physical size is needed.
+/// Falls back to a ~96 dpi-equivalent density when no usable size is reported
+/// (nested backend, or a panel with bogus EDID).
+fn output_px_per_mm(output: &Output) -> f64 {
+    const FALLBACK: f64 = 4.0;
+    let phys = output.physical_properties().size;
+    let Some(mode) = output.current_mode() else {
+        return FALLBACK;
+    };
+    if phys.w <= 0 || phys.h <= 0 || mode.size.w <= 0 || mode.size.h <= 0 {
+        return FALLBACK;
+    }
+    // `mode.size` (raw resolution) and `phys` (EDID) are both in the panel's
+    // native, pre-transform orientation, so their axes line up regardless of
+    // output rotation; logical px = physical px / scale.
+    let scale = output.current_scale().fractional_scale();
+    let x = mode.size.w as f64 / phys.w as f64;
+    let y = mode.size.h as f64 / phys.h as f64;
+    let ppm = (x + y) / 2.0 / scale;
+    // Guard against bogus EDID dimensions producing an absurd density.
+    if ppm.is_finite() && (1.5..20.0).contains(&ppm) {
+        ppm
+    } else {
+        FALLBACK
+    }
+}
 
 /// Map where the fingers landed within a window to a resize edge via a 3×3 grid
 /// (`origin` is canvas-space, `loc`/`size` are the window's canvas rect). The
@@ -143,12 +183,15 @@ pub struct TouchGestureGrab {
     nav_fired_swipe: bool,
     nav_fired_pinch: bool,
     /// Pinch-zoom is live for the current `PanZoom` gesture (set once the spread
-    /// clears `ZOOM_SLOP_PX`). Pan runs regardless; this only gates zoom.
+    /// clears the zoom slop). Pan runs regardless; this only gates zoom.
     zoom_engaged: bool,
+    /// Logical px per mm for this grab's panel, for physical thresholds.
+    px_per_mm: f64,
 }
 
 impl TouchGestureGrab {
     pub fn new(start_data: TouchGrabStartData<DriftWm>, output: Output) -> Self {
+        let px_per_mm = output_px_per_mm(&output);
         Self {
             start_data,
             output,
@@ -168,6 +211,7 @@ impl TouchGestureGrab {
             nav_fired_swipe: false,
             nav_fired_pinch: false,
             zoom_engaged: false,
+            px_per_mm,
         }
     }
 
@@ -217,13 +261,12 @@ impl TouchGestureGrab {
         sum / n as f64
     }
 
-    /// Spread change required to engage zoom — larger with three fingers, whose
-    /// spread is noisier under a pan than two fingers'.
-    fn zoom_slop(&self) -> f64 {
+    /// Spread-change fraction required to engage zoom (larger with three fingers).
+    fn zoom_slop_ratio(&self) -> f64 {
         if self.max_fingers >= 3 {
-            ZOOM_SLOP_PX_3F
+            ZOOM_SLOP_RATIO_3F
         } else {
-            ZOOM_SLOP_PX
+            ZOOM_SLOP_RATIO
         }
     }
 
@@ -281,11 +324,8 @@ impl TouchGestureGrab {
 
         let th = &data.config.gesture_thresholds;
         let swipe_dist = (self.nav_cumulative.x.powi(2) + self.nav_cumulative.y.powi(2)).sqrt();
-        let swipe_progress = if th.swipe_distance > 0.0 {
-            swipe_dist / th.swipe_distance
-        } else {
-            f64::INFINITY
-        };
+        let swipe_threshold = NAV_SWIPE_MM * self.px_per_mm;
+        let swipe_progress = swipe_dist / swipe_threshold;
 
         // Pinch progress as a fraction of the in/out margin: a pure swipe's
         // natural splay stays well below 1.0, a deliberate pinch climbs past it.
@@ -643,23 +683,25 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             let dy = centroid.y - self.start_centroid.y;
             let centroid_disp = (dx * dx + dy * dy).sqrt();
             // Spread deviation from the settle baseline (`last_spread`, untouched
-            // while inactive). A pinch gathers the fingers without translating the
-            // centroid, so the spread must be able to break the dead zone on its
-            // own.
-            let span_dev = if self.points.len() >= 2 && self.last_spread > 1.0 {
-                (self.spread(centroid) - self.last_spread).abs()
-            } else {
-                0.0
-            };
-            let slop = self.zoom_slop();
-            if centroid_disp < DEAD_ZONE_PX && span_dev < slop {
+            // while inactive), as a fraction of it. A pinch gathers the fingers
+            // without translating the centroid, so the spread must be able to
+            // break the dead zone on its own.
+            let span_ratio =
+                if self.points.len() >= 2 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm {
+                    (self.spread(centroid) / self.last_spread - 1.0).abs()
+                } else {
+                    0.0
+                };
+            let slop = self.zoom_slop_ratio();
+            let dead_zone = DEAD_ZONE_MM * self.px_per_mm;
+            if centroid_disp < dead_zone && span_ratio < slop {
                 return;
             }
             self.ever_active = true;
             self.active = true;
             // Engage zoom right away if the gesture broke the dead zone by
             // pinching; otherwise it engages later once the spread clears the slop.
-            self.zoom_engaged = self.points.len() >= 2 && span_dev >= slop;
+            self.zoom_engaged = self.points.len() >= 2 && span_ratio >= slop;
             self.last_centroid = centroid;
             self.last_spread = self.spread(centroid);
 
@@ -686,8 +728,8 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             // Engage zoom once the spread has changed past the slop, consuming it
             // so there's no jump on the first zoomed frame.
             if !self.zoom_engaged
-                && self.last_spread > 1.0
-                && (cur_spread - self.last_spread).abs() >= self.zoom_slop()
+                && self.last_spread > MIN_SPREAD_MM * self.px_per_mm
+                && (cur_spread / self.last_spread - 1.0).abs() >= self.zoom_slop_ratio()
             {
                 self.zoom_engaged = true;
                 self.last_spread = cur_spread;
