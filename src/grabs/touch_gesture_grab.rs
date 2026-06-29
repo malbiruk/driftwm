@@ -40,11 +40,22 @@ const HOLD_MS: u32 = 350;
 /// band. The baseline only advances on a committed zoom, so a deliberate pinch
 /// still accumulates past it.
 const ZOOM_DEADZONE: f64 = 0.02;
-/// Change in finger spread (screen px) that engages pinch-zoom. Pan and zoom run
-/// simultaneously — the centroid always pans once active — but zoom only starts
-/// tracking the spread ratio after the pinch clears this slop, so a plain pan's
-/// finger jitter can't wobble the zoom.
+/// Change in finger spread (screen px) that engages pinch-zoom with two fingers.
+/// Pan and zoom run simultaneously — the centroid always pans once active — but
+/// zoom only starts tracking the spread ratio after the pinch clears this slop,
+/// so a plain pan's finger jitter can't wobble the zoom.
 const ZOOM_SLOP_PX: f64 = 6.0;
+/// Same slop for a 3-finger gesture. Three fingers can't translate uniformly
+/// during a pan, so the spread metric is far noisier than with two; a deliberate
+/// pinch must change the spread this much more before zoom engages, or a pan
+/// wobbles into it.
+const ZOOM_SLOP_PX_3F: f64 = 18.0;
+/// During 4-finger navigation, a swipe won't fire once pinch progress reaches
+/// this fraction. A pinch-in contracts slowly (limited finger range) while the
+/// hand drifts the centroid, so without this the tiny swipe threshold steals it
+/// before the pinch completes; a clean directional swipe barely changes the
+/// spread and never reaches this.
+const SWIPE_BLOCK_PINCH: f64 = 0.6;
 
 /// Map where the fingers landed within a window to a resize edge via a 3×3 grid
 /// (`origin` is canvas-space, `loc`/`size` are the window's canvas rect). The
@@ -206,6 +217,16 @@ impl TouchGestureGrab {
         sum / n as f64
     }
 
+    /// Spread change required to engage zoom — larger with three fingers, whose
+    /// spread is noisier under a pan than two fingers'.
+    fn zoom_slop(&self) -> f64 {
+        if self.max_fingers >= 3 {
+            ZOOM_SLOP_PX_3F
+        } else {
+            ZOOM_SLOP_PX
+        }
+    }
+
     /// Reset the per-frame baseline to the current finger configuration so a
     /// finger add/remove doesn't produce a pan/zoom jump.
     fn rebaseline(&mut self) {
@@ -290,9 +311,10 @@ impl TouchGestureGrab {
         };
 
         // Swipe and pinch are mutually exclusive; whichever is further past its
-        // own threshold claims the gesture. Pinch wins ties so a deliberate
-        // pinch-in isn't stolen by the small swipe threshold (a pinch always
-        // drifts the centroid a little).
+        // own threshold claims the gesture. Pinch wins ties, and a developing
+        // pinch (past `SWIPE_BLOCK_PINCH`) blocks the swipe outright — a pinch-in
+        // contracts slowly while the hand drifts the centroid, so otherwise the
+        // small swipe threshold steals it before the pinch completes.
         if pinch_progress >= 1.0 && pinch_progress >= swipe_progress {
             self.nav_fired_pinch = true;
             if scale < 1.0 {
@@ -300,7 +322,7 @@ impl TouchGestureGrab {
             } else {
                 data.execute_action(&Action::HomeToggle);
             }
-        } else if swipe_progress >= 1.0 {
+        } else if swipe_progress >= 1.0 && pinch_progress < SWIPE_BLOCK_PINCH {
             self.nav_fired_swipe = true;
             let dir = direction_from_vector(self.nav_cumulative);
             data.execute_action(&Action::CenterNearest(dir));
@@ -629,14 +651,15 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             } else {
                 0.0
             };
-            if centroid_disp < DEAD_ZONE_PX && span_dev < ZOOM_SLOP_PX {
+            let slop = self.zoom_slop();
+            if centroid_disp < DEAD_ZONE_PX && span_dev < slop {
                 return;
             }
             self.ever_active = true;
             self.active = true;
             // Engage zoom right away if the gesture broke the dead zone by
             // pinching; otherwise it engages later once the spread clears the slop.
-            self.zoom_engaged = self.points.len() >= 2 && span_dev >= ZOOM_SLOP_PX;
+            self.zoom_engaged = self.points.len() >= 2 && span_dev >= slop;
             self.last_centroid = centroid;
             self.last_spread = self.spread(centroid);
 
@@ -664,7 +687,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             // so there's no jump on the first zoomed frame.
             if !self.zoom_engaged
                 && self.last_spread > 1.0
-                && (cur_spread - self.last_spread).abs() >= ZOOM_SLOP_PX
+                && (cur_spread - self.last_spread).abs() >= self.zoom_slop()
             {
                 self.zoom_engaged = true;
                 self.last_spread = cur_spread;
