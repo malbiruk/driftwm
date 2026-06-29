@@ -244,6 +244,21 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
         _focus: Option<(<DriftWm as SeatHandler>::PointerFocus, Point<f64, Logical>)>,
         event: &MotionEvent,
     ) {
+        // A fullscreen output renders only its fullscreen window — everything
+        // else on it is culled — so a window dragged there would just vanish.
+        // Freeze the drag while the cursor is over one; the cross-output branch
+        // re-anchors on return.
+        if let Some(o) = data.focused_output.clone()
+            && data.is_output_fullscreen(&o)
+        {
+            // Disarm edge-pan on the current output, else it keeps scrolling
+            // that monitor's camera while the drag is parked — the grab is the
+            // only thing that disarms it.
+            output_state(&self.output).edge_pan_velocity = None;
+            handle.motion(data, None, event);
+            return;
+        }
+
         // Screen-pinned move: track the cursor with a fixed screen-space offset.
         // The window reassigns to whichever output the cursor is on (free
         // multi-monitor move). No snap / cluster / edge-pan.
