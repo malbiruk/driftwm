@@ -109,6 +109,29 @@ action (launching an app, navigating) naturally exits it.
 
 </details>
 
+### Touchscreen
+
+Everything works by touch too: pan and zoom the canvas, jump between windows, and
+move or resize windows — even whole window groups — exactly as you would on a
+trackpad.
+
+<details><summary><b>Touch gestures</b></summary>
+
+| Input                    | Action                      | Context   |
+| ------------------------ | --------------------------- | --------- |
+| 1-finger swipe           | Pan viewport                | on-canvas |
+| 3-finger swipe           | Pan viewport                | anywhere  |
+| 2-finger pinch           | Zoom                        | on-canvas |
+| 3-finger pinch           | Zoom                        | anywhere  |
+| 4-finger swipe           | Jump to nearest window      | anywhere  |
+| 4-finger pinch in / out  | Zoom-to-fit / home toggle   | anywhere  |
+| 3-finger tap             | Center window               | on-window |
+| 3-finger double-tap      | Fit window                  | on-window |
+| 3-finger doubletap-swipe | Move window (hold: cluster) | on-window |
+| 3-finger hold-swipe      | Resize window               | on-window |
+
+</details>
+
 ### Infinite background
 
 https://github.com/user-attachments/assets/6e9eb7f7-0c73-4fdd-b7aa-230b8ff0a172
@@ -200,7 +223,6 @@ window-search script that lets you search and jump to any open window.
 
 - New window placement: in viewport center (default), under cursor, or snapped adjacent to the focused window's cluster
 - Click-to-focus (default) or focus-follows-mouse (sloppy focus)
-- Touchscreen support
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screen capture: screencasting (OBS, Firefox, Discord) and screenshots, incl. built-in [canvas/DPI capture](docs/ipc.md#screenshots)
 - 40+ Wayland protocols
