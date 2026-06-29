@@ -598,36 +598,42 @@ impl DriftWm {
         let new_layout: Point<f64, smithay::utils::Logical> =
             (old_layout.x + delta.x, old_layout.y + delta.y).into();
 
-        // Find target output at new layout pos
-        let (target_output, screen_pos) =
-            if let Some(target) = self.output_at_layout_pos(new_layout) {
-                if target != cur_output {
-                    // Cross to target output
-                    let target_lp = crate::state::output_state(&target).layout_position;
-                    let target_screen: Point<f64, smithay::utils::Logical> = (
-                        new_layout.x - target_lp.x as f64,
-                        new_layout.y - target_lp.y as f64,
-                    )
-                        .into();
-                    (target, target_screen)
-                } else {
-                    // Same output — compute screen pos within it
-                    let screen: Point<f64, smithay::utils::Logical> = (
-                        new_layout.x - cur_layout_pos.x as f64,
-                        new_layout.y - cur_layout_pos.y as f64,
-                    )
-                        .into();
-                    (cur_output.clone(), screen)
-                }
-            } else {
-                // No output at new pos → clamp to current output
-                let clamped: Point<f64, smithay::utils::Logical> = (
-                    (old_screen.x + delta.x).clamp(0.0, output_size.w as f64 - 1.0),
-                    (old_screen.y + delta.y).clamp(0.0, output_size.h as f64 - 1.0),
+        // Find target output at new layout pos. A confined pointer is pinned to
+        // its current output — it must never cross to one whose camera views a
+        // different canvas region, after which the confine could never
+        // re-establish. The reject below keeps it inside its surface in this
+        // output's coordinate space.
+        let (target_output, screen_pos) = if confined.is_none()
+            && let Some(target) = self.output_at_layout_pos(new_layout)
+        {
+            if target != cur_output {
+                // Cross to target output
+                let target_lp = crate::state::output_state(&target).layout_position;
+                let target_screen: Point<f64, smithay::utils::Logical> = (
+                    new_layout.x - target_lp.x as f64,
+                    new_layout.y - target_lp.y as f64,
                 )
                     .into();
-                (cur_output.clone(), clamped)
-            };
+                (target, target_screen)
+            } else {
+                // Same output — compute screen pos within it
+                let screen: Point<f64, smithay::utils::Logical> = (
+                    new_layout.x - cur_layout_pos.x as f64,
+                    new_layout.y - cur_layout_pos.y as f64,
+                )
+                    .into();
+                (cur_output.clone(), screen)
+            }
+        } else {
+            // No output at new pos, or a confined pointer staying put →
+            // clamp to the current output.
+            let clamped: Point<f64, smithay::utils::Logical> = (
+                (old_screen.x + delta.x).clamp(0.0, output_size.w as f64 - 1.0),
+                (old_screen.y + delta.y).clamp(0.0, output_size.h as f64 - 1.0),
+            )
+                .into();
+            (cur_output.clone(), clamped)
+        };
 
         // Convert target-output-local screen pos to canvas via target's camera/zoom
         let (target_camera, target_zoom) = {
