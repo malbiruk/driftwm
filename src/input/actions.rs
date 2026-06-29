@@ -157,11 +157,18 @@ impl DriftWm {
                 }
 
                 let focused = self.focused_window().filter(|w| !self.is_pinned(w));
-                let viewport_center = self.viewport_center_canvas();
 
-                let (origin, skip) = if let Some(ref w) = focused
-                    && self.window_visible_at_least(w, CENTER_NEAREST_ANCHOR_THRESHOLD)
-                {
+                // Anchor the directional search to the just-exited fullscreen
+                // window (wherever the restored view placed it) — otherwise the
+                // anchor falls back to a corner/offscreen spot and the swipe
+                // finds nothing.
+                let anchor = was_fullscreen.clone().or_else(|| {
+                    focused.filter(|w| {
+                        self.window_visible_at_least(w, CENTER_NEAREST_ANCHOR_THRESHOLD)
+                    })
+                });
+
+                let (origin, skip) = if let Some(ref w) = anchor {
                     let center = self.window_visual_center(w).unwrap_or_else(|| {
                         let loc = self.space.element_location(w).unwrap_or_default();
                         let size = w.geometry().size;
@@ -172,7 +179,7 @@ impl DriftWm {
                     });
                     (center, Some(NavTarget::Window(w.clone())))
                 } else {
-                    (viewport_center, None)
+                    (self.viewport_center_canvas(), None)
                 };
 
                 let windows = self
