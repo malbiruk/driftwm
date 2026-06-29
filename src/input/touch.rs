@@ -31,6 +31,17 @@ pub struct PendingClose {
     last_canvas: Point<f64, Logical>,
 }
 
+/// Active touch window-move that is edge-panning the camera. The animation loop
+/// re-drives the move from the finger's fixed screen position each frame (the
+/// touch analogue of warping the pointer), so the window keeps following the
+/// finger as the canvas scrolls under it.
+#[derive(Clone)]
+pub struct TouchEdgePan {
+    pub slot: TouchSlot,
+    pub screen_pos: Point<f64, Logical>,
+    pub output: Output,
+}
+
 /// Coordinator-side touch state. Per-gesture state lives in `TouchGestureGrab`;
 /// this only holds what must survive across grab lifetimes.
 pub struct TouchState {
@@ -41,6 +52,9 @@ pub struct TouchState {
     /// follow-up double-tap (fit) / double-tap-drag (move) doesn't flash a
     /// center first. Cancelled when a second 3-finger gesture supersedes it.
     pub pending_center_timer: Option<RegistrationToken>,
+    /// Set by an active touch move grab while the finger sits in an edge zone.
+    /// Cleared when the grab ends or the finger leaves the zone.
+    pub edge_pan: Option<TouchEdgePan>,
 }
 
 impl TouchState {
@@ -49,6 +63,7 @@ impl TouchState {
             last_three_finger_tap: None,
             pending_close: None,
             pending_center_timer: None,
+            edge_pan: None,
         }
     }
 }

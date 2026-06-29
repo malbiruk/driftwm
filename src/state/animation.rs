@@ -156,6 +156,39 @@ impl DriftWm {
         self.warp_pointer(pos + delta);
     }
 
+    /// During a touch window-move that has reached a screen edge, re-drive the
+    /// move grab from the finger's fixed screen position after the camera has
+    /// edge-panned, so the window keeps following the finger. Returns true if a
+    /// touch move consumed the edge-pan for `output`.
+    fn redrive_touch_edge_pan(&mut self, output: &Output) -> bool {
+        let Some(tep) = self.touch_state.edge_pan.clone() else {
+            return false;
+        };
+        if &tep.output != output {
+            return false;
+        }
+        let (camera, zoom) = {
+            let os = output_state(output);
+            (os.camera, os.zoom)
+        };
+        let location = canvas::screen_to_canvas(canvas::ScreenPos(tep.screen_pos), camera, zoom).0;
+        let Some(touch) = self.seat.get_touch() else {
+            return false;
+        };
+        let time = self.start_time.elapsed().as_millis() as u32;
+        touch.motion(
+            self,
+            None,
+            &smithay::input::touch::MotionEvent {
+                slot: tep.slot,
+                location,
+                time,
+            },
+        );
+        touch.frame(self);
+        true
+    }
+
     /// Apply edge auto-pan each frame during a window drag near viewport edges.
     /// Synthetic pointer motion keeps cursor at the same screen position and
     /// lets the active MoveSurfaceGrab reposition the window automatically.
@@ -168,6 +201,13 @@ impl DriftWm {
         let canvas_delta = Point::from((velocity.x / zoom, velocity.y / zoom));
         self.set_camera(self.camera() + canvas_delta);
         self.update_output_from_camera();
+
+        // Touch move: re-drive the grab instead of warping the (hidden) pointer.
+        if let Some(output) = self.focused_output.clone()
+            && self.redrive_touch_edge_pan(&output)
+        {
+            return;
+        }
 
         let pos = self.seat.get_pointer().unwrap().current_location();
         self.warp_pointer(pos + canvas_delta);
@@ -460,6 +500,11 @@ impl DriftWm {
             let mut os = output_state(output);
             os.camera.x += canvas_delta.x;
             os.camera.y += canvas_delta.y;
+        }
+
+        // Touch move: re-drive the grab instead of warping the (hidden) pointer.
+        if self.redrive_touch_edge_pan(output) {
+            return;
         }
 
         if is_active {

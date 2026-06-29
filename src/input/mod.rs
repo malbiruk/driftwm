@@ -750,6 +750,11 @@ impl DriftWm {
         if pointer.is_grabbed() {
             return;
         }
+        // A touch window-move owns edge_pan_velocity too; don't let the resting
+        // (hidden) cursor's position overwrite it.
+        if self.seat.get_touch().is_some_and(|t| t.is_grabbed()) {
+            return;
+        }
         if !self.cursor_edge_pan {
             return;
         }

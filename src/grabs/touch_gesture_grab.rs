@@ -34,11 +34,16 @@ const DOUBLE_TAP_MS: u32 = 300;
 /// gesture: resize (no prior tap) or cluster move (after a double-tap). Long
 /// enough that a normal pan, which drags promptly, never trips it.
 const HOLD_MS: u32 = 350;
-/// Per-frame pinch-zoom deadzone (on the spread ratio). The 3-finger spread
-/// metric is noisy, so a pure pan would wobble the zoom; ignore scale changes
-/// inside this band. The baseline only advances on a committed zoom, so a
-/// deliberate pinch still accumulates past it.
+/// Per-frame pinch-zoom deadzone (on the spread ratio). The spread metric is
+/// noisy, so a pure pan would wobble the zoom; ignore scale changes inside this
+/// band. The baseline only advances on a committed zoom, so a deliberate pinch
+/// still accumulates past it.
 const ZOOM_DEADZONE: f64 = 0.02;
+/// Spread-ratio change that breaks the dead zone for a pinch even when the
+/// centroid barely moves, so pinch-in (which gathers the fingers in place,
+/// leaving the centroid put) can start. Larger than the per-frame
+/// `ZOOM_DEADZONE` so finger noise alone doesn't trip it.
+const SPREAD_ACTIVATE: f64 = 0.05;
 
 /// Map where the fingers landed within a window to a resize edge via a 3×3 grid
 /// (`origin` is canvas-space, `loc`/`size` are the window's canvas rect). The
@@ -212,7 +217,9 @@ impl TouchGestureGrab {
         ));
         data.drift_pan_on(pan, time, &self.output);
 
-        if self.points.len() >= 2 && self.last_spread > 1.0 {
+        // Zoom is the 2-finger pinch only; 3-finger stays pure pan so the noisy
+        // spread metric can't wobble the zoom under a pan.
+        if self.max_fingers == 2 && self.points.len() >= 2 && self.last_spread > 1.0 {
             let spread = self.spread(centroid);
             let scale = spread / self.last_spread;
             if (scale - 1.0).abs() > ZOOM_DEADZONE {
@@ -237,30 +244,59 @@ impl TouchGestureGrab {
         // Inverted, like the trackpad swipe: drag content right → reveal left.
         let centroid_delta = centroid - self.last_centroid;
         self.nav_cumulative += Point::from((-centroid_delta.x, -centroid_delta.y));
+        self.last_centroid = centroid;
 
-        let threshold = data.config.gesture_thresholds.swipe_distance;
-        let cum_sq = self.nav_cumulative.x * self.nav_cumulative.x
-            + self.nav_cumulative.y * self.nav_cumulative.y;
-        // Swipe and pinch are mutually exclusive: the first to cross its
-        // threshold claims the gesture so a 4-finger swipe's natural splay can't
-        // also fire zoom-to-fit.
-        if !self.nav_fired_swipe && !self.nav_fired_pinch && cum_sq >= threshold * threshold {
+        if self.nav_fired_swipe || self.nav_fired_pinch {
+            return;
+        }
+
+        let th = &data.config.gesture_thresholds;
+        let swipe_dist = (self.nav_cumulative.x.powi(2) + self.nav_cumulative.y.powi(2)).sqrt();
+        let swipe_progress = if th.swipe_distance > 0.0 {
+            swipe_dist / th.swipe_distance
+        } else {
+            f64::INFINITY
+        };
+
+        // Pinch progress as a fraction of the in/out margin: a pure swipe's
+        // natural splay stays well below 1.0, a deliberate pinch climbs past it.
+        let scale = if self.start_spread > 1.0 {
+            self.spread(centroid) / self.start_spread
+        } else {
+            1.0
+        };
+        let pinch_progress = if scale < 1.0 {
+            let margin = 1.0 - th.pinch_in_scale;
+            if margin > 0.0 {
+                (1.0 - scale) / margin
+            } else {
+                0.0
+            }
+        } else {
+            let margin = th.pinch_out_scale - 1.0;
+            if margin > 0.0 {
+                (scale - 1.0) / margin
+            } else {
+                0.0
+            }
+        };
+
+        // Swipe and pinch are mutually exclusive; whichever is further past its
+        // own threshold claims the gesture. Pinch wins ties so a deliberate
+        // pinch-in isn't stolen by the small swipe threshold (a pinch always
+        // drifts the centroid a little).
+        if pinch_progress >= 1.0 && pinch_progress >= swipe_progress {
+            self.nav_fired_pinch = true;
+            if scale < 1.0 {
+                data.execute_action(&Action::ZoomToFit);
+            } else {
+                data.execute_action(&Action::HomeToggle);
+            }
+        } else if swipe_progress >= 1.0 {
             self.nav_fired_swipe = true;
             let dir = direction_from_vector(self.nav_cumulative);
             data.execute_action(&Action::CenterNearest(dir));
         }
-
-        if !self.nav_fired_pinch && !self.nav_fired_swipe && self.start_spread > 1.0 {
-            let scale = self.spread(centroid) / self.start_spread;
-            if scale < data.config.gesture_thresholds.pinch_in_scale {
-                self.nav_fired_pinch = true;
-                data.execute_action(&Action::ZoomToFit);
-            } else if scale > data.config.gesture_thresholds.pinch_out_scale {
-                self.nav_fired_pinch = true;
-                data.execute_action(&Action::HomeToggle);
-            }
-        }
-        self.last_centroid = centroid;
     }
 
     /// Double-tap-drag: hand off to a touch move grab on the window under the
@@ -445,7 +481,35 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             Mode::PanZoom | Mode::Navigate => {
                 // Escalation from app-forwarding to a system gesture: revoke the
                 // app's in-flight touch sequence so it sees no dangling points.
+                // smithay's touch cancel skips any slot already framed
+                // (current >= pending) — i.e. every finger that landed in an
+                // earlier frame, the common case for a 3-finger gesture. Replay a
+                // no-op motion on those slots first to bump pending past current,
+                // so the cancel that follows actually revokes them.
                 if self.app_owns && !self.system_cancelled {
+                    let replays: Vec<(TouchSlot, Point<f64, Logical>)> = self
+                        .points
+                        .iter()
+                        .filter(|(slot, p)| **slot != event.slot && p.focus.is_some())
+                        .map(|(slot, p)| {
+                            (
+                                *slot,
+                                screen_to_canvas(ScreenPos(p.last_screen), camera, zoom).0,
+                            )
+                        })
+                        .collect();
+                    for (slot, location) in replays {
+                        handle.motion(
+                            data,
+                            None,
+                            &MotionEvent {
+                                slot,
+                                location,
+                                time: event.time,
+                            },
+                            seq,
+                        );
+                    }
                     handle.cancel(data, seq);
                     self.system_cancelled = true;
                 }
@@ -524,14 +588,33 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         if !self.active {
             let dx = centroid.x - self.start_centroid.x;
             let dy = centroid.y - self.start_centroid.y;
-            if dx * dx + dy * dy < DEAD_ZONE_PX * DEAD_ZONE_PX {
+            let centroid_moved = dx * dx + dy * dy >= DEAD_ZONE_PX * DEAD_ZONE_PX;
+            // A pure pinch gathers the fingers without moving the centroid, so it
+            // would never cross the centroid dead zone. Break out on a spread
+            // change too, so pinch-in (2-finger zoom, 4-finger zoom-to-fit) can
+            // start without first having to translate the whole hand. Only where
+            // spread is a gesture: for 3 fingers (pan / hold-resize / tap) spread
+            // jitter must not preempt the hold timing or disqualify a tap.
+            let spread_matters = self.max_fingers == 2 || self.max_fingers >= 4;
+            let spread_changed = spread_matters
+                && self.last_spread > 1.0
+                && (self.spread(centroid) / self.last_spread - 1.0).abs() > SPREAD_ACTIVATE;
+            if !centroid_moved && !spread_changed {
                 return;
             }
             self.active = true;
             self.ever_active = true;
+            let cur_spread = self.spread(centroid);
+            // Measure pinch scale from the settle-time spread (the rebaseline
+            // value), not the activation spread — an already-progressing pinch
+            // should compare against rest, not against where it tripped active.
+            self.start_spread = if self.last_spread > 1.0 {
+                self.last_spread
+            } else {
+                cur_spread
+            };
             self.last_centroid = centroid;
-            self.last_spread = self.spread(centroid);
-            self.start_spread = self.last_spread;
+            self.last_spread = cur_spread;
             self.nav_cumulative = Point::from((0.0, 0.0));
 
             // At drag commit, the time since the fingers settled selects the

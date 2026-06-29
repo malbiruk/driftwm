@@ -547,7 +547,6 @@ impl MoveSurfaceGrab {
     }
 
     /// Update edge auto-pan velocity from the cursor/finger screen position.
-    /// Pointer-only: the touch move path leaves this off (no pointer to warp).
     fn update_edge_pan(&mut self, data: &mut DriftWm, location: Point<f64, Logical>) {
         let (camera, zoom) = {
             let os = output_state(&self.output);
@@ -616,6 +615,9 @@ impl TouchGrab<DriftWm> for MoveSurfaceGrab {
         // but keep the grab until every finger lifts so stray fingers don't
         // leak out of grab routing.
         if event.slot == self.touch_start.as_ref().expect("touch move grab").slot {
+            // Stop edge-panning now that the controlling finger lifted.
+            output_state(&self.output).edge_pan_velocity = None;
+            data.touch_state.edge_pan = None;
             data.refresh_stable_snap_rect(&self.window);
             for (member, _) in &self.cluster_members {
                 if member.alive() {
@@ -643,6 +645,24 @@ impl TouchGrab<DriftWm> for MoveSurfaceGrab {
         if self.apply_move(data, event.location) {
             handle.motion(data, None, event, seq);
         }
+        // Drag the window to a screen edge and the canvas scrolls under it. The
+        // animation loop re-drives this grab from the recorded finger position
+        // as the camera pans (there's no pointer to warp on touch).
+        self.update_edge_pan(data, event.location);
+        let (camera, zoom) = {
+            let os = output_state(&self.output);
+            (os.camera, os.zoom)
+        };
+        let screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
+        data.touch_state.edge_pan =
+            output_state(&self.output)
+                .edge_pan_velocity
+                .is_some()
+                .then(|| crate::input::touch::TouchEdgePan {
+                    slot: event.slot,
+                    screen_pos: screen,
+                    output: self.output.clone(),
+                });
     }
 
     fn frame(
@@ -689,7 +709,8 @@ impl TouchGrab<DriftWm> for MoveSurfaceGrab {
         self.touch_start.as_ref().expect("touch move grab")
     }
 
-    fn unset(&mut self, _data: &mut DriftWm) {
+    fn unset(&mut self, data: &mut DriftWm) {
         output_state(&self.output).edge_pan_velocity = None;
+        data.touch_state.edge_pan = None;
     }
 }
