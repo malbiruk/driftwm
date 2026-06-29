@@ -362,23 +362,19 @@ fn resolve_screenshot_region(
             Ok(crate::state::output_viewport_rect(&output))
         }
         ScreenshotTarget::Window => {
-            // Pinned windows render in screen space and are excluded from the
-            // canvas-capture path by construction, so there's no canvas region
-            // to capture — refuse rather than emit the background behind them.
+            // Pinned and fullscreen windows render in screen space, not on the
+            // canvas, so there's no canvas region to capture. Refuse rather than
+            // emit the background behind them.
             let window = state
                 .focused_window()
-                .filter(|w| !w.is_widget() && !state.is_pinned(w))
+                .filter(|w| state.is_canvas_window(w))
                 .ok_or("no focused window to capture")?;
             window_visual_rect(state, &window)
                 .ok_or_else(|| "focused window has no capturable area".to_string())
         }
         ScreenshotTarget::All => {
             let mut acc: Option<Rectangle<i32, Logical>> = None;
-            for w in state
-                .space
-                .elements()
-                .filter(|w| !w.is_widget() && !state.is_pinned(w))
-            {
+            for w in state.space.elements().filter(|w| state.is_canvas_window(w)) {
                 let Some(r) = window_visual_rect(state, w) else {
                     continue;
                 };
