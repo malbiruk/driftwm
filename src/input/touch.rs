@@ -100,7 +100,7 @@ impl DriftWm {
             return Some(o);
         }
 
-        let libinput_device = (device as &dyn Any).downcast_ref::<LibinputDevice>();
+        let libinput_device = as_libinput_device::<I>(device);
 
         if let Some(name) = libinput_device.and_then(LibinputDevice::output_name)
             && let Some(o) = self.output_by_name(&name)
@@ -318,7 +318,8 @@ impl DriftWm {
             slot,
             location: canvas_pos,
         };
-        let grab = TouchGestureGrab::new(start_data, output);
+        let device_mm = touch_device_size_mm::<I>(&event.device());
+        let grab = TouchGestureGrab::new(start_data, output, device_mm);
         let touch = self.seat.get_touch().unwrap();
         touch.set_grab(self, grab, serial);
         self.seat.get_touch().unwrap().down(
@@ -472,6 +473,24 @@ impl DriftWm {
             touch.frame(self);
         }
     }
+}
+
+/// Downcast a backend input device to the libinput device behind it, if any (the
+/// udev backend); `None` for the winit virtual device.
+fn as_libinput_device<I: InputBackend>(device: &I::Device) -> Option<&LibinputDevice>
+where
+    I::Device: 'static,
+{
+    (device as &dyn Any).downcast_ref::<LibinputDevice>()
+}
+
+/// Touch digitizer's physical size in mm, if the backend device reports one
+/// (libinput touchscreens do; the winit virtual device doesn't).
+fn touch_device_size_mm<I: InputBackend>(device: &I::Device) -> Option<(f64, f64)>
+where
+    I::Device: 'static,
+{
+    as_libinput_device::<I>(device).and_then(LibinputDevice::size)
 }
 
 /// Whether a touch digitizer's physical size (mm) matches a panel's, within 5%

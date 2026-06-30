@@ -55,6 +55,15 @@ const ZOOM_SLOP_RATIO_3F: f64 = 0.20;
 /// at a tiny spread a sliver of jitter is a large fraction; require a real
 /// physical separation first — the floor the old absolute-px slop had implicitly.
 const MIN_SPREAD_MM: f64 = 3.0;
+/// Minimum *change* in finger spread (mm) before pinch engages, on top of the
+/// ratio slop. The ratio alone is panel-size-fragile: on a small, cramped panel
+/// the fingers sit close, so the baseline spread is small and ordinary jitter
+/// during a pan/swipe is a large *fraction* of it — enough to wobble a 3-finger
+/// pan into zoom or steal a 4-finger swipe as zoom-to-fit. A deliberate pinch
+/// moves fingers well past this floor; jitter doesn't, so it separates intent on
+/// any panel size. On a healthy panel (fingers far apart) the ratio change is
+/// already many mm, so this floor never binds.
+const PINCH_MIN_DELTA_MM: f64 = 3.0;
 /// Centroid travel for a 4-finger directional navigation swipe, in millimetres
 /// (converted to px per panel via `px_per_mm`). A muscle-memory command gesture
 /// wants consistent physical travel across panels; a real mm-scale threshold also
@@ -71,30 +80,39 @@ const SWIPE_BLOCK_PINCH: f64 = 0.4;
 /// Logical pixels per millimetre for `output`, used to convert physical gesture
 /// thresholds (dead zone, nav swipe) into the panel's pixel space. Touch points
 /// already arrive in logical px, so only the panel's physical size is needed.
-/// Falls back to a ~96 dpi-equivalent density when no usable size is reported
-/// (nested backend, or a panel with bogus EDID).
-fn output_px_per_mm(output: &Output) -> f64 {
+///
+/// Prefers the touch digitizer's own physical size (`device_mm`) over the
+/// output's EDID. The finger physically travels across the digitizer, so its mm
+/// size is the right denominator — and a cheap USB touch monitor's EDID often
+/// reports a bogus size (e.g. a cloned ~2× value) while the digitizer reports
+/// the truth. Falls back to EDID, then to a ~96 dpi-equivalent density (nested
+/// backend, or a panel with no usable size anywhere).
+fn output_px_per_mm(output: &Output, device_mm: Option<(f64, f64)>) -> f64 {
     const FALLBACK: f64 = 4.0;
-    let phys = output.physical_properties().size;
     let Some(mode) = output.current_mode() else {
         return FALLBACK;
     };
-    if phys.w <= 0 || phys.h <= 0 || mode.size.w <= 0 || mode.size.h <= 0 {
+    if mode.size.w <= 0 || mode.size.h <= 0 {
         return FALLBACK;
     }
-    // `mode.size` (raw resolution) and `phys` (EDID) are both in the panel's
-    // native, pre-transform orientation, so their axes line up regardless of
-    // output rotation; logical px = physical px / scale.
     let scale = output.current_scale().fractional_scale();
-    let x = mode.size.w as f64 / phys.w as f64;
-    let y = mode.size.h as f64 / phys.h as f64;
-    let ppm = (x + y) / 2.0 / scale;
-    // Guard against bogus EDID dimensions producing an absurd density.
-    if ppm.is_finite() && (1.5..20.0).contains(&ppm) {
-        ppm
-    } else {
-        FALLBACK
-    }
+    let mode_area = mode.size.w as f64 * mode.size.h as f64;
+
+    // Density from a physical size via area (a geometric mean of both axes), so it
+    // doesn't matter whether the digitizer reports its axes in the panel's native
+    // orientation — EDID guarantees that alignment, a digitizer doesn't. `None`
+    // when the size is missing, or yields an out-of-range (bogus) density.
+    let density = |phys_w: f64, phys_h: f64| {
+        (phys_w > 0.0 && phys_h > 0.0)
+            .then(|| (mode_area / (phys_w * phys_h)).sqrt() / scale)
+            .filter(|ppm| ppm.is_finite() && (1.5..20.0).contains(ppm))
+    };
+
+    let edid = output.physical_properties().size;
+    device_mm
+        .and_then(|(w, h)| density(w, h))
+        .or_else(|| density(edid.w as f64, edid.h as f64))
+        .unwrap_or(FALLBACK)
 }
 
 /// Map where the fingers landed within a window to a resize edge via a 3×3 grid
@@ -190,8 +208,12 @@ pub struct TouchGestureGrab {
 }
 
 impl TouchGestureGrab {
-    pub fn new(start_data: TouchGrabStartData<DriftWm>, output: Output) -> Self {
-        let px_per_mm = output_px_per_mm(&output);
+    pub fn new(
+        start_data: TouchGrabStartData<DriftWm>,
+        output: Output,
+        device_mm: Option<(f64, f64)>,
+    ) -> Self {
+        let px_per_mm = output_px_per_mm(&output, device_mm);
         Self {
             start_data,
             output,
@@ -329,8 +351,9 @@ impl TouchGestureGrab {
 
         // Pinch progress as a fraction of the in/out margin: a pure swipe's
         // natural splay stays well below 1.0, a deliberate pinch climbs past it.
+        let cur_spread = self.spread(centroid);
         let scale = if self.start_spread > 1.0 {
-            self.spread(centroid) / self.start_spread
+            cur_spread / self.start_spread
         } else {
             1.0
         };
@@ -350,19 +373,31 @@ impl TouchGestureGrab {
             }
         };
 
+        // The ratio alone isn't enough to call it a pinch: on a small, cramped
+        // panel four fingers can't translate without their spread fluctuating
+        // ~margin, so a swipe's jitter crosses `pinch_progress` and steals the
+        // gesture as zoom-to-fit. Require a real physical spread change too; until
+        // then the pinch reads as zero, so it neither fires nor blocks the swipe.
+        let effective_pinch =
+            if (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm {
+                pinch_progress
+            } else {
+                0.0
+            };
+
         // Swipe and pinch are mutually exclusive; whichever is further past its
         // own threshold claims the gesture. Pinch wins ties, and a developing
         // pinch (past `SWIPE_BLOCK_PINCH`) blocks the swipe outright — a pinch-in
         // contracts slowly while the hand drifts the centroid, so otherwise the
         // small swipe threshold steals it before the pinch completes.
-        if pinch_progress >= 1.0 && pinch_progress >= swipe_progress {
+        if effective_pinch >= 1.0 && effective_pinch >= swipe_progress {
             self.nav_fired_pinch = true;
             if scale < 1.0 {
                 data.execute_action(&Action::ZoomToFit);
             } else {
                 data.execute_action(&Action::HomeToggle);
             }
-        } else if swipe_progress >= 1.0 && pinch_progress < SWIPE_BLOCK_PINCH {
+        } else if swipe_progress >= 1.0 && effective_pinch < SWIPE_BLOCK_PINCH {
             self.nav_fired_swipe = true;
             let dir = direction_from_vector(self.nav_cumulative);
             data.execute_action(&Action::CenterNearest(dir));
@@ -696,26 +731,32 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             let dx = centroid.x - self.start_centroid.x;
             let dy = centroid.y - self.start_centroid.y;
             let centroid_disp = (dx * dx + dy * dy).sqrt();
-            // Spread deviation from the settle baseline (`last_spread`, untouched
-            // while inactive), as a fraction of it. A pinch gathers the fingers
-            // without translating the centroid, so the spread must be able to
-            // break the dead zone on its own.
-            let span_ratio =
-                if self.points.len() >= 2 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm {
-                    (self.spread(centroid) / self.last_spread - 1.0).abs()
-                } else {
-                    0.0
-                };
+            // A real pinch must clear both the ratio slop AND a physical spread
+            // change (`PINCH_MIN_DELTA_MM`): the ratio gathers the fingers without
+            // translating the centroid, so the spread can break the dead zone on
+            // its own — but on a small panel ordinary jitter crosses the ratio at
+            // a tiny absolute change, so the mm floor keeps a pan from wobbling
+            // into zoom. (A pinch needs >= 2 fingers and a non-trivial baseline.)
+            let has_two = self.points.len() >= 2;
+            let cur_spread = if has_two { self.spread(centroid) } else { 0.0 };
+            let span_ratio = if has_two && self.last_spread > MIN_SPREAD_MM * self.px_per_mm {
+                (cur_spread / self.last_spread - 1.0).abs()
+            } else {
+                0.0
+            };
             let slop = self.zoom_slop_ratio();
+            let real_pinch = has_two
+                && span_ratio >= slop
+                && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
             let dead_zone = DEAD_ZONE_MM * self.px_per_mm;
-            if centroid_disp < dead_zone && span_ratio < slop {
+            if centroid_disp < dead_zone && !real_pinch {
                 return;
             }
             self.ever_active = true;
             self.active = true;
-            // Engage zoom right away if the gesture broke the dead zone by
-            // pinching; otherwise it engages later once the spread clears the slop.
-            self.zoom_engaged = self.points.len() >= 2 && span_ratio >= slop;
+            // Engage zoom right away only if the gesture broke the dead zone by a
+            // real pinch; otherwise it engages later once the spread clears both.
+            self.zoom_engaged = real_pinch;
             self.last_centroid = centroid;
             self.last_spread = self.spread(centroid);
 
@@ -739,11 +780,13 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         self.apply_pan(data, centroid, event.time);
         if self.points.len() >= 2 {
             let cur_spread = self.spread(centroid);
-            // Engage zoom once the spread has changed past the slop, consuming it
-            // so there's no jump on the first zoomed frame.
+            // Engage zoom once the spread has changed past both the ratio slop and
+            // the physical floor (so a pan's jitter can't latch it), consuming the
+            // change so there's no jump on the first zoomed frame.
             if !self.zoom_engaged
                 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm
                 && (cur_spread / self.last_spread - 1.0).abs() >= self.zoom_slop_ratio()
+                && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
             {
                 self.zoom_engaged = true;
                 self.last_spread = cur_spread;
