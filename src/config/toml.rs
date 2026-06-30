@@ -59,6 +59,7 @@ pub(super) struct InputConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct TouchDeviceFileConfig {
     pub enable: Option<bool>,
+    pub map_to_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

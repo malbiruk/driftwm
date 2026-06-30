@@ -190,6 +190,18 @@ Default: `true`
 
 enable touchscreen support
 
+### `map_to_output`
+
+Default: `"none"`
+
+pin touch to an output by connector name; "none" (default) auto-detects the touchscreen by physical size + connector. Only set this to tell apart two identically-sized touchscreens.
+
+**Example:**
+
+```toml
+map_to_output = "DP-2"
+```
+
 ## `[cursor]`
 
 ### `theme`

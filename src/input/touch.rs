@@ -1,3 +1,4 @@
+use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashSet;
 use std::time::Duration;
@@ -17,6 +18,7 @@ use smithay::{
             RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
+        input::Device as LibinputDevice,
         wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
     utils::{IsAlive, Logical, Point, SERIAL_COUNTER},
@@ -55,6 +57,11 @@ pub struct TouchState {
     /// Set by an active touch move grab while the finger sits in an edge zone.
     /// Cleared when the grab ends or the finger leaves the zone.
     pub edge_pan: Option<TouchEdgePan>,
+    /// Output the live touch interaction maps to, resolved once at touch-down
+    /// and reused for the rest of the sequence. Motion reads this instead of
+    /// re-resolving per event, so it can't diverge from the grab's output on a
+    /// mid-gesture hotplug or `map_to_output` reload (and avoids per-event work).
+    pub output: Option<Output>,
 }
 
 impl TouchState {
@@ -64,16 +71,67 @@ impl TouchState {
             pending_close: None,
             pending_center_timer: None,
             edge_pan: None,
+            output: None,
         }
     }
 }
 
 impl DriftWm {
-    /// Output a touch maps to. No per-device mapping yet (future
-    /// `[input.touch] map_to_output`); use the first output — the touch panel —
-    /// rather than the keyboard-focused one, which may be a non-touch monitor.
-    pub(crate) fn touch_output(&self) -> Option<Output> {
-        self.space.outputs().next().cloned()
+    /// Output a touch from `device` maps to. Resolved per-device so multiple
+    /// touchscreens each drive their own monitor. Resolution order: explicit
+    /// config first, then libinput's output tag, then a single-output shortcut,
+    /// then physical-size match (a digitizer is the same physical size as the
+    /// panel it overlays), then the internal panel, then the first output.
+    ///
+    /// The last two steps are best-effort guesses: a device that reports no
+    /// output tag and no physical size on a multi-output system falls back to
+    /// the internal panel even if it's an external touchscreen. Set
+    /// `[touch] map_to_output` to pin such a device explicitly.
+    pub(crate) fn touch_output_for_device<I: InputBackend>(
+        &self,
+        device: &I::Device,
+    ) -> Option<Output>
+    where
+        I::Device: 'static,
+    {
+        if let Some(name) = self.config.touch.map_to_output.as_deref()
+            && let Some(o) = self.output_by_name(name)
+        {
+            return Some(o);
+        }
+
+        let libinput_device = (device as &dyn Any).downcast_ref::<LibinputDevice>();
+
+        if let Some(name) = libinput_device.and_then(LibinputDevice::output_name)
+            && let Some(o) = self.output_by_name(&name)
+        {
+            return Some(o);
+        }
+
+        let mut outputs = self.space.outputs();
+        let first = outputs.next().cloned();
+        if outputs.next().is_none() {
+            return first; // zero or one output: unambiguous
+        }
+
+        if let Some((dev_w, dev_h)) = libinput_device.and_then(LibinputDevice::size)
+            && let Some(o) = self.space.outputs().find(|o| {
+                let size = o.physical_properties().size;
+                physical_size_matches(size.w as f64, size.h as f64, dev_w, dev_h)
+            })
+        {
+            return Some(o.clone());
+        }
+
+        if let Some(o) = self.space.outputs().find(|o| is_internal_output(&o.name())) {
+            return Some(o.clone());
+        }
+
+        first
+    }
+
+    fn output_by_name(&self, name: &str) -> Option<Output> {
+        self.space.outputs().find(|o| o.name() == name).cloned()
     }
 
     /// Schedule a deferred single-tap center for `window` after `delay`. Any
@@ -150,17 +208,22 @@ impl DriftWm {
         ))
     }
 
-    pub fn on_touch_down<I: InputBackend>(&mut self, event: I::TouchDownEvent) {
+    pub fn on_touch_down<I: InputBackend>(&mut self, event: I::TouchDownEvent)
+    where
+        I::Device: 'static,
+    {
         if !self.config.touch.enable {
             return;
         }
-        let Some(output) = self.touch_output() else {
+        let Some(output) = self.touch_output_for_device::<I>(&event.device()) else {
             return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
-        // Touch acts on its own output and hides the pointer.
+        // Touch acts on its own output and hides the pointer. Cache the output
+        // for the rest of the sequence so motion reuses it (see `TouchState`).
+        self.touch_state.output = Some(output.clone());
         self.focused_output = Some(output.clone());
         self.cursor.hidden_by_touch = true;
 
@@ -221,7 +284,7 @@ impl DriftWm {
         // Fresh interaction. The first finger hit-tests SSD decorations.
         match self.decoration_under(canvas_pos) {
             Some((window, DecorationHit::TitleBar)) => {
-                self.start_touch_move(&window, slot, canvas_pos, serial);
+                self.start_touch_move(&window, slot, canvas_pos, serial, output);
                 return;
             }
             Some((window, DecorationHit::CloseButton)) => {
@@ -276,10 +339,8 @@ impl DriftWm {
         slot: TouchSlot,
         location: Point<f64, Logical>,
         serial: smithay::utils::Serial,
+        output: Output,
     ) {
-        let Some(output) = self.touch_output() else {
-            return;
-        };
         let Some(initial) = self.space.element_location(window) else {
             return;
         };
@@ -307,7 +368,9 @@ impl DriftWm {
         if !self.config.touch.enable {
             return;
         }
-        let Some(output) = self.touch_output() else {
+        // Reuse the output resolved at touch-down; the down always precedes its
+        // motion, so this is set for any live sequence.
+        let Some(output) = self.touch_state.output.clone() else {
             return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
@@ -408,5 +471,64 @@ impl DriftWm {
         if let Some(touch) = self.seat.get_touch() {
             touch.frame(self);
         }
+    }
+}
+
+/// Whether a touch digitizer's physical size (mm) matches a panel's, within 5%
+/// (mutter's `MAX_SIZE_MATCH_DIFF`). Tries both orientations so a digitizer that
+/// reports its width/height swapped still matches. Zero/unknown sizes never
+/// match.
+fn physical_size_matches(out_w: f64, out_h: f64, dev_w: f64, dev_h: f64) -> bool {
+    const TOLERANCE: f64 = 0.05;
+    let close = |a: f64, b: f64| b > 0.0 && a > 0.0 && (a - b).abs() / b <= TOLERANCE;
+    (close(dev_w, out_w) && close(dev_h, out_h)) || (close(dev_w, out_h) && close(dev_h, out_w))
+}
+
+/// Whether `name` is an internal-panel connector (laptop built-in display).
+fn is_internal_output(name: &str) -> bool {
+    let name = name.to_ascii_uppercase();
+    name.starts_with("EDP") || name.starts_with("LVDS") || name.starts_with("DSI")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_match_exact_and_within_tolerance() {
+        // A 13" panel and its bonded digitizer report ~the same mm.
+        assert!(physical_size_matches(294.0, 165.0, 294.0, 165.0));
+        // EDID rounding / digitizer slop within 5%.
+        assert!(physical_size_matches(294.0, 165.0, 300.0, 168.0));
+    }
+
+    #[test]
+    fn size_match_rotated_panel() {
+        // Output reported portrait, digitizer landscape (or vice versa).
+        assert!(physical_size_matches(165.0, 294.0, 294.0, 165.0));
+    }
+
+    #[test]
+    fn size_mismatch_rejects_other_monitor_and_touchpad() {
+        // A different-sized external monitor must not match.
+        assert!(!physical_size_matches(531.0, 299.0, 294.0, 165.0));
+        // A touchpad (~100x70mm) must never match a display.
+        assert!(!physical_size_matches(294.0, 165.0, 100.0, 70.0));
+    }
+
+    #[test]
+    fn size_match_rejects_unknown_dimensions() {
+        // Outputs with no EDID physical size (0x0) never match.
+        assert!(!physical_size_matches(0.0, 0.0, 294.0, 165.0));
+        assert!(!physical_size_matches(294.0, 165.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn internal_output_detection() {
+        assert!(is_internal_output("eDP-1"));
+        assert!(is_internal_output("LVDS-1"));
+        assert!(is_internal_output("DSI-1"));
+        assert!(!is_internal_output("DP-2"));
+        assert!(!is_internal_output("HDMI-A-1"));
     }
 }

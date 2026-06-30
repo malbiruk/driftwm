@@ -375,11 +375,18 @@ impl Default for TrackpadSettings {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TouchSettings {
     pub enable: bool,
+    /// Pin touch input to the output with this connector name. `None` =
+    /// auto-detect the touchscreen's output. Only needed to disambiguate
+    /// multiple identically-sized touchscreens.
+    pub map_to_output: Option<String>,
 }
 
 impl Default for TouchSettings {
     fn default() -> Self {
-        Self { enable: true }
+        Self {
+            enable: true,
+            map_to_output: None,
+        }
     }
 }
 

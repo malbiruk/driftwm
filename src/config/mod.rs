@@ -520,6 +520,8 @@ impl Config {
             let t = &raw.input.touch;
             TouchSettings {
                 enable: t.enable.unwrap_or(true),
+                // `"none"` means auto-detect the touchscreen's output, same as unset.
+                map_to_output: t.map_to_output.clone().filter(|o| o.as_str() != "none"),
             }
         };
 
