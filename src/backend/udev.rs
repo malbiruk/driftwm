@@ -180,10 +180,11 @@ impl UdevDevice {
 
 /// Tick animations once for all outputs, mark dirty CRTCs, then render.
 ///
-/// Iterates `data.udev_devices`, cloning each `Rc` handle out first so we hold
-/// an independent `RefCell` borrow without conflicting with mutations on
-/// `data`. Today only the primary device is populated; per-device frame
-/// orchestration is revisited when a secondary GPU is lit up.
+/// Clones each device's `Rc` handle out of `data.udev_devices` first so a
+/// borrow stays independent of mutations on `data`. Global per-frame work
+/// (DPMS drain, mode changes, foreign-toplevel + output-management refresh)
+/// runs once and is routed to the owning device; dirty-marking and rendering
+/// iterate every device.
 pub(crate) fn render_if_needed(data: &mut DriftWm) {
     // Fast path: nothing needs attention — skip all work when idle
     let any_chunked_pending = data
@@ -225,25 +226,14 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
     // Emit the one coalesced pointer motion for this frame, after animations.
     data.flush_pointer_resync();
 
-    // TODO(multi-gpu): the per-device body below still drains global queues
-    // (pending_dpms, pending_mode_changes) and notifies output management from
-    // within the first device's iteration. Correct while only one device is
-    // populated; revisit when a second GPU is driven (steps 5/6).
-    for device in devices {
-        let mut dev = device.0.borrow_mut();
-
-        // Skip rendering when this device's DRM is paused (VT switch away).
-        // Without this the event loop wakes constantly on client commits and
-        // spam-retries render, pegging a CPU and starving the rest of the system.
-        if !dev.drm.is_active() {
-            continue;
-        }
-
-        // 2. Drain pending DPMS transitions before animation marking so DPMS-off
-        //    outputs don't get re-dirtied below.
-        if !data.pending_dpms.is_empty() {
-            let pending: Vec<(Output, bool)> = data.pending_dpms.drain().collect();
-            for (output, on) in &pending {
+    // 2. Drain pending DPMS transitions before animation marking so DPMS-off
+    //    outputs don't get re-dirtied below. Each output lives on exactly one
+    //    device, so find the surface across all devices.
+    if !data.pending_dpms.is_empty() {
+        let pending: Vec<(Output, bool)> = data.pending_dpms.drain().collect();
+        for (output, on) in &pending {
+            for device in &devices {
+                let mut dev = device.0.borrow_mut();
                 let Some((&crtc, surface)) =
                     dev.surfaces.iter_mut().find(|(_, s)| s.output == *output)
                 else {
@@ -264,14 +254,22 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
                         data.loop_handle.remove(token);
                     }
                 }
+                break;
             }
-            // Broadcast mode events for client-initiated changes (already sent
-            // inline) plus anything else that drifted; idempotent.
-            driftwm::protocols::output_power::OutputPowerState::refresh(data);
         }
+        // Broadcast mode events for client-initiated changes (already sent
+        // inline) plus anything else that drifted; idempotent.
+        driftwm::protocols::output_power::OutputPowerState::refresh(data);
+    }
 
-        // Mark outputs dirty for per-output animations.
-        for (_, surface) in dev.surfaces.iter() {
+    // 3. Mark outputs dirty for per-output animations / pending chunk uploads,
+    //    across every active device.
+    for device in &devices {
+        let dev = device.0.borrow();
+        if !dev.drm.is_active() {
+            continue;
+        }
+        for surface in dev.surfaces.values() {
             if data.dpms_off_outputs.contains(&surface.output) {
                 continue;
             }
@@ -294,50 +292,70 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
                 data.redraws_needed.insert(surface.output.clone());
             }
         }
+    }
 
-        // Global animations (key repeat, cursor) → every output.
-        if data.held_action.is_some()
-            || data.cursor.exec_cursor_show_at.is_some()
-            || data.cursor.exec_cursor_deadline.is_some()
-            || data.cursor_is_animated()
-        {
-            data.mark_all_dirty();
-        } else if data.render.background_is_animated {
-            // Fullscreen outputs skip the background entirely, so an animated bg
-            // gives them nothing to redraw — marking them just burns battery.
-            let dirty: Vec<_> = data
-                .active_outputs
-                .iter()
-                .filter(|o| !data.is_output_fullscreen(o))
-                .cloned()
-                .collect();
-            data.redraws_needed.extend(dirty);
-        }
+    // Global animations (key repeat, cursor) → every output.
+    if data.held_action.is_some()
+        || data.cursor.exec_cursor_show_at.is_some()
+        || data.cursor.exec_cursor_deadline.is_some()
+        || data.cursor_is_animated()
+    {
+        data.mark_all_dirty();
+    } else if data.render.background_is_animated {
+        // Fullscreen outputs skip the background entirely, so an animated bg
+        // gives them nothing to redraw — marking them just burns battery.
+        let dirty: Vec<_> = data
+            .active_outputs
+            .iter()
+            .filter(|o| !data.is_output_fullscreen(o))
+            .cloned()
+            .collect();
+        data.redraws_needed.extend(dirty);
+    }
 
-        // 4. Foreign toplevel refresh (once per frame, not per-output)
-        crate::render::refresh_foreign_toplevels(data);
+    // 4. Foreign toplevel refresh (once per frame, not per-output)
+    crate::render::refresh_foreign_toplevels(data);
 
-        // 4a. Drain queued mode changes before re-notifying clients so the
-        // re-broadcast reflects the new mode state. Mode changes either come from
-        // wlr-output-management Apply or from config reload.
-        if !data.pending_mode_changes.is_empty() {
-            // Borrow-split: iter_mut on `surfaces` reborrows the whole RefMut.
-            // Same pattern as the hotplug callback at line ~527.
+    // 4a. Drain queued mode changes before re-notifying clients so the
+    // re-broadcast reflects the new mode state. Mode changes come from
+    // wlr-output-management Apply or config reload.
+    //
+    // TODO(multi-gpu): apply_pending_mode_changes takes the whole queue and
+    // drops entries whose output isn't on the device it's handed. Correct while
+    // only the primary device has outputs; route per-owning-device once a
+    // secondary GPU drives outputs (step 6).
+    if !data.pending_mode_changes.is_empty() {
+        for device in &devices {
+            if data.pending_mode_changes.is_empty() {
+                break;
+            }
+            let mut dev = device.0.borrow_mut();
             let DeviceData { drm, surfaces, .. } = &mut *dev;
             apply_pending_mode_changes(drm, surfaces, data);
         }
+    }
 
-        // 4b. Re-notify output management clients after apply_output_config
-        if data.output_config_dirty {
-            data.output_config_dirty = false;
-            let head_state = collect_output_state_from_surfaces(&dev.surfaces, &dev.drm);
-            driftwm::protocols::output_management::notify_changes::<DriftWm>(
-                &mut data.output_management_state,
-                head_state,
-            );
+    // 4b. Re-notify output management clients after apply_output_config,
+    //     aggregating heads across every device.
+    if data.output_config_dirty {
+        data.output_config_dirty = false;
+        let mut head_state = HashMap::new();
+        for device in &devices {
+            let dev = device.0.borrow();
+            head_state.extend(collect_output_state_from_surfaces(&dev.surfaces, &dev.drm));
         }
+        driftwm::protocols::output_management::notify_changes::<DriftWm>(
+            &mut data.output_management_state,
+            head_state,
+        );
+    }
 
-        // Render outputs that need it.
+    // 5. Render outputs that need it, per device.
+    for device in &devices {
+        let mut dev = device.0.borrow_mut();
+        if !dev.drm.is_active() {
+            continue;
+        }
         for (&crtc, surface) in dev.surfaces.iter_mut() {
             if data.dpms_off_outputs.contains(&surface.output) {
                 data.redraws_needed.remove(&surface.output);
