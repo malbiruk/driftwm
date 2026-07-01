@@ -1436,17 +1436,25 @@ impl DriftWm {
     }
     pub fn set_camera(&mut self, val: Point<f64, Logical>) {
         if let Some(o) = self.active_output() {
-            // Invariant: a fullscreen window is parked at its output's
-            // camera-origin at zoom 1, so the camera must not move or it slides
-            // off (0,0) and re-exposes to other cameras. Nav paths that reach
-            // set_camera already exit fullscreen first; this is a backstop so a
-            // future set_camera caller can't silently reintroduce the bleed.
-            // (`enter_fullscreen` snaps via output_state directly to bypass it.)
-            if self.fullscreen.contains_key(&o) {
-                return;
-            }
-            output_state(&o).camera = val;
+            self.set_camera_on(&o, val);
         }
+    }
+
+    /// Move `output`'s camera, honoring the fullscreen lock. Every per-output
+    /// animation tick (momentum, edge-pan, zoom, camera) routes through here, so
+    /// none can move a fullscreen output's camera. Interactive pan/zoom grabs
+    /// still write output_state directly, but they exit fullscreen before
+    /// panning, so they never race the lock.
+    ///
+    /// Invariant: a fullscreen window is parked at its output's camera-origin at
+    /// zoom 1, so the camera must not move or it slides off (0,0) and re-exposes
+    /// black to that output (and other cameras). (`enter_fullscreen` seeds the
+    /// origin by writing output_state directly, before its state is inserted.)
+    pub fn set_camera_on(&mut self, output: &Output, val: Point<f64, Logical>) {
+        if self.fullscreen.contains_key(output) {
+            return;
+        }
+        output_state(output).camera = val;
     }
     pub fn zoom(&self) -> f64 {
         // 1.0 default (not 0.0) avoids divide-by-zero in `step / zoom` callers.
@@ -1864,6 +1872,126 @@ impl DriftWm {
         Some((
             pos.0.round() as i32 + bw_i,
             pos.1.round() as i32 + bw_i + bar,
+        ))
+    }
+
+    /// Placement for a new window that would otherwise land on top of a
+    /// fullscreen window. Anchors to the fullscreen window's *saved*
+    /// (pre-fullscreen) canvas rect so the new window tucks in beside it, off
+    /// the fullscreen viewport — culled now, revealed cleanly on exit.
+    ///
+    /// Output-scoped: only fires when the new window's own output is the
+    /// fullscreen one, so a window on a monitor you're actively using still
+    /// places normally. `None` when there's no fullscreen window to tuck behind.
+    pub fn fullscreen_background_pos(
+        &self,
+        new_window: &Window,
+        new_size: Size<i32, Logical>,
+        bar: i32,
+    ) -> Option<(i32, i32)> {
+        let new_surface = new_window.wl_surface()?.into_owned();
+
+        // The fullscreen window to tuck behind: the map-time focus anchor when
+        // it is itself fullscreen (auto/center/cursor all snapshot it), else the
+        // active output's fullscreen window. The fallback covers a no-anchor map
+        // and the case where focus sits on some other window while an output is
+        // fullscreen — the pointer's output is the one the window lands on.
+        let anchor = self
+            .auto_anchor_snapshot
+            .get(&new_surface)
+            .and_then(|o| o.clone());
+        let output = anchor
+            .as_ref()
+            .and_then(|a| {
+                self.fullscreen
+                    .iter()
+                    .find(|(_, fs)| &fs.window == a)
+                    .map(|(o, _)| o.clone())
+            })
+            .or_else(|| {
+                let out = self.active_output()?;
+                self.fullscreen.contains_key(&out).then_some(out)
+            })?;
+        let fs = self.fullscreen.get(&output)?;
+
+        // Anchor rect = the fullscreen window's canvas home, reconstructed as a
+        // frame rect (borders + SSD bar) exactly like `auto_placement_pos`.
+        let fs_bw = fs
+            .window
+            .wl_surface()
+            .map_or(0, |s| self.window_border_width(&s)) as f64;
+        let fs_bar = self.window_ssd_bar(&fs.window);
+        let anchor_rect = driftwm::layout::auto_placement::Rect {
+            x: fs.saved_location.x as f64 - fs_bw,
+            y: (fs.saved_location.y - fs_bar) as f64 - fs_bw,
+            w: fs.saved_size.w as f64 + 2.0 * fs_bw,
+            h: (fs.saved_size.h + fs_bar) as f64 + 2.0 * fs_bw,
+        };
+
+        let mut rects = vec![anchor_rect];
+        let mut eligible: HashSet<usize> = HashSet::new();
+        eligible.insert(0);
+
+        for w in self.space.elements() {
+            if w == new_window || w == &fs.window {
+                continue;
+            }
+            let widget = w
+                .wl_surface()
+                .and_then(|s| driftwm::config::applied_rule(&s))
+                .is_some_and(|r| r.widget);
+            if widget || self.is_window_fullscreen(w) || self.is_pinned(w) {
+                continue;
+            }
+            let Some(loc) = self.space.element_location(w) else {
+                continue;
+            };
+            let size = w.geometry().size;
+            let b = self.window_ssd_bar(w);
+            let bw = w.wl_surface().map_or(0, |s| self.window_border_width(&s)) as f64;
+            let idx = rects.len();
+            rects.push(driftwm::layout::auto_placement::Rect {
+                x: loc.x as f64 - bw,
+                y: (loc.y - b) as f64 - bw,
+                w: size.w as f64 + 2.0 * bw,
+                h: (size.h + b) as f64 + 2.0 * bw,
+            });
+            eligible.insert(idx);
+        }
+
+        let new_bw = self.window_border_width(&new_surface) as f64;
+        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
+        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
+
+        // Bias toward the fullscreen window's home center; its live location is
+        // the fullscreen viewport, which is irrelevant to canvas placement.
+        let vc = (
+            anchor_rect.x + anchor_rect.w / 2.0,
+            anchor_rect.y + anchor_rect.h / 2.0,
+        );
+
+        let bw_i = new_bw as i32;
+        if let Some(pos) = driftwm::layout::auto_placement::place_auto(
+            &rects,
+            0,
+            &eligible,
+            new_w_f,
+            new_h_f,
+            vc,
+            self.config.snap_gap,
+        ) {
+            return Some((
+                pos.0.round() as i32 + bw_i,
+                pos.1.round() as i32 + bw_i + bar,
+            ));
+        }
+
+        // No adjacent slot: park it just below the fullscreen window's saved
+        // home so it doesn't overlap where that window restores to on exit.
+        let gap = self.config.snap_gap.round() as i32;
+        Some((
+            fs.saved_location.x,
+            fs.saved_location.y + fs.saved_size.h + gap,
         ))
     }
 

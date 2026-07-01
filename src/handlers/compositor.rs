@@ -314,6 +314,7 @@ impl CompositorHandler for DriftWm {
                     };
 
                     let mut placed_at_cursor = false;
+                    let mut place_in_background = false;
                     // One-shot: when a rule forces a size, first commit
                     // arrives at the client's preferred size; configure with
                     // the rule size and defer positioning/decoration/nav to
@@ -402,16 +403,24 @@ impl CompositorHandler for DriftWm {
                                 } else {
                                     0
                                 };
-                            let cursor_pos = if matches!(
-                                self.config.window_placement,
-                                driftwm::config::WindowPlacement::Cursor
-                            ) {
+                            // Fullscreen takes precedence over the auto/cursor/
+                            // center placement handled here: a new window must
+                            // never land on top of a fullscreen window on its own
+                            // output.
+                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, bar_px);
+                            place_in_background = bg_pos.is_some();
+                            let cursor_pos = if bg_pos.is_none()
+                                && matches!(
+                                    self.config.window_placement,
+                                    driftwm::config::WindowPlacement::Cursor
+                                ) {
                                 self.cursor_placement_pos(geo.size, bar_px)
                             } else {
                                 None
                             };
                             placed_at_cursor = cursor_pos.is_some();
-                            let auto_pos = if cursor_pos.is_none()
+                            let auto_pos = if bg_pos.is_none()
+                                && cursor_pos.is_none()
                                 && matches!(
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
@@ -420,7 +429,7 @@ impl CompositorHandler for DriftWm {
                             } else {
                                 None
                             };
-                            let placed = cursor_pos.or(auto_pos).unwrap_or_else(|| {
+                            let placed = bg_pos.or(cursor_pos).or(auto_pos).unwrap_or_else(|| {
                                 let output_geo = self
                                     .active_output()
                                     .and_then(|o| self.space.output_geometry(&o));
@@ -437,9 +446,18 @@ impl CompositorHandler for DriftWm {
                                     (0, 0)
                                 }
                             });
-                            self.cascade_position(placed, &window)
+                            if place_in_background {
+                                // Already anchored to the fullscreen window's
+                                // saved home; cascade would only fight that.
+                                placed
+                            } else {
+                                self.cascade_position(placed, &window)
+                            }
                         };
-                        let activate = applied.as_ref().is_none_or(|a| !a.widget);
+                        // Background-placed windows never activate: keep the
+                        // fullscreen window focused and on top.
+                        let activate =
+                            !place_in_background && applied.as_ref().is_none_or(|a| !a.widget);
                         self.space.map_element(window.clone(), pos, activate);
                     }
 
@@ -528,6 +546,7 @@ impl CompositorHandler for DriftWm {
                             || self.pending_fullscreen.contains_key(&root);
                         if !is_widget
                             && !is_fullscreen
+                            && !place_in_background
                             && !deferred_fit_or_fs
                             && !self.pinned.contains_key(&root.id())
                         {
