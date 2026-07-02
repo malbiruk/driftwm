@@ -303,6 +303,17 @@ impl TouchGestureGrab {
         }
     }
 
+    /// A pinch reading is only trustworthy when every finger the gesture started
+    /// with is currently down. Cheap digitizers intermittently drop a contact
+    /// mid-gesture (fingers bunched on a small surface merge or vanish for many
+    /// frames); with a finger missing, the remaining points' spread lurches like
+    /// a large pinch — enough to wobble a 3-finger pan into zoom or make a
+    /// 4-finger swipe read as zoom-to-fit. Suppress pinch detection until the
+    /// full set is back. On healthy hardware this is always true, so it's inert.
+    fn all_fingers_down(&self) -> bool {
+        self.points.len() >= self.max_fingers
+    }
+
     /// Reset the per-frame baseline to the current finger configuration so a
     /// finger add/remove doesn't produce a pan/zoom jump.
     fn rebaseline(&mut self) {
@@ -387,17 +398,23 @@ impl TouchGestureGrab {
         // The ratio alone isn't enough to call it a pinch: on a small, cramped
         // panel four fingers can't translate without their spread fluctuating
         // ~margin, so a swipe's jitter crosses `pinch_progress` and steals the
-        // gesture as zoom-to-fit. Require a real physical spread change too; until
-        // then the pinch reads as zero, so it neither fires nor blocks the swipe.
-        let effective_pinch =
-            if (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm {
-                pinch_progress
-            } else {
-                0.0
-            };
+        // gesture as zoom-to-fit. Require a real physical spread change too, and
+        // only trust the reading while all four fingers are down — a dropped
+        // contact collapses the spread far past the floor and would fire zoom.
+        // Until both hold the pinch reads as zero, so it neither fires nor blocks
+        // the swipe.
+        let effective_pinch = if self.all_fingers_down()
+            && (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
+        {
+            pinch_progress
+        } else {
+            0.0
+        };
 
         tracing::debug!(
             target: "touch",
+            fingers = self.points.len(),
+            max_fingers = self.max_fingers,
             swipe_progress,
             pinch_progress,
             effective_pinch,
@@ -771,6 +788,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             };
             let slop = self.zoom_slop_ratio();
             let real_pinch = has_two
+                && self.all_fingers_down()
                 && span_ratio >= slop
                 && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
             let dead_zone = DEAD_ZONE_MM * self.px_per_mm;
@@ -808,6 +826,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             tracing::debug!(
                 target: "touch",
                 fingers = self.points.len(),
+                max_fingers = self.max_fingers,
                 zoom_engaged = self.zoom_engaged,
                 cur_spread,
                 last_spread = self.last_spread,
@@ -820,8 +839,10 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             );
             // Engage zoom once the spread has changed past both the ratio slop and
             // the physical floor (so a pan's jitter can't latch it), consuming the
-            // change so there's no jump on the first zoomed frame.
+            // change so there's no jump on the first zoomed frame. Requires the
+            // full finger set — a dropped contact collapses the spread past both.
             if !self.zoom_engaged
+                && self.all_fingers_down()
                 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm
                 && (cur_spread / self.last_spread - 1.0).abs() >= self.zoom_slop_ratio()
                 && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
