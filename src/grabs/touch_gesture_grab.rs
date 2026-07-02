@@ -61,6 +61,13 @@ const MIN_SPREAD_MM: f64 = 3.0;
 /// steal as zoom-to-fit. A deliberate pinch clears this floor; jitter doesn't. On
 /// a roomy panel the ratio change is already many mm, so it never binds.
 const PINCH_MIN_DELTA_MM: f64 = 3.0;
+/// Consecutive frames the pinch floor must hold before zoom is trusted. A real
+/// pinch sustains the spread change; a swipe or pan's finger splay only stabs
+/// past the floor for lone frames — especially on a cramped panel, where four
+/// fingers sit so close that a deliberate pinch-in barely out-travels the splay
+/// in magnitude and only its *persistence* tells them apart. One frame over the
+/// floor can't fire zoom.
+const PINCH_CONFIRM_FRAMES: u32 = 2;
 /// Centroid travel for a 4-finger directional navigation swipe, in millimetres
 /// (converted to px per panel via `px_per_mm`). A muscle-memory command gesture
 /// wants consistent physical travel across panels; a real mm-scale threshold also
@@ -195,6 +202,8 @@ pub struct TouchGestureGrab {
     nav_cumulative: Point<f64, Logical>,
     nav_fired_swipe: bool,
     nav_fired_pinch: bool,
+    /// Consecutive frames the pinch floor has held, for the confirm debounce.
+    pinch_streak: u32,
     /// Pinch-zoom is live for the current `PanZoom` gesture (set once the spread
     /// clears the zoom slop). Pan runs regardless; this only gates zoom.
     zoom_engaged: bool,
@@ -238,6 +247,7 @@ impl TouchGestureGrab {
             nav_cumulative: Point::from((0.0, 0.0)),
             nav_fired_swipe: false,
             nav_fired_pinch: false,
+            pinch_streak: 0,
             zoom_engaged: false,
             px_per_mm,
         }
@@ -390,12 +400,14 @@ impl TouchGestureGrab {
         // Ratio alone isn't a pinch: on a cramped panel four fingers can't translate
         // without their spread fluctuating ~margin, so a swipe's jitter crosses
         // `pinch_progress` and steals zoom-to-fit. Require a real physical spread
-        // change too, and only while all fingers are down — a dropped contact
-        // collapses the spread past the floor. Otherwise reads zero, so it neither
-        // fires nor blocks the swipe.
-        let effective_pinch = if self.all_fingers_down()
-            && (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
-        {
+        // change too, held for a couple of frames, and only while all fingers are
+        // down — a dropped contact collapses the spread past the floor, and a
+        // swipe's splay stabs past it for lone frames. Until confirmed it reads
+        // zero, so it neither fires nor blocks the swipe.
+        let qualified = self.all_fingers_down()
+            && (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
+        self.pinch_streak = if qualified { self.pinch_streak + 1 } else { 0 };
+        let effective_pinch = if self.pinch_streak >= PINCH_CONFIRM_FRAMES {
             pinch_progress
         } else {
             0.0
@@ -682,6 +694,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                     self.nav_cumulative = Point::from((0.0, 0.0));
                     self.nav_fired_swipe = false;
                     self.nav_fired_pinch = false;
+                    self.pinch_streak = 0;
                 }
                 self.rebaseline();
             }
@@ -830,15 +843,16 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 "panzoom frame",
             );
             // Engage zoom once the spread clears both the ratio slop and the mm
-            // floor (so a pan's jitter can't latch it), consuming the change so
-            // there's no jump on the first zoomed frame. Needs the full finger set —
-            // a dropped contact collapses the spread past both.
-            if !self.zoom_engaged
-                && self.all_fingers_down()
+            // floor for a couple of frames (so a pan's lone jitter spike can't
+            // latch it), consuming the change so there's no jump on the first
+            // zoomed frame. Needs the full finger set — a dropped contact collapses
+            // the spread past both.
+            let qualified = self.all_fingers_down()
                 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm
                 && (cur_spread / self.last_spread - 1.0).abs() >= self.zoom_slop_ratio()
-                && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
-            {
+                && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
+            self.pinch_streak = if qualified { self.pinch_streak + 1 } else { 0 };
+            if !self.zoom_engaged && self.pinch_streak >= PINCH_CONFIRM_FRAMES {
                 self.zoom_engaged = true;
                 self.last_spread = cur_spread;
             }
