@@ -214,6 +214,17 @@ impl TouchGestureGrab {
         device_mm: Option<(f64, f64)>,
     ) -> Self {
         let px_per_mm = output_px_per_mm(&output, device_mm);
+        let edid = output.physical_properties().size;
+        tracing::debug!(
+            target: "touch",
+            output = %output.name(),
+            ?device_mm,
+            edid_mm = ?(edid.w, edid.h),
+            mode = ?output.current_mode().map(|m| (m.size.w, m.size.h)),
+            scale = output.current_scale().fractional_scale(),
+            px_per_mm,
+            "gesture grab: resolved density",
+        );
         Self {
             start_data,
             output,
@@ -384,6 +395,20 @@ impl TouchGestureGrab {
             } else {
                 0.0
             };
+
+        tracing::debug!(
+            target: "touch",
+            swipe_progress,
+            pinch_progress,
+            effective_pinch,
+            scale,
+            spread_delta_mm = (cur_spread - self.start_spread).abs() / self.px_per_mm,
+            swipe_dist_mm = swipe_dist / self.px_per_mm,
+            floor_mm = PINCH_MIN_DELTA_MM,
+            nav_swipe_mm = NAV_SWIPE_MM,
+            px_per_mm = self.px_per_mm,
+            "nav frame",
+        );
 
         // Swipe and pinch are mutually exclusive; whichever is further past its
         // own threshold claims the gesture. Pinch wins ties, and a developing
@@ -780,6 +805,19 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         self.apply_pan(data, centroid, event.time);
         if self.points.len() >= 2 {
             let cur_spread = self.spread(centroid);
+            tracing::debug!(
+                target: "touch",
+                fingers = self.points.len(),
+                zoom_engaged = self.zoom_engaged,
+                cur_spread,
+                last_spread = self.last_spread,
+                ratio = if self.last_spread > 0.0 { cur_spread / self.last_spread - 1.0 } else { 0.0 },
+                delta_mm = (cur_spread - self.last_spread).abs() / self.px_per_mm,
+                slop = self.zoom_slop_ratio(),
+                floor_mm = PINCH_MIN_DELTA_MM,
+                px_per_mm = self.px_per_mm,
+                "panzoom frame",
+            );
             // Engage zoom once the spread has changed past both the ratio slop and
             // the physical floor (so a pan's jitter can't latch it), consuming the
             // change so there's no jump on the first zoomed frame.
