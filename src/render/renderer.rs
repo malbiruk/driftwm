@@ -1,7 +1,3 @@
-// TODO(multi-gpu): drop this allow once the live render path uses as_gles_renderer
-// (shader compilation / blur), which genericizing compose_frame over R will do.
-#![allow(dead_code)]
-
 use smithay::backend::allocator::dmabuf::Dmabuf;
 use smithay::backend::renderer::gles::{GlesFrame, GlesRenderer, GlesTexture};
 use smithay::backend::renderer::{

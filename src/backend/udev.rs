@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -12,7 +12,7 @@ use smithay::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
+            DrmDevice, DrmDeviceFd, DrmDeviceNotifier, DrmEvent, DrmNode, NodeType,
             compositor::{DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
@@ -29,7 +29,7 @@ use smithay::{
     output::{Mode, Output, PhysicalProperties, Subpixel},
     reexports::{
         calloop::{
-            Dispatcher, EventLoop,
+            Dispatcher, EventLoop, RegistrationToken,
             timer::{TimeoutAction, Timer},
         },
         drm::control::{self, connector, crtc},
@@ -95,12 +95,18 @@ pub struct UdevRenderer {
 }
 
 struct DeviceData {
+    /// This device's DRM render node (resolved via EGL; the KMS node itself on
+    /// split-DRM systems without one). Outputs here scan out buffers rendered
+    /// on the primary GPU — when the nodes differ, via an implicit PRIME copy.
+    render_node: DrmNode,
     drm: DrmDevice,
     gbm: GbmDevice<DrmDeviceFd>,
     drm_scanner: DrmScanner,
     surfaces: HashMap<crtc::Handle, SurfaceData>,
     render_formats: Vec<Format>,
-    libinput: Libinput,
+    /// Calloop token for this device's DRM (VBlank) event source; removed
+    /// when the GPU is unplugged.
+    drm_token: Option<RegistrationToken>,
 }
 
 struct SurfaceData {
@@ -120,7 +126,7 @@ struct SurfaceData {
     pending_gamma_change: Option<Option<Vec<u16>>>,
 }
 
-/// Opaque handle to udev backend device data. Returned by init_udev, stored in
+/// Opaque handle to udev backend device data, stored in
 /// `DriftWm::udev_devices` keyed by KMS node. Rc-cloneable so the render loop
 /// and gamma-control handler can each grab an independent `RefCell` borrow
 /// without re-routing through DriftWm.
@@ -318,20 +324,21 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
 
     // 4a. Drain queued mode changes before re-notifying clients so the
     // re-broadcast reflects the new mode state. Mode changes come from
-    // wlr-output-management Apply or config reload.
-    //
-    // TODO(multi-gpu): apply_pending_mode_changes takes the whole queue and
-    // drops entries whose output isn't on the device it's handed. Correct while
-    // only the primary device has outputs; route per-owning-device once a
-    // secondary GPU drives outputs (step 6).
+    // wlr-output-management Apply or config reload. Each device claims the
+    // entries for outputs it owns and hands the rest back; anything left
+    // after every device had a look targets a gone output.
     if !data.pending_mode_changes.is_empty() {
+        let mut pending = std::mem::take(&mut data.pending_mode_changes);
         for device in &devices {
-            if data.pending_mode_changes.is_empty() {
+            if pending.is_empty() {
                 break;
             }
             let mut dev = device.0.borrow_mut();
             let DeviceData { drm, surfaces, .. } = &mut *dev;
-            apply_pending_mode_changes(drm, surfaces, data);
+            pending = apply_pending_mode_changes(drm, surfaces, data, pending);
+        }
+        for (name, _) in pending {
+            tracing::warn!("Mode change for '{name}' dropped: output no longer present");
         }
     }
 
@@ -339,11 +346,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
     //     aggregating heads across every device.
     if data.output_config_dirty {
         data.output_config_dirty = false;
-        let mut head_state = HashMap::new();
-        for device in &devices {
-            let dev = device.0.borrow();
-            head_state.extend(collect_output_state_from_surfaces(&dev.surfaces, &dev.drm));
-        }
+        let head_state = collect_all_head_states(data);
         driftwm::protocols::output_management::notify_changes::<DriftWm>(
             &mut data.output_management_state,
             head_state,
@@ -356,6 +359,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         if !dev.drm.is_active() {
             continue;
         }
+        let render_node = dev.render_node;
         for (&crtc, surface) in dev.surfaces.iter_mut() {
             if data.dpms_off_outputs.contains(&surface.output) {
                 data.redraws_needed.remove(&surface.output);
@@ -367,7 +371,13 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
                 && !data.frames_pending.contains(&crtc)
                 && !data.estimated_vblank_timers.contains_key(&crtc)
             {
-                render_frame(data, &mut surface.compositor, &surface.output, crtc);
+                render_frame(
+                    data,
+                    &mut surface.compositor,
+                    &surface.output,
+                    crtc,
+                    render_node,
+                );
             }
         }
     }
@@ -376,7 +386,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
 pub fn init_udev(
     event_loop: &mut EventLoop<'static, DriftWm>,
     data: &mut DriftWm,
-) -> Result<(DrmNode, UdevDevice), Box<dyn std::error::Error>> {
+) -> Result<(), Box<dyn std::error::Error>> {
     // 1. Create libseat session
     let (mut session, session_notifier) = LibSeatSession::new()
         .map_err(|e| format!("Failed to create session (are you running from a TTY?): {e}"))?;
@@ -418,8 +428,9 @@ pub fn init_udev(
         return Err("No GPUs found".into());
     }
 
-    // 3. Try each GPU until one has connected displays
-    let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+    // 3. Open every usable GPU. The first that opens becomes the primary
+    // render GPU (candidate order puts the system primary first); the others'
+    // outputs scan out primary-rendered buffers via an implicit PRIME copy.
 
     // Multi-GPU manager: one GLES renderer per render node, created lazily as
     // nodes are added. The primary node's renderer is used for same-GPU work;
@@ -428,158 +439,61 @@ pub fn init_udev(
         GpuManager::new(GbmGlesBackend::with_context_priority(ContextPriority::High))
             .map_err(|e| format!("Failed to create GPU manager: {e}"))?;
 
-    let (mut drm, drm_notifier, gbm, render_formats, render_node, kms_node) = 'found: {
-        for path in &gpu_paths {
-            let node = match DrmNode::from_path(path) {
-                Ok(n) => n,
-                Err(e) => {
-                    tracing::debug!("{}: not a DRM node ({e}), skipping", path.display());
-                    continue;
-                }
-            };
-            if node.ty() != NodeType::Primary {
-                tracing::debug!("{}: not a primary node, skipping", path.display());
-                continue;
-            }
-
-            let fd = match session.open(path, open_flags) {
-                Ok(fd) => fd,
-                Err(e) => {
-                    tracing::warn!("{}: failed to open ({e})", path.display());
-                    continue;
-                }
-            };
-            let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
-
-            // true = release existing CRTCs for a clean modeset (avoids conflicts
-            // with previous session's DRM state)
-            let (drm, drm_notifier) = match DrmDevice::new(device_fd.clone(), true) {
-                Ok(pair) => pair,
-                Err(e) => {
-                    tracing::warn!("{}: failed to create DRM device ({e})", path.display());
-                    continue;
-                }
-            };
-
-            if !gpu_has_connected_displays(&drm) {
-                tracing::info!("{}: no connected displays, trying next GPU", path.display());
-                continue;
-            }
-
-            let gbm = match GbmDevice::new(device_fd.clone()) {
-                Ok(g) => g,
-                Err(e) => {
-                    tracing::warn!("{}: failed to create GBM device ({e})", path.display());
-                    continue;
-                }
-            };
-
-            let egl_display = match unsafe { EGLDisplay::new(gbm.clone()) } {
-                Ok(d) => d,
-                Err(e) => {
-                    tracing::warn!("{}: failed to create EGL display ({e})", path.display());
-                    continue;
-                }
-            };
-            // High priority lets the compositor's composite preempt a
-            // GPU-saturating client (shader compile, screen-share encode) instead
-            // of queuing behind it. EGL_IMG_context_priority is best-effort:
-            // smithay falls back to default priority if the extension is absent, and
-            // some drivers (notably NVIDIA) may only partially honor it.
-            let egl_context =
-                match EGLContext::new_with_priority(&egl_display, ContextPriority::High) {
-                    Ok(c) => c,
-                    Err(e) => {
-                        tracing::warn!("{}: failed to create EGL context ({e})", path.display());
-                        continue;
-                    }
-                };
-            let render_formats: Vec<Format> = egl_context
-                .dmabuf_render_formats()
-                .iter()
-                .copied()
-                .filter(|f| {
-                    // Intel CCS modifiers increase display link bandwidth, which can
-                    // prevent high-res/high-refresh modes from working (e.g. ultrawides
-                    // that need DSC). Filter them out — the GPU falls back to
-                    // uncompressed framebuffers with no visual difference.
-                    let is_ccs = matches!(
-                        f.modifier,
-                        Modifier::I915_y_tiled_ccs
-                            | Modifier::I915_y_tiled_gen12_rc_ccs
-                            | Modifier::I915_y_tiled_gen12_mc_ccs
-                            // Yf_TILED_CCS
-                            | Modifier::Unrecognized(0x100000000000005)
-                            // Y_TILED_GEN12_RC_CCS_CC
-                            | Modifier::Unrecognized(0x100000000000008)
-                            // 4_TILED_DG2_RC_CCS
-                            | Modifier::Unrecognized(0x10000000000000a)
-                            // 4_TILED_DG2_MC_CCS
-                            | Modifier::Unrecognized(0x10000000000000b)
-                            // 4_TILED_DG2_RC_CCS_CC
-                            | Modifier::Unrecognized(0x10000000000000c)
-                    );
-                    !is_ccs
-                })
-                .collect();
-            // Ask EGL/Mesa for the actual rendering device — on split-DRM
-            // systems the KMS node we opened has no render node, but Mesa
-            // routes rendering through the right GPU under the hood. We need
-            // to advertise that GPU's render node to clients (`zwp_linux_dmabuf_v1`
-            // feedback, xdph-wlr) so they don't crash trying to use the
-            // display-only node.
-            let render_node = EGLDevice::device_for_display(&egl_display)
-                .ok()
-                .and_then(|d| d.try_get_render_node().ok().flatten())
-                .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()))
-                .unwrap_or_else(|| {
-                    tracing::warn!(
-                        "could not resolve a DRM render node; falling back to KMS node {node:?} \
-                         — capture clients may misbehave"
-                    );
-                    node
-                });
-
-            // Drop the probe context before handing the GBM device to the GPU
-            // manager, which creates its own EGL display + GLES renderer for the
-            // render node (avoids two high-priority contexts on the same device).
-            drop(egl_context);
-            if let Err(e) = gpu_manager.as_mut().add_node(render_node, gbm.clone()) {
-                tracing::warn!(
-                    "{}: failed to add render node to GPU manager ({e})",
-                    path.display()
-                );
-                continue;
-            }
-
-            tracing::info!("Using GPU: {}", path.display());
-            break 'found (drm, drm_notifier, gbm, render_formats, render_node, node);
+    let mut opened: Vec<OpenedGpu> = Vec::new();
+    for path in &gpu_paths {
+        if let Some(gpu) = open_gpu(&mut session, &mut gpu_manager, path) {
+            tracing::info!(
+                "Using GPU: {} (render node {})",
+                path.display(),
+                gpu.render_node,
+            );
+            opened.push(gpu);
         }
-        return Err("No GPU with connected displays found (are you running from a TTY?)".into());
+    }
+    let Some(primary) = opened.first() else {
+        return Err("No usable GPU found (are you running from a TTY?)".into());
     };
+    let primary_render_node = primary.render_node;
+    let primary_render_formats = primary.render_formats.clone();
 
     // 4. Store renderer on state + create DMA-BUF global
     data.backend = Some(Backend::Udev(Box::new(UdevRenderer {
         gpu_manager,
-        primary_render_node: render_node,
+        primary_render_node,
     })));
     let formats = data
         .backend
         .as_mut()
         .unwrap()
         .with_renderer(|r| r.dmabuf_formats());
-    data.render_device = Some(render_node.dev_id());
+    data.render_device = Some(primary_render_node.dev_id());
     // Capture clients allocate buffers we render INTO, so advertise the
     // render-target set (already CCS-filtered above) — not the wider
     // import set, which can include formats we can't bind as a target.
-    data.render_dmabuf_formats = Some(render_formats.iter().copied().collect());
-    let default_feedback = DmabufFeedbackBuilder::new(render_node.dev_id(), formats)
+    data.render_dmabuf_formats = Some(primary_render_formats.iter().copied().collect());
+    let default_feedback = DmabufFeedbackBuilder::new(primary_render_node.dev_id(), formats)
         .build()
         .expect("failed to build dmabuf feedback");
     let dmabuf_global = data
         .dmabuf_state
         .create_global_with_default_feedback::<DriftWm>(&data.display_handle, &default_feedback);
     data.dmabuf_global = Some(dmabuf_global);
+
+    // Compile background/effect shaders on the primary renderer before any
+    // frame renders (attach_gpu below queues the first frames).
+    {
+        let mut backend = data.backend.take().unwrap();
+        backend.with_renderer(|r| {
+            data.render.shadow_shader = crate::render::compile_shadow_shader(r);
+            data.render.border_shader = crate::render::compile_border_shader(r);
+            data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(r);
+            let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(r);
+            data.render.blur_down_shader = blur_down;
+            data.render.blur_up_shader = blur_up;
+            data.render.blur_mask_shader = blur_mask;
+        });
+        data.backend = Some(backend);
+    }
 
     // 5. Set up libinput
     let libinput_session = LibinputSessionInterface::from(session.clone());
@@ -609,136 +523,18 @@ pub fn init_udev(
     // Store session on state so keyboard handler can call change_vt()
     data.session = Some(session);
 
-    // 6. Scan connectors and set up outputs
-    log_drm_connectors(&drm);
-
-    let mut drm_scanner = DrmScanner::new();
-    let scan_result = drm_scanner.scan_connectors(&drm)?;
-    let mut device_surfaces: HashMap<crtc::Handle, SurfaceData> = HashMap::new();
-    let saved_output_state = crate::state::read_all_per_output_state();
-
-    for event in scan_result {
-        match event {
-            DrmScanEvent::Connected {
-                connector,
-                crtc: Some(crtc),
-            } => {
-                tracing::info!(
-                    "Connector connected: {}-{} (CRTC {:?})",
-                    connector_type_name(&connector),
-                    connector.interface_id(),
-                    crtc,
-                );
-                let dh = data.display_handle.clone();
-                if let Some(surface_data) = create_surface(
-                    &mut drm,
-                    &gbm,
-                    &render_formats,
-                    &connector,
-                    crtc,
-                    &dh,
-                    data,
-                    &saved_output_state,
-                ) {
-                    device_surfaces.insert(crtc, surface_data);
-                }
-            }
-            DrmScanEvent::Connected {
-                connector,
-                crtc: None,
-            } => {
-                tracing::warn!(
-                    "Connector {}-{} has no available CRTC",
-                    connector_type_name(&connector),
-                    connector.interface_id()
-                );
-            }
-            DrmScanEvent::Disconnected { connector, crtc } => {
-                tracing::debug!(
-                    "Connector {}-{} disconnected (CRTC {:?})",
-                    connector_type_name(&connector),
-                    connector.interface_id(),
-                    crtc,
-                );
-            }
-            _ => {}
-        }
-    }
-
-    if device_surfaces.is_empty() {
-        return Err("Display connected but failed to create DRM surfaces".into());
-    }
-
-    // 7. Compile background shader / load tile (shared with winit)
-    // Uses first surface's mode for initial background element size (resized per-frame anyway)
-    {
-        let mut backend = data.backend.take().unwrap();
-        backend.with_renderer(|r| {
-            data.render.shadow_shader = crate::render::compile_shadow_shader(r);
-            data.render.border_shader = crate::render::compile_border_shader(r);
-            data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(r);
-            let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(r);
-            data.render.blur_down_shader = blur_down;
-            data.render.blur_up_shader = blur_up;
-            data.render.blur_mask_shader = blur_mask;
-        });
-        data.backend = Some(backend);
-    }
-
-    // 8. Build shared device state (Rc<RefCell<>> for safe sharing across calloop closures)
-    let device = Rc::new(RefCell::new(DeviceData {
-        drm,
-        gbm,
-        drm_scanner,
-        surfaces: device_surfaces,
-        render_formats,
-        libinput,
-    }));
-
-    // 9. Register DRM event source (VBlank handler)
-    let device_for_drm = Rc::clone(&device);
-    event_loop
-        .handle()
-        .insert_source(drm_notifier, move |event, meta, data: &mut DriftWm| {
-            let mut dev = device_for_drm.borrow_mut();
-            match event {
-                DrmEvent::VBlank(crtc) => {
-                    let Some(surface) = dev.surfaces.get_mut(&crtc) else {
-                        return;
-                    };
-                    match surface.compositor.frame_submitted() {
-                        Ok(Some(mut feedback)) => {
-                            deliver_presentation(&mut feedback, &surface.output, meta.as_ref());
-                        }
-                        Ok(None) => {}
-                        Err(e) => tracing::warn!("frame_submitted error: {e:?}"),
-                    }
-                    data.frames_pending.remove(&crtc);
-                    // Real VBlank beat any estimated-VBlank timer we might have armed.
-                    if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
-                        data.loop_handle.remove(token);
-                    }
-                    if data.redraws_needed.contains(&surface.output) {
-                        render_frame(data, &mut surface.compositor, &surface.output, crtc);
-                    }
-                }
-                DrmEvent::Error(err) => {
-                    tracing::error!("DRM error: {err}");
-                }
-            }
-        })?;
-
-    // 10. Register session notifier (VT switching)
-    let device_for_session = Rc::clone(&device);
+    // 6. Register session notifier (VT switching). Pauses/resumes every DRM
+    // device; libinput is seat-wide, so the one handle moves into the closure.
     event_loop
         .handle()
         .insert_source(session_notifier, move |event, _, data: &mut DriftWm| {
-            let mut dev = device_for_session.borrow_mut();
             match event {
                 SessionEvent::PauseSession => {
                     tracing::info!("Session paused (VT switch away)");
-                    dev.libinput.suspend();
-                    dev.drm.pause();
+                    libinput.suspend();
+                    for device in data.udev_devices.values() {
+                        device.0.borrow_mut().drm.pause();
+                    }
                     for (_, token) in data.estimated_vblank_timers.drain() {
                         data.loop_handle.remove(token);
                     }
@@ -750,12 +546,8 @@ pub fn init_udev(
                 }
                 SessionEvent::ActivateSession => {
                     tracing::info!("Session resumed (VT switch back)");
-                    if dev.libinput.resume().is_err() {
+                    if libinput.resume().is_err() {
                         tracing::warn!("Failed to resume libinput");
-                    }
-                    if let Err(e) = dev.drm.activate(false) {
-                        tracing::error!("Failed to activate DRM: {e}");
-                        return;
                     }
                     // VBlanks for pre-switch frames never arrive
                     data.frames_pending.clear();
@@ -768,185 +560,533 @@ pub fn init_udev(
                     data.dpms_off_outputs.clear();
                     data.pending_dpms.clear();
                     driftwm::protocols::output_power::OutputPowerState::refresh(data);
-                    let DeviceData { drm, surfaces, .. } = &mut *dev;
-                    for (&crtc, surface) in surfaces.iter_mut() {
-                        if let Err(e) = surface.compositor.reset_state() {
-                            tracing::warn!("Failed to reset DRM surface state: {e}");
+                    let devices: Vec<UdevDevice> = data.udev_devices.values().cloned().collect();
+                    for device in &devices {
+                        let mut dev = device.0.borrow_mut();
+                        if let Err(e) = dev.drm.activate(false) {
+                            tracing::error!("Failed to activate DRM: {e}");
+                            continue;
                         }
-                        let _ = surface.compositor.frame_submitted();
-                        if let Some(ramp) = surface.pending_gamma_change.take() {
-                            if apply_gamma(surface, drm, crtc, ramp.as_deref()).is_none() {
-                                tracing::warn!(
-                                    "failed to re-apply gamma on session resume for crtc {crtc:?}"
-                                );
+                        let render_node = dev.render_node;
+                        let DeviceData { drm, surfaces, .. } = &mut *dev;
+                        for (&crtc, surface) in surfaces.iter_mut() {
+                            if let Err(e) = surface.compositor.reset_state() {
+                                tracing::warn!("Failed to reset DRM surface state: {e}");
                             }
-                        } else if let Some(gp) = &mut surface.gamma_props
-                            && gp.has_previous_blob()
-                        {
-                            // VT switch clears CRTC gamma to default. Re-apply
-                            // the last-set blob so a tint set before the switch
-                            // doesn't silently vanish until the client re-polls.
-                            // Legacy path has no equivalent — kernel doesn't
-                            // retain the ramp and we don't shadow it.
-                            if gp.restore_gamma(drm).is_none() {
-                                tracing::warn!(
-                                    "failed to restore gamma on session resume for crtc {crtc:?}"
-                                );
+                            let _ = surface.compositor.frame_submitted();
+                            if let Some(ramp) = surface.pending_gamma_change.take() {
+                                if apply_gamma(surface, drm, crtc, ramp.as_deref()).is_none() {
+                                    tracing::warn!(
+                                        "failed to re-apply gamma on session resume for crtc {crtc:?}"
+                                    );
+                                }
+                            } else if let Some(gp) = &mut surface.gamma_props
+                                && gp.has_previous_blob()
+                            {
+                                // VT switch clears CRTC gamma to default. Re-apply
+                                // the last-set blob so a tint set before the switch
+                                // doesn't silently vanish until the client re-polls.
+                                // Legacy path has no equivalent — kernel doesn't
+                                // retain the ramp and we don't shadow it.
+                                if gp.restore_gamma(drm).is_none() {
+                                    tracing::warn!(
+                                        "failed to restore gamma on session resume for crtc {crtc:?}"
+                                    );
+                                }
                             }
+                            render_frame(
+                                data,
+                                &mut surface.compositor,
+                                &surface.output,
+                                crtc,
+                                render_node,
+                            );
                         }
-                        render_frame(data, &mut surface.compositor, &surface.output, crtc);
                     }
                 }
             }
         })?;
 
-    // 11. Register udev backend for hotplug
-    let device_for_hotplug = Rc::clone(&device);
+    // 7. Register udev backend for hotplug (connectors AND whole GPUs)
     let udev_dispatcher = Dispatcher::new(
         udev_backend,
-        move |event: UdevEvent, _, data: &mut DriftWm| {
-            let mut dev = device_for_hotplug.borrow_mut();
-            match event {
-                UdevEvent::Changed { device_id } => {
-                    tracing::debug!("Udev device changed: {device_id:?}");
-                    let DeviceData {
-                        ref mut drm_scanner,
-                        ref mut drm,
-                        ref gbm,
-                        ref render_formats,
-                        ref mut surfaces,
-                        ..
-                    } = *dev;
-                    if let Ok(scan_result) = drm_scanner.scan_connectors(&*drm) {
-                        for scan_event in scan_result {
-                            match scan_event {
-                                DrmScanEvent::Connected {
-                                    connector,
-                                    crtc: Some(crtc),
-                                } => {
-                                    if surfaces.contains_key(&crtc) {
-                                        continue;
-                                    }
-                                    tracing::info!(
-                                        "Hotplug: {}-{} connected",
-                                        connector_type_name(&connector),
-                                        connector.interface_id()
-                                    );
-                                    // Replace any virtual placeholder outputs. The unmap-to-
-                                    // create_surface sequence is synchronous within this
-                                    // connector handler, so active_output() is never None.
-                                    if !data.disconnected_outputs.is_empty() {
-                                        let virtual_outputs: Vec<_> = data
-                                            .space
-                                            .outputs()
-                                            .filter(|o| {
-                                                data.disconnected_outputs.contains(&o.name())
-                                            })
-                                            .cloned()
-                                            .collect();
-                                        for old in &virtual_outputs {
-                                            data.space.unmap_output(old);
-                                            data.render.remove_output(&old.name());
-                                        }
-                                        data.disconnected_outputs.clear();
-                                        data.focused_output = None;
-                                    }
-                                    let saved = crate::state::read_all_per_output_state();
-                                    let dh = data.display_handle.clone();
-                                    if let Some(sd) = create_surface(
-                                        drm,
-                                        gbm,
-                                        render_formats,
-                                        &connector,
-                                        crtc,
-                                        &dh,
-                                        data,
-                                        &saved,
-                                    ) {
-                                        surfaces.insert(crtc, sd);
-                                        data.active_outputs.insert(surfaces[&crtc].output.clone());
-                                        // Pin any windows orphaned by the virtual-output swap to
-                                        // the freshly connected monitor.
-                                        let new_output = surfaces[&crtc].output.clone();
-                                        data.reassign_orphaned_pinned(&new_output);
-                                        let surface = surfaces.get_mut(&crtc).unwrap();
-                                        // Notify existing toplevels about the new output
-                                        driftwm::protocols::foreign_toplevel::send_output_enter_all(
-                                            &mut data.foreign_toplevel_state,
-                                            &surface.output,
-                                        );
-                                        render_frame(
-                                            data,
-                                            &mut surface.compositor,
-                                            &surface.output,
-                                            crtc,
-                                        );
-                                    }
-                                }
-                                DrmScanEvent::Disconnected {
-                                    crtc: Some(crtc), ..
-                                } => {
-                                    tracing::info!("Hotplug: CRTC {crtc:?} disconnected");
-                                    if let Some(surface) = surfaces.remove(&crtc) {
-                                        let is_last = surfaces.is_empty();
-                                        teardown_output(data, surface, is_last);
-                                    }
-                                    data.frames_pending.remove(&crtc);
-                                    if let Some(token) = data.estimated_vblank_timers.remove(&crtc)
-                                    {
-                                        data.loop_handle.remove(token);
-                                    }
-                                }
-                                _ => {}
-                            }
-                        }
-                    }
-                    // Notify output management clients after hotplug changes
-                    let head_state = collect_output_state_from_surfaces(surfaces, drm);
-                    driftwm::protocols::output_management::notify_changes::<DriftWm>(
-                        &mut data.output_management_state,
-                        head_state,
-                    );
+        move |event: UdevEvent, _, data: &mut DriftWm| match event {
+            UdevEvent::Changed { device_id } => {
+                let Ok(node) = DrmNode::from_dev_id(device_id) else {
+                    return;
+                };
+                let Some(device) = data.udev_devices.get(&node).cloned() else {
+                    tracing::debug!("udev change for unknown device {device_id:?}");
+                    return;
+                };
+                tracing::debug!("Udev device changed: {device_id:?}");
+                scan_device_connectors(data, &device);
+            }
+            UdevEvent::Added { device_id, path } => {
+                let Ok(node) = DrmNode::from_dev_id(device_id) else {
+                    return;
+                };
+                if data.udev_devices.contains_key(&node) {
+                    return;
                 }
-                UdevEvent::Added { device_id: _, path } => {
-                    tracing::info!("Udev device added: {path:?} (ignoring — single GPU)");
-                }
-                UdevEvent::Removed { device_id } => {
-                    tracing::info!("Udev device removed: {device_id:?}");
-                }
+                tracing::info!("Udev device added: {}", path.display());
+                gpu_added(data, &path);
+            }
+            UdevEvent::Removed { device_id } => {
+                let Ok(node) = DrmNode::from_dev_id(device_id) else {
+                    return;
+                };
+                gpu_removed(data, node);
             }
         },
     );
     event_loop.handle().register_dispatcher(udev_dispatcher)?;
 
-    // 12. Seed active_outputs and queue initial render
-    {
-        let mut dev = device.borrow_mut();
-        for (&crtc, surface) in dev.surfaces.iter_mut() {
-            data.active_outputs.insert(surface.output.clone());
-            render_frame(data, &mut surface.compositor, &surface.output, crtc);
-        }
-        // 13. Notify output management clients of initial state
-        let head_state = collect_output_state_from_surfaces(&dev.surfaces, &dev.drm);
-        driftwm::protocols::output_management::notify_changes::<DriftWm>(
-            &mut data.output_management_state,
-            head_state,
-        );
+    // 8. Attach every opened GPU: registers its VBlank source, scans its
+    // connectors, creates outputs and queues their first frames.
+    for gpu in opened {
+        attach_gpu(data, gpu);
     }
 
-    Ok((kms_node, UdevDevice(device)))
+    let total_surfaces: usize = data
+        .udev_devices
+        .values()
+        .map(|d| d.0.borrow().surfaces.len())
+        .sum();
+    if total_surfaces == 0 {
+        return Err("No GPU with connected displays found (are you running from a TTY?)".into());
+    }
+
+    Ok(())
 }
 
-/// Quick check: does this DRM device have any connector in Connected state?
-fn gpu_has_connected_displays(drm: &DrmDevice) -> bool {
-    use smithay::reexports::drm::control::Device as ControlDevice;
-    let Ok(res) = ControlDevice::resource_handles(drm) else {
-        return false;
+/// A DRM device opened and EGL-probed, with its render node registered on the
+/// GPU manager, but not yet attached to the event loop or scanned for outputs.
+struct OpenedGpu {
+    node: DrmNode,
+    drm: DrmDevice,
+    drm_notifier: DrmDeviceNotifier,
+    gbm: GbmDevice<DrmDeviceFd>,
+    render_formats: Vec<Format>,
+    render_node: DrmNode,
+}
+
+/// Open one DRM device and register its render node with the GPU manager.
+/// Returns `None` (with a log line) on any failure so callers can skip to the
+/// next candidate.
+fn open_gpu(
+    session: &mut LibSeatSession,
+    gpu_manager: &mut GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>,
+    path: &Path,
+) -> Option<OpenedGpu> {
+    let open_flags = OFlags::RDWR | OFlags::CLOEXEC | OFlags::NOCTTY | OFlags::NONBLOCK;
+
+    let node = match DrmNode::from_path(path) {
+        Ok(n) => n,
+        Err(e) => {
+            tracing::debug!("{}: not a DRM node ({e}), skipping", path.display());
+            return None;
+        }
     };
-    res.connectors().iter().any(|&handle| {
-        ControlDevice::get_connector(drm, handle, true)
-            .is_ok_and(|c| c.state() == connector::State::Connected)
+    if node.ty() != NodeType::Primary {
+        tracing::debug!("{}: not a primary node, skipping", path.display());
+        return None;
+    }
+
+    let fd = match session.open(path, open_flags) {
+        Ok(fd) => fd,
+        Err(e) => {
+            tracing::warn!("{}: failed to open ({e})", path.display());
+            return None;
+        }
+    };
+    let device_fd = DrmDeviceFd::new(DeviceFd::from(fd));
+
+    // true = release existing CRTCs for a clean modeset (avoids conflicts
+    // with previous session's DRM state)
+    let (drm, drm_notifier) = match DrmDevice::new(device_fd.clone(), true) {
+        Ok(pair) => pair,
+        Err(e) => {
+            tracing::warn!("{}: failed to create DRM device ({e})", path.display());
+            return None;
+        }
+    };
+
+    let gbm = match GbmDevice::new(device_fd) {
+        Ok(g) => g,
+        Err(e) => {
+            tracing::warn!("{}: failed to create GBM device ({e})", path.display());
+            return None;
+        }
+    };
+
+    let egl_display = match unsafe { EGLDisplay::new(gbm.clone()) } {
+        Ok(d) => d,
+        Err(e) => {
+            tracing::warn!("{}: failed to create EGL display ({e})", path.display());
+            return None;
+        }
+    };
+    if EGLDevice::device_for_display(&egl_display).is_ok_and(|d| d.is_software()) {
+        tracing::warn!("{}: software EGL device, skipping", path.display());
+        return None;
+    }
+    // High priority lets the compositor's composite preempt a
+    // GPU-saturating client (shader compile, screen-share encode) instead
+    // of queuing behind it. EGL_IMG_context_priority is best-effort:
+    // smithay falls back to default priority if the extension is absent, and
+    // some drivers (notably NVIDIA) may only partially honor it.
+    let egl_context = match EGLContext::new_with_priority(&egl_display, ContextPriority::High) {
+        Ok(c) => c,
+        Err(e) => {
+            tracing::warn!("{}: failed to create EGL context ({e})", path.display());
+            return None;
+        }
+    };
+    let render_formats: Vec<Format> = egl_context
+        .dmabuf_render_formats()
+        .iter()
+        .copied()
+        .filter(|f| {
+            // Intel CCS modifiers increase display link bandwidth, which can
+            // prevent high-res/high-refresh modes from working (e.g. ultrawides
+            // that need DSC). Filter them out — the GPU falls back to
+            // uncompressed framebuffers with no visual difference.
+            let is_ccs = matches!(
+                f.modifier,
+                Modifier::I915_y_tiled_ccs
+                    | Modifier::I915_y_tiled_gen12_rc_ccs
+                    | Modifier::I915_y_tiled_gen12_mc_ccs
+                    // Yf_TILED_CCS
+                    | Modifier::Unrecognized(0x100000000000005)
+                    // Y_TILED_GEN12_RC_CCS_CC
+                    | Modifier::Unrecognized(0x100000000000008)
+                    // 4_TILED_DG2_RC_CCS
+                    | Modifier::Unrecognized(0x10000000000000a)
+                    // 4_TILED_DG2_MC_CCS
+                    | Modifier::Unrecognized(0x10000000000000b)
+                    // 4_TILED_DG2_RC_CCS_CC
+                    | Modifier::Unrecognized(0x10000000000000c)
+            );
+            !is_ccs
+        })
+        .collect();
+    // Ask EGL/Mesa for the actual rendering device — on split-DRM
+    // systems the KMS node we opened has no render node, but Mesa
+    // routes rendering through the right GPU under the hood. We need
+    // to advertise that GPU's render node to clients (`zwp_linux_dmabuf_v1`
+    // feedback, xdph-wlr) so they don't crash trying to use the
+    // display-only node.
+    let render_node = EGLDevice::device_for_display(&egl_display)
+        .ok()
+        .and_then(|d| d.try_get_render_node().ok().flatten())
+        .or_else(|| node.node_with_type(NodeType::Render).and_then(|n| n.ok()))
+        .unwrap_or_else(|| {
+            tracing::warn!(
+                "could not resolve a DRM render node; falling back to KMS node {node:?} \
+                 — capture clients may misbehave"
+            );
+            node
+        });
+
+    // Drop the probe context before handing the GBM device to the GPU
+    // manager, which creates its own EGL display + GLES renderer for the
+    // render node (avoids two high-priority contexts on the same device).
+    // add_node is a no-op if another KMS device already registered this
+    // render node (split-DRM boards routing through one render GPU).
+    drop(egl_context);
+    if let Err(e) = gpu_manager.as_mut().add_node(render_node, gbm.clone()) {
+        tracing::warn!(
+            "{}: failed to add render node to GPU manager ({e})",
+            path.display()
+        );
+        return None;
+    }
+
+    Some(OpenedGpu {
+        node,
+        drm,
+        drm_notifier,
+        gbm,
+        render_formats,
+        render_node,
     })
+}
+
+/// Wire an opened GPU into the compositor: register its VBlank event source,
+/// store it in `udev_devices`, and scan its connectors (creating outputs and
+/// queuing their first frames).
+fn attach_gpu(data: &mut DriftWm, gpu: OpenedGpu) {
+    let OpenedGpu {
+        node,
+        drm,
+        drm_notifier,
+        gbm,
+        render_formats,
+        render_node,
+    } = gpu;
+
+    log_drm_connectors(&drm);
+
+    let device = UdevDevice(Rc::new(RefCell::new(DeviceData {
+        render_node,
+        drm,
+        gbm,
+        drm_scanner: DrmScanner::new(),
+        surfaces: HashMap::new(),
+        render_formats,
+        drm_token: None,
+    })));
+
+    let device_for_drm = device.clone();
+    let token =
+        data.loop_handle
+            .insert_source(drm_notifier, move |event, meta, data: &mut DriftWm| {
+                let mut dev = device_for_drm.0.borrow_mut();
+                let render_node = dev.render_node;
+                match event {
+                    DrmEvent::VBlank(crtc) => {
+                        let Some(surface) = dev.surfaces.get_mut(&crtc) else {
+                            return;
+                        };
+                        match surface.compositor.frame_submitted() {
+                            Ok(Some(mut feedback)) => {
+                                deliver_presentation(&mut feedback, &surface.output, meta.as_ref());
+                            }
+                            Ok(None) => {}
+                            Err(e) => tracing::warn!("frame_submitted error: {e:?}"),
+                        }
+                        data.frames_pending.remove(&crtc);
+                        // Real VBlank beat any estimated-VBlank timer we might have armed.
+                        if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
+                            data.loop_handle.remove(token);
+                        }
+                        if data.redraws_needed.contains(&surface.output) {
+                            render_frame(
+                                data,
+                                &mut surface.compositor,
+                                &surface.output,
+                                crtc,
+                                render_node,
+                            );
+                        }
+                    }
+                    DrmEvent::Error(err) => {
+                        tracing::error!("DRM error: {err}");
+                    }
+                }
+            });
+    match token {
+        Ok(token) => device.0.borrow_mut().drm_token = Some(token),
+        Err(e) => tracing::error!("Failed to register DRM event source for {node}: {e}"),
+    }
+
+    data.udev_devices.insert(node, device.clone());
+    scan_device_connectors(data, &device);
+}
+
+/// Rescan a device's connectors, creating surfaces for newly connected ones
+/// and tearing down disconnected ones. Shared between initial attach and
+/// udev change events.
+fn scan_device_connectors(data: &mut DriftWm, device: &UdevDevice) {
+    {
+        let mut dev = device.0.borrow_mut();
+        let DeviceData {
+            render_node,
+            ref mut drm_scanner,
+            ref mut drm,
+            ref gbm,
+            ref render_formats,
+            ref mut surfaces,
+            ..
+        } = *dev;
+        let scan_result = match drm_scanner.scan_connectors(&*drm) {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!("Failed to scan connectors: {e}");
+                return;
+            }
+        };
+        for scan_event in scan_result {
+            match scan_event {
+                DrmScanEvent::Connected {
+                    connector,
+                    crtc: Some(crtc),
+                } => {
+                    if surfaces.contains_key(&crtc) {
+                        continue;
+                    }
+                    tracing::info!(
+                        "Connector connected: {}-{} (CRTC {:?})",
+                        connector_type_name(&connector),
+                        connector.interface_id(),
+                        crtc,
+                    );
+                    // Replace any virtual placeholder outputs. The unmap-to-
+                    // create_surface sequence is synchronous within this
+                    // connector handler, so active_output() is never None.
+                    if !data.disconnected_outputs.is_empty() {
+                        let virtual_outputs: Vec<_> = data
+                            .space
+                            .outputs()
+                            .filter(|o| data.disconnected_outputs.contains(&o.name()))
+                            .cloned()
+                            .collect();
+                        for old in &virtual_outputs {
+                            data.space.unmap_output(old);
+                            data.render.remove_output(&old.name());
+                        }
+                        data.disconnected_outputs.clear();
+                        data.focused_output = None;
+                    }
+                    let saved = crate::state::read_all_per_output_state();
+                    let dh = data.display_handle.clone();
+                    if let Some(sd) = create_surface(
+                        drm,
+                        gbm,
+                        render_formats,
+                        render_node,
+                        &connector,
+                        crtc,
+                        &dh,
+                        data,
+                        &saved,
+                    ) {
+                        surfaces.insert(crtc, sd);
+                        data.active_outputs.insert(surfaces[&crtc].output.clone());
+                        // Pin any windows orphaned by the virtual-output swap to
+                        // the freshly connected monitor.
+                        let new_output = surfaces[&crtc].output.clone();
+                        data.reassign_orphaned_pinned(&new_output);
+                        let surface = surfaces.get_mut(&crtc).unwrap();
+                        // Notify existing toplevels about the new output
+                        driftwm::protocols::foreign_toplevel::send_output_enter_all(
+                            &mut data.foreign_toplevel_state,
+                            &surface.output,
+                        );
+                        render_frame(
+                            data,
+                            &mut surface.compositor,
+                            &surface.output,
+                            crtc,
+                            render_node,
+                        );
+                    }
+                }
+                DrmScanEvent::Connected {
+                    connector,
+                    crtc: None,
+                } => {
+                    tracing::warn!(
+                        "Connector {}-{} has no available CRTC",
+                        connector_type_name(&connector),
+                        connector.interface_id()
+                    );
+                }
+                DrmScanEvent::Disconnected {
+                    crtc: Some(crtc), ..
+                } => {
+                    tracing::info!("Hotplug: CRTC {crtc:?} disconnected");
+                    if let Some(surface) = surfaces.remove(&crtc) {
+                        // "Last output" spans all devices: another GPU's
+                        // monitor keeps the canvas alive.
+                        let is_last = surfaces.is_empty()
+                            && data
+                                .udev_devices
+                                .values()
+                                .filter(|d| !Rc::ptr_eq(&d.0, &device.0))
+                                .all(|d| d.0.borrow().surfaces.is_empty());
+                        teardown_output(data, surface, is_last);
+                    }
+                    data.frames_pending.remove(&crtc);
+                    if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
+                        data.loop_handle.remove(token);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    // Notify output management clients after connector changes; heads span
+    // every device, so aggregate across all of them.
+    let head_state = collect_all_head_states(data);
+    driftwm::protocols::output_management::notify_changes::<DriftWm>(
+        &mut data.output_management_state,
+        head_state,
+    );
+}
+
+/// A whole GPU appeared at runtime (eGPU dock, driver rebind): open it, add
+/// its render node to the GPU manager, and light up its outputs.
+fn gpu_added(data: &mut DriftWm, path: &Path) {
+    let Some(Backend::Udev(udev)) = data.backend.as_mut() else {
+        return;
+    };
+    let Some(session) = data.session.as_mut() else {
+        return;
+    };
+    let Some(gpu) = open_gpu(session, &mut udev.gpu_manager, path) else {
+        return;
+    };
+    attach_gpu(data, gpu);
+}
+
+/// A whole GPU disappeared: tear down its outputs, drop its event source and
+/// (unless shared or primary) its renderer.
+fn gpu_removed(data: &mut DriftWm, node: DrmNode) {
+    let Some(device) = data.udev_devices.remove(&node) else {
+        tracing::debug!("udev removal for unknown device {node}");
+        return;
+    };
+    tracing::info!("GPU removed: {node}");
+
+    let (surfaces, token, render_node) = {
+        let mut dev = device.0.borrow_mut();
+        let surfaces: Vec<(crtc::Handle, SurfaceData)> = dev.surfaces.drain().collect();
+        (surfaces, dev.drm_token.take(), dev.render_node)
+    };
+    if let Some(token) = token {
+        data.loop_handle.remove(token);
+    }
+
+    let surviving: usize = data
+        .udev_devices
+        .values()
+        .map(|d| d.0.borrow().surfaces.len())
+        .sum();
+    let count = surfaces.len();
+    for (i, (crtc, surface)) in surfaces.into_iter().enumerate() {
+        data.frames_pending.remove(&crtc);
+        if let Some(t) = data.estimated_vblank_timers.remove(&crtc) {
+            data.loop_handle.remove(t);
+        }
+        teardown_output(data, surface, surviving == 0 && i + 1 == count);
+    }
+
+    if let Some(Backend::Udev(udev)) = data.backend.as_mut() {
+        if render_node == udev.primary_render_node {
+            // Surviving outputs render on this node; nothing sane to do but
+            // keep it and hope only the KMS side went away.
+            if !data.udev_devices.is_empty() {
+                tracing::error!(
+                    "Primary render GPU {render_node} removed with outputs remaining — \
+                     rendering may fail until restart"
+                );
+            }
+        } else if !data
+            .udev_devices
+            .values()
+            .any(|d| d.0.borrow().render_node == render_node)
+        {
+            udev.gpu_manager.as_mut().remove_node(&render_node);
+        }
+    }
+
+    let head_state = collect_all_head_states(data);
+    driftwm::protocols::output_management::notify_changes::<DriftWm>(
+        &mut data.output_management_state,
+        head_state,
+    );
 }
 
 /// Log all connectors and their states for the selected GPU.
@@ -1089,6 +1229,7 @@ fn create_surface(
     drm: &mut DrmDevice,
     gbm: &GbmDevice<DrmDeviceFd>,
     render_formats: &[Format],
+    render_node: DrmNode,
     connector: &connector::Info,
     crtc: crtc::Handle,
     dh: &smithay::reexports::wayland_server::DisplayHandle,
@@ -1209,12 +1350,15 @@ fn create_surface(
         gbm.clone(),
         GbmBufferFlags::RENDERING | GbmBufferFlags::SCANOUT,
     );
+    // The exporter's import filter must name this device's render node:
+    // client buffers allocated there can go to a KMS plane directly
+    // (`NodeFilter::None` would veto direct scanout entirely).
     let compositor = match DrmCompositor::new(
         &output,
         drm_surface,
         None,
         allocator.clone(),
-        GbmFramebufferExporter::new(gbm.clone(), None.into()),
+        GbmFramebufferExporter::new(gbm.clone(), render_node.into()),
         SUPPORTED_COLOR_FORMATS.iter().copied(),
         render_formats.iter().copied(),
         drm.cursor_size(),
@@ -1246,7 +1390,7 @@ fn create_surface(
                 fallback_surface,
                 None,
                 allocator,
-                GbmFramebufferExporter::new(gbm.clone(), None.into()),
+                GbmFramebufferExporter::new(gbm.clone(), render_node.into()),
                 SUPPORTED_COLOR_FORMATS.iter().copied(),
                 fallback_formats,
                 drm.cursor_size(),
@@ -1466,12 +1610,14 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
     }
 }
 
-/// Render a single frame and queue it to the DRM compositor.
+/// Render a single frame and queue it to the DRM compositor. `render_node` is
+/// the owning device's render node, deciding same-GPU vs cross-GPU rendering.
 fn render_frame(
     data: &mut DriftWm,
     compositor: &mut GbmDrmCompositor,
     output: &Output,
     crtc: crtc::Handle,
+    render_node: DrmNode,
 ) {
     #[cfg(feature = "profile-with-tracy")]
     let _span = tracy_client::span!("udev::render_frame");
@@ -1535,18 +1681,24 @@ fn render_frame(
     }
 
     // Take the backend out to split the borrow from state, then grab a
-    // MultiRenderer for the whole frame. This output lives on the primary GPU
-    // (render == target node), so single_renderer; an output hanging off another
-    // GPU will use gpu_manager.renderer(primary, target, fmt) for the PRIME copy.
+    // MultiRenderer for the whole frame. Same GPU: plain single_renderer.
+    // Output on another GPU: render on the primary, copy to the scanout GPU
+    // in the compositor's framebuffer format (implicit PRIME).
     let mut backend = data.backend.take().unwrap();
     let Backend::Udev(udev) = &mut backend else {
         data.backend = Some(backend);
         return;
     };
-    let mut renderer = match udev.gpu_manager.single_renderer(&udev.primary_render_node) {
+    let renderer = if render_node == udev.primary_render_node {
+        udev.gpu_manager.single_renderer(&udev.primary_render_node)
+    } else {
+        udev.gpu_manager
+            .renderer(&udev.primary_render_node, &render_node, compositor.format())
+    };
+    let mut renderer = match renderer {
         Ok(r) => r,
         Err(e) => {
-            tracing::warn!("Failed to acquire primary renderer: {e:?}");
+            tracing::warn!("Failed to acquire renderer for {render_node}: {e:?}");
             data.backend = Some(backend);
             queue_estimated_vblank_timer(data, output, crtc);
             return;
@@ -1766,22 +1918,25 @@ fn queue_estimated_vblank_timer(data: &mut DriftWm, output: &Output, crtc: crtc:
 
 use driftwm::protocols::output_management::{ModeInfo, OutputHeadState};
 
-/// Drain `data.pending_mode_changes`, applying each via `DrmCompositor::use_mode`.
-/// Entries for outputs with a frame in flight are deferred (bounded retries) so
-/// we don't modeset on top of an in-progress page flip.
+/// Apply queued mode changes for outputs on this device via
+/// `DrmCompositor::use_mode`; entries for other devices' outputs are returned
+/// unclaimed. Entries for outputs with a frame in flight are deferred back
+/// into `data.pending_mode_changes` (bounded retries) so we don't modeset on
+/// top of an in-progress page flip.
 fn apply_pending_mode_changes(
     drm: &DrmDevice,
     surfaces: &mut HashMap<crtc::Handle, SurfaceData>,
     data: &mut DriftWm,
-) {
+    pending: HashMap<String, crate::state::PendingMode>,
+) -> HashMap<String, crate::state::PendingMode> {
     use smithay::reexports::drm::control::Device as ControlDevice;
     const MAX_RETRIES: u8 = 3;
 
-    let pending = std::mem::take(&mut data.pending_mode_changes);
+    let mut unclaimed = HashMap::new();
     for (name, mut pm) in pending {
         let Some((crtc, surface)) = surfaces.iter_mut().find(|(_, s)| s.output.name() == name)
         else {
-            tracing::warn!("Mode change for '{name}' dropped: output no longer present");
+            unclaimed.insert(name, pm);
             continue;
         };
 
@@ -1853,6 +2008,17 @@ fn apply_pending_mode_changes(
             }
         }
     }
+    unclaimed
+}
+
+/// Aggregate wlr-output-management head state across every DRM device.
+fn collect_all_head_states(data: &DriftWm) -> HashMap<String, OutputHeadState> {
+    let mut head_state = HashMap::new();
+    for device in data.udev_devices.values() {
+        let dev = device.0.borrow();
+        head_state.extend(collect_output_state_from_surfaces(&dev.surfaces, &dev.drm));
+    }
+    head_state
 }
 
 fn collect_output_state_from_surfaces(

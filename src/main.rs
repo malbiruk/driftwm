@@ -124,10 +124,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     match backend_name.as_str() {
-        "udev" => {
-            let (node, dev) = backend::udev::init_udev(&mut event_loop, &mut data)?;
-            data.udev_devices.insert(node, dev);
-        }
+        "udev" => backend::udev::init_udev(&mut event_loop, &mut data)?,
         _ => backend::winit::init_winit(&mut event_loop, &mut data)?,
     }
 
