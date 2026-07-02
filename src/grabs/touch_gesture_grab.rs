@@ -56,13 +56,10 @@ const ZOOM_SLOP_RATIO_3F: f64 = 0.20;
 /// physical separation first — the floor the old absolute-px slop had implicitly.
 const MIN_SPREAD_MM: f64 = 3.0;
 /// Minimum *change* in finger spread (mm) before pinch engages, on top of the
-/// ratio slop. The ratio alone is panel-size-fragile: on a small, cramped panel
-/// the fingers sit close, so the baseline spread is small and ordinary jitter
-/// during a pan/swipe is a large *fraction* of it — enough to wobble a 3-finger
-/// pan into zoom or steal a 4-finger swipe as zoom-to-fit. A deliberate pinch
-/// moves fingers well past this floor; jitter doesn't, so it separates intent on
-/// any panel size. On a healthy panel (fingers far apart) the ratio change is
-/// already many mm, so this floor never binds.
+/// ratio slop. On a small panel the baseline spread is tiny, so jitter is a large
+/// *fraction* of it and the ratio alone lets a pan wobble into zoom or a swipe
+/// steal as zoom-to-fit. A deliberate pinch clears this floor; jitter doesn't. On
+/// a roomy panel the ratio change is already many mm, so it never binds.
 const PINCH_MIN_DELTA_MM: f64 = 3.0;
 /// Centroid travel for a 4-finger directional navigation swipe, in millimetres
 /// (converted to px per panel via `px_per_mm`). A muscle-memory command gesture
@@ -81,12 +78,11 @@ const SWIPE_BLOCK_PINCH: f64 = 0.4;
 /// thresholds (dead zone, nav swipe) into the panel's pixel space. Touch points
 /// already arrive in logical px, so only the panel's physical size is needed.
 ///
-/// Prefers the touch digitizer's own physical size (`device_mm`) over the
-/// output's EDID. The finger physically travels across the digitizer, so its mm
-/// size is the right denominator — and a cheap USB touch monitor's EDID often
-/// reports a bogus size (e.g. a cloned ~2× value) while the digitizer reports
-/// the truth. Falls back to EDID, then to a ~96 dpi-equivalent density (nested
-/// backend, or a panel with no usable size anywhere).
+/// Prefers the touch digitizer's own physical size (`device_mm`) over the output's
+/// EDID: the finger travels across the digitizer, so its mm size is the right
+/// denominator, and cheap USB touch monitors often report a bogus EDID size (e.g. a
+/// cloned ~2× value) while the digitizer reports the truth. Falls back to EDID, then
+/// to ~96 dpi (nested backend, or no usable size anywhere).
 fn output_px_per_mm(output: &Output, device_mm: Option<(f64, f64)>) -> f64 {
     const FALLBACK: f64 = 4.0;
     let Some(mode) = output.current_mode() else {
@@ -98,10 +94,9 @@ fn output_px_per_mm(output: &Output, device_mm: Option<(f64, f64)>) -> f64 {
     let scale = output.current_scale().fractional_scale();
     let mode_area = mode.size.w as f64 * mode.size.h as f64;
 
-    // Density from a physical size via area (a geometric mean of both axes), so it
-    // doesn't matter whether the digitizer reports its axes in the panel's native
-    // orientation — EDID guarantees that alignment, a digitizer doesn't. `None`
-    // when the size is missing, or yields an out-of-range (bogus) density.
+    // Density via area (geometric mean of both axes) so axis orientation doesn't
+    // matter — EDID axes align with the panel's native orientation, a digitizer's
+    // may not. `None` on a missing size or an out-of-range (bogus) density.
     let density = |phys_w: f64, phys_h: f64| {
         (phys_w > 0.0 && phys_h > 0.0)
             .then(|| (mode_area / (phys_w * phys_h)).sqrt() / scale)
@@ -303,13 +298,10 @@ impl TouchGestureGrab {
         }
     }
 
-    /// A pinch reading is only trustworthy when every finger the gesture started
-    /// with is currently down. Cheap digitizers intermittently drop a contact
-    /// mid-gesture (fingers bunched on a small surface merge or vanish for many
-    /// frames); with a finger missing, the remaining points' spread lurches like
-    /// a large pinch — enough to wobble a 3-finger pan into zoom or make a
-    /// 4-finger swipe read as zoom-to-fit. Suppress pinch detection until the
-    /// full set is back. On healthy hardware this is always true, so it's inert.
+    /// A pinch reading is only trustworthy with every starting finger down. Cheap
+    /// digitizers drop a contact mid-gesture (fingers bunched on a small surface
+    /// merge or vanish for frames); with one missing, the remaining points' spread
+    /// lurches like a big pinch and can fire zoom. Inert on healthy hardware.
     fn all_fingers_down(&self) -> bool {
         self.points.len() >= self.max_fingers
     }
@@ -395,14 +387,12 @@ impl TouchGestureGrab {
             }
         };
 
-        // The ratio alone isn't enough to call it a pinch: on a small, cramped
-        // panel four fingers can't translate without their spread fluctuating
-        // ~margin, so a swipe's jitter crosses `pinch_progress` and steals the
-        // gesture as zoom-to-fit. Require a real physical spread change too, and
-        // only trust the reading while all four fingers are down — a dropped
-        // contact collapses the spread far past the floor and would fire zoom.
-        // Until both hold the pinch reads as zero, so it neither fires nor blocks
-        // the swipe.
+        // Ratio alone isn't a pinch: on a cramped panel four fingers can't translate
+        // without their spread fluctuating ~margin, so a swipe's jitter crosses
+        // `pinch_progress` and steals zoom-to-fit. Require a real physical spread
+        // change too, and only while all fingers are down — a dropped contact
+        // collapses the spread past the floor. Otherwise reads zero, so it neither
+        // fires nor blocks the swipe.
         let effective_pinch = if self.all_fingers_down()
             && (cur_spread - self.start_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm
         {
@@ -773,12 +763,11 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             let dx = centroid.x - self.start_centroid.x;
             let dy = centroid.y - self.start_centroid.y;
             let centroid_disp = (dx * dx + dy * dy).sqrt();
-            // A real pinch must clear both the ratio slop AND a physical spread
-            // change (`PINCH_MIN_DELTA_MM`): the ratio gathers the fingers without
-            // translating the centroid, so the spread can break the dead zone on
-            // its own — but on a small panel ordinary jitter crosses the ratio at
-            // a tiny absolute change, so the mm floor keeps a pan from wobbling
-            // into zoom. (A pinch needs >= 2 fingers and a non-trivial baseline.)
+            // A real pinch clears both the ratio slop and the mm floor: a pinch
+            // gathers the fingers without moving the centroid, so the spread must
+            // break the dead zone on its own — but on a small panel jitter crosses
+            // the ratio at a tiny absolute change, so the mm floor stops a pan
+            // wobbling into zoom. (Needs >= 2 fingers and a non-trivial baseline.)
             let has_two = self.points.len() >= 2;
             let cur_spread = if has_two { self.spread(centroid) } else { 0.0 };
             let span_ratio = if has_two && self.last_spread > MIN_SPREAD_MM * self.px_per_mm {
@@ -791,10 +780,10 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 && span_ratio >= slop
                 && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
             let dead_zone = DEAD_ZONE_MM * self.px_per_mm;
-            // Break the dead zone on the spread change alone (ungated): a stale,
-            // over-counted `max_fingers` must never leave a pure, non-translating
-            // pinch with no way out. Zoom itself only *engages* with the full set
-            // down, so a dropped-contact spread lurch still can't latch it.
+            // Break the dead zone on the spread change alone, ungated by finger
+            // count: a stale, over-counted `max_fingers` must never trap a pure,
+            // non-translating pinch. Safe because zoom only *engages* with the full
+            // set down, so a dropped-contact spread lurch still can't latch it.
             if centroid_disp < dead_zone && !spread_pinch {
                 return;
             }
@@ -840,10 +829,10 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 px_per_mm = self.px_per_mm,
                 "panzoom frame",
             );
-            // Engage zoom once the spread has changed past both the ratio slop and
-            // the physical floor (so a pan's jitter can't latch it), consuming the
-            // change so there's no jump on the first zoomed frame. Requires the
-            // full finger set — a dropped contact collapses the spread past both.
+            // Engage zoom once the spread clears both the ratio slop and the mm
+            // floor (so a pan's jitter can't latch it), consuming the change so
+            // there's no jump on the first zoomed frame. Needs the full finger set —
+            // a dropped contact collapses the spread past both.
             if !self.zoom_engaged
                 && self.all_fingers_down()
                 && self.last_spread > MIN_SPREAD_MM * self.px_per_mm
