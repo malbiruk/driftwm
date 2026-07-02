@@ -787,19 +787,22 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 0.0
             };
             let slop = self.zoom_slop_ratio();
-            let real_pinch = has_two
-                && self.all_fingers_down()
+            let spread_pinch = has_two
                 && span_ratio >= slop
                 && (cur_spread - self.last_spread).abs() >= PINCH_MIN_DELTA_MM * self.px_per_mm;
             let dead_zone = DEAD_ZONE_MM * self.px_per_mm;
-            if centroid_disp < dead_zone && !real_pinch {
+            // Break the dead zone on the spread change alone (ungated): a stale,
+            // over-counted `max_fingers` must never leave a pure, non-translating
+            // pinch with no way out. Zoom itself only *engages* with the full set
+            // down, so a dropped-contact spread lurch still can't latch it.
+            if centroid_disp < dead_zone && !spread_pinch {
                 return;
             }
             self.ever_active = true;
             self.active = true;
             // Engage zoom right away only if the gesture broke the dead zone by a
             // real pinch; otherwise it engages later once the spread clears both.
-            self.zoom_engaged = real_pinch;
+            self.zoom_engaged = spread_pinch && self.all_fingers_down();
             self.last_centroid = centroid;
             self.last_spread = self.spread(centroid);
 
