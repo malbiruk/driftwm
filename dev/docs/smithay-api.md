@@ -313,6 +313,18 @@ let images = xcursor::parser::parse_xcursor(&std::fs::read(path)?)?;
 - **Libinput `suspend()`/`resume()` take `&self`** (not `&mut self`) — clone is fine.
 - **Both Backend enum variants should be `Box`ed** — `WinitGraphicsBackend` ~6.5KB, `GlesRenderer` ~6.3KB. Clippy warns about variant size differences.
 
+### Multi-GPU (`renderer::multigpu`)
+
+- **`GpuManager<GbmGlesBackend<GlesRenderer, DrmDeviceFd>>`** — one GLES renderer per render node. `add_node(render_node, gbm)` (no-op if already registered), `remove_node(&render_node)` then `let _ = manager.devices()` to trigger the actual drop. `single_renderer(&node)` → `MultiRenderer` with render == target; `renderer(&render, &target, format)` adds the implicit PRIME copy at `finish()`.
+- **`MultiFrame` damage recording**: `clear`/`draw_solid`/`render_texture_from_to` extend a private `damage` vec; the cross-GPU `finish()` copies ONLY those regions to the target. Draws via `as_gles_frame()` bypass it — record damage manually with a transparent `draw_solid` (blending stays enabled for non-opaque colors, so it's a visual no-op). `GlesFrame::draw_solid` disables blending only for `color.is_opaque()`.
+- **`GpuManager::early_import(target_node, &wl_surface)`** — walks the surface tree and imports committed buffers for `target_node` ahead of rendering. Requires `on_commit_buffer_handler` to have run. Call it from `CompositorHandler::commit`.
+- **`MultiRenderer: Offscreen<GlesTexture> + Bind<GlesTexture>`**, but both route to the TARGET device — fine when render == target (`single_renderer`), wrong GPU for a true cross-GPU renderer.
+- **`DmabufFeedbackBuilder`**: `new(main_device_dev_t, formats)`; `add_preference_tranche(target_dev_t, Some(TrancheFlags::Scanout), formats)` — dedups formats already in an equivalent tranche; empty tranches are simply not sent. `build() -> Result<DmabufFeedback, io::Error>` (writes the format table to a memfd). `DmabufFeedback` is `Clone` + `PartialEq`.
+- **`SurfaceDmabufFeedbackState::set_feedback` dedups by content** — `send_dmabuf_feedback_surface_tree` every frame is fine; clients only see actual changes. Selector: `smithay::backend::renderer::element::utils::select_dmabuf_feedback(surface, states, &render_fb, &scanout_fb)` returns `scanout_fb` on `ZeroCopy` / `Rendering{ScanoutFailed|FormatUnsupported}`.
+- **`TrancheFlags`** lives at `smithay::reexports::wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags`.
+- **`FormatSet`** (`backend::allocator::format::FormatSet`) has `intersection()`/`iter()` but no `len()` — use `iter().count()`.
+- **`DrmSurface`**: `plane_info().formats` = primary-plane `FormatSet`; `planes().overlay` for overlay planes' formats.
+
 ### Rust 2024 Edition
 
 - **Temporaries in `if let` live until end of block** — separate `let x = expr.cloned(); if let Some(x) = x {` when needing `&mut self` inside the block.

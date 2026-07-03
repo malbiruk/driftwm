@@ -36,4 +36,20 @@ impl Backend {
             }
         }
     }
+
+    /// Start importing a committed surface's buffer on the primary GPU before
+    /// the next frame needs it, overlapping the import (and any cross-GPU copy)
+    /// with the client's remaining work instead of paying it at render time.
+    pub fn early_import(
+        &mut self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        if let Backend::Udev(udev) = self
+            && let Err(err) = udev
+                .gpu_manager
+                .early_import(udev.primary_render_node, surface)
+        {
+            tracing::warn!("early import failed: {err:?}");
+        }
+    }
 }

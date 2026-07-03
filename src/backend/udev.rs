@@ -1136,23 +1136,48 @@ fn gpu_removed(data: &mut DriftWm, node: DrmNode) {
         teardown_output(data, surface, surviving == 0 && i + 1 == count);
     }
 
-    if let Some(Backend::Udev(udev)) = data.backend.as_mut() {
+    // On split-DRM boards several KMS devices can route to one render node;
+    // only release the render node with its last KMS device.
+    let render_node_still_used = data
+        .udev_devices
+        .values()
+        .any(|d| d.0.borrow().render_node == render_node);
+    if let Some(Backend::Udev(udev)) = data.backend.as_mut()
+        && !render_node_still_used
+    {
         if render_node == udev.primary_render_node {
-            // Surviving outputs render on this node; nothing sane to do but
-            // keep it and hope only the KMS side went away.
-            if !data.udev_devices.is_empty() {
-                tracing::error!(
-                    "Primary render GPU {render_node} removed with outputs remaining — \
-                     rendering may fail until restart"
-                );
+            // We can't render without the primary GPU (no promotion of a new
+            // primary — surviving outputs go dark until it returns or restart).
+            // Withdraw what advertised the dead node so new clients don't
+            // allocate on it: the dmabuf global (delayed destroy, like output
+            // globals) and every surviving surface's dmabuf feedback.
+            tracing::error!(
+                "Primary render GPU {render_node} removed — rendering is unavailable \
+                 until restart"
+            );
+            if let Some(global) = data.dmabuf_global.take() {
+                data.dmabuf_state
+                    .disable_global::<DriftWm>(&data.display_handle, &global);
+                let timer = Timer::from_duration(Duration::from_secs(10));
+                let _ = data
+                    .loop_handle
+                    .insert_source(timer, move |_, _, data: &mut DriftWm| {
+                        let dh = data.display_handle.clone();
+                        data.dmabuf_state.destroy_global::<DriftWm>(&dh, global);
+                        TimeoutAction::Drop
+                    });
             }
-        } else if !data
-            .udev_devices
-            .values()
-            .any(|d| d.0.borrow().render_node == render_node)
-        {
-            udev.gpu_manager.as_mut().remove_node(&render_node);
+            data.render_device = None;
+            data.render_dmabuf_formats = None;
+            for device in data.udev_devices.values() {
+                for surface in device.0.borrow_mut().surfaces.values_mut() {
+                    surface.dmabuf_feedback = None;
+                }
+            }
         }
+        udev.gpu_manager.as_mut().remove_node(&render_node);
+        // Trigger re-enumeration so the manager actually drops the device.
+        let _ = udev.gpu_manager.devices();
     }
 
     let head_state = collect_all_head_states(data);
