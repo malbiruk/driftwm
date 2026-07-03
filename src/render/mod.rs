@@ -28,7 +28,7 @@ pub use elements::{
 };
 pub use error_bar::ErrorBarCache;
 pub use lifecycle::{
-    post_render, refresh_foreign_toplevels, send_frame_callbacks_fallback,
+    post_render, refresh_foreign_toplevels, send_dmabuf_feedbacks, send_frame_callbacks_fallback,
     take_presentation_feedback, update_primary_scanout_output,
 };
 pub use renderer::{AsGlesRenderer, DriftRenderer};

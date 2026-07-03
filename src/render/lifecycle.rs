@@ -184,6 +184,58 @@ pub fn take_presentation_feedback(
     feedback
 }
 
+/// Send per-surface dmabuf feedback (render vs scanout) to every surface whose
+/// primary scanout output is `output`. Surfaces that were promoted to (or
+/// considered for) direct scanout this frame get the scanout feedback, steering
+/// their next allocation toward buffers the output's device can put on a plane;
+/// everyone else gets the render feedback (primary render node).
+pub fn send_dmabuf_feedbacks(
+    state: &crate::state::DriftWm,
+    output: &Output,
+    feedback: &crate::backend::udev::SurfaceDmabufFeedback,
+    states: &RenderElementStates,
+) {
+    use smithay::backend::renderer::element::utils::select_dmabuf_feedback;
+    use smithay::desktop::utils::{
+        send_dmabuf_feedback_surface_tree, surface_primary_scanout_output,
+    };
+
+    let select = |surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+                  _: &smithay::wayland::compositor::SurfaceData| {
+        select_dmabuf_feedback(surface, states, &feedback.render, &feedback.scanout)
+    };
+
+    for window in state.space.elements() {
+        window.send_dmabuf_feedback(output, surface_primary_scanout_output, select);
+    }
+
+    for layer_surface in layer_map_for_output(output).layers() {
+        layer_surface.send_dmabuf_feedback(output, surface_primary_scanout_output, select);
+    }
+
+    for cl in &state.canvas_layers {
+        send_dmabuf_feedback_surface_tree(
+            cl.surface.wl_surface(),
+            output,
+            surface_primary_scanout_output,
+            select,
+        );
+    }
+
+    if let Some(lock_surface) = state.lock_surfaces.get(output) {
+        send_dmabuf_feedback_surface_tree(
+            lock_surface.wl_surface(),
+            output,
+            surface_primary_scanout_output,
+            select,
+        );
+    }
+
+    if let CursorImageStatus::Surface(ref surface) = state.cursor.cursor_status {
+        send_dmabuf_feedback_surface_tree(surface, output, surface_primary_scanout_output, select);
+    }
+}
+
 /// Post-render: frame callbacks, space cleanup.
 pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     let time = state.start_time.elapsed();

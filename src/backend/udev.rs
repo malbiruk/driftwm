@@ -9,6 +9,7 @@ use smithay::{
     backend::{
         allocator::{
             Format, Fourcc, Modifier,
+            format::FormatSet,
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
@@ -37,8 +38,9 @@ use smithay::{
         rustix::fs::OFlags,
     },
     utils::{DeviceFd, Transform},
-    wayland::dmabuf::DmabufFeedbackBuilder,
+    wayland::dmabuf::{DmabufFeedback, DmabufFeedbackBuilder},
 };
+use smithay::reexports::wayland_protocols::wp::linux_dmabuf::zv1::server::zwp_linux_dmabuf_feedback_v1::TrancheFlags;
 
 use smithay_drm_extras::drm_scanner::{DrmScanEvent, DrmScanner};
 
@@ -95,6 +97,9 @@ pub struct UdevRenderer {
 }
 
 struct DeviceData {
+    /// This device's KMS (primary) node — the key in `DriftWm::udev_devices`,
+    /// and the allocation target advertised in scanout dmabuf-feedback tranches.
+    kms_node: DrmNode,
     /// This device's DRM render node (resolved via EGL; the KMS node itself on
     /// split-DRM systems without one). Outputs here scan out buffers rendered
     /// on the primary GPU — when the nodes differ, via an implicit PRIME copy.
@@ -124,6 +129,95 @@ struct SurfaceData {
     /// Re-applied on session resume. `Some(Some(ramp))` = set to ramp,
     /// `Some(None)` = reset to identity, `None` = nothing pending.
     pending_gamma_change: Option<Option<Vec<u16>>>,
+    /// Per-surface dmabuf feedback sent to clients shown on this output.
+    /// `None` if building it failed — clients fall back to the default global.
+    dmabuf_feedback: Option<SurfaceDmabufFeedback>,
+}
+
+/// Per-surface dmabuf feedback. `render` steers clients toward the primary
+/// render node; `scanout` adds scanout-flagged tranches targeting this
+/// output's KMS device so a fullscreen client allocates buffers its
+/// DrmCompositor can promote to a plane. Which one a surface receives is
+/// decided per frame from its render-element state (see
+/// `render::send_dmabuf_feedbacks`).
+pub struct SurfaceDmabufFeedback {
+    pub render: DmabufFeedback,
+    pub scanout: DmabufFeedback,
+}
+
+fn surface_dmabuf_feedback(
+    compositor: &GbmDrmCompositor,
+    primary_formats: FormatSet,
+    primary_render_node: DrmNode,
+    surface_render_node: DrmNode,
+    surface_kms_node: DrmNode,
+) -> Result<SurfaceDmabufFeedback, std::io::Error> {
+    let surface = compositor.surface();
+    let planes = surface.planes();
+
+    let primary_plane_formats = surface.plane_info().formats.clone();
+    let primary_or_overlay_plane_formats = primary_plane_formats
+        .iter()
+        .chain(planes.overlay.iter().flat_map(|p| p.formats.iter()))
+        .copied()
+        .collect::<FormatSet>();
+
+    // Limit scanout tranches to formats we can also render from, so a buffer
+    // that fails the scanout test still has a composite fallback path.
+    let mut primary_scanout_formats = primary_plane_formats
+        .intersection(&primary_formats)
+        .copied()
+        .collect::<Vec<_>>();
+    let mut primary_or_overlay_scanout_formats = primary_or_overlay_plane_formats
+        .intersection(&primary_formats)
+        .copied()
+        .collect::<Vec<_>>();
+
+    // Cross-GPU scanout is only reliable with Linear buffers: iGPU+dGPU pairs
+    // can share non-Linear modifiers on paper yet scan out glitched frames
+    // (same workaround as niri).
+    if surface_render_node != primary_render_node {
+        primary_scanout_formats.retain(|f| f.modifier == Modifier::Linear);
+        primary_or_overlay_scanout_formats.retain(|f| f.modifier == Modifier::Linear);
+    }
+
+    tracing::info!(
+        "dmabuf feedback for {surface_kms_node}: {} plane formats, {} render-node formats, \
+         scanout tranches {} + {}",
+        primary_plane_formats.iter().count(),
+        primary_formats.iter().count(),
+        primary_scanout_formats.len(),
+        primary_or_overlay_scanout_formats.len(),
+    );
+
+    let builder = DmabufFeedbackBuilder::new(primary_render_node.dev_id(), primary_formats);
+
+    // Prefer primary-plane-only formats over primary-or-overlay: overlay
+    // planes are disabled in render_frame, so this raises the chance a
+    // client's buffer lands in the tranche that can actually scan out.
+    let scanout = builder
+        .clone()
+        .add_preference_tranche(
+            surface_kms_node.dev_id(),
+            Some(TrancheFlags::Scanout),
+            primary_scanout_formats,
+        )
+        .add_preference_tranche(
+            surface_kms_node.dev_id(),
+            Some(TrancheFlags::Scanout),
+            primary_or_overlay_scanout_formats,
+        )
+        .build()?;
+
+    // On the primary node the render path can scan out too — reuse the
+    // scanout feedback to avoid advertising duplicate tranches.
+    let render = if surface_render_node == primary_render_node {
+        scanout.clone()
+    } else {
+        builder.build()?
+    };
+
+    Ok(SurfaceDmabufFeedback { render, scanout })
 }
 
 /// Opaque handle to udev backend device data, stored in
@@ -371,13 +465,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
                 && !data.frames_pending.contains(&crtc)
                 && !data.estimated_vblank_timers.contains_key(&crtc)
             {
-                render_frame(
-                    data,
-                    &mut surface.compositor,
-                    &surface.output,
-                    crtc,
-                    render_node,
-                );
+                render_frame(data, surface, crtc, render_node);
             }
         }
     }
@@ -594,13 +682,7 @@ pub fn init_udev(
                                     );
                                 }
                             }
-                            render_frame(
-                                data,
-                                &mut surface.compositor,
-                                &surface.output,
-                                crtc,
-                                render_node,
-                            );
+                            render_frame(data, surface, crtc, render_node);
                         }
                     }
                 }
@@ -829,6 +911,7 @@ fn attach_gpu(data: &mut DriftWm, gpu: OpenedGpu) {
     log_drm_connectors(&drm);
 
     let device = UdevDevice(Rc::new(RefCell::new(DeviceData {
+        kms_node: node,
         render_node,
         drm,
         gbm,
@@ -862,13 +945,7 @@ fn attach_gpu(data: &mut DriftWm, gpu: OpenedGpu) {
                             data.loop_handle.remove(token);
                         }
                         if data.redraws_needed.contains(&surface.output) {
-                            render_frame(
-                                data,
-                                &mut surface.compositor,
-                                &surface.output,
-                                crtc,
-                                render_node,
-                            );
+                            render_frame(data, surface, crtc, render_node);
                         }
                     }
                     DrmEvent::Error(err) => {
@@ -892,6 +969,7 @@ fn scan_device_connectors(data: &mut DriftWm, device: &UdevDevice) {
     {
         let mut dev = device.0.borrow_mut();
         let DeviceData {
+            kms_node,
             render_node,
             ref mut drm_scanner,
             ref mut drm,
@@ -946,6 +1024,7 @@ fn scan_device_connectors(data: &mut DriftWm, device: &UdevDevice) {
                         gbm,
                         render_formats,
                         render_node,
+                        kms_node,
                         &connector,
                         crtc,
                         &dh,
@@ -964,13 +1043,7 @@ fn scan_device_connectors(data: &mut DriftWm, device: &UdevDevice) {
                             &mut data.foreign_toplevel_state,
                             &surface.output,
                         );
-                        render_frame(
-                            data,
-                            &mut surface.compositor,
-                            &surface.output,
-                            crtc,
-                            render_node,
-                        );
+                        render_frame(data, surface, crtc, render_node);
                     }
                 }
                 DrmScanEvent::Connected {
@@ -1230,6 +1303,7 @@ fn create_surface(
     gbm: &GbmDevice<DrmDeviceFd>,
     render_formats: &[Format],
     render_node: DrmNode,
+    kms_node: DrmNode,
     connector: &connector::Info,
     crtc: crtc::Handle,
     dh: &smithay::reexports::wayland_server::DisplayHandle,
@@ -1466,6 +1540,27 @@ fn create_surface(
         );
     }
 
+    let mut dmabuf_feedback = None;
+    if let Some(crate::backend::Backend::Udev(udev)) = state.backend.as_mut() {
+        let primary_render_node = udev.primary_render_node;
+        if let Ok(renderer) = udev.gpu_manager.single_renderer(&primary_render_node) {
+            let primary_formats = renderer.dmabuf_formats();
+            drop(renderer);
+            match surface_dmabuf_feedback(
+                &compositor,
+                primary_formats,
+                primary_render_node,
+                render_node,
+                kms_node,
+            ) {
+                Ok(f) => dmabuf_feedback = Some(f),
+                Err(e) => {
+                    tracing::warn!("Failed to build dmabuf feedback for {connector_name}: {e}");
+                }
+            }
+        }
+    }
+
     Some(SurfaceData {
         compositor,
         output,
@@ -1476,6 +1571,7 @@ fn create_surface(
         global,
         gamma_props,
         pending_gamma_change: None,
+        dmabuf_feedback,
     })
 }
 
@@ -1614,13 +1710,20 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
 /// the owning device's render node, deciding same-GPU vs cross-GPU rendering.
 fn render_frame(
     data: &mut DriftWm,
-    compositor: &mut GbmDrmCompositor,
-    output: &Output,
+    surface: &mut SurfaceData,
     crtc: crtc::Handle,
     render_node: DrmNode,
 ) {
     #[cfg(feature = "profile-with-tracy")]
     let _span = tracy_client::span!("udev::render_frame");
+
+    let SurfaceData {
+        compositor,
+        output,
+        dmabuf_feedback,
+        ..
+    } = surface;
+    let output = &*output;
 
     #[cfg(feature = "profile-with-tracy")]
     {
@@ -1778,6 +1881,14 @@ fn render_frame(
     match render_result {
         Ok(render_result) => {
             crate::render::update_primary_scanout_output(data, output, &render_result.states);
+            if let Some(surface_feedback) = dmabuf_feedback.as_ref() {
+                crate::render::send_dmabuf_feedbacks(
+                    data,
+                    output,
+                    surface_feedback,
+                    &render_result.states,
+                );
+            }
             let feedback =
                 crate::render::take_presentation_feedback(data, output, &render_result.states);
             let queue_result = {
