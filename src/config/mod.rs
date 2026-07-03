@@ -319,13 +319,32 @@ impl Config {
             }
         };
 
-        let mut bindings: HashMap<KeyCombo, Action> = default_bindings(mod_key)
-            .into_iter()
-            .map(|(mut k, v)| {
-                k.normalize();
-                (k, v)
-            })
-            .collect();
+        let mut disable_keys = false;
+        let mut disable_mouse = false;
+        let mut disable_gestures = false;
+        for cat in raw.bindings.disable_defaults.into_iter().flatten() {
+            match cat.as_str() {
+                "keys" => disable_keys = true,
+                "mouse" => disable_mouse = true,
+                "gestures" => disable_gestures = true,
+                other => warn_and_collect!(
+                    "config: unknown bindings.disable_defaults category '{other}' \
+                     (expected \"keys\", \"mouse\", or \"gestures\")"
+                ),
+            }
+        }
+
+        let mut bindings: HashMap<KeyCombo, Action> = if disable_keys {
+            HashMap::new()
+        } else {
+            default_bindings(mod_key)
+                .into_iter()
+                .map(|(mut k, v)| {
+                    k.normalize();
+                    (k, v)
+                })
+                .collect()
+        };
 
         let mut tap_bindings: HashMap<Modifiers, Action> = HashMap::new();
         if let Some(user_bindings) = raw.keybindings {
@@ -389,7 +408,11 @@ impl Config {
         let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
         let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
         let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
-        let mut mouse_bindings = default_mouse_bindings(mod_key);
+        let mut mouse_bindings = if disable_mouse {
+            ContextBindings::empty()
+        } else {
+            default_mouse_bindings(mod_key)
+        };
         for (ctx, section) in [
             (BindingContext::OnWindow, raw.mouse.on_window),
             (BindingContext::OnCanvas, raw.mouse.on_canvas),
@@ -422,7 +445,11 @@ impl Config {
             }
         }
 
-        let mut gesture_bindings = default_gesture_bindings(mod_key);
+        let mut gesture_bindings = if disable_gestures {
+            ContextBindings::empty()
+        } else {
+            default_gesture_bindings(mod_key)
+        };
         for (ctx, section) in [
             (BindingContext::OnWindow, raw.gestures.on_window),
             (BindingContext::OnCanvas, raw.gestures.on_canvas),
@@ -520,6 +547,8 @@ impl Config {
             let t = &raw.input.touch;
             TouchSettings {
                 enable: t.enable.unwrap_or(true),
+                // `"none"` means auto-detect the touchscreen's output, same as unset.
+                map_to_output: t.map_to_output.clone().filter(|o| o.as_str() != "none"),
             }
         };
 

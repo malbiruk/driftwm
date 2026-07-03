@@ -181,6 +181,121 @@ fn toml_gesture_context_priority() {
     );
 }
 
+// ── [bindings] disable_defaults ──────────────────────────────────────────
+
+#[test]
+fn toml_disable_defaults_keys_clears_default_keybindings_only() {
+    let toml = r#"
+        [bindings]
+        disable_defaults = ["keys"]
+        [keybindings]
+        "Mod+x" = "close-window"
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+
+    assert!(
+        config
+            .lookup(&logo(), Keysym::from(keysyms::KEY_q))
+            .is_none(),
+        "default Mod+q should be gone when keys defaults are disabled"
+    );
+    assert!(
+        matches!(
+            config.lookup(&logo(), Keysym::from(keysyms::KEY_x)),
+            Some(Action::CloseWindow)
+        ),
+        "user-defined Mod+x should still resolve"
+    );
+    assert!(
+        matches!(
+            config.mouse_button_lookup_ctx(&alt(), BTN_RIGHT, BindingContext::OnWindow),
+            Some(MouseAction::ResizeWindow)
+        ),
+        "mouse defaults should survive disabling keys defaults"
+    );
+    assert!(
+        config
+            .gesture_lookup(
+                &ModifiersState::default(),
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::Anywhere,
+            )
+            .is_some(),
+        "gesture defaults should survive disabling keys defaults"
+    );
+}
+
+#[test]
+fn toml_disable_defaults_mouse_clears_default_mouse_bindings_only() {
+    let toml = r#"
+        [bindings]
+        disable_defaults = ["mouse"]
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+
+    assert!(
+        config
+            .mouse_button_lookup_ctx(&alt(), BTN_RIGHT, BindingContext::OnWindow)
+            .is_none(),
+        "default Alt+RightClick resize should be gone when mouse defaults are disabled"
+    );
+    assert!(
+        matches!(
+            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
+            Some(Action::CloseWindow)
+        ),
+        "key defaults should survive disabling mouse defaults"
+    );
+}
+
+#[test]
+fn toml_disable_defaults_gestures_clears_default_gestures_only() {
+    let toml = r#"
+        [bindings]
+        disable_defaults = ["gestures"]
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+
+    assert!(
+        config
+            .gesture_lookup(
+                &ModifiersState::default(),
+                &GestureTrigger::Swipe { fingers: 3 },
+                BindingContext::Anywhere,
+            )
+            .is_none(),
+        "default 3-finger swipe should be gone when gesture defaults are disabled"
+    );
+    assert!(
+        matches!(
+            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
+            Some(Action::CloseWindow)
+        ),
+        "key defaults should survive disabling gesture defaults"
+    );
+}
+
+#[test]
+fn toml_disable_defaults_unknown_category_warns_and_keeps_defaults() {
+    let toml = r#"
+        [bindings]
+        disable_defaults = ["typo"]
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+
+    assert!(
+        warnings.iter().any(|w| w.contains("typo")),
+        "an unknown disable_defaults category should produce a warning, got: {warnings:?}"
+    );
+    assert!(
+        matches!(
+            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
+            Some(Action::CloseWindow)
+        ),
+        "defaults should be untouched for an unknown category"
+    );
+}
+
 #[test]
 fn toml_old_flat_mouse_section_is_rejected() {
     let toml = r#"

@@ -453,6 +453,15 @@ impl DriftWm {
 
             self.tick_scroll_momentum_on(output, is_active, dt);
             self.tick_edge_pan_on(output, is_active);
+            // A fullscreen output's camera is locked (set_camera_on refuses to
+            // move it). Drop any pending pan/zoom target so it can't fire the
+            // moment fullscreen exits; the ticks then no-op on the None targets.
+            if self.fullscreen.contains_key(output) {
+                let mut os = output_state(output);
+                os.camera_target = None;
+                os.zoom_target = None;
+                os.zoom_animation_center = None;
+            }
             self.tick_zoom_animation_on(output, is_active, dt);
             self.tick_camera_animation_on(output, is_active, dt);
         }
@@ -475,11 +484,8 @@ impl DriftWm {
         };
         let Some(delta) = delta else { return };
 
-        {
-            let mut os = output_state(output);
-            os.camera.x += delta.x;
-            os.camera.y += delta.y;
-        }
+        let cam = output_state(output).camera;
+        self.set_camera_on(output, Point::from((cam.x + delta.x, cam.y + delta.y)));
 
         if is_active {
             let pos = self.seat.get_pointer().unwrap().current_location();
@@ -496,11 +502,11 @@ impl DriftWm {
             Point::from((velocity.x / os.zoom, velocity.y / os.zoom))
         };
 
-        {
-            let mut os = output_state(output);
-            os.camera.x += canvas_delta.x;
-            os.camera.y += canvas_delta.y;
-        }
+        let cam = output_state(output).camera;
+        self.set_camera_on(
+            output,
+            Point::from((cam.x + canvas_delta.x, cam.y + canvas_delta.y)),
+        );
 
         // Touch move: re-drive the grab instead of warping the (hidden) pointer.
         if self.redrive_touch_edge_pan(output) {
@@ -527,15 +533,13 @@ impl DriftWm {
         let dx = target.x - old_camera.x;
         let dy = target.y - old_camera.y;
 
-        {
-            let mut os = output_state(output);
-            if dx * dx + dy * dy < 0.25 {
-                os.camera = target;
-                os.camera_target = None;
-            } else {
-                os.camera = Point::from((old_camera.x + dx * factor, old_camera.y + dy * factor));
-            }
-        }
+        let new_camera = if dx * dx + dy * dy < 0.25 {
+            output_state(output).camera_target = None;
+            target
+        } else {
+            Point::from((old_camera.x + dx * factor, old_camera.y + dy * factor))
+        };
+        self.set_camera_on(output, new_camera);
 
         if is_active {
             let new_camera = output_state(output).camera;
@@ -576,10 +580,13 @@ impl DriftWm {
             let cx = current_center.x + (target_center.x - current_center.x) * factor;
             let cy = current_center.y + (target_center.y - current_center.y) * factor;
 
+            let cur_zoom = output_state(output).zoom;
+            self.set_camera_on(
+                output,
+                Point::from((cx - vc.x / cur_zoom, cy - vc.y / cur_zoom)),
+            );
             {
                 let mut os = output_state(output);
-                let cur_zoom = os.zoom;
-                os.camera = Point::from((cx - vc.x / cur_zoom, cy - vc.y / cur_zoom));
                 // Suppress camera_animation — we set camera directly
                 os.camera_target = None;
 

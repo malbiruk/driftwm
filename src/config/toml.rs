@@ -18,6 +18,7 @@ pub(super) struct ConfigFile {
     pub effects: EffectsFileConfig,
     pub backend: BackendFileConfig,
     pub autostart: Option<Vec<String>>,
+    pub bindings: BindingsFileConfig,
     pub keybindings: Option<HashMap<String, String>>,
     pub mouse: MouseFileConfig,
     pub gestures: GestureFileConfig,
@@ -27,6 +28,12 @@ pub(super) struct ConfigFile {
     pub window_placement: Option<String>,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct BindingsFileConfig {
+    pub disable_defaults: Option<Vec<String>>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -59,6 +66,7 @@ pub(super) struct InputConfig {
 #[serde(default, deny_unknown_fields)]
 pub(super) struct TouchDeviceFileConfig {
     pub enable: Option<bool>,
+    pub map_to_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

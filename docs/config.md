@@ -190,6 +190,18 @@ Default: `true`
 
 enable touchscreen support
 
+### `map_to_output`
+
+Default: `"none"`
+
+pin touch to an output by connector name; "none" (default) auto-detects the touchscreen by physical size + connector. Only set this to tell apart two identically-sized touchscreens.
+
+**Example:**
+
+```toml
+map_to_output = "DP-2"
+```
+
 ## `[cursor]`
 
 ### `theme`
@@ -548,6 +560,20 @@ Honor a shader's output alpha so transparent pixels reveal whatever sits below t
 Default: `128`
 
 Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers, with LRU eviction. Raise it for sharper revisits on large / HiDPI displays; lower it on memory-constrained machines (too low just keeps the background blurrier).
+
+## `[bindings]`
+
+### `disable_defaults`
+
+Default: `[]`
+
+Opt out of built-in default bindings by category, for a clean slate. Normally your [keybindings]/[mouse]/[gestures] entries merge with the built-ins (use `= "none"` to drop a single default). Listing a category here removes ALL of that category's defaults, leaving only your own entries. Categories: "keys", "mouse", "gestures".
+
+**Example: bring your own keyboard scheme, keep mouse + gesture defaults**
+
+```toml
+disable_defaults = ["keys"]
+```
 
 ## `[keybindings]`
 

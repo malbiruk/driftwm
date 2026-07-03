@@ -436,7 +436,9 @@ impl XdgShellHandler for DriftWm {
             let Some(initial_window_location) = self.space.element_location(&window) else {
                 return;
             };
-            let Some(output) = self.touch_output() else {
+            // The initiating touch-down resolved and stored the touch's output as
+            // the focused output; reuse it (no input device on this client path).
+            let Some(output) = self.active_output() else {
                 return;
             };
             // The finger's `down` was forwarded to the client (Forward mode), and

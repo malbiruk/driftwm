@@ -7,6 +7,17 @@ pub struct SnapRect {
     pub y_high: f64,
 }
 
+impl SnapRect {
+    /// True when the two rects share positive-area overlap (touching edges
+    /// don't count).
+    pub fn overlaps(&self, other: &SnapRect) -> bool {
+        self.x_low < other.x_high
+            && other.x_low < self.x_high
+            && self.y_low < other.y_high
+            && other.y_low < self.y_high
+    }
+}
+
 /// Parameters for snap candidate search along one axis.
 pub struct SnapParams<'a> {
     pub extent: f64,

@@ -79,6 +79,12 @@
 
 [input.touch]
 # enable = true               # enable touchscreen support
+# map_to_output = "none"      # pin touch to an output by connector name;
+                              # "none" (default) auto-detects the touchscreen by
+                              # physical size + connector. Only set this to tell
+                              # apart two identically-sized touchscreens.
+# # Example:
+# # map_to_output = "DP-2"
 
 [cursor]
 # theme = "none"             # XCURSOR_THEME; "none" = inherit from environment (e.g. "Adwaita")
@@ -223,6 +229,16 @@
 # # lower it on memory-constrained machines (too low just keeps the background
 # # blurrier).
 # cache_budget_mb = 128
+
+[bindings]
+# # Opt out of built-in default bindings by category, for a clean slate.
+# # Normally your [keybindings]/[mouse]/[gestures] entries merge with the
+# # built-ins (use `= "none"` to drop a single default). Listing a category
+# # here removes ALL of that category's defaults, leaving only your own entries.
+# # Categories: "keys", "mouse", "gestures".
+# disable_defaults = []
+# # Example: bring your own keyboard scheme, keep mouse + gesture defaults
+# # disable_defaults = ["keys"]
 
 [keybindings]
 # # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"

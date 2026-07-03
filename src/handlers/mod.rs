@@ -3,11 +3,6 @@ pub mod compositor;
 pub mod layer_shell;
 pub mod xdg_shell;
 
-/// Skip the pan on xdg-activation only when the activated window is already
-/// fully inside the viewport. Any clipping → animate the camera to bring it
-/// fully into view; the activating client is asking the user to look at it.
-const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
-
 use crate::state::{DriftWm, FocusTarget};
 use driftwm::window_ext::WindowExt;
 use smithay::wayland::seat::WaylandFocus;
@@ -90,9 +85,14 @@ impl SeatHandler for DriftWm {
             && matches!(&image, CursorImageStatus::Named(icon) if *icon == CursorIcon::Default)
         {
             self.cursor.cursor_status = CursorImageStatus::Named(CursorIcon::Wait);
-            return;
+        } else {
+            self.cursor.cursor_status = image;
         }
-        self.cursor.cursor_status = image;
+        // A wp_cursor_shape change (set_shape) commits no buffer, so nothing
+        // else marks the scene dirty; without this the new cursor isn't
+        // composited until the next unrelated damage. Surface cursors dodge
+        // this via their own buffer commit.
+        self.mark_all_dirty();
     }
 
     fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
@@ -286,14 +286,7 @@ impl XdgActivationHandler for DriftWm {
             if window.geometry().size.w == 0 || window.geometry().size.h == 0 {
                 return;
             }
-            let mostly_visible =
-                self.window_visible_at_least(&window, ACTIVATION_VISIBLE_THRESHOLD);
-            if mostly_visible {
-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                self.raise_and_focus(&window, serial);
-            } else {
-                self.navigate_to_window(&window, self.config.zoom_reset_on_activation);
-            }
+            self.activate_window_output_local(&window);
         }
     }
 }
@@ -629,7 +622,7 @@ impl ForeignToplevelHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
             .cloned();
         if let Some(window) = window {
-            self.navigate_to_window(&window, self.config.zoom_reset_on_activation);
+            self.activate_window_output_local(&window);
         }
     }
 

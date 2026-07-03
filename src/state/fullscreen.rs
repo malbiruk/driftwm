@@ -223,6 +223,14 @@ impl DriftWm {
             let mut os = super::output_state(output);
             os.camera = fs.saved_camera;
             os.zoom = fs.saved_zoom;
+            // Match the enter path's clean slate: drop any animation targets
+            // that were set while the camera was locked (e.g. an activation
+            // aimed at this output). The per-tick fullscreen clear handles the
+            // steady state, but an exit in the same dispatch cycle — before any
+            // tick — would otherwise animate a spurious jump to the stale target.
+            os.camera_target = None;
+            os.zoom_target = None;
+            os.zoom_animation_center = None;
         }
         // Re-pin if it was pinned before fullscreen, then snap its Space loc
         // back to screen_pos (update_output_from_camera's sync only fires on a

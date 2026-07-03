@@ -591,6 +591,20 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 // and the navigation recognizer measures from a fresh baseline.
                 let crossed_system = prev_max < 3 && self.max_fingers >= 3;
                 let crossed_nav = prev_max < 4 && self.max_fingers >= 4;
+                // Exit fullscreen before a 3+ finger system gesture so the pan/zoom
+                // acts on the restored canvas instead of sliding the parked fullscreen
+                // window off its camera origin. Stash the exited window so a 4-finger
+                // nav firing right after can still anchor to it. Uses the touch output,
+                // which may differ from the active/pointer output.
+                if crossed_system
+                    && let Some(window) = data
+                        .fullscreen
+                        .get(&self.output)
+                        .map(|fs| fs.window.clone())
+                {
+                    data.gesture_exited_fullscreen = Some(window);
+                    data.exit_fullscreen_on(&self.output);
+                }
                 if self.points.len() == 1 || crossed_system || crossed_nav {
                     self.active = false;
                     self.zoom_engaged = false;

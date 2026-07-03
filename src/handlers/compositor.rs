@@ -317,6 +317,7 @@ impl CompositorHandler for DriftWm {
                     };
 
                     let mut placed_at_cursor = false;
+                    let mut place_in_background = false;
                     // One-shot: when a rule forces a size, first commit
                     // arrives at the client's preferred size; configure with
                     // the rule size and defer positioning/decoration/nav to
@@ -405,16 +406,24 @@ impl CompositorHandler for DriftWm {
                                 } else {
                                     0
                                 };
-                            let cursor_pos = if matches!(
-                                self.config.window_placement,
-                                driftwm::config::WindowPlacement::Cursor
-                            ) {
+                            // Fullscreen takes precedence over the auto/cursor/
+                            // center placement handled here: a new window must
+                            // never land on top of a fullscreen window on its own
+                            // output.
+                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, bar_px);
+                            place_in_background = bg_pos.is_some();
+                            let cursor_pos = if bg_pos.is_none()
+                                && matches!(
+                                    self.config.window_placement,
+                                    driftwm::config::WindowPlacement::Cursor
+                                ) {
                                 self.cursor_placement_pos(geo.size, bar_px)
                             } else {
                                 None
                             };
                             placed_at_cursor = cursor_pos.is_some();
-                            let auto_pos = if cursor_pos.is_none()
+                            let auto_pos = if bg_pos.is_none()
+                                && cursor_pos.is_none()
                                 && matches!(
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
@@ -423,7 +432,7 @@ impl CompositorHandler for DriftWm {
                             } else {
                                 None
                             };
-                            let placed = cursor_pos.or(auto_pos).unwrap_or_else(|| {
+                            let placed = bg_pos.or(cursor_pos).or(auto_pos).unwrap_or_else(|| {
                                 let output_geo = self
                                     .active_output()
                                     .and_then(|o| self.space.output_geometry(&o));
@@ -440,9 +449,18 @@ impl CompositorHandler for DriftWm {
                                     (0, 0)
                                 }
                             });
-                            self.cascade_position(placed, &window)
+                            if place_in_background {
+                                // Already anchored to the fullscreen window's
+                                // saved home; cascade would only fight that.
+                                placed
+                            } else {
+                                self.cascade_position(placed, &window)
+                            }
                         };
-                        let activate = applied.as_ref().is_none_or(|a| !a.widget);
+                        // Background-placed windows never activate: keep the
+                        // fullscreen window focused and on top.
+                        let activate =
+                            !place_in_background && applied.as_ref().is_none_or(|a| !a.widget);
                         self.space.map_element(window.clone(), pos, activate);
                     }
 
@@ -531,6 +549,7 @@ impl CompositorHandler for DriftWm {
                             || self.pending_fullscreen.contains_key(&root);
                         if !is_widget
                             && !is_fullscreen
+                            && !place_in_background
                             && !deferred_fit_or_fs
                             && !self.pinned.contains_key(&root.id())
                         {
@@ -596,6 +615,8 @@ impl CompositorHandler for DriftWm {
                         self.pending_recenter.remove(&root.id());
                     }
                 }
+
+                self.reflow_grown_snapped_window(&window, &root);
             }
         }
 
@@ -843,6 +864,101 @@ impl DriftWm {
                     .replace(ResizeState::Idle);
             });
             self.refresh_stable_snap_rect(window);
+        }
+    }
+
+    /// A snapped window that resizes *itself* larger — not via a resize grab —
+    /// can grow over its neighbors. The classic case is a game that maps at a
+    /// small size then jumps to its full render resolution a frame later. Move
+    /// it beside its former cluster so the snap gaps survive, and recenter the
+    /// camera if it's the focused window.
+    ///
+    /// No-ops unless the footprint actually grew into an overlap: shrinks and
+    /// grows into free space keep their position. Resize-grab motion (and its
+    /// cluster cascade) is owned by `handle_resize_commit`, so this fires only
+    /// on `ResizeState::Idle`.
+    fn reflow_grown_snapped_window(
+        &mut self,
+        window: &smithay::desktop::Window,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        let resize_state = with_states(surface, |states| {
+            *states
+                .data_map
+                .get_or_insert(|| RefCell::new(ResizeState::Idle))
+                .borrow()
+        });
+        if !matches!(resize_state, ResizeState::Idle) {
+            return;
+        }
+        if self.is_window_fullscreen(window) || crate::state::fit::is_fit(window) {
+            return;
+        }
+
+        let Some(&stable) = self.stable_snap_rects.get(&surface.id()) else {
+            return;
+        };
+        // `snap_rect_for` returns `None` for widgets / pinned / fullscreen, so
+        // this also filters those out.
+        let Some(current) = self.snap_rect_for(window) else {
+            return;
+        };
+
+        // Cheap early-out: `commit` runs on every frame, so bail before any
+        // cluster math unless the footprint grew past its settled size.
+        const EPS: f64 = 1.0;
+        let grew = (current.x_high - current.x_low) > (stable.x_high - stable.x_low) + EPS
+            || (current.y_high - current.y_low) > (stable.y_high - stable.y_low) + EPS;
+        if !grew {
+            return;
+        }
+
+        let gap = self.config.snap_gap;
+        let others: Vec<(smithay::desktop::Window, driftwm::layout::snap::SnapRect)> = self
+            .space
+            .elements()
+            .filter(|w| *w != window)
+            .filter_map(|w| self.snap_rect_for(w).map(|r| (w.clone(), r)))
+            .collect();
+
+        // Gate on "was snapped", measured from the pre-grow (stable) rect: the
+        // grown rect may already overlap a neighbor and no longer read as
+        // edge-adjacent. The first such neighbor also anchors re-placement.
+        let anchor = others
+            .iter()
+            .find(|(_, r)| driftwm::layout::cluster::adjacent_side(&stable, r, gap).is_some())
+            .map(|(w, _)| w.clone());
+        let Some(anchor) = anchor else {
+            return;
+        };
+
+        // Only reflow when the grow actually collided; growing into free space
+        // keeps the window put.
+        if !others.iter().any(|(_, r)| current.overlaps(r)) {
+            return;
+        }
+
+        let content_size = window.geometry().size;
+        let bar = self.window_ssd_bar(window);
+        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, bar) else {
+            return;
+        };
+        let new_loc = Point::from((x, y));
+        if self.space.element_location(window) == Some(new_loc) {
+            return;
+        }
+        self.space.map_element(window.clone(), new_loc, false);
+        self.refresh_stable_snap_rect(window);
+
+        // Recenter only when the reflow pushed the focused window (partly) out
+        // of view — a large jump (the game landing beside its neighbor) follows
+        // the window; an in-view nudge (sidebar toggle, font bump) leaves the
+        // camera alone. `0.999` absorbs subpixel rounding at the viewport edge.
+        const FULLY_VISIBLE: f64 = 0.999;
+        if self.focused_window().as_ref() == Some(window)
+            && !self.window_visible_at_least(window, FULLY_VISIBLE)
+        {
+            self.navigate_to_window(window, false);
         }
     }
 }

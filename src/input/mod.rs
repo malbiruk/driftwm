@@ -112,7 +112,10 @@ impl DriftWm {
     }
 
     /// Process a single input event from any backend (winit, libinput, etc).
-    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>) {
+    pub fn process_input_event<I: InputBackend>(&mut self, event: InputEvent<I>)
+    where
+        I::Device: 'static,
+    {
         if !self.is_relative_motion_to_locked_pointer(&event) {
             self.mark_all_dirty();
         }

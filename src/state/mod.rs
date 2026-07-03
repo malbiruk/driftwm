@@ -8,8 +8,10 @@ mod fullscreen;
 mod init;
 mod navigation;
 pub mod persistence;
+mod placement;
 mod reload;
 mod render_cache;
+mod viewport;
 pub use cluster_snapshot::ClusterResizeSnapshot;
 pub use cursor::{CursorFrames, CursorState};
 pub use errors::ErrorSource;
@@ -808,10 +810,21 @@ impl DriftWm {
             g.grab.ungrab(PopupUngrabStrategy::All);
             let time = self.start_time.elapsed().as_millis() as u32;
             self.seat.get_keyboard().unwrap().unset_grab(self);
-            self.seat
-                .get_pointer()
-                .unwrap()
-                .unset_grab(self, serial, time);
+            // Defer the pointer ungrab to an idle: a focus change can originate
+            // inside a PointerGrab's own callback (NavigateGrab's center-nearest
+            // drag and PanGrab's click-on-empty-canvas both move focus from their
+            // motion/button), and PointerHandle holds a non-reentrant mutex across
+            // that callback. Calling `unset_grab` inline would re-lock it on the
+            // same thread and hang the compositor; the idle runs once dispatch
+            // unwinds and the lock is free. Whatever owns the pointer by then —
+            // the popup grab on the keyboard path or the drag grab itself on the
+            // mouse path — has finished interacting, so ending it is harmless.
+            self.loop_handle.insert_idle(move |data| {
+                data.seat
+                    .get_pointer()
+                    .unwrap()
+                    .unset_grab(data, serial, time);
+            });
         }
 
         // Focus staying on the grab root: a live grab keeps ownership (it rejects
@@ -1416,108 +1429,6 @@ impl DriftWm {
         Some(f(&mut guard))
     }
 
-    // Per-output field accessors. Getters fall back to a sensible default
-    // when no output exists; setters silently no-op. Hotplug/lid-close races
-    // briefly leave the compositor with zero outputs — must not panic then.
-    pub fn camera(&self) -> Point<f64, Logical> {
-        self.active_output()
-            .map(|o| output_state(&o).camera)
-            .unwrap_or_default()
-    }
-    pub fn set_camera(&mut self, val: Point<f64, Logical>) {
-        if let Some(o) = self.active_output() {
-            // Invariant: a fullscreen window is parked at its output's
-            // camera-origin at zoom 1, so the camera must not move or it slides
-            // off (0,0) and re-exposes to other cameras. Nav paths that reach
-            // set_camera already exit fullscreen first; this is a backstop so a
-            // future set_camera caller can't silently reintroduce the bleed.
-            // (`enter_fullscreen` snaps via output_state directly to bypass it.)
-            if self.fullscreen.contains_key(&o) {
-                return;
-            }
-            output_state(&o).camera = val;
-        }
-    }
-    pub fn zoom(&self) -> f64 {
-        // 1.0 default (not 0.0) avoids divide-by-zero in `step / zoom` callers.
-        self.active_output()
-            .map(|o| output_state(&o).zoom)
-            .unwrap_or(1.0)
-    }
-    pub fn set_zoom(&mut self, val: f64) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).zoom = val;
-        }
-    }
-    pub fn zoom_target(&self) -> Option<f64> {
-        self.active_output()
-            .and_then(|o| output_state(&o).zoom_target)
-    }
-    pub fn set_zoom_target(&mut self, val: Option<f64>) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).zoom_target = val;
-        }
-    }
-    pub fn zoom_animation_center(&self) -> Option<Point<f64, Logical>> {
-        self.active_output()
-            .and_then(|o| output_state(&o).zoom_animation_center)
-    }
-    pub fn set_zoom_animation_center(&mut self, val: Option<Point<f64, Logical>>) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).zoom_animation_center = val;
-        }
-    }
-    pub fn overview_return(&self) -> Option<(Point<f64, Logical>, f64)> {
-        self.active_output()
-            .and_then(|o| output_state(&o).overview_return)
-    }
-    pub fn set_overview_return(&mut self, val: Option<(Point<f64, Logical>, f64)>) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).overview_return = val;
-        }
-    }
-    pub fn camera_target(&self) -> Option<Point<f64, Logical>> {
-        self.active_output()
-            .and_then(|o| output_state(&o).camera_target)
-    }
-    pub fn set_camera_target(&mut self, val: Option<Point<f64, Logical>>) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).camera_target = val;
-        }
-    }
-    pub fn last_scroll_pan(&self) -> Option<Instant> {
-        self.active_output()
-            .and_then(|o| output_state(&o).last_scroll_pan)
-    }
-    pub fn set_last_scroll_pan(&mut self, val: Option<Instant>) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).last_scroll_pan = val;
-        }
-    }
-    pub fn panning(&self) -> bool {
-        self.active_output()
-            .is_some_and(|o| output_state(&o).panning)
-    }
-    pub fn set_panning(&mut self, val: bool) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).panning = val;
-        }
-    }
-    pub fn edge_pan_velocity(&self) -> Option<Point<f64, Logical>> {
-        self.active_output()
-            .and_then(|o| output_state(&o).edge_pan_velocity)
-    }
-    pub fn last_frame_instant(&self) -> Instant {
-        self.active_output()
-            .map(|o| output_state(&o).last_frame_instant)
-            .unwrap_or_else(Instant::now)
-    }
-    pub fn set_last_frame_instant(&mut self, val: Instant) {
-        if let Some(o) = self.active_output() {
-            output_state(&o).last_frame_instant = val;
-        }
-    }
-
     /// Sync each output's position to its camera so render_output
     /// applies the canvas→screen transform.
     pub fn update_output_from_camera(&mut self) {
@@ -1637,7 +1548,14 @@ impl DriftWm {
 
     /// Screen-space center of the usable area (= viewport center when no panels exist).
     pub fn usable_center_screen(&self) -> Point<f64, Logical> {
-        let usable = self.get_usable_area();
+        self.active_output()
+            .map(|o| self.usable_center_screen_on(&o))
+            .unwrap_or_else(|| Point::from((0.5, 0.5)))
+    }
+
+    /// Screen-space center of `output`'s usable area (viewport minus panels).
+    pub fn usable_center_screen_on(&self, output: &Output) -> Point<f64, Logical> {
+        let usable = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
         Point::from((
             usable.loc.x as f64 + usable.size.w as f64 / 2.0,
             usable.loc.y as f64 + usable.size.h as f64 / 2.0,
@@ -1703,178 +1621,32 @@ impl DriftWm {
         )))
     }
 
-    /// True if at least `threshold` of the window's area is inside the viewport.
+    /// True if at least `threshold` of the window's area is inside the active
+    /// output's viewport.
     pub fn window_visible_at_least(&self, window: &Window, threshold: f64) -> bool {
+        self.active_output()
+            .is_some_and(|o| self.window_visible_at_least_on(window, &o, threshold))
+    }
+
+    /// As `window_visible_at_least`, but against `output`'s viewport instead
+    /// of the active one.
+    pub fn window_visible_at_least_on(
+        &self,
+        window: &Window,
+        output: &Output,
+        threshold: f64,
+    ) -> bool {
         let Some(loc) = self.space.element_location(window) else {
             return false;
         };
+        let os = output_state(output);
         driftwm::canvas::visible_fraction(
             loc,
             window.geometry().size,
-            self.camera(),
-            self.get_viewport_size(),
-            self.zoom(),
+            os.camera,
+            output_logical_size(output),
+            os.zoom,
         ) >= threshold
-    }
-
-    /// Spawn pos for `placement = "cursor"`: center the visual frame
-    /// (titlebar + content) on the cursor, clamped to the active output's
-    /// usable rect. `bar` is SSD title-bar height (0 for CSD/minimal).
-    pub fn cursor_placement_pos(
-        &self,
-        window_size: Size<i32, Logical>,
-        bar: i32,
-    ) -> Option<(i32, i32)> {
-        self.active_output()?;
-
-        let pointer = self.seat.get_pointer()?;
-        let cursor = pointer.current_location();
-
-        // usable area is screen-local; convert to canvas coords.
-        let usable = self.get_usable_area();
-        let zoom = self.zoom();
-        let camera = self.camera();
-        let cx_min = camera.x + usable.loc.x as f64 / zoom;
-        let cy_min = camera.y + usable.loc.y as f64 / zoom;
-        let cx_max = camera.x + (usable.loc.x + usable.size.w) as f64 / zoom;
-        let cy_max = camera.y + (usable.loc.y + usable.size.h) as f64 / zoom;
-
-        // Target: visual frame center on cursor. Frame spans [loc.y - bar, loc.y + h],
-        // so frame center = loc.y + (h - bar)/2  →  loc.y = cursor.y - h/2 + bar/2.
-        let bar_f = bar as f64;
-        let raw_x = cursor.x - window_size.w as f64 / 2.0;
-        let raw_y = cursor.y - window_size.h as f64 / 2.0 + bar_f / 2.0;
-
-        // Clamp so the frame stays fully inside the usable canvas rect.
-        // For oversized windows, .max() keeps the upper bound >= lower bound
-        // (the top sticks at the usable edge; the bottom overflows).
-        let max_x = (cx_max - window_size.w as f64).max(cx_min);
-        let max_y = (cy_max - window_size.h as f64).max(cy_min + bar_f);
-        let x = raw_x.clamp(cx_min, max_x);
-        let y = raw_y.clamp(cy_min + bar_f, max_y);
-
-        Some((x.round() as i32, y.round() as i32))
-    }
-
-    /// Spawn pos for `placement = "auto"`: snap-place adjacent to the focused
-    /// window's cluster. Returns content top-left (shifted down by `bar` so
-    /// the visual frame snaps to the neighbor). `None` on no eligible focus
-    /// or no valid placement; caller falls back to center.
-    ///
-    /// `new_window` is excluded from anchor search and obstacle list. Without
-    /// the skip we'd anchor the new window against itself, since by the time
-    /// this runs `new_window` is already at the viewport center and front of
-    /// `focus_history`.
-    pub fn auto_placement_pos(
-        &self,
-        new_window: &Window,
-        new_size: Size<i32, Logical>,
-        bar: i32,
-    ) -> Option<(i32, i32)> {
-        // Anchor = keyboard focus at `new_toplevel` time, snapshotted before
-        // focus was reassigned to the new surface. `None` (or absent) means
-        // no anchor and caller falls back to center.
-        let new_surface = new_window.wl_surface()?.into_owned();
-        let focused = self.auto_anchor_snapshot.get(&new_surface)?.as_ref()?;
-        let widget = focused
-            .wl_surface()
-            .and_then(|s| driftwm::config::applied_rule(&s))
-            .is_some_and(|r| r.widget);
-        let is_fs = self.is_window_fullscreen(focused);
-        if widget || is_fs || self.is_pinned(focused) {
-            return None;
-        }
-
-        // Only anchor when enough of the focused window is visible that the
-        // user is plausibly working on its cluster; otherwise they intend a
-        // fresh cluster and caller falls back to center.
-        if !self.window_visible_at_least(focused, AUTO_PLACE_CLUSTER_THRESHOLD) {
-            return None;
-        }
-
-        // Widgets sit visually below windows (wallpaper-like) — neither
-        // anchors nor obstacles for auto placement.
-        let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
-        let mut eligible: HashSet<usize> = HashSet::new();
-        let mut focused_idx: Option<usize> = None;
-        for w in self.space.elements() {
-            if w == new_window {
-                continue;
-            }
-            let widget = w
-                .wl_surface()
-                .and_then(|s| driftwm::config::applied_rule(&s))
-                .is_some_and(|r| r.widget);
-            let is_fs = self.is_window_fullscreen(w);
-            if widget || is_fs || self.is_pinned(w) {
-                continue;
-            }
-            let Some(loc) = self.space.element_location(w) else {
-                continue;
-            };
-            let size = w.geometry().size;
-            let b = self.window_ssd_bar(w);
-            let bw = w.wl_surface().map_or(0, |s| self.window_border_width(&s)) as f64;
-            let idx = rects.len();
-            rects.push(driftwm::layout::auto_placement::Rect {
-                x: loc.x as f64 - bw,
-                y: (loc.y - b) as f64 - bw,
-                w: size.w as f64 + 2.0 * bw,
-                h: (size.h + b) as f64 + 2.0 * bw,
-            });
-            eligible.insert(idx);
-            if w == focused {
-                focused_idx = Some(idx);
-            }
-        }
-        let focused_idx = focused_idx?;
-
-        let new_bw = self.window_border_width(&new_surface) as f64;
-        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
-        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
-
-        let camera = self.camera();
-        let zoom = self.zoom();
-        let vc_screen = self.usable_center_screen();
-        let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
-
-        let pos = driftwm::layout::auto_placement::place_auto(
-            &rects,
-            focused_idx,
-            &eligible,
-            new_w_f,
-            new_h_f,
-            vc,
-            self.config.snap_gap,
-        )?;
-
-        // place_auto returns frame top-left (outside border, above title bar);
-        // shift inward to content top-left.
-        let bw_i = new_bw as i32;
-        Some((
-            pos.0.round() as i32 + bw_i,
-            pos.1.round() as i32 + bw_i + bar,
-        ))
-    }
-
-    /// Walk a spawn position in title-bar-sized diagonal steps until it
-    /// doesn't sit on top of an existing window.
-    pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
-        let step = self.config.decorations.title_bar_height;
-        loop {
-            let dominated = self.space.elements().any(|w| {
-                w != skip
-                    && self
-                        .space
-                        .element_location(w)
-                        .is_some_and(|loc| (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2)
-            });
-            if !dominated {
-                break pos;
-            }
-            pos.0 += step;
-            pos.1 += step;
-        }
     }
 
     pub fn load_xcursor(&mut self, name: &str) -> Option<&CursorFrames> {
