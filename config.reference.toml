@@ -524,7 +524,7 @@
 # # ALL matching rules are merged in config order (later rules override earlier
 # # ones for scalar fields; boolean flags are sticky-on). This lets you compose
 # # rules — e.g. one rule sets blur=true, a later one adds opacity=0.85.
-
+# #
 # # Match criteria (at least one required; all specified must match):
 # #   app_id     — Wayland app_id. X11 apps proxied via xwayland-satellite arrive
 # #                with app_id set from WM_CLASS instance (typically lowercase).
