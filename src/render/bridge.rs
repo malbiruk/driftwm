@@ -1,11 +1,28 @@
 use smithay::backend::renderer::element::{Element, Id, Kind, RenderElement, UnderlyingStorage};
 use smithay::backend::renderer::gles::{GlesError, GlesFrame, GlesRenderer};
 use smithay::backend::renderer::utils::{CommitCounter, DamageSet, OpaqueRegions};
+use smithay::backend::renderer::{Color32F, Frame};
 use smithay::utils::user_data::UserDataMap;
 use smithay::utils::{Buffer, Physical, Point, Rectangle, Scale, Transform};
 
 use crate::backend::udev::{MultiGpuFrame, MultiGpuRenderer, MultiGpuRendererError};
 use crate::render::renderer::AsGlesFrame;
+
+/// Record damage on the MultiFrame for pixels drawn behind its back.
+///
+/// The MultiFrame's cross-GPU `finish()` only PRIME-copies regions drawn
+/// through its own methods; anything painted via `as_gles_frame()` bypasses
+/// that tracking, so on a secondary-GPU output those pixels would never reach
+/// the scanout buffer (stale trails wherever only bridged elements repaint).
+/// A fully transparent `draw_solid` records the damage without visual effect
+/// (blending stays enabled for non-opaque colors).
+pub fn record_bridged_damage<'render>(
+    frame: &mut MultiGpuFrame<'render, '_, '_>,
+    dst: Rectangle<i32, Physical>,
+    damage: &[Rectangle<i32, Physical>],
+) -> Result<(), MultiGpuRendererError<'render>> {
+    frame.draw_solid(dst, damage, Color32F::TRANSPARENT)
+}
 
 // Adapts a Gles-only element (custom shaders, blur texture) to the multi-GPU
 // renderer. These elements are pure effects that always render on the primary
@@ -96,6 +113,7 @@ where
         opaque_regions: &[Rectangle<i32, Physical>],
         cache: Option<&UserDataMap>,
     ) -> Result<(), MultiGpuRendererError<'render>> {
+        record_bridged_damage(frame, dst, damage)?;
         let frame = frame.as_gles_frame();
         RenderElement::<GlesRenderer>::draw(
             &self.0,

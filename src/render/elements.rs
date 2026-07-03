@@ -200,6 +200,7 @@ impl<'render> RenderElement<MultiGpuRenderer<'render>> for TileShaderElement {
         opaque_regions: &[Rectangle<i32, Physical>],
         _user_data: Option<&smithay::utils::user_data::UserDataMap>,
     ) -> Result<(), MultiGpuRendererError<'render>> {
+        crate::render::bridge::record_bridged_damage(frame, dst, damage)?;
         let frame = frame.as_gles_frame();
         frame.render_texture_from_to(
             &self.texture,
