@@ -573,6 +573,12 @@ Default: `128`
 
 Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers, with LRU eviction. Raise it for sharper revisits on large / HiDPI displays; lower it on memory-constrained machines (too low just keeps the background blurrier).
 
+### `animate_fps`
+
+Default: `0`
+
+Frame-rate cap for animated (`u_time`) shader backgrounds. 0 = every output frame (default). Slow-moving shaders look identical well below the refresh rate; between ticks the compositor reuses the composited result instead of re-evaluating the shader, so this directly scales the background's GPU cost.
+
 ## `[bindings]`
 
 ### `disable_defaults`

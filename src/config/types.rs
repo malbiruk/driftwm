@@ -1017,4 +1017,9 @@ pub struct BackgroundConfig {
     /// shader-bake cache (`cache_shader`) and gigapixel-TIFF wallpapers. The
     /// cache LRU-evicts to stay under this; lower it on low-memory machines.
     pub cache_budget_mb: u32,
+    /// Frame-rate cap for animated (`u_time`) background shaders. 0 = every
+    /// output frame (default). Slow-moving shaders look identical well below
+    /// the refresh rate, and between animation ticks the compositor reuses the
+    /// composited result instead of re-evaluating the shader.
+    pub animate_fps: u32,
 }

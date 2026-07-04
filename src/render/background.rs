@@ -168,7 +168,10 @@ impl BackgroundElement {
 }
 
 /// Update the cached background element for the current camera/zoom.
-/// Returns (camera_moved, zoom_changed) for the caller's damage logic.
+/// Returns (camera_moved, zoom_changed, animated) for the caller's damage
+/// logic. `animated` reports whether this call advanced the animation —
+/// callers can't re-check `background_animation_due` afterwards because the
+/// stamp below has already consumed the tick.
 pub fn update_background_element(
     state: &mut crate::state::DriftWm,
     output: &Output,
@@ -176,7 +179,7 @@ pub fn update_background_element(
     cur_zoom: f64,
     last_rendered_camera: Point<f64, Logical>,
     last_rendered_zoom: f64,
-) -> (bool, bool) {
+) -> (bool, bool, bool) {
     let camera_moved = cur_camera != last_rendered_camera;
     let zoom_changed = cur_zoom != last_rendered_zoom;
     let output_name = output.name();
@@ -188,9 +191,19 @@ pub fn update_background_element(
     // Only push uniforms the shader actually consumes — update_uniforms bumps
     // the element's CommitCounter, which would damage the full-screen bg every
     // frame and force re-composition of every element above (blur especially).
+    // Animated shaders advance only when their fps budget allows; between
+    // ticks the CommitCounter stays put and the compositor reuses the last
+    // composited result instead of re-evaluating the shader every frame.
+    let animate_due = state.background_animation_due(&output_name);
+    if animate_due {
+        state
+            .render
+            .background_last_animate
+            .insert(output_name.clone(), std::time::Instant::now());
+    }
     let uniforms_stale = (camera_moved && state.render.background_uses_camera)
         || (zoom_changed && state.render.background_uses_zoom)
-        || state.render.background_is_animated;
+        || animate_due;
 
     let frame = BgFrame {
         canvas_area,
@@ -207,7 +220,7 @@ pub fn update_background_element(
     if let Some(bg) = state.render.cached_bg.get_mut(&output_name) {
         bg.update(&frame);
     }
-    (camera_moved, zoom_changed)
+    (camera_moved, zoom_changed, animate_due)
 }
 
 /// Compile background shader and/or load tile/wallpaper image.

@@ -42,6 +42,14 @@ pub struct RenderCache {
     /// scaling with the number of blurred windows. Keyed by output name —
     /// outputs differ in size and render on their own vblanks.
     pub shared_blur: HashMap<String, crate::render::SharedBlur>,
+    /// Per-output timestamp of the last animated-background uniform push
+    /// ([background] animate_fps). Keyed by output name: a single global
+    /// stamp would let one output's render satisfy the interval and starve
+    /// the others on multi-monitor setups.
+    pub background_last_animate: HashMap<String, std::time::Instant>,
+    /// A one-shot tick timer is armed for the next animation frame. Without
+    /// it the capped animation only advances alongside other redraws.
+    pub background_tick_armed: bool,
     pub shadow_cache: HashMap<ObjectId, ShadowCacheEntry>,
     pub border_cache: HashMap<ObjectId, BorderCacheEntry>,
     /// One element per output for the configured background (shader / tile /
@@ -79,6 +87,8 @@ impl RenderCache {
             blur_geometry_generation: 0,
             blur_camera_generation: HashMap::new(),
             shared_blur: HashMap::new(),
+            background_last_animate: HashMap::new(),
+            background_tick_armed: false,
             shadow_cache: HashMap::new(),
             border_cache: HashMap::new(),
             cached_bg: HashMap::new(),
@@ -124,6 +134,7 @@ impl RenderCache {
         self.shared_blur.remove(output_name);
         self.blur_cache.retain(|(out, _), _| out != output_name);
         self.blur_camera_generation.remove(output_name);
+        self.background_last_animate.remove(output_name);
         self.cached_error_bar.remove(output_name);
         self.remove_background_chunks(output_name);
         self.remove_capture_state(output_name);

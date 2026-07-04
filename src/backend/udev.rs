@@ -163,12 +163,50 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
             .any(|c| c.has_pending_bakes());
     if data.redraws_needed.is_empty()
         && !data.has_active_animations()
-        && !data.render.background_is_animated
+        && !data.background_animation_due_any()
         && !data.output_config_dirty
         && data.pending_dpms.is_empty()
         && !any_chunked_pending
         && !data.pending_pointer_resync
     {
+        // A capped animated background still needs a wake-up for its next
+        // tick: no event fires on an idle desktop, and without this the
+        // animation would only advance alongside other redraws (stutter).
+        let fps = data.config.background.animate_fps;
+        let eligible: Vec<String> = data.background_render_eligible_output_names().collect();
+        if data.render.background_is_animated
+            && fps > 0
+            && !data.render.background_tick_armed
+            && !eligible.is_empty()
+        {
+            let interval = Duration::from_secs_f64(1.0 / fps as f64);
+            // Wake for the soonest-due eligible output; stamps are per-output.
+            // A fullscreen/DPMS-off output's stamp goes stale forever once it
+            // stops rendering — excluding it here keeps a long-dead stamp
+            // from collapsing this to the 1ms floor and busy-rescheduling.
+            let elapsed = data
+                .render
+                .background_last_animate
+                .iter()
+                .filter(|(name, _)| eligible.contains(name))
+                .map(|(_, t)| t.elapsed())
+                .max()
+                .unwrap_or(interval);
+            let wait = interval
+                .saturating_sub(elapsed)
+                .max(Duration::from_millis(1));
+            if data
+                .loop_handle
+                .insert_source(Timer::from_duration(wait), |_, _, data: &mut DriftWm| {
+                    data.render.background_tick_armed = false;
+                    render_if_needed(data);
+                    TimeoutAction::Drop
+                })
+                .is_ok()
+            {
+                data.render.background_tick_armed = true;
+            }
+        }
         return;
     }
 
@@ -263,9 +301,8 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         // Fullscreen outputs skip the background entirely, so an animated bg
         // gives them nothing to redraw — marking them just burns battery.
         let dirty: Vec<_> = data
-            .active_outputs
-            .iter()
-            .filter(|o| !data.is_output_fullscreen(o))
+            .background_render_eligible_outputs()
+            .filter(|o| data.background_animation_due(&o.name()))
             .cloned()
             .collect();
         data.redraws_needed.extend(dirty);
@@ -1433,7 +1470,7 @@ fn render_frame(
     };
 
     // Update background element
-    let (camera_moved, zoom_changed) = crate::render::update_background_element(
+    let (camera_moved, zoom_changed, bg_animated) = crate::render::update_background_element(
         data, output, cur_camera, cur_zoom, last_cam, last_zoom,
     );
 
@@ -1449,7 +1486,9 @@ fn render_frame(
     // the background shader advances a frame the stale composited result is reused and
     // the background appears "frozen" inside those windows.
     // Fix: reset buffer ages so every pixel is redrawn from scratch this frame.
-    if data.render.background_is_animated {
+    // Only on frames where the animation actually advanced — between capped
+    // ticks the composited result is intentionally reused.
+    if bg_animated {
         let has_transparent = data.space.elements().any(|w| {
             w.wl_surface()
                 .as_deref()

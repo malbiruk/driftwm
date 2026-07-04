@@ -1155,6 +1155,55 @@ impl DriftWm {
             || os.momentum.velocity.y != 0.0
     }
 
+    /// True when `output_name`'s animated background is due for its next tick
+    /// under `[background] animate_fps` (0 = every frame). The timestamp is
+    /// stamped where the uniforms are actually pushed, in
+    /// `update_background_element`. Keyed per output: outputs render on their
+    /// own vblanks, and a global stamp would let whichever renders first
+    /// satisfy the interval and starve the rest.
+    pub fn background_animation_due(&self, output_name: &str) -> bool {
+        if !self.render.background_is_animated {
+            return false;
+        }
+        let fps = self.config.background.animate_fps;
+        if fps == 0 {
+            return true;
+        }
+        self.render
+            .background_last_animate
+            .get(output_name)
+            .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs_f64(1.0 / fps as f64))
+    }
+
+    /// Outputs whose animated background can actually render: active and not
+    /// fullscreen (fullscreen skips the background entirely, so it never
+    /// stamps `background_last_animate` and would otherwise look permanently
+    /// due). Shared by the idle due-check, the tick-timer arming wait, and
+    /// the per-frame dirty-marking so all three agree on which outputs count.
+    pub(crate) fn background_render_eligible_outputs(&self) -> impl Iterator<Item = &Output> {
+        self.active_outputs
+            .iter()
+            .filter(|o| !self.is_output_fullscreen(o))
+    }
+
+    /// Owned-name variant of [`Self::background_render_eligible_outputs`] for
+    /// callers outside this module that need to filter a name-keyed map
+    /// (e.g. `background_last_animate`) without holding a borrow of `self`.
+    pub fn background_render_eligible_output_names(&self) -> impl Iterator<Item = String> + '_ {
+        self.background_render_eligible_outputs().map(|o| o.name())
+    }
+
+    /// True when any eligible output's animated background is due (idle
+    /// wake-up check). Restricted to outputs that actually render the
+    /// background — a DPMS-off or fullscreen output never gets a
+    /// `background_last_animate` stamp, so including it here would read as
+    /// permanently due and defeat the idle fast path (see
+    /// `background_render_eligible_outputs`).
+    pub fn background_animation_due_any(&self) -> bool {
+        self.background_render_eligible_outputs()
+            .any(|o| self.background_animation_due(&o.name()))
+    }
+
     pub fn has_active_animations(&self) -> bool {
         self.space
             .outputs()

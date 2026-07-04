@@ -205,9 +205,10 @@ pub fn init_winit(
             };
 
             // --- Update cached background element ---
-            let (camera_moved, zoom_changed) = crate::render::update_background_element(
-                data, &output, cur_camera, cur_zoom, last_cam, last_zoom,
-            );
+            let (camera_moved, zoom_changed, bg_animated) =
+                crate::render::update_background_element(
+                    data, &output, cur_camera, cur_zoom, last_cam, last_zoom,
+                );
 
             // --- Take backend to split borrow from state ---
             let Backend::Winit(mut backend) = data.backend.take().unwrap() else {
@@ -231,7 +232,7 @@ pub fn init_winit(
             // Force full redraw when animated background is visible through transparent windows.
             // Without this, buffer-age optimisation reuses the stale composited result for
             // transparent windows — the background appears frozen inside them.
-            if age > 0 && data.render.background_is_animated {
+            if age > 0 && bg_animated {
                 let has_transparent = data.space.elements().any(|w| {
                     w.wl_surface()
                         .as_deref()

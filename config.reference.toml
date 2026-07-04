@@ -237,6 +237,12 @@
 # # blurrier).
 # cache_budget_mb = 128
 
+# # Frame-rate cap for animated (`u_time`) shader backgrounds. 0 = every output
+# # frame (default). Slow-moving shaders look identical well below the refresh
+# # rate; between ticks the compositor reuses the composited result instead of
+# # re-evaluating the shader, so this directly scales the background's GPU cost.
+# animate_fps = 0
+
 [bindings]
 # # Opt out of built-in default bindings by category, for a clean slate.
 # # Normally your [keybindings]/[mouse]/[gestures] entries merge with the

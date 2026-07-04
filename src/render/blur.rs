@@ -435,9 +435,21 @@ pub(crate) fn process_blur_requests(
         }
         if let Some(mut shared) = state.render.shared_blur.remove(&output_name) {
             let camera_moved = shared.camera_generation != camera_gen;
-            let due = shared
+            let time_due = shared
                 .refreshed_at
                 .is_none_or(|at| at.elapsed() >= min_interval);
+            // Also require the background to have actually ticked since the
+            // blur's last refresh: animate_blur_fps is independent of
+            // [background] animate_fps, so without this a faster blur
+            // throttle re-samples and re-blurs an unchanged background.
+            let bg_ticked_since_refresh = match (
+                state.render.background_last_animate.get(&output_name),
+                shared.refreshed_at,
+            ) {
+                (Some(bg_t), Some(blur_t)) => *bg_t > blur_t,
+                _ => true,
+            };
+            let due = time_due && bg_ticked_since_refresh;
             if due || camera_moved {
                 let mut rendered = false;
                 if let Ok(mut target) = renderer.bind(&mut shared.tex_a) {
