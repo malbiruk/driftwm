@@ -99,6 +99,25 @@ Every `RenderElement<MultiGpuRenderer>::draw` impl that goes through
 transparent `draw_solid` on the `MultiFrame`: a visual no-op (blending stays
 enabled for non-opaque colors) that records the damage for the PRIME copy.
 
+### Offscreen renders on cross-GPU frames
+
+On a cross-GPU `MultiRenderer`, `Offscreen<GlesTexture>`/`Bind<GlesTexture>`
+allocate and bind on the *target* (scanout) GPU, while `as_gles_renderer()`
+is the *render* GPU — two GL contexts that can't share textures. Two
+consequences:
+
+- **Capture readback** (`render_to_offscreen` in `render/capture.rs`) renders
+  *and* reads back entirely through `R`: the `MultiRenderer`'s
+  `copy_framebuffer`/`map_texture` route to whichever GPU owns the
+  framebuffer/mapping. Never read an `R`-bound texture back through
+  `as_gles_renderer()`. The dmabuf capture path (`render_to_dmabuf`) has no
+  readback and is naturally cross-GPU-safe.
+- **Blur is skipped on cross-GPU frames** (`frame_is_cross_gpu`, set per frame
+  by the udev render loop). The blur pipeline interleaves frame-renderer binds
+  with raw GLES passes on the primary context; smithay exposes no handle to
+  the target GPU's `GlesRenderer`, so there is currently no correct way to run
+  it for a secondary-GPU output. Windows on such outputs render without blur.
+
 ## Per-surface dmabuf feedback
 
 Besides the default dmabuf global (primary render node), each output surface

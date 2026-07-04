@@ -210,7 +210,7 @@ impl DmabufHandler for DriftWm {
         };
         if backend
             .with_renderer(|r| r.import_dmabuf(&dmabuf, None))
-            .is_ok()
+            .is_some_and(|res| res.is_ok())
         {
             let _ = notifier.successful::<DriftWm>();
         } else {

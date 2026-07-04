@@ -64,7 +64,7 @@ pub fn render_screencopy<R: DriftRenderer>(
     OutputRenderElements<R>: RenderElement<R>,
 {
     use driftwm::protocols::screencopy::ScreencopyBuffer;
-    use smithay::backend::renderer::ExportMem;
+
     use smithay::wayland::shm;
     use std::ptr;
 
@@ -202,17 +202,9 @@ pub fn render_screencopy<R: DriftRenderer>(
                     cs,
                 );
                 match result {
-                    Ok(mapping) => {
-                        let gles = renderer.as_gles_renderer();
+                    Ok(bytes) => {
                         let copy_ok =
                             shm::with_buffer_contents_mut(wl_buffer, |shm_buf, shm_len, _data| {
-                                let bytes = match gles.map_texture(&mapping) {
-                                    Ok(b) => b,
-                                    Err(e) => {
-                                        tracing::warn!("screencopy: map_texture failed: {e:?}");
-                                        return false;
-                                    }
-                                };
                                 let copy_len = shm_len.min(bytes.len());
                                 unsafe {
                                     ptr::copy_nonoverlapping(
@@ -221,11 +213,10 @@ pub fn render_screencopy<R: DriftRenderer>(
                                         copy_len,
                                     );
                                 }
-                                true
                             });
 
                         match copy_ok {
-                            Ok(true) => {
+                            Ok(()) => {
                                 stamp_capture_submit(
                                     &mut state.render.capture_state,
                                     &capture_key,
@@ -277,20 +268,21 @@ fn render_to_offscreen<R: DriftRenderer>(
     format: Fourcc,
     elements: &[&OutputRenderElements<R>],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
-) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>>
+) -> Result<Vec<u8>, Box<dyn std::error::Error>>
 where
     OutputRenderElements<R>: RenderElement<R>,
 {
+    use smithay::backend::renderer::Offscreen;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::gles::GlesTexture;
-    use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 
     let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
     let clear = clear_color_for(format);
 
-    // Render through R (so OutputRenderElements<R> can draw, and content can land
-    // on the primary GPU). Read the result back through the underlying
-    // GlesRenderer, whose ExportMem yields the GlesMapping the callers expect.
+    // Bind, render AND read back all through R: on a cross-GPU MultiRenderer,
+    // Offscreen/Bind allocate the texture on the scanout GPU, so a readback via
+    // the primary GlesRenderer would bind it on the wrong GL context.
+    // R's ExportMem routes copy_framebuffer/map_texture to the owning GPU.
     if let Some(cs) = capture_state {
         // Reuse or reallocate texture when size changes
         let tex = match &mut cs.offscreen_texture {
@@ -305,30 +297,24 @@ where
             }
         };
 
-        {
-            let mut target = renderer.bind(tex)?;
-            let _ =
-                cs.damage_tracker
-                    .render_output(renderer, &mut target, cs.age, elements, clear)?;
-        }
+        let mut target = renderer.bind(tex)?;
+        let _ = cs
+            .damage_tracker
+            .render_output(renderer, &mut target, cs.age, elements, clear)?;
         cs.age += 1;
 
-        let gles = renderer.as_gles_renderer();
-        let target = gles.bind(tex)?;
-        let mapping = gles.copy_framebuffer(&target, Rectangle::from_size(buffer_size), format)?;
-        Ok(mapping)
+        let mapping =
+            renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), format)?;
+        Ok(renderer.map_texture(&mapping)?.to_vec())
     } else {
         let mut texture: GlesTexture =
             Offscreen::<GlesTexture>::create_buffer(renderer, format, buffer_size)?;
-        {
-            let mut target = renderer.bind(&mut texture)?;
-            let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
-            let _ = damage_tracker.render_output(renderer, &mut target, 0, elements, clear)?;
-        }
-        let gles = renderer.as_gles_renderer();
-        let target = gles.bind(&mut texture)?;
-        let mapping = gles.copy_framebuffer(&target, Rectangle::from_size(buffer_size), format)?;
-        Ok(mapping)
+        let mut target = renderer.bind(&mut texture)?;
+        let mut damage_tracker = OutputDamageTracker::new(size, scale, transform);
+        let _ = damage_tracker.render_output(renderer, &mut target, 0, elements, clear)?;
+        let mapping =
+            renderer.copy_framebuffer(&target, Rectangle::from_size(buffer_size), format)?;
+        Ok(renderer.map_texture(&mapping)?.to_vec())
     }
 }
 
@@ -346,9 +332,7 @@ pub(crate) fn render_elements_to_rgba<R: DriftRenderer>(
 where
     OutputRenderElements<R>: RenderElement<R>,
 {
-    use smithay::backend::renderer::ExportMem;
-
-    let mapping = render_to_offscreen(
+    render_to_offscreen(
         renderer,
         size,
         scale,
@@ -357,12 +341,7 @@ where
         elements,
         None,
     )
-    .map_err(|e| format!("offscreen render failed: {e:?}"))?;
-    let bytes = renderer
-        .as_gles_renderer()
-        .map_texture(&mapping)
-        .map_err(|e| format!("map_texture failed: {e:?}"))?;
-    Ok(bytes.to_vec())
+    .map_err(|e| format!("offscreen render failed: {e:?}"))
 }
 
 /// Render elements directly into a client-provided DMA-BUF (zero CPU copies).
@@ -420,7 +399,6 @@ pub fn render_capture_frames<R: DriftRenderer>(
 ) where
     OutputRenderElements<R>: RenderElement<R>,
 {
-    use smithay::backend::renderer::ExportMem;
     use smithay::wayland::shm;
     use std::ptr;
 
@@ -552,23 +530,14 @@ pub fn render_capture_frames<R: DriftRenderer>(
                 cs,
             );
             match result {
-                Ok(mapping) => {
-                    let gles = renderer.as_gles_renderer();
+                Ok(bytes) => {
                     shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {
-                        let bytes = match gles.map_texture(&mapping) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!("capture: map_texture failed: {e:?}");
-                                return false;
-                            }
-                        };
                         let copy_len = shm_len.min(bytes.len());
                         unsafe {
                             ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
                         }
-                        true
                     })
-                    .unwrap_or(false)
+                    .is_ok()
                 }
                 Err(e) => {
                     tracing::warn!("capture: offscreen render failed: {e:?}");
@@ -622,7 +591,7 @@ pub fn render_toplevel_captures<R: DriftRenderer>(
     OutputRenderElements<R>: RenderElement<R>,
 {
     use driftwm::protocols::image_copy_capture::PendingCaptureKind;
-    use smithay::backend::renderer::ExportMem;
+
     use smithay::backend::renderer::element::Kind;
     use smithay::backend::renderer::element::surface::WaylandSurfaceRenderElement;
     use smithay::backend::renderer::element::surface::render_elements_from_surface_tree;
@@ -780,23 +749,14 @@ pub fn render_toplevel_captures<R: DriftRenderer>(
                 &elems_refs,
                 cs,
             ) {
-                Ok(mapping) => {
-                    let gles = renderer.as_gles_renderer();
+                Ok(bytes) => {
                     shm::with_buffer_contents_mut(&capture.buffer, |shm_buf, shm_len, _data| {
-                        let bytes = match gles.map_texture(&mapping) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                tracing::warn!("toplevel capture: map_texture failed: {e:?}");
-                                return false;
-                            }
-                        };
                         let copy_len = shm_len.min(bytes.len());
                         unsafe {
                             ptr::copy_nonoverlapping(bytes.as_ptr(), shm_buf.cast(), copy_len);
                         }
-                        true
                     })
-                    .unwrap_or(false)
+                    .is_ok()
                 }
                 Err(e) => {
                     tracing::warn!("toplevel capture: offscreen render failed: {e:?}");

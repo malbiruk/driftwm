@@ -300,6 +300,17 @@ where
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
 
+    // The blur pipeline mixes frame-renderer binds with raw GLES passes on the
+    // primary GPU's context. On a cross-GPU output those are two different GL
+    // contexts that can't share textures — render such frames without blur.
+    if state.render.frame_is_cross_gpu {
+        static CROSS_GPU_BLUR: std::sync::Once = std::sync::Once::new();
+        CROSS_GPU_BLUR.call_once(|| {
+            tracing::info!("blur is unavailable on outputs driven by a secondary GPU");
+        });
+        return;
+    }
+
     let logical_size = crate::state::output_logical_size(output);
     let output_size: Size<i32, Physical> = logical_size.to_physical_precise_round(output_scale);
     let out_buf_size = output_size.to_logical(1).to_buffer(1, Transform::Normal);

@@ -553,7 +553,8 @@ pub fn init_udev(
         .backend
         .as_mut()
         .unwrap()
-        .with_renderer(|r| r.dmabuf_formats());
+        .with_renderer(|r| r.dmabuf_formats())
+        .expect("primary renderer available at init");
     data.render_device = Some(primary_render_node.dev_id());
     // Capture clients allocate buffers we render INTO, so advertise the
     // render-target set (already CCS-filtered above) — not the wider
@@ -571,15 +572,17 @@ pub fn init_udev(
     // frame renders (attach_gpu below queues the first frames).
     {
         let mut backend = data.backend.take().unwrap();
-        backend.with_renderer(|r| {
-            data.render.shadow_shader = crate::render::compile_shadow_shader(r);
-            data.render.border_shader = crate::render::compile_border_shader(r);
-            data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(r);
-            let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(r);
-            data.render.blur_down_shader = blur_down;
-            data.render.blur_up_shader = blur_up;
-            data.render.blur_mask_shader = blur_mask;
-        });
+        backend
+            .with_renderer(|r| {
+                data.render.shadow_shader = crate::render::compile_shadow_shader(r);
+                data.render.border_shader = crate::render::compile_border_shader(r);
+                data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(r);
+                let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(r);
+                data.render.blur_down_shader = blur_down;
+                data.render.blur_up_shader = blur_up;
+                data.render.blur_mask_shader = blur_mask;
+            })
+            .expect("primary renderer available at init");
         data.backend = Some(backend);
     }
 
@@ -1817,6 +1820,7 @@ fn render_frame(
         data.backend = Some(backend);
         return;
     };
+    data.render.frame_is_cross_gpu = render_node != udev.primary_render_node;
     let renderer = if render_node == udev.primary_render_node {
         udev.gpu_manager.single_renderer(&udev.primary_render_node)
     } else {

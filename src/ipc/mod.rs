@@ -342,7 +342,7 @@ fn cmd_screenshot(target: &ScreenshotTarget, scale: f64, path: &str, state: &mut
     });
     state.backend = Some(backend);
 
-    let cap = result?;
+    let cap = result.ok_or("primary GPU renderer unavailable")??;
     Ok(Response::Screenshot {
         path: path.to_string(),
         width: cap.width,
