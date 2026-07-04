@@ -51,6 +51,7 @@ pub(super) struct EffectsFileConfig {
     pub blur_radius: Option<u32>,
     pub blur_strength: Option<f64>,
     pub animate_blur: Option<bool>,
+    pub animate_blur_fps: Option<u32>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

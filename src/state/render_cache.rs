@@ -31,6 +31,12 @@ pub struct RenderCache {
     pub blur_bg_fbo: Option<(GlesTexture, Size<i32, Physical>)>,
     pub blur_geometry_generation: u64,
     pub blur_camera_generation: u64,
+    /// Shared full-output blurred background for `animate_blur`: ping-pong
+    /// pair, blurred once per refresh and sliced per window, so cost stops
+    /// scaling with the number of blurred windows.
+    pub shared_blur: Option<(GlesTexture, GlesTexture, Size<i32, Physical>)>,
+    pub shared_blur_at: Option<std::time::Instant>,
+    pub shared_blur_camera_generation: u64,
     pub shadow_cache: HashMap<ObjectId, ShadowCacheEntry>,
     pub border_cache: HashMap<ObjectId, BorderCacheEntry>,
     /// One element per output for the configured background (shader / tile /
@@ -67,6 +73,9 @@ impl RenderCache {
             blur_bg_fbo: None,
             blur_geometry_generation: 0,
             blur_camera_generation: 0,
+            shared_blur: None,
+            shared_blur_at: None,
+            shared_blur_camera_generation: 0,
             shadow_cache: HashMap::new(),
             border_cache: HashMap::new(),
             cached_bg: HashMap::new(),

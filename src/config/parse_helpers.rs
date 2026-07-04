@@ -426,6 +426,7 @@ pub(super) fn parse_effects_config(raw: EffectsFileConfig, errors: &mut Warnings
             errors,
         ),
         animate_blur: raw.animate_blur.unwrap_or(false),
+        animate_blur_fps: raw.animate_blur_fps.unwrap_or(20).clamp(1, 144),
     }
 }
 
