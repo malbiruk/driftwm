@@ -314,6 +314,8 @@ pub(super) struct HotCornersFile {
     pub top_right:    Option<String>,
     pub bottom_left:  Option<String>,
     pub bottom_right: Option<String>,
+    pub disable_when_fullscreen: Option<bool>,
+    pub disable_while_dragging:  Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]

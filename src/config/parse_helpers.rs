@@ -569,7 +569,15 @@ pub(super) fn parse_hot_corners(hcf: HotCornersFile) -> Result<HotCorners, Strin
     try_set(HotCorner::BottomLeft,  &hcf.bottom_left,  &mut bindings)?;
     try_set(HotCorner::BottomRight, &hcf.bottom_right, &mut bindings)?;
 
-    Ok(HotCorners { bindings, threshold })
+    let disable_when_fullscreen = hcf.disable_when_fullscreen.unwrap_or(true);
+    let disable_while_dragging  = hcf.disable_while_dragging.unwrap_or(true);
+
+    Ok(HotCorners {
+        bindings,
+        threshold,
+        disable_when_fullscreen,
+        disable_while_dragging,
+    })
 }
 
 #[cfg(test)]

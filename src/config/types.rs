@@ -980,12 +980,25 @@ impl HotCorner {
 }
 
 /// Per-output hot-corner bindings. Empty map = no corners configured.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct HotCorners {
     /// Action to fire when the cursor enters this corner. `None` disables the corner.
     pub bindings: HashMap<HotCorner, Action>,
     /// Activation zone size in logical pixels. Defaults to 4.
     pub threshold: f64,
+    pub disable_when_fullscreen: bool,
+    pub disable_while_dragging: bool,
+}
+
+impl Default for HotCorners {
+    fn default() -> Self {
+        Self {
+            bindings: HashMap::new(),
+            threshold: 4.0,
+            disable_when_fullscreen: true,
+            disable_while_dragging: true,
+        }
+    }
 }
 
 impl Default for OutputConfig {

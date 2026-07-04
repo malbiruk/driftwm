@@ -79,6 +79,11 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         let button = event.button_code();
         let button_state = event.state();
+        if button_state == ButtonState::Pressed {
+            self.held_buttons.insert(button);
+        } else {
+            self.held_buttons.remove(&button);
+        }
         let pointer = self.seat.get_pointer().unwrap();
 
         // Buffer BTN_MIDDLE release while a pending click is waiting

@@ -923,7 +923,26 @@ bottom_right = "exec-launcher"
 name = "HDMI-A-1"
 scale = 1.0
 mode = "1920x1080@60"
+
+Global on/off switch for hot-corners. When false, hot-corners never fire
+regardless of per-output config. Defaults to true.
 ```
+
+### `hot_corners`
+
+Default: `true`
+
+### `disable_when_fullscreen`
+
+Default: `true`
+
+disable when ANY window is fullscreen on this output (default: true)
+
+### `disable_while_dragging`
+
+Default: `true`
+
+disable while dragging/resizing a window (default: true)
 
 ## Window rules
 
@@ -948,28 +967,28 @@ To find a window's identifiers, run while the window is open:
 
 Effect fields:
 
-- `position` — [x, y] coordinates (window center, Y-up). Canvas coords, or output-relative (origin = output center) when pinned_to_screen.
-- `size` — [width, height] initial window dimensions (one-shot; user/app can resize after)
-- `widget` — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)
-- `pinned_to_screen` — true: lock the window to the output's screen space — ignores pan/zoom, floats above normal windows (PiP, toolbars). `position` becomes output-relative; movable unless widget = true. Toggle live with `toggle-pin-to-screen` (Mod+T). (default: false)
-- `decoration` — overrides [decorations] default_mode for matched windows. Omit to inherit default_mode. Values:
+- position   — [x, y] coordinates (window center, Y-up). Canvas coords, or output-relative (origin = output center) when pinned_to_screen.
+  - size       — [width, height] initial window dimensions (one-shot; user/app can resize after)
+  - widget     — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)
+  - pinned_to_screen — true: lock the window to the output's screen space — ignores pan/zoom, floats above normal windows (PiP, toolbars). `position` becomes output-relative; movable unless widget = true. Toggle live with `toggle-pin-to-screen` (Mod+T). (default: false)
+  - decoration — overrides [decorations] default_mode for matched windows. Omit to inherit default_mode. Values:
   - "client":  CSD — client's own titlebar
   - "server":  SSD — driftwm's titlebar
   - "minimal": SSD — no titlebar, just shadow + corners + border (this is the mode for chrome-on-borderless widgets; border_width / corner_radius / shadow rules apply)
   - "none":    bare client surface — compositor adds zero chrome, and per-window border_width / corner_radius / shadow rules are ignored. Use "minimal" if you want chrome without a titlebar.
-- `blur` — true: blur background behind this window (default: false)
-- `opacity` — 0.0–1.0: window transparency (default: 1.0, fully opaque)
-- `border_width` — per-window border width override (px). Set to 0 to disable border on a window even when [decorations] border_width > 0. Ignored for decoration = "none".
-- `border_color` — per-window unfocused border color hex (e.g. "#5c5c5c").
-- `border_color_focused` — per-window focused border color hex.
-- `corner_radius` — per-window corner radius override (px). Affects content clip, border shape, and shadow. Ignored for decoration = "none".
-- `shadow` — per-window shadow toggle. Overrides [decorations] shadow. Ignored for decoration = "none".
-- `output` — output name (e.g. "DP-1") this window fullscreens onto. Takes precedence over the output the client itself requests. Omit to honor the client's request, then the active output. Find names under `outputs.*` in `driftwm msg state`. (default: unset)
-- `pass_keys` — controls which compositor keybindings are forwarded to the app:
+  - blur       — true: blur background behind this window (default: false)
+  - opacity    — 0.0–1.0: window transparency (default: 1.0, fully opaque)
+  - border_width         — per-window border width override (px). Set to 0 to disable border on a window even when [decorations] border_width > 0. Ignored for decoration = "none".
+  - border_color         — per-window unfocused border color hex (e.g. "#5c5c5c").
+  - border_color_focused — per-window focused border color hex.
+  - corner_radius        — per-window corner radius override (px). Affects content clip, border shape, and shadow. Ignored for decoration = "none".
+  - shadow               — per-window shadow toggle. Overrides [decorations] shadow. Ignored for decoration = "none".
+  - output     — output name (e.g. "DP-1") this window fullscreens onto. Takes precedence over the output the client itself requests. Omit to honor the client's request, then the active output. Find names under `outputs.*` in `driftwm msg state`. (default: unset)
+  - pass_keys  — controls which compositor keybindings are forwarded to the app:
   - pass_keys = true — forward ALL keys (game-friendly)
   - pass_keys = ["mod+q", "ctrl+q"] — forward ONLY these combos; all other compositor shortcuts stay active
   - pass_keys = false / omit — compositor handles everything (default)
-  - VT switching (Ctrl+Alt+F1–F12) — always stays in the compositor
+  - VT switching (Ctrl+Alt+F1–F12) — always stays in the compositor hot_corners - true: allow hot corners on this window (default: global)
 
 Layer-shell surfaces (panels, notifications, bars like waybar): `decoration` is ignored — layers have no decoration mode. Chrome (border_width, corner_radius, shadow) is field-by-field opt-in on the rule and does NOT inherit from [decorations]. Without explicit values on the rule, a layer surface has no border, no shadow, and no corner clip.
 

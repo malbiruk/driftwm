@@ -23,6 +23,12 @@ impl DriftWm {
         let keycode = event.key_code();
         let keycode_u32: u32 = keycode.into();
 
+        if key_state == KeyState::Pressed {
+            self.held_keys.insert(keycode_u32);
+        } else {
+            self.held_keys.remove(&keycode_u32);
+        }
+
         // When session is locked, only allow VT switching — forward everything else
         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
             let keyboard = self.seat.get_keyboard().unwrap();

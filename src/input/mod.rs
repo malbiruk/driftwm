@@ -99,6 +99,32 @@ impl DriftWm {
             return;
         }
 
+        // Disable while a pointer grab is active (move/resize/pan-viewport/navigate).
+        // is_grabbed() is the canonical "compositor owns input" signal — every
+        // relevant action sets a grab via pointer.set_grab.
+        // if self.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
+        //     return;
+        // }
+
+        // disable_when_fullscreen: any fullscreen window on this output silences
+        // hot-corners for that output.
+        if cfg.hot_corners.disable_when_fullscreen && self.is_output_fullscreen(output) {
+            return;
+        }
+
+        // disable_while_dragging: suppress during any compositor grab (move/resize/
+        // pan-viewport/navigate) OR while any key/mouse button is held. The single
+        // flag covers all "user is mid-action" states — flipping it to false
+        // restores the pre-flag behaviour identically.
+        if cfg.hot_corners.disable_while_dragging
+            && (self.seat.get_pointer().is_some_and(|p| p.is_grabbed())
+                || !self.held_keys.is_empty()
+                || !self.held_buttons.is_empty())
+        {
+            self.hot_corners_armed.remove(output);
+            return;
+        }
+
         let size = crate::state::output_logical_size(output);
         let out_w = size.w as f64;
         let out_h = size.h as f64;
