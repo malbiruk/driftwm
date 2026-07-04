@@ -544,10 +544,10 @@ pub(super) fn parse_hot_corners(hcf: HotCornersFile) -> Result<HotCorners, Strin
     use super::parse::parse_action;
     use super::types::HotCorner;
 
-    let threshold = hcf.threshold.unwrap_or(4.0);
-    if threshold <= 0.0 {
+    let threshold = hcf.threshold.unwrap_or(HotCorners::DEFAULT_THRESHOLD);
+    if !threshold.is_finite() || threshold <= 0.0 {
         return Err(format!(
-            "hot_corners.threshold must be > 0, got {threshold}"
+            "hot_corners.threshold must be a finite positive number, got {threshold}"
         ));
     }
 

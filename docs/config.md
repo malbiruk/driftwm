@@ -912,16 +912,20 @@ transform = "normal"     # normal, 90, 180, 270, flipped, flipped-90, flipped-18
 position = "auto"        # "auto" (left-to-right) or [x, y] in layout coords
 mode = "preferred"       # "preferred", "1920x1080", or "2560x1440@144"
 
+[[outputs]]
+name = "HDMI-A-1"
+scale = 1.0
+mode = "1920x1080@60"
+
 [outputs.hot_corners]
 threshold = 4         # activation radius in logical px (default: 4)
 top_left = "zoom-to-fit"
 top_right = "none"
 bottom_left = "spawn grim - | wl-copy"
 bottom_right = "exec-launcher"
-disable_when_fullscreen = true   # suppress hot-corners while a fullscreen
+disable_when_fullscreen = true   # suppress hot-corners while a fullscreen window is on this output (default: true)
+disable_while_dragging  = true   # suppress hot-corners while any key/mouse button is held, or a pointer grab (move/resize/pan) is active (default: true)
 ```
-
-disable_while_dragging  = true   # suppress hot-corners while any key/mouse [[outputs]] name = "HDMI-A-1" scale = 1.0 mode = "1920x1080@60"
 
 ## Window rules
 

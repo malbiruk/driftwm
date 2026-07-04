@@ -987,11 +987,18 @@ impl Default for HotCorners {
     fn default() -> Self {
         Self {
             bindings: HashMap::new(),
-            threshold: 4.0,
+            threshold: Self::DEFAULT_THRESHOLD,
             disable_when_fullscreen: true,
             disable_while_dragging: true,
         }
     }
+}
+
+impl HotCorners {
+    /// Default activation zone radius in logical pixels. Tuned for trackpad
+    /// precision: small enough not to eat normal cursor travel, large enough
+    /// to catch a deliberate flick to a corner.
+    pub const DEFAULT_THRESHOLD: f64 = 4.0;
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

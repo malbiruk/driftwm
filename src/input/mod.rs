@@ -99,13 +99,6 @@ impl DriftWm {
             return;
         }
 
-        // Disable while a pointer grab is active (move/resize/pan-viewport/navigate).
-        // is_grabbed() is the canonical "compositor owns input" signal — every
-        // relevant action sets a grab via pointer.set_grab.
-        // if self.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
-        //     return;
-        // }
-
         // disable_when_fullscreen: any fullscreen window on this output silences
         // hot-corners for that output.
         if cfg.hot_corners.disable_when_fullscreen && self.is_output_fullscreen(output) {

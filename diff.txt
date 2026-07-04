@@ -1,0 +1,2016 @@
+diff --git a/config.reference.toml b/config.reference.toml
+index 88c6970..624102d 100644
+--- a/config.reference.toml
++++ b/config.reference.toml
+@@ -230,6 +230,16 @@
+ # # blurrier).
+ # cache_budget_mb = 128
+ 
++[bindings]
++# # Opt out of built-in default bindings by category, for a clean slate.
++# # Normally your [keybindings]/[mouse]/[gestures] entries merge with the
++# # built-ins (use `= "none"` to drop a single default). Listing a category
++# # here removes ALL of that category's defaults, leaving only your own entries.
++# # Categories: "keys", "mouse", "gestures".
++# disable_defaults = []
++# # Example: bring your own keyboard scheme, keep mouse + gesture defaults
++# # disable_defaults = ["keys"]
++
+ [keybindings]
+ # # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
+ # # Merges with defaults. Use "none" to unbind a default binding.
+@@ -489,6 +499,16 @@
+ # # synthesizing a CVT modeline when the monitor doesn't advertise it (intended
+ # # for CRTs or forcing non-standard modes; may be rejected by some panels).
+ # #
++# ## Hot-corners: bind any keyboard action to a screen corner. The action fires
++# # when the cursor enters that corner of THIS output (per-monitor setting),
++# # and re-arms when the cursor leaves. The whole `[[outputs]]` block can be
++# # omitted if you don't need any hot corners on a particular monitor.
++# #
++# # Supported actions: any of the actions documented in `[keybindings]` /
++# # `[mouse]` (exec, exec-terminal, exec-launcher, spawn, zoom-to-fit,
++# # cycle-windows, reload-config, quit, ...). Pass "none" to leave a corner
++# # unbound.
++# #
+ # # Example:
+ # # [[outputs]]
+ # # name = "eDP-1"           # connector name (required)
+@@ -497,6 +517,18 @@
+ # # position = "auto"        # "auto" (left-to-right) or [x, y] in layout coords
+ # # mode = "preferred"       # "preferred", "1920x1080", or "2560x1440@144"
+ # #
++# # [outputs.hot_corners]
++# # threshold = 4         # activation radius in logical px (default: 4)
++# # top_left = "zoom-to-fit"
++# # top_right = "none"
++# # bottom_left = "spawn grim - | wl-copy"
++# # bottom_right = "exec-launcher"
++# # disable_when_fullscreen = true   # suppress hot-corners while a fullscreen
++                                   # window is on this output (default: true)
++# # disable_while_dragging  = true   # suppress hot-corners while any key/mouse
++                                   # button is held, or a pointer grab
++                                   # (move/resize/pan) is active
++                                   # (default: true)
+ # # [[outputs]]
+ # # name = "HDMI-A-1"
+ # # scale = 1.0
+diff --git a/docs/config.md b/docs/config.md
+index ef83dcd..d11cb7a 100644
+--- a/docs/config.md
++++ b/docs/config.md
+@@ -561,6 +561,20 @@ Default: `128`
+ 
+ Memory ceiling (MB) shared by cache_shader and gigapixel-TIFF wallpapers, with LRU eviction. Raise it for sharper revisits on large / HiDPI displays; lower it on memory-constrained machines (too low just keeps the background blurrier).
+ 
++## `[bindings]`
++
++### `disable_defaults`
++
++Default: `[]`
++
++Opt out of built-in default bindings by category, for a clean slate. Normally your [keybindings]/[mouse]/[gestures] entries merge with the built-ins (use `= "none"` to drop a single default). Listing a category here removes ALL of that category's defaults, leaving only your own entries. Categories: "keys", "mouse", "gestures".
++
++**Example: bring your own keyboard scheme, keep mouse + gesture defaults**
++
++```toml
++disable_defaults = ["keys"]
++```
++
+ ## `[keybindings]`
+ 
+ Keyboard bindings: "Modifier+...+Keysym" = "action [arg]" Merges with defaults. Use "none" to unbind a default binding. "mod" expands to mod_key. Literal modifiers: alt, super, ctrl, shift. Keysyms are XKB names (case-insensitive): return, tab, up, a, equal, etc. A bare modifier combo (e.g. "alt+shift") is a tap binding (fires on chord release; see [input.keyboard] options).
+@@ -882,6 +896,12 @@ Per-output configuration. Each [[outputs]] entry matches by connector name. Find
+ 
+ `mode` accepts "preferred", "WxH", or "WxH@Hz". A bare "WxH" only selects a mode the monitor already advertises — if none matches, it keeps the preferred mode (logged as a warning, not an error). "WxH@Hz" forces that exact mode, synthesizing a CVT modeline when the monitor doesn't advertise it (intended for CRTs or forcing non-standard modes; may be rejected by some panels).
+ 
++## Hot-corners: bind any keyboard action to a screen corner. The action fires
++
++when the cursor enters that corner of THIS output (per-monitor setting), and re-arms when the cursor leaves. The whole `[[outputs]]` block can be omitted if you don't need any hot corners on a particular monitor.
++
++Supported actions: any of the actions documented in `[keybindings]` / `[mouse]` (exec, exec-terminal, exec-launcher, spawn, zoom-to-fit, cycle-windows, reload-config, quit, ...). Pass "none" to leave a corner unbound.
++
+ **Example:**
+ 
+ ```toml
+@@ -892,12 +912,17 @@ transform = "normal"     # normal, 90, 180, 270, flipped, flipped-90, flipped-18
+ position = "auto"        # "auto" (left-to-right) or [x, y] in layout coords
+ mode = "preferred"       # "preferred", "1920x1080", or "2560x1440@144"
+ 
+-[[outputs]]
+-name = "HDMI-A-1"
+-scale = 1.0
+-mode = "1920x1080@60"
++[outputs.hot_corners]
++threshold = 4         # activation radius in logical px (default: 4)
++top_left = "zoom-to-fit"
++top_right = "none"
++bottom_left = "spawn grim - | wl-copy"
++bottom_right = "exec-launcher"
++disable_when_fullscreen = true   # suppress hot-corners while a fullscreen
+ ```
+ 
++disable_while_dragging  = true   # suppress hot-corners while any key/mouse [[outputs]] name = "HDMI-A-1" scale = 1.0 mode = "1920x1080@60"
++
+ ## Window rules
+ 
+ Window rules: match windows and apply per-window overrides. ALL matching rules are merged in config order (later rules override earlier ones for scalar fields; boolean flags are sticky-on). This lets you compose rules — e.g. one rule sets blur=true, a later one adds opacity=0.85.
+diff --git a/src/config/mod.rs b/src/config/mod.rs
+index 9bd9aa9..b42c5f7 100644
+--- a/src/config/mod.rs
++++ b/src/config/mod.rs
+@@ -319,13 +319,32 @@ impl Config {
+             }
+         };
+ 
+-        let mut bindings: HashMap<KeyCombo, Action> = default_bindings(mod_key)
+-            .into_iter()
+-            .map(|(mut k, v)| {
+-                k.normalize();
+-                (k, v)
+-            })
+-            .collect();
++        let mut disable_keys = false;
++        let mut disable_mouse = false;
++        let mut disable_gestures = false;
++        for cat in raw.bindings.disable_defaults.into_iter().flatten() {
++            match cat.as_str() {
++                "keys" => disable_keys = true,
++                "mouse" => disable_mouse = true,
++                "gestures" => disable_gestures = true,
++                other => warn_and_collect!(
++                    "config: unknown bindings.disable_defaults category '{other}' \
++                     (expected \"keys\", \"mouse\", or \"gestures\")"
++                ),
++            }
++        }
++
++        let mut bindings: HashMap<KeyCombo, Action> = if disable_keys {
++            HashMap::new()
++        } else {
++            default_bindings(mod_key)
++                .into_iter()
++                .map(|(mut k, v)| {
++                    k.normalize();
++                    (k, v)
++                })
++                .collect()
++        };
+ 
+         let mut tap_bindings: HashMap<Modifiers, Action> = HashMap::new();
+         if let Some(user_bindings) = raw.keybindings {
+@@ -389,7 +408,11 @@ impl Config {
+         let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
+         let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
+         let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
+-        let mut mouse_bindings = default_mouse_bindings(mod_key);
++        let mut mouse_bindings = if disable_mouse {
++            ContextBindings::empty()
++        } else {
++            default_mouse_bindings(mod_key)
++        };
+         for (ctx, section) in [
+             (BindingContext::OnWindow, raw.mouse.on_window),
+             (BindingContext::OnCanvas, raw.mouse.on_canvas),
+@@ -422,7 +445,11 @@ impl Config {
+             }
+         }
+ 
+-        let mut gesture_bindings = default_gesture_bindings(mod_key);
++        let mut gesture_bindings = if disable_gestures {
++            ContextBindings::empty()
++        } else {
++            default_gesture_bindings(mod_key)
++        };
+         for (ctx, section) in [
+             (BindingContext::OnWindow, raw.gestures.on_window),
+             (BindingContext::OnCanvas, raw.gestures.on_canvas),
+diff --git a/src/config/parse_helpers.rs b/src/config/parse_helpers.rs
+index 2241b91..bc5ce96 100644
+--- a/src/config/parse_helpers.rs
++++ b/src/config/parse_helpers.rs
+@@ -4,17 +4,19 @@
+ //! `super::types`, applying defaults, clamping, and validation. No
+ //! compositor state is touched — these are pure functions.
+ 
++use std::collections::HashMap;
++
+ use smithay::utils::Transform;
+ 
+ use super::parse::parse_key_combo;
+ use super::toml::{
+-    BackendFileConfig, DecorationFileConfig, EffectsFileConfig, OutputOutlineConfig,
+-    OutputRuleFile, PassKeysFile, WindowRuleFile,
++    BackendFileConfig, DecorationFileConfig, EffectsFileConfig, HotCornersFile,
++    OutputOutlineConfig, OutputRuleFile, PassKeysFile, WindowRuleFile,
+ };
+ use super::types::{
+-    BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FontWeight, KeyCombo, ModKey,
+-    OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition, PassKeys, Pattern, TitleAlign,
+-    WindowRule,
++    Action, BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FontWeight, HotCorners,
++    KeyCombo, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition, PassKeys,
++    Pattern, TitleAlign, WindowRule,
+ };
+ 
+ /// How actionable a config warning is. The error bar has room for one message,
+@@ -522,12 +524,62 @@ pub(super) fn parse_output_rule(r: OutputRuleFile) -> Result<OutputConfig, Strin
+         .map(|s| parse_output_mode(&s))
+         .transpose()?
+         .unwrap_or_default();
++
++    let hot_corners = match r.hot_corners {
++        Some(hcf) => parse_hot_corners(hcf)?,
++        None => HotCorners::default(),
++    };
++
+     Ok(OutputConfig {
+         name: r.name,
+         scale,
+         transform,
+         position,
+         mode,
++        hot_corners,
++    })
++}
++
++pub(super) fn parse_hot_corners(hcf: HotCornersFile) -> Result<HotCorners, String> {
++    use super::parse::parse_action;
++    use super::types::HotCorner;
++
++    let threshold = hcf.threshold.unwrap_or(4.0);
++    if threshold <= 0.0 {
++        return Err(format!(
++            "hot_corners.threshold must be > 0, got {threshold}"
++        ));
++    }
++
++    let mut bindings = HashMap::new();
++    let try_set = |corner: HotCorner,
++                   raw: &Option<String>,
++                   bindings: &mut HashMap<HotCorner, Action>|
++     -> Result<(), String> {
++        if let Some(s) = raw {
++            if s == "none" {
++                bindings.remove(&corner);
++            } else {
++                let action = parse_action(s)?;
++                bindings.insert(corner, action);
++            }
++        }
++        Ok(())
++    };
++
++    try_set(HotCorner::TopLeft, &hcf.top_left, &mut bindings)?;
++    try_set(HotCorner::TopRight, &hcf.top_right, &mut bindings)?;
++    try_set(HotCorner::BottomLeft, &hcf.bottom_left, &mut bindings)?;
++    try_set(HotCorner::BottomRight, &hcf.bottom_right, &mut bindings)?;
++
++    let disable_when_fullscreen = hcf.disable_when_fullscreen.unwrap_or(true);
++    let disable_while_dragging = hcf.disable_while_dragging.unwrap_or(true);
++
++    Ok(HotCorners {
++        bindings,
++        threshold,
++        disable_when_fullscreen,
++        disable_while_dragging,
+     })
+ }
+ 
+diff --git a/src/config/toml.rs b/src/config/toml.rs
+index 9fab50e..ea6d5f3 100644
+--- a/src/config/toml.rs
++++ b/src/config/toml.rs
+@@ -18,6 +18,7 @@ pub(super) struct ConfigFile {
+     pub effects: EffectsFileConfig,
+     pub backend: BackendFileConfig,
+     pub autostart: Option<Vec<String>>,
++    pub bindings: BindingsFileConfig,
+     pub keybindings: Option<HashMap<String, String>>,
+     pub mouse: MouseFileConfig,
+     pub gestures: GestureFileConfig,
+@@ -29,6 +30,12 @@ pub(super) struct ConfigFile {
+     pub outputs: Option<Vec<OutputRuleFile>>,
+ }
+ 
++#[derive(Serialize, Deserialize, Default)]
++#[serde(default, deny_unknown_fields)]
++pub(super) struct BindingsFileConfig {
++    pub disable_defaults: Option<Vec<String>>,
++}
++
+ #[derive(Serialize, Deserialize, Default)]
+ #[serde(default, deny_unknown_fields)]
+ pub(super) struct BackendFileConfig {
+@@ -288,14 +295,27 @@ pub(super) struct GestureFileConfig {
+     pub anywhere: Option<HashMap<String, String>>,
+ }
+ 
+-#[derive(Serialize, Deserialize)]
+-#[serde(deny_unknown_fields)]
++#[derive(Serialize, Deserialize, Default)]
++#[serde(default, deny_unknown_fields)]
+ pub(super) struct OutputRuleFile {
+     pub name: String,
+     pub scale: Option<f64>,
+     pub transform: Option<String>,
+     pub position: Option<::toml::Value>,
+     pub mode: Option<String>,
++    pub hot_corners: Option<HotCornersFile>,
++}
++
++#[derive(Serialize, Deserialize, Default)]
++#[serde(default, deny_unknown_fields)]
++pub(super) struct HotCornersFile {
++    pub threshold: Option<f64>,
++    pub top_left: Option<String>,
++    pub top_right: Option<String>,
++    pub bottom_left: Option<String>,
++    pub bottom_right: Option<String>,
++    pub disable_when_fullscreen: Option<bool>,
++    pub disable_while_dragging: Option<bool>,
+ }
+ 
+ #[derive(Serialize, Deserialize)]
+diff --git a/src/config/types.rs b/src/config/types.rs
+index e9daec1..07132c8 100644
+--- a/src/config/types.rs
++++ b/src/config/types.rs
+@@ -936,13 +936,62 @@ impl Default for OutputOutlineSettings {
+ }
+ 
+ /// Per-output configuration from `[[outputs]]` config sections.
+-#[derive(Clone, Debug, PartialEq)]
++#[derive(Clone, Debug, PartialEq, Default)]
+ pub struct OutputConfig {
+     pub name: String,
+     pub scale: Option<f64>,
+     pub transform: Option<Transform>,
+     pub position: OutputPosition,
+     pub mode: OutputMode,
++    pub hot_corners: HotCorners,
++}
++
++/// Which corner of the screen to bind a hot-corner action to.
++#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
++pub enum HotCorner {
++    TopLeft,
++    TopRight,
++    BottomLeft,
++    BottomRight,
++}
++
++impl HotCorner {
++    /// True when `(x, y)` in output-local screen coords is within `threshold`
++    /// pixels of this corner.
++    pub fn contains(&self, x: f64, y: f64, out_w: f64, out_h: f64, threshold: f64) -> bool {
++        let on_left = x < threshold;
++        let on_right = x > out_w - threshold;
++        let on_top = y < threshold;
++        let on_bottom = y > out_h - threshold;
++        match self {
++            Self::TopLeft => on_left && on_top,
++            Self::TopRight => on_right && on_top,
++            Self::BottomLeft => on_left && on_bottom,
++            Self::BottomRight => on_right && on_bottom,
++        }
++    }
++}
++
++/// Per-output hot-corner bindings. Empty map = no corners configured.
++#[derive(Clone, Debug, PartialEq)]
++pub struct HotCorners {
++    /// Action to fire when the cursor enters this corner. `None` disables the corner.
++    pub bindings: HashMap<HotCorner, Action>,
++    /// Activation zone size in logical pixels. Defaults to 4.
++    pub threshold: f64,
++    pub disable_when_fullscreen: bool,
++    pub disable_while_dragging: bool,
++}
++
++impl Default for HotCorners {
++    fn default() -> Self {
++        Self {
++            bindings: HashMap::new(),
++            threshold: 4.0,
++            disable_when_fullscreen: true,
++            disable_while_dragging: true,
++        }
++    }
+ }
+ 
+ #[derive(Clone, Debug, Default, PartialEq)]
+diff --git a/src/handlers/compositor.rs b/src/handlers/compositor.rs
+index 48c93d2..a2d50e9 100644
+--- a/src/handlers/compositor.rs
++++ b/src/handlers/compositor.rs
+@@ -314,6 +314,7 @@ impl CompositorHandler for DriftWm {
+                     };
+ 
+                     let mut placed_at_cursor = false;
++                    let mut place_in_background = false;
+                     // One-shot: when a rule forces a size, first commit
+                     // arrives at the client's preferred size; configure with
+                     // the rule size and defer positioning/decoration/nav to
+@@ -402,16 +403,24 @@ impl CompositorHandler for DriftWm {
+                                 } else {
+                                     0
+                                 };
+-                            let cursor_pos = if matches!(
+-                                self.config.window_placement,
+-                                driftwm::config::WindowPlacement::Cursor
+-                            ) {
++                            // Fullscreen takes precedence over the auto/cursor/
++                            // center placement handled here: a new window must
++                            // never land on top of a fullscreen window on its own
++                            // output.
++                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, bar_px);
++                            place_in_background = bg_pos.is_some();
++                            let cursor_pos = if bg_pos.is_none()
++                                && matches!(
++                                    self.config.window_placement,
++                                    driftwm::config::WindowPlacement::Cursor
++                                ) {
+                                 self.cursor_placement_pos(geo.size, bar_px)
+                             } else {
+                                 None
+                             };
+                             placed_at_cursor = cursor_pos.is_some();
+-                            let auto_pos = if cursor_pos.is_none()
++                            let auto_pos = if bg_pos.is_none()
++                                && cursor_pos.is_none()
+                                 && matches!(
+                                     self.config.window_placement,
+                                     driftwm::config::WindowPlacement::Auto
+@@ -420,7 +429,7 @@ impl CompositorHandler for DriftWm {
+                             } else {
+                                 None
+                             };
+-                            let placed = cursor_pos.or(auto_pos).unwrap_or_else(|| {
++                            let placed = bg_pos.or(cursor_pos).or(auto_pos).unwrap_or_else(|| {
+                                 let output_geo = self
+                                     .active_output()
+                                     .and_then(|o| self.space.output_geometry(&o));
+@@ -437,9 +446,18 @@ impl CompositorHandler for DriftWm {
+                                     (0, 0)
+                                 }
+                             });
+-                            self.cascade_position(placed, &window)
++                            if place_in_background {
++                                // Already anchored to the fullscreen window's
++                                // saved home; cascade would only fight that.
++                                placed
++                            } else {
++                                self.cascade_position(placed, &window)
++                            }
+                         };
+-                        let activate = applied.as_ref().is_none_or(|a| !a.widget);
++                        // Background-placed windows never activate: keep the
++                        // fullscreen window focused and on top.
++                        let activate =
++                            !place_in_background && applied.as_ref().is_none_or(|a| !a.widget);
+                         self.space.map_element(window.clone(), pos, activate);
+                     }
+ 
+@@ -528,6 +546,7 @@ impl CompositorHandler for DriftWm {
+                             || self.pending_fullscreen.contains_key(&root);
+                         if !is_widget
+                             && !is_fullscreen
++                            && !place_in_background
+                             && !deferred_fit_or_fs
+                             && !self.pinned.contains_key(&root.id())
+                         {
+@@ -593,6 +612,8 @@ impl CompositorHandler for DriftWm {
+                         self.pending_recenter.remove(&root.id());
+                     }
+                 }
++
++                self.reflow_grown_snapped_window(&window, &root);
+             }
+         }
+ 
+@@ -842,6 +863,101 @@ impl DriftWm {
+             self.refresh_stable_snap_rect(window);
+         }
+     }
++
++    /// A snapped window that resizes *itself* larger — not via a resize grab —
++    /// can grow over its neighbors. The classic case is a game that maps at a
++    /// small size then jumps to its full render resolution a frame later. Move
++    /// it beside its former cluster so the snap gaps survive, and recenter the
++    /// camera if it's the focused window.
++    ///
++    /// No-ops unless the footprint actually grew into an overlap: shrinks and
++    /// grows into free space keep their position. Resize-grab motion (and its
++    /// cluster cascade) is owned by `handle_resize_commit`, so this fires only
++    /// on `ResizeState::Idle`.
++    fn reflow_grown_snapped_window(
++        &mut self,
++        window: &smithay::desktop::Window,
++        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
++    ) {
++        let resize_state = with_states(surface, |states| {
++            *states
++                .data_map
++                .get_or_insert(|| RefCell::new(ResizeState::Idle))
++                .borrow()
++        });
++        if !matches!(resize_state, ResizeState::Idle) {
++            return;
++        }
++        if self.is_window_fullscreen(window) || crate::state::fit::is_fit(window) {
++            return;
++        }
++
++        let Some(&stable) = self.stable_snap_rects.get(&surface.id()) else {
++            return;
++        };
++        // `snap_rect_for` returns `None` for widgets / pinned / fullscreen, so
++        // this also filters those out.
++        let Some(current) = self.snap_rect_for(window) else {
++            return;
++        };
++
++        // Cheap early-out: `commit` runs on every frame, so bail before any
++        // cluster math unless the footprint grew past its settled size.
++        const EPS: f64 = 1.0;
++        let grew = (current.x_high - current.x_low) > (stable.x_high - stable.x_low) + EPS
++            || (current.y_high - current.y_low) > (stable.y_high - stable.y_low) + EPS;
++        if !grew {
++            return;
++        }
++
++        let gap = self.config.snap_gap;
++        let others: Vec<(smithay::desktop::Window, driftwm::layout::snap::SnapRect)> = self
++            .space
++            .elements()
++            .filter(|w| *w != window)
++            .filter_map(|w| self.snap_rect_for(w).map(|r| (w.clone(), r)))
++            .collect();
++
++        // Gate on "was snapped", measured from the pre-grow (stable) rect: the
++        // grown rect may already overlap a neighbor and no longer read as
++        // edge-adjacent. The first such neighbor also anchors re-placement.
++        let anchor = others
++            .iter()
++            .find(|(_, r)| driftwm::layout::cluster::adjacent_side(&stable, r, gap).is_some())
++            .map(|(w, _)| w.clone());
++        let Some(anchor) = anchor else {
++            return;
++        };
++
++        // Only reflow when the grow actually collided; growing into free space
++        // keeps the window put.
++        if !others.iter().any(|(_, r)| current.overlaps(r)) {
++            return;
++        }
++
++        let content_size = window.geometry().size;
++        let bar = self.window_ssd_bar(window);
++        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, bar) else {
++            return;
++        };
++        let new_loc = Point::from((x, y));
++        if self.space.element_location(window) == Some(new_loc) {
++            return;
++        }
++        self.space.map_element(window.clone(), new_loc, false);
++        self.refresh_stable_snap_rect(window);
++
++        // Recenter only when the reflow pushed the focused window (partly) out
++        // of view — a large jump (the game landing beside its neighbor) follows
++        // the window; an in-view nudge (sidebar toggle, font bump) leaves the
++        // camera alone. `0.999` absorbs subpixel rounding at the viewport edge.
++        const FULLY_VISIBLE: f64 = 0.999;
++        if self.focused_window().as_ref() == Some(window)
++            && !self.window_visible_at_least(window, FULLY_VISIBLE)
++        {
++            self.navigate_to_window(window, false);
++        }
++    }
+ }
+ 
+ impl BufferHandler for DriftWm {
+diff --git a/src/handlers/mod.rs b/src/handlers/mod.rs
+index 4ea0a93..8842ef8 100644
+--- a/src/handlers/mod.rs
++++ b/src/handlers/mod.rs
+@@ -3,11 +3,6 @@ pub mod compositor;
+ pub mod layer_shell;
+ pub mod xdg_shell;
+ 
+-/// Skip the pan on xdg-activation only when the activated window is already
+-/// fully inside the viewport. Any clipping → animate the camera to bring it
+-/// fully into view; the activating client is asking the user to look at it.
+-const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
+-
+ use crate::state::{DriftWm, FocusTarget};
+ use driftwm::window_ext::WindowExt;
+ use smithay::wayland::seat::WaylandFocus;
+@@ -90,9 +85,14 @@ impl SeatHandler for DriftWm {
+             && matches!(&image, CursorImageStatus::Named(icon) if *icon == CursorIcon::Default)
+         {
+             self.cursor.cursor_status = CursorImageStatus::Named(CursorIcon::Wait);
+-            return;
++        } else {
++            self.cursor.cursor_status = image;
+         }
+-        self.cursor.cursor_status = image;
++        // A wp_cursor_shape change (set_shape) commits no buffer, so nothing
++        // else marks the scene dirty; without this the new cursor isn't
++        // composited until the next unrelated damage. Surface cursors dodge
++        // this via their own buffer commit.
++        self.mark_all_dirty();
+     }
+ 
+     fn led_state_changed(&mut self, _seat: &Seat<Self>, led_state: keyboard::LedState) {
+@@ -283,14 +283,7 @@ impl XdgActivationHandler for DriftWm {
+             if window.geometry().size.w == 0 || window.geometry().size.h == 0 {
+                 return;
+             }
+-            let mostly_visible =
+-                self.window_visible_at_least(&window, ACTIVATION_VISIBLE_THRESHOLD);
+-            if mostly_visible {
+-                let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+-                self.raise_and_focus(&window, serial);
+-            } else {
+-                self.navigate_to_window(&window, self.config.zoom_reset_on_activation);
+-            }
++            self.activate_window_output_local(&window);
+         }
+     }
+ }
+@@ -626,7 +619,7 @@ impl ForeignToplevelHandler for DriftWm {
+             .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
+             .cloned();
+         if let Some(window) = window {
+-            self.navigate_to_window(&window, self.config.zoom_reset_on_activation);
++            self.activate_window_output_local(&window);
+         }
+     }
+ 
+diff --git a/src/input/keyboard.rs b/src/input/keyboard.rs
+index ea36d5f..8c0837e 100644
+--- a/src/input/keyboard.rs
++++ b/src/input/keyboard.rs
+@@ -23,6 +23,12 @@ impl DriftWm {
+         let keycode = event.key_code();
+         let keycode_u32: u32 = keycode.into();
+ 
++        if key_state == KeyState::Pressed {
++            self.held_keys.insert(keycode_u32);
++        } else {
++            self.held_keys.remove(&keycode_u32);
++        }
++
+         // When session is locked, only allow VT switching — forward everything else
+         if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+             let keyboard = self.seat.get_keyboard().unwrap();
+diff --git a/src/input/mod.rs b/src/input/mod.rs
+index 07803ed..2a134dc 100644
+--- a/src/input/mod.rs
++++ b/src/input/mod.rs
+@@ -27,6 +27,7 @@ use smithay::wayland::compositor::RegionAttributes;
+ use crate::decorations::DecorationHit;
+ use crate::state::{DriftWm, FocusTarget};
+ use driftwm::canvas::{ScreenPos, screen_to_canvas};
++use driftwm::config::HotCorner;
+ use driftwm::protocols::output_power::OutputPowerHandler;
+ 
+ /// Constant-speed edge-pan velocity for the bare cursor: a steady glide
+@@ -82,6 +83,82 @@ fn window_origin_for_surface(
+ }
+ 
+ impl DriftWm {
++    /// Fire any hot-corner action the cursor is currently inside.
++    /// `screen_pos` is output-local screen-space. `output` is the output the
++    /// cursor is on (the caller knows — for absolute motion it's `active_output()`,
++    /// for relative motion it's the one we computed from `output_at_layout_pos`).
++    fn check_hot_corners(
++        &mut self,
++        output: &smithay::output::Output,
++        screen_pos: Point<f64, smithay::utils::Logical>,
++    ) {
++        let Some(cfg) = self.config.output_config(&output.name()).cloned() else {
++            return;
++        };
++        if cfg.hot_corners.bindings.is_empty() {
++            return;
++        }
++
++        // Disable while a pointer grab is active (move/resize/pan-viewport/navigate).
++        // is_grabbed() is the canonical "compositor owns input" signal — every
++        // relevant action sets a grab via pointer.set_grab.
++        // if self.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
++        //     return;
++        // }
++
++        // disable_when_fullscreen: any fullscreen window on this output silences
++        // hot-corners for that output.
++        if cfg.hot_corners.disable_when_fullscreen && self.is_output_fullscreen(output) {
++            return;
++        }
++
++        // disable_while_dragging: suppress during any compositor grab (move/resize/
++        // pan-viewport/navigate) OR while any key/mouse button is held. The single
++        // flag covers all "user is mid-action" states — flipping it to false
++        // restores the pre-flag behaviour identically.
++        if cfg.hot_corners.disable_while_dragging
++            && (self.seat.get_pointer().is_some_and(|p| p.is_grabbed())
++                || !self.held_keys.is_empty()
++                || !self.held_buttons.is_empty())
++        {
++            self.hot_corners_armed.remove(output);
++            return;
++        }
++
++        let size = crate::state::output_logical_size(output);
++        let out_w = size.w as f64;
++        let out_h = size.h as f64;
++        let threshold = cfg.hot_corners.threshold;
++
++        let active_corner = [
++            HotCorner::TopLeft,
++            HotCorner::TopRight,
++            HotCorner::BottomLeft,
++            HotCorner::BottomRight,
++        ]
++        .into_iter()
++        .find(|c| c.contains(screen_pos.x, screen_pos.y, out_w, out_h, threshold));
++
++        let armed = self.hot_corners_armed.get(output).copied();
++
++        match (active_corner, armed) {
++            (Some(c), prev) if prev != Some(c) => {
++                if let Some(action) = cfg.hot_corners.bindings.get(&c).cloned() {
++                    tracing::info!("hot-corner fired: {:?} on {}", c, output.name());
++                    self.execute_action(&action);
++                    self.hot_corners_armed.insert(output.clone(), c);
++                } else {
++                    // Not configured - we consider it not armed.
++                    self.hot_corners_armed.remove(output);
++                }
++            }
++            (None, _) => {
++                // Cursor left every corner — re-arm.
++                self.hot_corners_armed.remove(output);
++            }
++            _ => {}
++        }
++    }
+     fn wake_dpms_off_outputs(&mut self) {
+         if self.dpms_off_outputs.is_empty() {
+             return;
+@@ -504,6 +581,9 @@ impl DriftWm {
+         pointer.frame(self);
+         self.update_decoration_cursor(canvas_pos);
+         self.update_pointer_constraint(old_focus);
++        if let Some(out) = self.active_output() {
++            self.check_hot_corners(&out, screen_pos);
++        }
+         self.maybe_hover_focus(canvas_pos);
+         self.refresh_cursor_edge_pan();
+     }
+@@ -678,7 +758,7 @@ impl DriftWm {
+ 
+         let prev_focused_output = self.focused_output.clone();
+         let prev_pointer_over_layer = self.pointer_over_layer;
+-        self.focused_output = Some(target_output);
++        self.focused_output = Some(target_output.clone());
+ 
+         let old_focus = pointer.current_focus();
+         // Compute the focus once and use it for both motion and relative_motion,
+@@ -741,6 +821,7 @@ impl DriftWm {
+         pointer.frame(self);
+         self.update_decoration_cursor(canvas_pos);
+         self.update_pointer_constraint(old_focus);
++        self.check_hot_corners(&target_output, screen_pos);
+         self.maybe_hover_focus(canvas_pos);
+         self.refresh_cursor_edge_pan();
+     }
+diff --git a/src/input/pointer.rs b/src/input/pointer.rs
+index 15167bf..4322410 100644
+--- a/src/input/pointer.rs
++++ b/src/input/pointer.rs
+@@ -79,6 +79,11 @@ impl DriftWm {
+         let serial = SERIAL_COUNTER.next_serial();
+         let button = event.button_code();
+         let button_state = event.state();
++        if button_state == ButtonState::Pressed {
++            self.held_buttons.insert(button);
++        } else {
++            self.held_buttons.remove(&button);
++        }
+         let pointer = self.seat.get_pointer().unwrap();
+ 
+         // Buffer BTN_MIDDLE release while a pending click is waiting
+diff --git a/src/layout/snap.rs b/src/layout/snap.rs
+index 233c23b..a58df78 100644
+--- a/src/layout/snap.rs
++++ b/src/layout/snap.rs
+@@ -7,6 +7,17 @@ pub struct SnapRect {
+     pub y_high: f64,
+ }
+ 
++impl SnapRect {
++    /// True when the two rects share positive-area overlap (touching edges
++    /// don't count).
++    pub fn overlaps(&self, other: &SnapRect) -> bool {
++        self.x_low < other.x_high
++            && other.x_low < self.x_high
++            && self.y_low < other.y_high
++            && other.y_low < self.y_high
++    }
++}
++
+ /// Parameters for snap candidate search along one axis.
+ pub struct SnapParams<'a> {
+     pub extent: f64,
+diff --git a/src/state/animation.rs b/src/state/animation.rs
+index 82b4088..722e15d 100644
+--- a/src/state/animation.rs
++++ b/src/state/animation.rs
+@@ -453,6 +453,15 @@ impl DriftWm {
+ 
+             self.tick_scroll_momentum_on(output, is_active, dt);
+             self.tick_edge_pan_on(output, is_active);
++            // A fullscreen output's camera is locked (set_camera_on refuses to
++            // move it). Drop any pending pan/zoom target so it can't fire the
++            // moment fullscreen exits; the ticks then no-op on the None targets.
++            if self.fullscreen.contains_key(output) {
++                let mut os = output_state(output);
++                os.camera_target = None;
++                os.zoom_target = None;
++                os.zoom_animation_center = None;
++            }
+             self.tick_zoom_animation_on(output, is_active, dt);
+             self.tick_camera_animation_on(output, is_active, dt);
+         }
+@@ -475,11 +484,8 @@ impl DriftWm {
+         };
+         let Some(delta) = delta else { return };
+ 
+-        {
+-            let mut os = output_state(output);
+-            os.camera.x += delta.x;
+-            os.camera.y += delta.y;
+-        }
++        let cam = output_state(output).camera;
++        self.set_camera_on(output, Point::from((cam.x + delta.x, cam.y + delta.y)));
+ 
+         if is_active {
+             let pos = self.seat.get_pointer().unwrap().current_location();
+@@ -496,11 +502,11 @@ impl DriftWm {
+             Point::from((velocity.x / os.zoom, velocity.y / os.zoom))
+         };
+ 
+-        {
+-            let mut os = output_state(output);
+-            os.camera.x += canvas_delta.x;
+-            os.camera.y += canvas_delta.y;
+-        }
++        let cam = output_state(output).camera;
++        self.set_camera_on(
++            output,
++            Point::from((cam.x + canvas_delta.x, cam.y + canvas_delta.y)),
++        );
+ 
+         // Touch move: re-drive the grab instead of warping the (hidden) pointer.
+         if self.redrive_touch_edge_pan(output) {
+@@ -527,15 +533,13 @@ impl DriftWm {
+         let dx = target.x - old_camera.x;
+         let dy = target.y - old_camera.y;
+ 
+-        {
+-            let mut os = output_state(output);
+-            if dx * dx + dy * dy < 0.25 {
+-                os.camera = target;
+-                os.camera_target = None;
+-            } else {
+-                os.camera = Point::from((old_camera.x + dx * factor, old_camera.y + dy * factor));
+-            }
+-        }
++        let new_camera = if dx * dx + dy * dy < 0.25 {
++            output_state(output).camera_target = None;
++            target
++        } else {
++            Point::from((old_camera.x + dx * factor, old_camera.y + dy * factor))
++        };
++        self.set_camera_on(output, new_camera);
+ 
+         if is_active {
+             let new_camera = output_state(output).camera;
+@@ -576,10 +580,13 @@ impl DriftWm {
+             let cx = current_center.x + (target_center.x - current_center.x) * factor;
+             let cy = current_center.y + (target_center.y - current_center.y) * factor;
+ 
++            let cur_zoom = output_state(output).zoom;
++            self.set_camera_on(
++                output,
++                Point::from((cx - vc.x / cur_zoom, cy - vc.y / cur_zoom)),
++            );
+             {
+                 let mut os = output_state(output);
+-                let cur_zoom = os.zoom;
+-                os.camera = Point::from((cx - vc.x / cur_zoom, cy - vc.y / cur_zoom));
+                 // Suppress camera_animation — we set camera directly
+                 os.camera_target = None;
+ 
+diff --git a/src/state/fullscreen.rs b/src/state/fullscreen.rs
+index 2fdf0a6..4544812 100644
+--- a/src/state/fullscreen.rs
++++ b/src/state/fullscreen.rs
+@@ -223,6 +223,14 @@ impl DriftWm {
+             let mut os = super::output_state(output);
+             os.camera = fs.saved_camera;
+             os.zoom = fs.saved_zoom;
++            // Match the enter path's clean slate: drop any animation targets
++            // that were set while the camera was locked (e.g. an activation
++            // aimed at this output). The per-tick fullscreen clear handles the
++            // steady state, but an exit in the same dispatch cycle — before any
++            // tick — would otherwise animate a spurious jump to the stale target.
++            os.camera_target = None;
++            os.zoom_target = None;
++            os.zoom_animation_center = None;
+         }
+         // Re-pin if it was pinned before fullscreen, then snap its Space loc
+         // back to screen_pos (update_output_from_camera's sync only fires on a
+diff --git a/src/state/init.rs b/src/state/init.rs
+index 49f0cd5..4c5a4cf 100644
+--- a/src/state/init.rs
++++ b/src/state/init.rs
+@@ -331,6 +331,8 @@ impl DriftWm {
+             tap: TapTracker::default(),
+             pending_tap_action: None,
+             suppressed_keys: HashSet::new(),
++            held_keys: HashSet::new(),
++            held_buttons: HashSet::new(),
+             gesture_state: None,
+             pending_middle_click: None,
+             momentum_timer: None,
+@@ -363,6 +365,7 @@ impl DriftWm {
+             satellite: None,
+             udev_device: None,
+             last_titlebar_click: None,
++            hot_corners_armed: HashMap::new(),
+             errors: init_errors,
+             cursor_edge_pan: edge_pan_cursor,
+             touch_state: crate::input::touch::TouchState::new(),
+diff --git a/src/state/mod.rs b/src/state/mod.rs
+index 7c6ef52..6ac88f9 100644
+--- a/src/state/mod.rs
++++ b/src/state/mod.rs
+@@ -8,8 +8,10 @@ mod fullscreen;
+ mod init;
+ mod navigation;
+ pub mod persistence;
++mod placement;
+ mod reload;
+ mod render_cache;
++mod viewport;
+ pub use cluster_snapshot::ClusterResizeSnapshot;
+ pub use cursor::{CursorFrames, CursorState};
+ pub use errors::ErrorSource;
+@@ -77,7 +79,7 @@ use crate::backend::Backend;
+ use crate::input::gestures::GestureState;
+ use crate::input::keyboard::TapTracker;
+ use driftwm::canvas::MomentumState;
+-use driftwm::config::Config;
++use driftwm::config::{Config, HotCorner};
+ use driftwm::window_ext::WindowExt;
+ 
+ /// Min visible fraction of the focused window for auto-placement to anchor a
+@@ -521,6 +523,12 @@ pub struct DriftWm {
+     /// launchers leak the trigger key into the previously focused window.
+     pub suppressed_keys: HashSet<u32>,
+ 
++    /// Keys currently held down (raw keycodes). Used by hot-corners gating
++    /// (`disable_while_dragging`) — any held key suspends hot-corner firing.
++    pub held_keys: HashSet<u32>,
++    /// Mouse buttons currently held down. Same purpose as `held_keys`.
++    pub held_buttons: HashSet<u32>,
++
+     pub fullscreen: HashMap<Output, FullscreenState>,
+ 
+     pub gesture_state: Option<GestureState>,
+@@ -599,6 +607,11 @@ pub struct DriftWm {
+         smithay::reexports::wayland_server::backend::ObjectId,
+     )>,
+ 
++    /// Last hot-corner that fired, per output. The latch prevents spamming the
++    /// bound action on every motion event while the cursor sits in the corner:
++    /// re-arm when the cursor leaves the corner.
++    pub hot_corners_armed: HashMap<Output, HotCorner>,
++
+     /// Compositor-generated errors shown in the on-screen error bar, keyed by
+     /// source. Empty = no bar. Use [`Self::set_error`]/[`Self::clear_error`].
+     pub errors: BTreeMap<ErrorSource, String>,
+@@ -1426,108 +1439,6 @@ impl DriftWm {
+         Some(f(&mut guard))
+     }
+ 
+-    // Per-output field accessors. Getters fall back to a sensible default
+-    // when no output exists; setters silently no-op. Hotplug/lid-close races
+-    // briefly leave the compositor with zero outputs — must not panic then.
+-    pub fn camera(&self) -> Point<f64, Logical> {
+-        self.active_output()
+-            .map(|o| output_state(&o).camera)
+-            .unwrap_or_default()
+-    }
+-    pub fn set_camera(&mut self, val: Point<f64, Logical>) {
+-        if let Some(o) = self.active_output() {
+-            // Invariant: a fullscreen window is parked at its output's
+-            // camera-origin at zoom 1, so the camera must not move or it slides
+-            // off (0,0) and re-exposes to other cameras. Nav paths that reach
+-            // set_camera already exit fullscreen first; this is a backstop so a
+-            // future set_camera caller can't silently reintroduce the bleed.
+-            // (`enter_fullscreen` snaps via output_state directly to bypass it.)
+-            if self.fullscreen.contains_key(&o) {
+-                return;
+-            }
+-            output_state(&o).camera = val;
+-        }
+-    }
+-    pub fn zoom(&self) -> f64 {
+-        // 1.0 default (not 0.0) avoids divide-by-zero in `step / zoom` callers.
+-        self.active_output()
+-            .map(|o| output_state(&o).zoom)
+-            .unwrap_or(1.0)
+-    }
+-    pub fn set_zoom(&mut self, val: f64) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).zoom = val;
+-        }
+-    }
+-    pub fn zoom_target(&self) -> Option<f64> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).zoom_target)
+-    }
+-    pub fn set_zoom_target(&mut self, val: Option<f64>) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).zoom_target = val;
+-        }
+-    }
+-    pub fn zoom_animation_center(&self) -> Option<Point<f64, Logical>> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).zoom_animation_center)
+-    }
+-    pub fn set_zoom_animation_center(&mut self, val: Option<Point<f64, Logical>>) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).zoom_animation_center = val;
+-        }
+-    }
+-    pub fn overview_return(&self) -> Option<(Point<f64, Logical>, f64)> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).overview_return)
+-    }
+-    pub fn set_overview_return(&mut self, val: Option<(Point<f64, Logical>, f64)>) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).overview_return = val;
+-        }
+-    }
+-    pub fn camera_target(&self) -> Option<Point<f64, Logical>> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).camera_target)
+-    }
+-    pub fn set_camera_target(&mut self, val: Option<Point<f64, Logical>>) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).camera_target = val;
+-        }
+-    }
+-    pub fn last_scroll_pan(&self) -> Option<Instant> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).last_scroll_pan)
+-    }
+-    pub fn set_last_scroll_pan(&mut self, val: Option<Instant>) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).last_scroll_pan = val;
+-        }
+-    }
+-    pub fn panning(&self) -> bool {
+-        self.active_output()
+-            .is_some_and(|o| output_state(&o).panning)
+-    }
+-    pub fn set_panning(&mut self, val: bool) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).panning = val;
+-        }
+-    }
+-    pub fn edge_pan_velocity(&self) -> Option<Point<f64, Logical>> {
+-        self.active_output()
+-            .and_then(|o| output_state(&o).edge_pan_velocity)
+-    }
+-    pub fn last_frame_instant(&self) -> Instant {
+-        self.active_output()
+-            .map(|o| output_state(&o).last_frame_instant)
+-            .unwrap_or_else(Instant::now)
+-    }
+-    pub fn set_last_frame_instant(&mut self, val: Instant) {
+-        if let Some(o) = self.active_output() {
+-            output_state(&o).last_frame_instant = val;
+-        }
+-    }
+-
+     /// Sync each output's position to its camera so render_output
+     /// applies the canvas→screen transform.
+     pub fn update_output_from_camera(&mut self) {
+@@ -1647,7 +1558,14 @@ impl DriftWm {
+ 
+     /// Screen-space center of the usable area (= viewport center when no panels exist).
+     pub fn usable_center_screen(&self) -> Point<f64, Logical> {
+-        let usable = self.get_usable_area();
++        self.active_output()
++            .map(|o| self.usable_center_screen_on(&o))
++            .unwrap_or_else(|| Point::from((0.5, 0.5)))
++    }
++
++    /// Screen-space center of `output`'s usable area (viewport minus panels).
++    pub fn usable_center_screen_on(&self, output: &Output) -> Point<f64, Logical> {
++        let usable = smithay::desktop::layer_map_for_output(output).non_exclusive_zone();
+         Point::from((
+             usable.loc.x as f64 + usable.size.w as f64 / 2.0,
+             usable.loc.y as f64 + usable.size.h as f64 / 2.0,
+@@ -1713,180 +1631,34 @@ impl DriftWm {
+         )))
+     }
+ 
+-    /// True if at least `threshold` of the window's area is inside the viewport.
++    /// True if at least `threshold` of the window's area is inside the active
++    /// output's viewport.
+     pub fn window_visible_at_least(&self, window: &Window, threshold: f64) -> bool {
++        self.active_output()
++            .is_some_and(|o| self.window_visible_at_least_on(window, &o, threshold))
++    }
++
++    /// As `window_visible_at_least`, but against `output`'s viewport instead
++    /// of the active one.
++    pub fn window_visible_at_least_on(
++        &self,
++        window: &Window,
++        output: &Output,
++        threshold: f64,
++    ) -> bool {
+         let Some(loc) = self.space.element_location(window) else {
+             return false;
+         };
++        let os = output_state(output);
+         driftwm::canvas::visible_fraction(
+             loc,
+             window.geometry().size,
+-            self.camera(),
+-            self.get_viewport_size(),
+-            self.zoom(),
++            os.camera,
++            output_logical_size(output),
++            os.zoom,
+         ) >= threshold
+     }
+ 
+-    /// Spawn pos for `placement = "cursor"`: center the visual frame
+-    /// (titlebar + content) on the cursor, clamped to the active output's
+-    /// usable rect. `bar` is SSD title-bar height (0 for CSD/minimal).
+-    pub fn cursor_placement_pos(
+-        &self,
+-        window_size: Size<i32, Logical>,
+-        bar: i32,
+-    ) -> Option<(i32, i32)> {
+-        self.active_output()?;
+-
+-        let pointer = self.seat.get_pointer()?;
+-        let cursor = pointer.current_location();
+-
+-        // usable area is screen-local; convert to canvas coords.
+-        let usable = self.get_usable_area();
+-        let zoom = self.zoom();
+-        let camera = self.camera();
+-        let cx_min = camera.x + usable.loc.x as f64 / zoom;
+-        let cy_min = camera.y + usable.loc.y as f64 / zoom;
+-        let cx_max = camera.x + (usable.loc.x + usable.size.w) as f64 / zoom;
+-        let cy_max = camera.y + (usable.loc.y + usable.size.h) as f64 / zoom;
+-
+-        // Target: visual frame center on cursor. Frame spans [loc.y - bar, loc.y + h],
+-        // so frame center = loc.y + (h - bar)/2  →  loc.y = cursor.y - h/2 + bar/2.
+-        let bar_f = bar as f64;
+-        let raw_x = cursor.x - window_size.w as f64 / 2.0;
+-        let raw_y = cursor.y - window_size.h as f64 / 2.0 + bar_f / 2.0;
+-
+-        // Clamp so the frame stays fully inside the usable canvas rect.
+-        // For oversized windows, .max() keeps the upper bound >= lower bound
+-        // (the top sticks at the usable edge; the bottom overflows).
+-        let max_x = (cx_max - window_size.w as f64).max(cx_min);
+-        let max_y = (cy_max - window_size.h as f64).max(cy_min + bar_f);
+-        let x = raw_x.clamp(cx_min, max_x);
+-        let y = raw_y.clamp(cy_min + bar_f, max_y);
+-
+-        Some((x.round() as i32, y.round() as i32))
+-    }
+-
+-    /// Spawn pos for `placement = "auto"`: snap-place adjacent to the focused
+-    /// window's cluster. Returns content top-left (shifted down by `bar` so
+-    /// the visual frame snaps to the neighbor). `None` on no eligible focus
+-    /// or no valid placement; caller falls back to center.
+-    ///
+-    /// `new_window` is excluded from anchor search and obstacle list. Without
+-    /// the skip we'd anchor the new window against itself, since by the time
+-    /// this runs `new_window` is already at the viewport center and front of
+-    /// `focus_history`.
+-    pub fn auto_placement_pos(
+-        &self,
+-        new_window: &Window,
+-        new_size: Size<i32, Logical>,
+-        bar: i32,
+-    ) -> Option<(i32, i32)> {
+-        // Anchor = keyboard focus at `new_toplevel` time, snapshotted before
+-        // focus was reassigned to the new surface. `None` (or absent) means
+-        // no anchor and caller falls back to center.
+-        let new_surface = new_window.wl_surface()?.into_owned();
+-        let focused = self.auto_anchor_snapshot.get(&new_surface)?.as_ref()?;
+-        let widget = focused
+-            .wl_surface()
+-            .and_then(|s| driftwm::config::applied_rule(&s))
+-            .is_some_and(|r| r.widget);
+-        let is_fs = self.is_window_fullscreen(focused);
+-        if widget || is_fs || self.is_pinned(focused) {
+-            return None;
+-        }
+-
+-        // Only anchor when enough of the focused window is visible that the
+-        // user is plausibly working on its cluster; otherwise they intend a
+-        // fresh cluster and caller falls back to center.
+-        if !self.window_visible_at_least(focused, AUTO_PLACE_CLUSTER_THRESHOLD) {
+-            return None;
+-        }
+-
+-        // Widgets sit visually below windows (wallpaper-like) — neither
+-        // anchors nor obstacles for auto placement.
+-        let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
+-        let mut eligible: HashSet<usize> = HashSet::new();
+-        let mut focused_idx: Option<usize> = None;
+-        for w in self.space.elements() {
+-            if w == new_window {
+-                continue;
+-            }
+-            let widget = w
+-                .wl_surface()
+-                .and_then(|s| driftwm::config::applied_rule(&s))
+-                .is_some_and(|r| r.widget);
+-            let is_fs = self.is_window_fullscreen(w);
+-            if widget || is_fs || self.is_pinned(w) {
+-                continue;
+-            }
+-            let Some(loc) = self.space.element_location(w) else {
+-                continue;
+-            };
+-            let size = w.geometry().size;
+-            let b = self.window_ssd_bar(w);
+-            let bw = w.wl_surface().map_or(0, |s| self.window_border_width(&s)) as f64;
+-            let idx = rects.len();
+-            rects.push(driftwm::layout::auto_placement::Rect {
+-                x: loc.x as f64 - bw,
+-                y: (loc.y - b) as f64 - bw,
+-                w: size.w as f64 + 2.0 * bw,
+-                h: (size.h + b) as f64 + 2.0 * bw,
+-            });
+-            eligible.insert(idx);
+-            if w == focused {
+-                focused_idx = Some(idx);
+-            }
+-        }
+-        let focused_idx = focused_idx?;
+-
+-        let new_bw = self.window_border_width(&new_surface) as f64;
+-        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
+-        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
+-
+-        let camera = self.camera();
+-        let zoom = self.zoom();
+-        let vc_screen = self.usable_center_screen();
+-        let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
+-
+-        let pos = driftwm::layout::auto_placement::place_auto(
+-            &rects,
+-            focused_idx,
+-            &eligible,
+-            new_w_f,
+-            new_h_f,
+-            vc,
+-            self.config.snap_gap,
+-        )?;
+-
+-        // place_auto returns frame top-left (outside border, above title bar);
+-        // shift inward to content top-left.
+-        let bw_i = new_bw as i32;
+-        Some((
+-            pos.0.round() as i32 + bw_i,
+-            pos.1.round() as i32 + bw_i + bar,
+-        ))
+-    }
+-
+-    /// Walk a spawn position in title-bar-sized diagonal steps until it
+-    /// doesn't sit on top of an existing window.
+-    pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
+-        let step = self.config.decorations.title_bar_height;
+-        loop {
+-            let dominated = self.space.elements().any(|w| {
+-                w != skip
+-                    && self
+-                        .space
+-                        .element_location(w)
+-                        .is_some_and(|loc| (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2)
+-            });
+-            if !dominated {
+-                break pos;
+-            }
+-            pos.0 += step;
+-            pos.1 += step;
+-        }
+-    }
+-
+     pub fn load_xcursor(&mut self, name: &str) -> Option<&CursorFrames> {
+         let theme = self.config.cursor_theme.as_deref().unwrap_or("default");
+         let size = self.config.cursor_size.unwrap_or(24);
+diff --git a/src/state/navigation.rs b/src/state/navigation.rs
+index e6b9ee5..1c795f7 100644
+--- a/src/state/navigation.rs
++++ b/src/state/navigation.rs
+@@ -1,5 +1,4 @@
+ use crate::surface_tree::focus_belongs_to_window;
+-use driftwm::layout::snap::SnapRect;
+ use driftwm::window_ext::WindowExt;
+ use smithay::{
+     desktop::Window,
+@@ -11,15 +10,27 @@ use smithay::{
+ 
+ use super::{DriftWm, output_state};
+ 
+-fn rects_overlap(a: &SnapRect, b: &SnapRect) -> bool {
+-    a.x_low < b.x_high && b.x_low < a.x_high && a.y_low < b.y_high && b.y_low < a.y_high
+-}
++/// Skip the activation pan only when the window is already fully inside its
++/// home output's viewport. Any clipping → pan that output to bring it fully
++/// into view; activation is a request to look at the window.
++const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
+ 
+ impl DriftWm {
+-    /// Navigate the viewport to center on a window: raise, focus, animate camera.
+-    /// When `reset_zoom` is true, zoom animates to 1.0 (intentional navigation).
+-    /// Otherwise preserves current zoom, or restores saved zoom if leaving overview.
++    /// Navigate the active output's viewport to center on a window: raise,
++    /// focus, animate camera. When `reset_zoom` is true, zoom animates to 1.0
++    /// (intentional navigation). Otherwise preserves current zoom, or restores
++    /// saved zoom if leaving overview.
+     pub fn navigate_to_window(&mut self, window: &Window, reset_zoom: bool) {
++        if let Some(output) = self.active_output() {
++            self.navigate_to_window_on(window, &output, reset_zoom);
++        }
++    }
++
++    /// As `navigate_to_window`, but pans `output`'s camera instead of the
++    /// active one. Lets xdg-activation reveal a window on the monitor it
++    /// already lives on rather than dragging the active monitor's camera
++    /// across to it.
++    pub fn navigate_to_window_on(&mut self, window: &Window, output: &Output, reset_zoom: bool) {
+         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+ 
+         // A fullscreen window lives in screen space, shown only on its own
+@@ -31,7 +42,7 @@ impl DriftWm {
+             .wl_surface()
+             .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+         {
+-            if self.active_output().as_ref() == Some(&fs_output) {
++            if &fs_output == output {
+                 self.raise_and_focus(window, serial);
+             }
+             return;
+@@ -40,22 +51,22 @@ impl DriftWm {
+         self.raise_and_focus(window, serial);
+ 
+         let target_zoom = if reset_zoom {
+-            self.set_overview_return(None);
++            output_state(output).overview_return = None;
+             1.0
+         } else {
+-            let overview_ret = self.overview_return();
+-            self.set_overview_return(None);
++            let overview_ret = output_state(output).overview_return;
++            output_state(output).overview_return = None;
+             if let Some((_, saved_zoom)) = overview_ret {
+                 saved_zoom
+             } else {
+-                self.zoom()
++                output_state(output).zoom
+             }
+         };
+ 
+         let window_loc = self.space.element_location(window).unwrap_or_default();
+         let window_size = window.geometry().size;
+         let bar = self.window_ssd_bar(window);
+-        let vc = self.usable_center_screen();
++        let vc = self.usable_center_screen_on(output);
+         let target =
+             driftwm::canvas::camera_to_center_window(window_loc, window_size, vc, target_zoom, bar);
+ 
+@@ -65,12 +76,27 @@ impl DriftWm {
+                 window_loc.y as f64 + window_size.h as f64 / 2.0,
+             ))
+         });
+-        self.with_output_state(|os| {
+-            os.momentum.stop();
+-            os.zoom_animation_center = Some(window_center);
+-            os.camera_target = Some(target);
+-            os.zoom_target = Some(target_zoom);
+-        });
++        let mut os = output_state(output);
++        os.momentum.stop();
++        os.zoom_animation_center = Some(window_center);
++        os.camera_target = Some(target);
++        os.zoom_target = Some(target_zoom);
++    }
++
++    /// Reveal and focus `window` on the output it already lives on, without
++    /// dragging a different monitor's camera to it: fully visible on its home
++    /// output → just focus; any clipping → pan that output into view. A window
++    /// off every screen falls back to the active output.
++    pub fn activate_window_output_local(&mut self, window: &Window) {
++        let Some(home) = self.output_for_window(window) else {
++            return;
++        };
++        if self.window_visible_at_least_on(window, &home, ACTIVATION_VISIBLE_THRESHOLD) {
++            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
++            self.raise_and_focus(window, serial);
++        } else {
++            self.navigate_to_window_on(window, &home, self.config.zoom_reset_on_activation);
++        }
+     }
+ 
+     /// Dynamic minimum zoom based on the current window layout.
+@@ -241,7 +267,7 @@ impl DriftWm {
+                 cluster.contains(*w)
+                     || self
+                         .snap_rect_for(w)
+-                        .is_some_and(|r| rects_overlap(&destroyed_rect, &r))
++                        .is_some_and(|r| destroyed_rect.overlaps(&r))
+             })
+             .cloned()
+     }
+diff --git a/src/state/placement.rs b/src/state/placement.rs
+new file mode 100644
+index 0000000..9446b0e
+--- /dev/null
++++ b/src/state/placement.rs
+@@ -0,0 +1,305 @@
++use std::collections::HashSet;
++
++use smithay::desktop::Window;
++use smithay::utils::{Logical, Size};
++use smithay::wayland::seat::WaylandFocus;
++
++use super::{AUTO_PLACE_CLUSTER_THRESHOLD, DriftWm};
++
++impl DriftWm {
++    /// Spawn pos for `placement = "cursor"`: center the visual frame
++    /// (titlebar + content) on the cursor, clamped to the active output's
++    /// usable rect. `bar` is SSD title-bar height (0 for CSD/minimal).
++    pub fn cursor_placement_pos(
++        &self,
++        window_size: Size<i32, Logical>,
++        bar: i32,
++    ) -> Option<(i32, i32)> {
++        self.active_output()?;
++
++        let pointer = self.seat.get_pointer()?;
++        let cursor = pointer.current_location();
++
++        // usable area is screen-local; convert to canvas coords.
++        let usable = self.get_usable_area();
++        let zoom = self.zoom();
++        let camera = self.camera();
++        let cx_min = camera.x + usable.loc.x as f64 / zoom;
++        let cy_min = camera.y + usable.loc.y as f64 / zoom;
++        let cx_max = camera.x + (usable.loc.x + usable.size.w) as f64 / zoom;
++        let cy_max = camera.y + (usable.loc.y + usable.size.h) as f64 / zoom;
++
++        // Target: visual frame center on cursor. Frame spans [loc.y - bar, loc.y + h],
++        // so frame center = loc.y + (h - bar)/2  →  loc.y = cursor.y - h/2 + bar/2.
++        let bar_f = bar as f64;
++        let raw_x = cursor.x - window_size.w as f64 / 2.0;
++        let raw_y = cursor.y - window_size.h as f64 / 2.0 + bar_f / 2.0;
++
++        // Clamp so the frame stays fully inside the usable canvas rect.
++        // For oversized windows, .max() keeps the upper bound >= lower bound
++        // (the top sticks at the usable edge; the bottom overflows).
++        let max_x = (cx_max - window_size.w as f64).max(cx_min);
++        let max_y = (cy_max - window_size.h as f64).max(cy_min + bar_f);
++        let x = raw_x.clamp(cx_min, max_x);
++        let y = raw_y.clamp(cy_min + bar_f, max_y);
++
++        Some((x.round() as i32, y.round() as i32))
++    }
++
++    /// Spawn pos for `placement = "auto"`: snap-place adjacent to the focused
++    /// window's cluster. Returns content top-left (shifted down by `bar` so
++    /// the visual frame snaps to the neighbor). `None` on no eligible focus
++    /// or no valid placement; caller falls back to center.
++    ///
++    /// `new_window` is excluded from anchor search and obstacle list. Without
++    /// the skip we'd anchor the new window against itself, since by the time
++    /// this runs `new_window` is already at the viewport center and front of
++    /// `focus_history`.
++    pub fn auto_placement_pos(
++        &self,
++        new_window: &Window,
++        new_size: Size<i32, Logical>,
++        bar: i32,
++    ) -> Option<(i32, i32)> {
++        // Anchor = keyboard focus at `new_toplevel` time, snapshotted before
++        // focus was reassigned to the new surface. `None` (or absent) means
++        // no anchor and caller falls back to center.
++        let new_surface = new_window.wl_surface()?.into_owned();
++        let focused = self.auto_anchor_snapshot.get(&new_surface)?.as_ref()?;
++        let widget = focused
++            .wl_surface()
++            .and_then(|s| driftwm::config::applied_rule(&s))
++            .is_some_and(|r| r.widget);
++        let is_fs = self.is_window_fullscreen(focused);
++        if widget || is_fs || self.is_pinned(focused) {
++            return None;
++        }
++
++        // Only anchor when enough of the focused window is visible that the
++        // user is plausibly working on its cluster; otherwise they intend a
++        // fresh cluster and caller falls back to center.
++        if !self.window_visible_at_least(focused, AUTO_PLACE_CLUSTER_THRESHOLD) {
++            return None;
++        }
++
++        self.place_adjacent_to(focused, new_window, new_size, bar)
++    }
++
++    /// Geometry-only placement of `placing` (content sized `new_size`, SSD
++    /// bar `bar`) adjacent to `anchor`'s snap cluster, treating every other
++    /// mapped window as an obstacle. Returns the content top-left in canvas
++    /// coords, or `None` when `anchor` is ineligible or no slot fits.
++    pub fn place_adjacent_to(
++        &self,
++        anchor: &Window,
++        placing: &Window,
++        new_size: Size<i32, Logical>,
++        bar: i32,
++    ) -> Option<(i32, i32)> {
++        let placing_surface = placing.wl_surface()?.into_owned();
++
++        // Widgets sit visually below windows (wallpaper-like) — neither
++        // anchors nor obstacles for auto placement.
++        let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
++        let mut eligible: HashSet<usize> = HashSet::new();
++        let mut anchor_idx: Option<usize> = None;
++        for w in self.space.elements() {
++            if w == placing {
++                continue;
++            }
++            let widget = w
++                .wl_surface()
++                .and_then(|s| driftwm::config::applied_rule(&s))
++                .is_some_and(|r| r.widget);
++            let is_fs = self.is_window_fullscreen(w);
++            if widget || is_fs || self.is_pinned(w) {
++                continue;
++            }
++            let Some(loc) = self.space.element_location(w) else {
++                continue;
++            };
++            let size = w.geometry().size;
++            let b = self.window_ssd_bar(w);
++            let bw = w.wl_surface().map_or(0, |s| self.window_border_width(&s)) as f64;
++            let idx = rects.len();
++            rects.push(driftwm::layout::auto_placement::Rect {
++                x: loc.x as f64 - bw,
++                y: (loc.y - b) as f64 - bw,
++                w: size.w as f64 + 2.0 * bw,
++                h: (size.h + b) as f64 + 2.0 * bw,
++            });
++            eligible.insert(idx);
++            if w == anchor {
++                anchor_idx = Some(idx);
++            }
++        }
++        let anchor_idx = anchor_idx?;
++
++        let new_bw = self.window_border_width(&placing_surface) as f64;
++        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
++        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
++
++        let camera = self.camera();
++        let zoom = self.zoom();
++        let vc_screen = self.usable_center_screen();
++        let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
++
++        let pos = driftwm::layout::auto_placement::place_auto(
++            &rects,
++            anchor_idx,
++            &eligible,
++            new_w_f,
++            new_h_f,
++            vc,
++            self.config.snap_gap,
++        )?;
++
++        // place_auto returns frame top-left (outside border, above title bar);
++        // shift inward to content top-left.
++        let bw_i = new_bw as i32;
++        Some((
++            pos.0.round() as i32 + bw_i,
++            pos.1.round() as i32 + bw_i + bar,
++        ))
++    }
++
++    /// Placement for a new window that would otherwise land on top of a
++    /// fullscreen window. Anchors to the fullscreen window's *saved*
++    /// (pre-fullscreen) canvas rect so the new window tucks in beside it, off
++    /// the fullscreen viewport — culled now, revealed cleanly on exit.
++    ///
++    /// Output-scoped: only fires when the new window's own output is the
++    /// fullscreen one, so a window on a monitor you're actively using still
++    /// places normally. `None` when there's no fullscreen window to tuck behind.
++    pub fn fullscreen_background_pos(
++        &self,
++        new_window: &Window,
++        new_size: Size<i32, Logical>,
++        bar: i32,
++    ) -> Option<(i32, i32)> {
++        let new_surface = new_window.wl_surface()?.into_owned();
++
++        // The fullscreen window to tuck behind: the map-time focus anchor when
++        // it is itself fullscreen (auto/center/cursor all snapshot it), else the
++        // active output's fullscreen window. The fallback covers a no-anchor map
++        // and the case where focus sits on some other window while an output is
++        // fullscreen — the pointer's output is the one the window lands on.
++        let anchor = self
++            .auto_anchor_snapshot
++            .get(&new_surface)
++            .and_then(|o| o.clone());
++        let output = anchor
++            .as_ref()
++            .and_then(|a| {
++                self.fullscreen
++                    .iter()
++                    .find(|(_, fs)| &fs.window == a)
++                    .map(|(o, _)| o.clone())
++            })
++            .or_else(|| {
++                let out = self.active_output()?;
++                self.fullscreen.contains_key(&out).then_some(out)
++            })?;
++        let fs = self.fullscreen.get(&output)?;
++
++        // Anchor rect = the fullscreen window's canvas home, reconstructed as a
++        // frame rect (borders + SSD bar) exactly like `auto_placement_pos`.
++        let fs_bw = fs
++            .window
++            .wl_surface()
++            .map_or(0, |s| self.window_border_width(&s)) as f64;
++        let fs_bar = self.window_ssd_bar(&fs.window);
++        let anchor_rect = driftwm::layout::auto_placement::Rect {
++            x: fs.saved_location.x as f64 - fs_bw,
++            y: (fs.saved_location.y - fs_bar) as f64 - fs_bw,
++            w: fs.saved_size.w as f64 + 2.0 * fs_bw,
++            h: (fs.saved_size.h + fs_bar) as f64 + 2.0 * fs_bw,
++        };
++
++        let mut rects = vec![anchor_rect];
++        let mut eligible: HashSet<usize> = HashSet::new();
++        eligible.insert(0);
++
++        for w in self.space.elements() {
++            if w == new_window || w == &fs.window {
++                continue;
++            }
++            let widget = w
++                .wl_surface()
++                .and_then(|s| driftwm::config::applied_rule(&s))
++                .is_some_and(|r| r.widget);
++            if widget || self.is_window_fullscreen(w) || self.is_pinned(w) {
++                continue;
++            }
++            let Some(loc) = self.space.element_location(w) else {
++                continue;
++            };
++            let size = w.geometry().size;
++            let b = self.window_ssd_bar(w);
++            let bw = w.wl_surface().map_or(0, |s| self.window_border_width(&s)) as f64;
++            let idx = rects.len();
++            rects.push(driftwm::layout::auto_placement::Rect {
++                x: loc.x as f64 - bw,
++                y: (loc.y - b) as f64 - bw,
++                w: size.w as f64 + 2.0 * bw,
++                h: (size.h + b) as f64 + 2.0 * bw,
++            });
++            eligible.insert(idx);
++        }
++
++        let new_bw = self.window_border_width(&new_surface) as f64;
++        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
++        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
++
++        // Bias toward the fullscreen window's home center; its live location is
++        // the fullscreen viewport, which is irrelevant to canvas placement.
++        let vc = (
++            anchor_rect.x + anchor_rect.w / 2.0,
++            anchor_rect.y + anchor_rect.h / 2.0,
++        );
++
++        let bw_i = new_bw as i32;
++        if let Some(pos) = driftwm::layout::auto_placement::place_auto(
++            &rects,
++            0,
++            &eligible,
++            new_w_f,
++            new_h_f,
++            vc,
++            self.config.snap_gap,
++        ) {
++            return Some((
++                pos.0.round() as i32 + bw_i,
++                pos.1.round() as i32 + bw_i + bar,
++            ));
++        }
++
++        // No adjacent slot: park it just below the fullscreen window's saved
++        // home so it doesn't overlap where that window restores to on exit.
++        let gap = self.config.snap_gap.round() as i32;
++        Some((
++            fs.saved_location.x,
++            fs.saved_location.y + fs.saved_size.h + gap,
++        ))
++    }
++
++    /// Walk a spawn position in title-bar-sized diagonal steps until it
++    /// doesn't sit on top of an existing window.
++    pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
++        let step = self.config.decorations.title_bar_height;
++        loop {
++            let dominated = self.space.elements().any(|w| {
++                w != skip
++                    && self
++                        .space
++                        .element_location(w)
++                        .is_some_and(|loc| (loc.x - pos.0).abs() <= 2 && (loc.y - pos.1).abs() <= 2)
++            });
++            if !dominated {
++                break pos;
++            }
++            pos.0 += step;
++            pos.1 += step;
++        }
++    }
++}
+diff --git a/src/state/viewport.rs b/src/state/viewport.rs
+new file mode 100644
+index 0000000..9b8f103
+--- /dev/null
++++ b/src/state/viewport.rs
+@@ -0,0 +1,118 @@
++use std::time::Instant;
++
++use smithay::output::Output;
++use smithay::utils::{Logical, Point};
++
++use super::{DriftWm, output_state};
++
++impl DriftWm {
++    // Per-output field accessors. Getters fall back to a sensible default
++    // when no output exists; setters silently no-op. Hotplug/lid-close races
++    // briefly leave the compositor with zero outputs — must not panic then.
++    pub fn camera(&self) -> Point<f64, Logical> {
++        self.active_output()
++            .map(|o| output_state(&o).camera)
++            .unwrap_or_default()
++    }
++    pub fn set_camera(&mut self, val: Point<f64, Logical>) {
++        if let Some(o) = self.active_output() {
++            self.set_camera_on(&o, val);
++        }
++    }
++
++    /// Move `output`'s camera, honoring the fullscreen lock. Every per-output
++    /// animation tick (momentum, edge-pan, zoom, camera) routes through here, so
++    /// none can move a fullscreen output's camera. Interactive pan/zoom grabs
++    /// still write output_state directly, but they exit fullscreen before
++    /// panning, so they never race the lock.
++    ///
++    /// Invariant: a fullscreen window is parked at its output's camera-origin at
++    /// zoom 1, so the camera must not move or it slides off (0,0) and re-exposes
++    /// black to that output (and other cameras). (`enter_fullscreen` seeds the
++    /// origin by writing output_state directly, before its state is inserted.)
++    pub fn set_camera_on(&mut self, output: &Output, val: Point<f64, Logical>) {
++        if self.fullscreen.contains_key(output) {
++            return;
++        }
++        output_state(output).camera = val;
++    }
++    pub fn zoom(&self) -> f64 {
++        // 1.0 default (not 0.0) avoids divide-by-zero in `step / zoom` callers.
++        self.active_output()
++            .map(|o| output_state(&o).zoom)
++            .unwrap_or(1.0)
++    }
++    pub fn set_zoom(&mut self, val: f64) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).zoom = val;
++        }
++    }
++    pub fn zoom_target(&self) -> Option<f64> {
++        self.active_output()
++            .and_then(|o| output_state(&o).zoom_target)
++    }
++    pub fn set_zoom_target(&mut self, val: Option<f64>) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).zoom_target = val;
++        }
++    }
++    pub fn zoom_animation_center(&self) -> Option<Point<f64, Logical>> {
++        self.active_output()
++            .and_then(|o| output_state(&o).zoom_animation_center)
++    }
++    pub fn set_zoom_animation_center(&mut self, val: Option<Point<f64, Logical>>) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).zoom_animation_center = val;
++        }
++    }
++    pub fn overview_return(&self) -> Option<(Point<f64, Logical>, f64)> {
++        self.active_output()
++            .and_then(|o| output_state(&o).overview_return)
++    }
++    pub fn set_overview_return(&mut self, val: Option<(Point<f64, Logical>, f64)>) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).overview_return = val;
++        }
++    }
++    pub fn camera_target(&self) -> Option<Point<f64, Logical>> {
++        self.active_output()
++            .and_then(|o| output_state(&o).camera_target)
++    }
++    pub fn set_camera_target(&mut self, val: Option<Point<f64, Logical>>) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).camera_target = val;
++        }
++    }
++    pub fn last_scroll_pan(&self) -> Option<Instant> {
++        self.active_output()
++            .and_then(|o| output_state(&o).last_scroll_pan)
++    }
++    pub fn set_last_scroll_pan(&mut self, val: Option<Instant>) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).last_scroll_pan = val;
++        }
++    }
++    pub fn panning(&self) -> bool {
++        self.active_output()
++            .is_some_and(|o| output_state(&o).panning)
++    }
++    pub fn set_panning(&mut self, val: bool) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).panning = val;
++        }
++    }
++    pub fn edge_pan_velocity(&self) -> Option<Point<f64, Logical>> {
++        self.active_output()
++            .and_then(|o| output_state(&o).edge_pan_velocity)
++    }
++    pub fn last_frame_instant(&self) -> Instant {
++        self.active_output()
++            .map(|o| output_state(&o).last_frame_instant)
++            .unwrap_or_else(Instant::now)
++    }
++    pub fn set_last_frame_instant(&mut self, val: Instant) {
++        if let Some(o) = self.active_output() {
++            output_state(&o).last_frame_instant = val;
++        }
++    }
++}
+diff --git a/tests/config_toml_test.rs b/tests/config_toml_test.rs
+index 2f5f143..2929123 100644
+--- a/tests/config_toml_test.rs
++++ b/tests/config_toml_test.rs
+@@ -181,6 +181,121 @@ fn toml_gesture_context_priority() {
+     );
+ }
+ 
++// ── [bindings] disable_defaults ──────────────────────────────────────────
++
++#[test]
++fn toml_disable_defaults_keys_clears_default_keybindings_only() {
++    let toml = r#"
++        [bindings]
++        disable_defaults = ["keys"]
++        [keybindings]
++        "Mod+x" = "close-window"
++    "#;
++    let config = Config::from_toml(toml).unwrap();
++
++    assert!(
++        config
++            .lookup(&logo(), Keysym::from(keysyms::KEY_q))
++            .is_none(),
++        "default Mod+q should be gone when keys defaults are disabled"
++    );
++    assert!(
++        matches!(
++            config.lookup(&logo(), Keysym::from(keysyms::KEY_x)),
++            Some(Action::CloseWindow)
++        ),
++        "user-defined Mod+x should still resolve"
++    );
++    assert!(
++        matches!(
++            config.mouse_button_lookup_ctx(&alt(), BTN_RIGHT, BindingContext::OnWindow),
++            Some(MouseAction::ResizeWindow)
++        ),
++        "mouse defaults should survive disabling keys defaults"
++    );
++    assert!(
++        config
++            .gesture_lookup(
++                &ModifiersState::default(),
++                &GestureTrigger::Swipe { fingers: 3 },
++                BindingContext::Anywhere,
++            )
++            .is_some(),
++        "gesture defaults should survive disabling keys defaults"
++    );
++}
++
++#[test]
++fn toml_disable_defaults_mouse_clears_default_mouse_bindings_only() {
++    let toml = r#"
++        [bindings]
++        disable_defaults = ["mouse"]
++    "#;
++    let config = Config::from_toml(toml).unwrap();
++
++    assert!(
++        config
++            .mouse_button_lookup_ctx(&alt(), BTN_RIGHT, BindingContext::OnWindow)
++            .is_none(),
++        "default Alt+RightClick resize should be gone when mouse defaults are disabled"
++    );
++    assert!(
++        matches!(
++            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
++            Some(Action::CloseWindow)
++        ),
++        "key defaults should survive disabling mouse defaults"
++    );
++}
++
++#[test]
++fn toml_disable_defaults_gestures_clears_default_gestures_only() {
++    let toml = r#"
++        [bindings]
++        disable_defaults = ["gestures"]
++    "#;
++    let config = Config::from_toml(toml).unwrap();
++
++    assert!(
++        config
++            .gesture_lookup(
++                &ModifiersState::default(),
++                &GestureTrigger::Swipe { fingers: 3 },
++                BindingContext::Anywhere,
++            )
++            .is_none(),
++        "default 3-finger swipe should be gone when gesture defaults are disabled"
++    );
++    assert!(
++        matches!(
++            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
++            Some(Action::CloseWindow)
++        ),
++        "key defaults should survive disabling gesture defaults"
++    );
++}
++
++#[test]
++fn toml_disable_defaults_unknown_category_warns_and_keeps_defaults() {
++    let toml = r#"
++        [bindings]
++        disable_defaults = ["typo"]
++    "#;
++    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
++
++    assert!(
++        warnings.iter().any(|w| w.contains("typo")),
++        "an unknown disable_defaults category should produce a warning, got: {warnings:?}"
++    );
++    assert!(
++        matches!(
++            config.lookup(&logo(), Keysym::from(keysyms::KEY_q)),
++            Some(Action::CloseWindow)
++        ),
++        "defaults should be untouched for an unknown category"
++    );
++}
++
+ #[test]
+ fn toml_old_flat_mouse_section_is_rejected() {
+     let toml = r#"
