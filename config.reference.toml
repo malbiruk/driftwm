@@ -529,7 +529,7 @@
 # # bottom_left = "spawn grim - | wl-copy"
 # # bottom_right = "exec-launcher"
 # # disable_when_fullscreen = true   # suppress hot-corners while a fullscreen window is on this output (default: true)
-# # disable_while_dragging  = true   # suppress hot-corners while any key/mouse button is held, or a pointer grab (move/resize/pan) is active (default: true)
+# # disable_while_dragging  = true   # suppress hot-corners while any mouse button is held, or a pointer grab (move/resize/pan) is active (default: true)
 
 # ## Window rules
 # # Window rules: match windows and apply per-window overrides.

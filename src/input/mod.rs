@@ -106,12 +106,13 @@ impl DriftWm {
         }
 
         // disable_while_dragging: suppress during any compositor grab (move/resize/
-        // pan-viewport/navigate) OR while any key/mouse button is held. The single
-        // flag covers all "user is mid-action" states — flipping it to false
-        // restores the pre-flag behaviour identically.
+        // pan-viewport/navigate) OR while any mouse button is held. Keyboard state
+        // is intentionally NOT considered — modifiers like Shift/Ctrl/Super are
+        // commonly held during normal cursor travel, and gating on them would
+        // make hot-corners unreachable for users who hold a modifier habitually.
+        // Matches macOS/Windows behaviour.
         if cfg.hot_corners.disable_while_dragging
             && (self.seat.get_pointer().is_some_and(|p| p.is_grabbed())
-                || !self.held_keys.is_empty()
                 || !self.held_buttons.is_empty())
         {
             self.hot_corners_armed.remove(output);

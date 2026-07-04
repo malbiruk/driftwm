@@ -523,9 +523,6 @@ pub struct DriftWm {
     /// launchers leak the trigger key into the previously focused window.
     pub suppressed_keys: HashSet<u32>,
 
-    /// Keys currently held down (raw keycodes). Used by hot-corners gating
-    /// (`disable_while_dragging`) — any held key suspends hot-corner firing.
-    pub held_keys: HashSet<u32>,
     /// Mouse buttons currently held down. Same purpose as `held_keys`.
     pub held_buttons: HashSet<u32>,
 
