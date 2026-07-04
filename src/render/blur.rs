@@ -49,6 +49,13 @@ pub struct BlurCache {
     pub texture: GlesTexture,
     pub scratch: GlesTexture,
     pub mask: GlesTexture,
+    /// Padded ping-pong pair for the blur itself. Blurring exactly the
+    /// window rect makes edge samples clamp to the border pixels, which
+    /// smears the backdrop inward as a bevel-like band (#125). The blur
+    /// instead runs on a padded crop and only the centre is kept.
+    pub pad_a: GlesTexture,
+    pub pad_b: GlesTexture,
+    pub pad_size: Size<i32, Physical>,
     pub size: Size<i32, Physical>,
     pub dirty: bool,
     pub last_geometry_generation: u64,
@@ -72,19 +79,31 @@ pub struct BlurCache {
 }
 
 impl BlurCache {
-    pub fn new(renderer: &mut GlesRenderer, size: Size<i32, Physical>) -> Option<Self> {
+    pub fn new(
+        renderer: &mut GlesRenderer,
+        size: Size<i32, Physical>,
+        pad_size: Size<i32, Physical>,
+    ) -> Option<Self> {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+        let pad_buf_size = pad_size.to_logical(1).to_buffer(1, Transform::Normal);
         let t1 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let t2 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let t3 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
+        let p1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
+            .ok()?;
+        let p2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
+            .ok()?;
         Some(Self {
             texture: t1,
             scratch: t2,
             mask: t3,
+            pad_a: p1,
+            pad_b: p2,
+            pad_size,
             size,
             dirty: true,
             last_geometry_generation: 0,
@@ -96,25 +115,45 @@ impl BlurCache {
         })
     }
 
-    pub fn resize(&mut self, renderer: &mut GlesRenderer, size: Size<i32, Physical>) {
+    pub fn resize(
+        &mut self,
+        renderer: &mut GlesRenderer,
+        size: Size<i32, Physical>,
+        pad_size: Size<i32, Physical>,
+    ) {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
+        let pad_buf_size = pad_size.to_logical(1).to_buffer(1, Transform::Normal);
         if let Ok(t1) =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(t2) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(t3) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
+            && let Ok(p1) =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
+            && let Ok(p2) =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
         {
             self.texture = t1;
             self.scratch = t2;
             self.mask = t3;
+            self.pad_a = p1;
+            self.pad_b = p2;
+            self.pad_size = pad_size;
             self.size = size;
             self.dirty = true;
             // Stored damage rects are at the old size — drop them; next render reseeds.
             self.damage_bag.reset();
         }
     }
+}
+
+/// Padding around the blur crop so the Kawase reach never touches a texture
+/// edge: window-edge samples must see real backdrop, not clamped border
+/// pixels. Sized to the blur's worst-case reach at the deepest mip.
+fn blur_pad(strength: f32, passes: usize) -> i32 {
+    ((strength * (1u32 << (passes + 1)) as f32).ceil() as i32).clamp(16, 128)
 }
 
 static BLUR_MASK_SRC: &str = include_str!("../shaders/blur_mask.glsl");
@@ -335,6 +374,7 @@ pub(crate) fn process_blur_requests(
         .collect();
 
     // ── First pass: create/resize caches, update dirty flags, decide who recomputes ──
+    let pad = blur_pad(blur_strength, blur_passes);
     let mut needs_recompute: Vec<bool> = Vec::with_capacity(blur_requests.len());
     for (i, req) in blur_requests.iter().enumerate() {
         let win_size = req.screen_rect.size;
@@ -342,9 +382,10 @@ pub(crate) fn process_blur_requests(
             needs_recompute.push(false);
             continue;
         }
+        let pad_size: Size<i32, Physical> = (win_size.w + 2 * pad, win_size.h + 2 * pad).into();
 
         if !state.render.blur_cache.contains_key(&req.surface_id) {
-            if let Some(c) = BlurCache::new(renderer, win_size) {
+            if let Some(c) = BlurCache::new(renderer, win_size, pad_size) {
                 state.render.blur_cache.insert(req.surface_id.clone(), c);
             } else {
                 needs_recompute.push(false);
@@ -352,8 +393,8 @@ pub(crate) fn process_blur_requests(
             }
         }
         let cache = state.render.blur_cache.get_mut(&req.surface_id).unwrap();
-        if cache.size != win_size {
-            cache.resize(renderer, win_size);
+        if cache.size != win_size || cache.pad_size != pad_size {
+            cache.resize(renderer, win_size, pad_size);
         }
 
         let bg_hash = hash_background_elements(
@@ -419,9 +460,67 @@ pub(crate) fn process_blur_requests(
             last_bg_depth = Some(behind);
         }
 
-        // Crop from bg_tex into cache.texture
+        // Crop from bg_tex into cache.pad_a WITH padding: blur samples past
+        // the window edge must see real backdrop, not clamped border pixels
+        // (the edge-fade bevel of #125).
+        let pad_size = cache.pad_size;
         {
             let bg_src = bg_tex.clone();
+            let Ok(mut target) = renderer.bind(&mut cache.pad_a) else {
+                continue;
+            };
+            let Ok(mut frame) = renderer.render(&mut target, pad_size, Transform::Normal) else {
+                continue;
+            };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(pad_size)]);
+            // Clamp the padded source to the output; offset the destination
+            // so the window content stays centred even at screen edges.
+            let want = Rectangle::<i32, Physical>::new(
+                (req.screen_rect.loc.x - pad, req.screen_rect.loc.y - pad).into(),
+                pad_size,
+            );
+            if let Some(clipped) = want.intersection(Rectangle::from_size(output_size)) {
+                if clipped.size.w > 0 && clipped.size.h > 0 {
+                    let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
+                        (clipped.loc.x as f64, clipped.loc.y as f64).into(),
+                        (clipped.size.w as f64, clipped.size.h as f64).into(),
+                    );
+                    let dst = Rectangle::<i32, Physical>::new(
+                        (clipped.loc.x - want.loc.x, clipped.loc.y - want.loc.y).into(),
+                        clipped.size,
+                    );
+                    let _ = frame.render_texture_from_to(
+                        &bg_src,
+                        src_rect,
+                        dst,
+                        &[dst],
+                        &[],
+                        Transform::Normal,
+                        1.0,
+                        None,
+                        &[],
+                    );
+                }
+            }
+            let _ = frame.finish();
+        }
+
+        // Run Kawase blur passes on the padded crop
+        let offset = blur_strength * output_scale as f32;
+        let _ = render_blur(
+            renderer,
+            &down_shader,
+            &up_shader,
+            &mut cache.pad_a,
+            &mut cache.pad_b,
+            offset,
+            blur_passes,
+        );
+
+        // Keep only the centre: blit the window-sized region back into
+        // cache.texture, discarding the padding ring and its edge artifacts.
+        {
+            let blurred = cache.pad_a.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else {
                 continue;
             };
@@ -430,11 +529,11 @@ pub(crate) fn process_blur_requests(
             };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
             let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
-                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (pad as f64, pad as f64).into(),
                 (win_size.w as f64, win_size.h as f64).into(),
             );
             let _ = frame.render_texture_from_to(
-                &bg_src,
+                &blurred,
                 src_rect,
                 Rectangle::from_size(win_size),
                 &[Rectangle::from_size(win_size)],
@@ -446,18 +545,6 @@ pub(crate) fn process_blur_requests(
             );
             let _ = frame.finish();
         }
-
-        // Run Kawase blur passes
-        let offset = blur_strength * output_scale as f32;
-        let _ = render_blur(
-            renderer,
-            &down_shader,
-            &up_shader,
-            &mut cache.texture,
-            &mut cache.scratch,
-            offset,
-            blur_passes,
-        );
     }
 
     // ── Loop 2: mask render + apply for all dirty windows (safe to overwrite bg_tex) ──
