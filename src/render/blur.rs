@@ -48,14 +48,20 @@ fn hash_background_elements(
 pub struct BlurCache {
     pub texture: GlesTexture,
     pub mask: GlesTexture,
-    /// Padded ping-pong pair for the blur itself. Blurring exactly the
-    /// window rect makes edge samples clamp to the border pixels, which
-    /// smears the backdrop inward as a bevel-like band (#125). The blur
-    /// instead runs on a padded crop and only the centre is kept.
-    pub pad_a: GlesTexture,
-    pub pad_b: GlesTexture,
+    /// Padded ping-pong pair for the exact per-window blur path. Blurring
+    /// exactly the window rect makes edge samples clamp to the border
+    /// pixels, smearing the backdrop inward as a bevel-like band (#125),
+    /// so the blur runs on a padded crop and only the centre is kept.
+    /// Lazy: the shared animated path never needs them, and allocating
+    /// them eagerly wastes ~10 MB per frosted window.
+    pub pads: Option<(GlesTexture, GlesTexture)>,
     pub pad_size: Size<i32, Physical>,
     pub size: Size<i32, Physical>,
+    /// Geometry generation the mask was last captured at. The mask is the
+    /// window's alpha shape: it changes with geometry, not with background
+    /// ticks, so animated refreshes reuse it instead of re-rendering the
+    /// surface into a full-output buffer per window per tick.
+    pub mask_geometry_generation: u64,
     pub dirty: bool,
     pub last_geometry_generation: u64,
     pub last_camera_generation: u64,
@@ -85,22 +91,17 @@ impl BlurCache {
     ) -> Option<Self> {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
-        let pad_buf_size = pad_size.to_logical(1).to_buffer(1, Transform::Normal);
         let t1 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
-        let t2 =
+        let t3 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
-        let p1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
-            .ok()?;
-        let p2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
-            .ok()?;
         Some(Self {
             texture: t1,
-            mask: t2,
-            pad_a: p1,
-            pad_b: p2,
+            mask: t3,
+            pads: None,
             pad_size,
             size,
+            mask_geometry_generation: u64::MAX,
             dirty: true,
             last_geometry_generation: 0,
             last_camera_generation: 0,
@@ -111,6 +112,23 @@ impl BlurCache {
         })
     }
 
+    /// Create the padded ping-pong pair on first use of the exact path.
+    pub fn ensure_pads(&mut self, renderer: &mut GlesRenderer) -> bool {
+        use smithay::backend::renderer::Offscreen;
+        if self.pads.is_some() {
+            return true;
+        }
+        let pad_buf_size = self.pad_size.to_logical(1).to_buffer(1, Transform::Normal);
+        let a = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size);
+        let b = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size);
+        if let (Ok(a), Ok(b)) = (a, b) {
+            self.pads = Some((a, b));
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn resize(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -119,22 +137,17 @@ impl BlurCache {
     ) {
         use smithay::backend::renderer::Offscreen;
         let buf_size = size.to_logical(1).to_buffer(1, Transform::Normal);
-        let pad_buf_size = pad_size.to_logical(1).to_buffer(1, Transform::Normal);
         if let Ok(t1) =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
-            && let Ok(t2) =
+            && let Ok(t3) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
-            && let Ok(p1) =
-                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
-            && let Ok(p2) =
-                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
         {
             self.texture = t1;
-            self.mask = t2;
-            self.pad_a = p1;
-            self.pad_b = p2;
+            self.mask = t3;
+            self.pads = None;
             self.pad_size = pad_size;
             self.size = size;
+            self.mask_geometry_generation = u64::MAX;
             self.dirty = true;
             // Stored damage rects are at the old size — drop them; next render reseeds.
             self.damage_bag.reset();
@@ -490,10 +503,12 @@ pub(crate) fn process_blur_requests(
     // ── First pass: create/resize caches, update dirty flags, decide who recomputes ──
     let pad = blur_pad(blur_strength, blur_passes);
     let mut needs_recompute: Vec<bool> = Vec::with_capacity(blur_requests.len());
+    let mut mask_forced: Vec<bool> = Vec::with_capacity(blur_requests.len());
     for (i, req) in blur_requests.iter().enumerate() {
         let win_size = req.screen_rect.size;
         if win_size.w <= 0 || win_size.h <= 0 {
             needs_recompute.push(false);
+            mask_forced.push(false);
             continue;
         }
         let pad_size: Size<i32, Physical> = (win_size.w + 2 * pad, win_size.h + 2 * pad).into();
@@ -504,6 +519,7 @@ pub(crate) fn process_blur_requests(
                 state.render.blur_cache.insert(key.clone(), c);
             } else {
                 needs_recompute.push(false);
+                mask_forced.push(false);
                 continue;
             }
         }
@@ -529,6 +545,7 @@ pub(crate) fn process_blur_requests(
         if background_changed || geom_changed || camera_dirty || (animated_bg && shared_refreshed) {
             cache.dirty = true;
         }
+        mask_forced.push(cache.force_dirty_frames > 0);
         if cache.force_dirty_frames > 0 {
             cache.dirty = true;
             cache.force_dirty_frames -= 1;
@@ -617,13 +634,19 @@ pub(crate) fn process_blur_requests(
             last_bg_depth = Some(behind);
         }
 
-        // Crop from bg_tex into cache.pad_a WITH padding: blur samples past
-        // the window edge must see real backdrop, not clamped border pixels
-        // (the edge-fade bevel of #125).
+        // Crop from bg_tex into the padded pair WITH padding: blur samples
+        // past the window edge must see real backdrop, not clamped border
+        // pixels (the edge-fade bevel of #125).
         let pad_size = cache.pad_size;
+        if !cache.ensure_pads(renderer) {
+            continue;
+        }
+        let Some((pad_a, pad_b)) = cache.pads.as_mut() else {
+            continue;
+        };
         {
             let bg_src = bg_tex.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.pad_a) else {
+            let Ok(mut target) = renderer.bind(&mut *pad_a) else {
                 continue;
             };
             let Ok(mut frame) = renderer.render(&mut target, pad_size, Transform::Normal) else {
@@ -662,8 +685,8 @@ pub(crate) fn process_blur_requests(
             renderer,
             &down_shader,
             &up_shader,
-            &mut cache.pad_a,
-            &mut cache.pad_b,
+            pad_a,
+            pad_b,
             offset,
             blur_passes,
         );
@@ -671,7 +694,7 @@ pub(crate) fn process_blur_requests(
         // Keep only the centre: blit the window-sized region back into
         // cache.texture, discarding the padding ring and its edge artifacts.
         {
-            let blurred = cache.pad_a.clone();
+            let blurred = pad_a.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else {
                 continue;
             };
@@ -716,11 +739,27 @@ pub(crate) fn process_blur_requests(
             BlurLayer::Widget => widget_prefix,
         };
 
-        // Render surface elements to bg_tex to capture alpha channel
-        // index_shift is 0 here — element insertion hasn't happened yet
+        // The mask is the window's alpha shape: it changes with geometry
+        // and during the DMA-BUF settle frames, not with background ticks.
+        // Recapturing it per animated refresh (full-output render + crop
+        // per window per tick) made blur cost scale with window count.
+        // Accepted tradeoff: an alpha-only change at constant geometry
+        // (subsurface map/unmap, a CSD corner-radius change) doesn't bump
+        // `geom_gen`, so the mask stays stale until something else (camera
+        // move, resize) invalidates it — rare enough not to special-case.
+        let key = (output_name.clone(), req.surface_id.clone());
+        let mask_stale = mask_forced[i]
+            || state
+                .render
+                .blur_cache
+                .get(&key)
+                .is_none_or(|c| c.mask_geometry_generation != geom_gen);
+
         let surf_start = prefix + req.elem_start;
         let surf_end = (surf_start + req.elem_count).min(all_elements.len());
-        {
+        if mask_stale {
+            // Render surface elements to bg_tex to capture the alpha channel
+            // (index_shift is 0 here — element insertion hasn't happened yet)
             let Ok(mut target) = renderer.bind(&mut bg_tex) else {
                 continue;
             };
@@ -734,7 +773,6 @@ pub(crate) fn process_blur_requests(
             );
         }
 
-        let key = (output_name.clone(), req.surface_id.clone());
         let Some(cache) = state.render.blur_cache.get_mut(&key) else {
             continue;
         };
@@ -745,7 +783,7 @@ pub(crate) fn process_blur_requests(
         // above leaves outside-region pixels at alpha=0; the alpha-multiply
         // pass below then zeros blur there.
         let whole_mask = [Rectangle::from_size(win_size)];
-        {
+        if mask_stale {
             let bg_src = bg_tex.clone();
             let Ok(mut target) = renderer.bind(&mut cache.mask) else {
                 continue;
@@ -774,6 +812,7 @@ pub(crate) fn process_blur_requests(
                 &[],
             );
             let _ = frame.finish();
+            cache.mask_geometry_generation = geom_gen;
         }
 
         // Masking pass — threshold surface alpha, multiply blur by it
