@@ -713,7 +713,7 @@ Default: `false`
 
 When true, maximize/unmaximize initiated via window decoration (CSD maximize button, SSD title-bar double-click, or xdg/foreign-toplevel set_maximized) propagates to every window connected via snap adjacency. Keybinding/gesture fit is unaffected — bind `fit-window-snapped` explicitly if you want cluster-aware fit there too.
 
-Mouse bindings: "Modifier+...+Trigger" = "action" Context-aware: on-window, on-canvas, anywhere. Specific context checked first, then "anywhere" as fallback. Click-to-focus and SSD decoration clicks are always hardcoded. Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll Merges with defaults. Use "none" to unbind.
+Mouse bindings: "Modifier+...+Trigger" = "action" Context-aware: on-window, on-canvas, anywhere. Specific context checked first, then "anywhere" as fallback. Click-to-focus and SSD decoration clicks are always hardcoded. Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll, wheel-up, wheel-down. The wheel-up/wheel-down triggers fire once per discrete wheel notch and can run any action, e.g. volume on mod+shift+scroll. Merges with defaults. Use "none" to unbind.
 
 Mouse actions: move-window, move-snapped-windows, resize-window, resize-window-snapped, pan-viewport, zoom, center-nearest Any keyboard action also works for button triggers: exec, close-window, toggle-fullscreen, etc.
 

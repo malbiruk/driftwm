@@ -221,6 +221,11 @@ pub enum MouseTrigger {
     Button(u32),
     TrackpadScroll,
     WheelScroll,
+    /// One discrete wheel notch away from the user. Unlike WheelScroll
+    /// (continuous pan/zoom), notch triggers can run any Action.
+    WheelUp,
+    /// One discrete wheel notch toward the user.
+    WheelDown,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

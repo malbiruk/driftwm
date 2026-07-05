@@ -512,6 +512,12 @@ pub struct DriftWm {
 
     pub held_action: Option<(u32, driftwm::config::Action, Instant)>,
 
+    /// Fractional wheel-notch credit for wheel-up/wheel-down bindings.
+    /// High-resolution wheels emit sub-notch v120 deltas; they accumulate
+    /// here and the bound action fires once per whole notch. Direction
+    /// flips discard the residual.
+    pub wheel_notch_accum: f64,
+
     pub tap: TapTracker,
     /// Action queued by a completed tap chord, run after the closure forwards
     /// the modifier events so the focused client still sees them.

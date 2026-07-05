@@ -328,6 +328,7 @@ impl DriftWm {
             on_demand_layer: None,
             popup_grab: None,
             held_action: None,
+            wheel_notch_accum: 0.0,
             tap: TapTracker::default(),
             pending_tap_action: None,
             suppressed_keys: HashSet::new(),

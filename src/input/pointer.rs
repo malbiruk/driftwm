@@ -774,6 +774,51 @@ impl DriftWm {
         let pos = pointer.current_location();
         let source = event.source();
 
+        // Discrete wheel-notch bindings (wheel-up / wheel-down) run any
+        // action once per notch — volume on mod+shift+scroll and the like.
+        // Wheel sources only: finger and continuous scrolling have no
+        // notches. Checked before the fullscreen block so a notch action
+        // fires like a keybinding, without exiting fullscreen.
+        if matches!(source, AxisSource::Wheel | AxisSource::WheelTilt) {
+            let v = event
+                .amount_v120(Axis::Vertical)
+                .map(|v| v / 120.0)
+                .or_else(|| event.amount(Axis::Vertical).map(|v| v / 15.0))
+                .unwrap_or(0.0);
+            let notch_context = if self.is_fullscreen() {
+                // The fullscreen window fills the screen.
+                BindingContext::OnWindow
+            } else {
+                self.pointer_context(pos)
+            };
+            if v != 0.0
+                && let Some(MouseAction::Action(act)) = self
+                    .config
+                    .mouse_wheel_step_lookup_ctx(&mods, v < 0.0, notch_context)
+                    .cloned()
+            {
+                // High-resolution wheels emit sub-notch v120 deltas;
+                // accumulate to whole notches so a flick fires the action
+                // once per notch, not once per event.
+                if self.wheel_notch_accum != 0.0 && self.wheel_notch_accum.signum() != v.signum() {
+                    self.wheel_notch_accum = 0.0;
+                }
+                self.wheel_notch_accum += v;
+                let whole = self.wheel_notch_accum.abs().floor();
+                self.wheel_notch_accum -= self.wheel_notch_accum.signum() * whole;
+                let notches = (whole as u32).min(10);
+                for _ in 0..notches {
+                    self.execute_action(&act);
+                }
+                // Consume sub-notch events too — the binding owns this
+                // scroll; forwarding the fractions would double-handle it.
+                let frame = AxisFrame::new(Event::time_msec(&event));
+                pointer.axis(self, frame);
+                pointer.frame(self);
+                return;
+            }
+        }
+
         // During fullscreen: bound scroll exits fullscreen first; plain scroll forwards.
         if self.is_fullscreen() {
             if self

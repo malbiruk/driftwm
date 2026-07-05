@@ -83,6 +83,8 @@ pub fn parse_mouse_binding(s: &str, mod_key: ModKey) -> Result<MouseBinding, Str
         "middle" => MouseTrigger::Button(BTN_MIDDLE),
         "trackpad-scroll" => MouseTrigger::TrackpadScroll,
         "wheel-scroll" => MouseTrigger::WheelScroll,
+        "wheel-up" => MouseTrigger::WheelUp,
+        "wheel-down" => MouseTrigger::WheelDown,
         other => return Err(format!("unknown mouse trigger: {other}")),
     };
 

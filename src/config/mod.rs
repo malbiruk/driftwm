@@ -185,6 +185,24 @@ impl Config {
         self.mouse.lookup(&binding, context)
     }
 
+    /// Look up a discrete wheel-notch action (wheel-up / wheel-down).
+    pub fn mouse_wheel_step_lookup_ctx(
+        &self,
+        modifiers: &ModifiersState,
+        up: bool,
+        context: BindingContext,
+    ) -> Option<&MouseAction> {
+        let binding = MouseBinding {
+            modifiers: Modifiers::from_state(modifiers),
+            trigger: if up {
+                MouseTrigger::WheelUp
+            } else {
+                MouseTrigger::WheelDown
+            },
+        };
+        self.mouse.lookup(&binding, context)
+    }
+
     /// Look up a mouse scroll action by modifier state, axis source, and context.
     pub fn mouse_scroll_lookup_ctx(
         &self,

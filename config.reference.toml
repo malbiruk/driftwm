@@ -363,7 +363,9 @@
 # # Context-aware: on-window, on-canvas, anywhere.
 # # Specific context checked first, then "anywhere" as fallback.
 # # Click-to-focus and SSD decoration clicks are always hardcoded.
-# # Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll
+# # Triggers: left, right, middle (buttons), trackpad-scroll, wheel-scroll,
+# # wheel-up, wheel-down. The wheel-up/wheel-down triggers fire once per
+# # discrete wheel notch and can run any action, e.g. volume on mod+shift+scroll.
 # # Merges with defaults. Use "none" to unbind.
 # #
 # # Mouse actions: move-window, move-snapped-windows, resize-window,
