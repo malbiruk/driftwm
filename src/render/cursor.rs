@@ -44,7 +44,14 @@ pub fn build_cursor_elements(
         CursorImageStatus::Surface(ref surface) => {
             if !surface.alive() {
                 state.cursor.cursor_status = CursorImageStatus::default_named();
-                return build_xcursor_elements(state, renderer, physical_pos, "default", alpha);
+                return build_xcursor_elements(
+                    state,
+                    renderer,
+                    physical_pos,
+                    "default",
+                    scale,
+                    alpha,
+                );
             }
             let hotspot = with_states(surface, |states| {
                 states
@@ -54,8 +61,8 @@ pub fn build_cursor_elements(
                     .unwrap_or_default()
             });
             let pos: Point<i32, Physical> = (
-                (physical_pos.x - hotspot.x as f64) as i32,
-                (physical_pos.y - hotspot.y as f64) as i32,
+                (physical_pos.x - hotspot.x as f64 * scale) as i32,
+                (physical_pos.y - hotspot.y as f64 * scale) as i32,
             )
                 .into();
             let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
@@ -73,7 +80,7 @@ pub fn build_cursor_elements(
                 .collect()
         }
         CursorImageStatus::Named(icon) => {
-            build_xcursor_elements(state, renderer, physical_pos, icon.name(), alpha)
+            build_xcursor_elements(state, renderer, physical_pos, icon.name(), scale, alpha)
         }
     };
 
@@ -112,6 +119,7 @@ fn build_xcursor_elements(
     renderer: &mut GlesRenderer,
     physical_pos: Point<f64, Physical>,
     name: &'static str,
+    scale: f64,
     alpha: f32,
 ) -> Vec<OutputRenderElements> {
     let loaded = state.load_xcursor(name).is_some();
@@ -141,7 +149,7 @@ fn build_xcursor_elements(
     let (buffer, hotspot, _) = &cursor_frames.frames[frame_idx];
     let hotspot = *hotspot;
 
-    let pos = physical_pos - Point::from((hotspot.x as f64, hotspot.y as f64));
+    let pos = physical_pos - Point::from((hotspot.x as f64 * scale, hotspot.y as f64 * scale));
     match MemoryRenderBufferRenderElement::from_buffer(
         renderer,
         pos,
