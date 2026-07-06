@@ -1,10 +1,9 @@
 use smithay::{
     backend::renderer::{
         element::{
-            Element, Id, Kind, RenderElement, UnderlyingStorage,
-            memory::MemoryRenderBufferRenderElement, render_elements,
-            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
-            utils::RescaleRenderElement,
+            Element, Id, Kind, RenderElement, UnderlyingStorage, Wrap,
+            memory::MemoryRenderBufferRenderElement, surface::WaylandSurfaceRenderElement,
+            texture::TextureRenderElement, utils::RescaleRenderElement,
         },
         gles::{
             GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformValue,
@@ -14,6 +13,10 @@ use smithay::{
     },
     utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform},
 };
+
+use crate::backend::udev::{MultiGpuFrame, MultiGpuRenderer, MultiGpuRendererError};
+use crate::render::bridge::GlesBridge;
+use crate::render::renderer::{AsGlesFrame, DriftRenderer};
 
 /// Render element that tiles a texture across an area using a custom GLSL shader.
 /// Behaves like `PixelShaderElement` for element tracking (stable ID, area-based
@@ -185,6 +188,43 @@ impl RenderElement<GlesRenderer> for TileShaderElement {
     }
 }
 
+// Gles-only effect: rendered on the primary GPU, then PRIME-copied to scanout by
+// the MultiRenderer. Bridges to the underlying GlesFrame.
+impl<'render> RenderElement<MultiGpuRenderer<'render>> for TileShaderElement {
+    fn draw(
+        &self,
+        frame: &mut MultiGpuFrame<'render, '_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        _user_data: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), MultiGpuRendererError<'render>> {
+        crate::render::bridge::record_bridged_damage(frame, dst, damage)?;
+        let frame = frame.as_gles_frame();
+        frame.render_texture_from_to(
+            &self.texture,
+            src,
+            dst,
+            damage,
+            opaque_regions,
+            Transform::Normal,
+            self.alpha,
+            Some(&self.shader),
+            &self.additional_uniforms,
+        )?;
+        Ok(())
+    }
+
+    #[inline]
+    fn underlying_storage(
+        &self,
+        _renderer: &mut MultiGpuRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
+        None
+    }
+}
+
 /// Corner-rounding helper: scales a pre-zoom physical rect into a post-zoom
 /// physical rect by rounding the TWO CORNERS independently (not loc+size).
 ///
@@ -337,21 +377,58 @@ impl<E: RenderElement<GlesRenderer>> RenderElement<GlesRenderer> for PixelSnapRe
     }
 }
 
-render_elements! {
-    pub OutputRenderElements<=GlesRenderer>;
-    Background=RescaleRenderElement<PixelShaderElement>,
-    TileBg=RescaleRenderElement<TileShaderElement>,
-    // PixelSnap (not Rescale): chunks need a shared rounding anchor to meet
-    // at pixel-consistent edges at fractional zoom.
-    TileBgChunk=PixelSnapRescaleElement<TileShaderElement>,
-    WallpaperBg=TileShaderElement,
-    Decoration=PixelSnapRescaleElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
-    Window=PixelSnapRescaleElement<WaylandSurfaceRenderElement<GlesRenderer>>,
-    CsdWindow=PixelSnapRescaleElement<RoundedCornerElement>,
-    Layer=WaylandSurfaceRenderElement<GlesRenderer>,
-    Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
-    CursorSurface=smithay::backend::renderer::element::Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,
-    Blur=TextureRenderElement<GlesTexture>,
+impl<'render, E> RenderElement<MultiGpuRenderer<'render>> for PixelSnapRescaleElement<E>
+where
+    E: RenderElement<MultiGpuRenderer<'render>>,
+{
+    fn draw(
+        &self,
+        frame: &mut MultiGpuFrame<'render, '_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        cache: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), MultiGpuRendererError<'render>> {
+        self.element
+            .draw(frame, src, dst, damage, opaque_regions, cache)
+    }
+
+    #[inline]
+    fn underlying_storage(
+        &self,
+        renderer: &mut MultiGpuRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
+        self.element.underlying_storage(renderer)
+    }
+
+    fn capture_framebuffer(
+        &self,
+        frame: &mut MultiGpuFrame<'render, '_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        cache: &smithay::utils::user_data::UserDataMap,
+    ) -> Result<(), MultiGpuRendererError<'render>> {
+        self.element.capture_framebuffer(frame, src, dst, cache)
+    }
+}
+
+drift_render_elements! {
+    OutputRenderElements<R> => {
+        Background = GlesBridge<RescaleRenderElement<PixelShaderElement>>,
+        TileBg = RescaleRenderElement<TileShaderElement>,
+        // PixelSnap (not Rescale): chunks need a shared rounding anchor to meet
+        // at pixel-consistent edges at fractional zoom.
+        TileBgChunk = PixelSnapRescaleElement<TileShaderElement>,
+        WallpaperBg = TileShaderElement,
+        Decoration = PixelSnapRescaleElement<MemoryRenderBufferRenderElement<R>>,
+        Window = PixelSnapRescaleElement<WaylandSurfaceRenderElement<R>>,
+        CsdWindow = PixelSnapRescaleElement<RoundedCornerElement<R>>,
+        Layer = WaylandSurfaceRenderElement<R>,
+        Cursor = MemoryRenderBufferRenderElement<R>,
+        CursorSurface = Wrap<WaylandSurfaceRenderElement<R>>,
+        Blur = GlesBridge<TextureRenderElement<GlesTexture>>,
+    }
 }
 
 // Shadow and Decoration share inner types with Background and Tile respectively.
@@ -376,8 +453,8 @@ render_elements! {
 ///   converted via `to_physical_precise_round(output_scale)`.
 /// - `aa_scale` is `output_scale * zoom` — keeps the AA band ~1 output
 ///   pixel wide regardless of canvas zoom.
-pub struct RoundedCornerElement {
-    inner: WaylandSurfaceRenderElement<GlesRenderer>,
+pub struct RoundedCornerElement<R: DriftRenderer> {
+    inner: WaylandSurfaceRenderElement<R>,
     shader: GlesTexProgram,
     geometry: Rectangle<f64, Logical>,
     corner_radius: [f32; 4],
@@ -385,9 +462,9 @@ pub struct RoundedCornerElement {
     aa_scale: f32,
 }
 
-impl RoundedCornerElement {
+impl<R: DriftRenderer> RoundedCornerElement<R> {
     pub fn new(
-        inner: WaylandSurfaceRenderElement<GlesRenderer>,
+        inner: WaylandSurfaceRenderElement<R>,
         shader: GlesTexProgram,
         geometry: Rectangle<f64, Logical>,
         corner_radius: [f32; 4],
@@ -500,7 +577,7 @@ impl RoundedCornerElement {
     }
 }
 
-impl Element for RoundedCornerElement {
+impl<R: DriftRenderer> Element for RoundedCornerElement<R> {
     fn id(&self) -> &Id {
         self.inner.id()
     }
@@ -590,7 +667,7 @@ impl Element for RoundedCornerElement {
     }
 }
 
-impl RenderElement<GlesRenderer> for RoundedCornerElement {
+impl RenderElement<GlesRenderer> for RoundedCornerElement<GlesRenderer> {
     fn draw(
         &self,
         frame: &mut GlesFrame<'_, '_>,
@@ -620,6 +697,46 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        self.inner.underlying_storage(renderer)
+    }
+}
+
+// Multi-GPU path: the corner-clip shader override lives on the underlying
+// GlesFrame; the surface itself draws through the MultiFrame (which renders on
+// the primary GPU and PRIME-copies to scanout). Set the override on the bridged
+// GlesFrame, then draw the inner element on the MultiFrame so the override
+// applies, and clear it afterwards.
+impl<'render> RenderElement<MultiGpuRenderer<'render>>
+    for RoundedCornerElement<MultiGpuRenderer<'render>>
+{
+    fn draw(
+        &self,
+        frame: &mut MultiGpuFrame<'render, '_, '_>,
+        src: Rectangle<f64, smithay::utils::Buffer>,
+        dst: Rectangle<i32, Physical>,
+        damage: &[Rectangle<i32, Physical>],
+        opaque_regions: &[Rectangle<i32, Physical>],
+        user_data: Option<&smithay::utils::user_data::UserDataMap>,
+    ) -> Result<(), MultiGpuRendererError<'render>> {
+        if self.inner.transform() != Transform::Normal {
+            return self
+                .inner
+                .draw(frame, src, dst, damage, opaque_regions, user_data);
+        }
+        frame
+            .as_gles_frame()
+            .override_default_tex_program(self.shader.clone(), self.compute_uniforms());
+        let result = self
+            .inner
+            .draw(frame, src, dst, damage, opaque_regions, user_data);
+        frame.as_gles_frame().clear_tex_program_override();
+        result
+    }
+
+    fn underlying_storage(
+        &self,
+        renderer: &mut MultiGpuRenderer<'render>,
+    ) -> Option<UnderlyingStorage<'_>> {
         self.inner.underlying_storage(renderer)
     }
 }

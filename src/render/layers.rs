@@ -1,9 +1,6 @@
-use smithay::backend::renderer::{
-    element::{
-        Kind,
-        surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
-    },
-    gles::GlesRenderer,
+use smithay::backend::renderer::element::{
+    Kind,
+    surface::{WaylandSurfaceRenderElement, render_elements_from_surface_tree},
 };
 use smithay::desktop::{PopupManager, layer_map_for_output};
 use smithay::output::Output;
@@ -16,6 +13,7 @@ use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 
 use super::blur::{BlurLayer, BlurRequestData};
 use super::elements::OutputRenderElements;
+use super::renderer::DriftRenderer;
 
 /// Push compositor chrome (corner clip on surface, border, shadow) for one
 /// layer surface, plus any popup elements anchored to it. Returns the number
@@ -32,22 +30,19 @@ use super::elements::OutputRenderElements;
 /// pushes `CsdWindow` regardless — corner clipping wraps in PixelSnap, and at
 /// `zoom = 1.0` PixelSnap collapses to identity.
 #[allow(clippy::too_many_arguments)]
-fn push_layer_chrome(
-    target: &mut Vec<OutputRenderElements>,
+fn push_layer_chrome<R: DriftRenderer>(
+    target: &mut Vec<OutputRenderElements<R>>,
     state: &mut crate::state::DriftWm,
     applied: Option<&driftwm::config::AppliedWindowRule>,
     surface_id: ObjectId,
-    surface_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
-    popup_elements: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    surface_elements: Vec<WaylandSurfaceRenderElement<R>>,
+    popup_elements: Vec<WaylandSurfaceRenderElement<R>>,
     inner_logical: Rectangle<f64, Logical>,
     opacity: f64,
     scale: Scale<f64>,
     output_scale: f64,
     zoom: f64,
-    mut push_plain: impl FnMut(
-        &mut Vec<OutputRenderElements>,
-        Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
-    ),
+    mut push_plain: impl FnMut(&mut Vec<OutputRenderElements<R>>, Vec<WaylandSurfaceRenderElement<R>>),
 ) -> usize {
     // Layer-shell surfaces don't have a decoration mode (no titlebar, no
     // SSD/CSD distinction). The `decoration` field is ignored on layer rules;
@@ -144,13 +139,13 @@ fn push_layer_chrome(
 /// `LayerSurface::AsRenderElements` does internally, but as a standalone
 /// function so the caller can corner-clip the parent surface tree without
 /// also clipping these popups.
-fn collect_layer_popup_elements(
-    renderer: &mut GlesRenderer,
+fn collect_layer_popup_elements<R: DriftRenderer>(
+    renderer: &mut R,
     parent: &WlSurface,
     parent_loc: Point<i32, Physical>,
     scale: Scale<f64>,
     opacity: f32,
-) -> Vec<WaylandSurfaceRenderElement<GlesRenderer>> {
+) -> Vec<WaylandSurfaceRenderElement<R>> {
     let mut popups = Vec::new();
     for (popup, popup_offset) in PopupManager::popups_for_surface(parent) {
         // Same rounding idiom as the window pipeline's popup walker in
@@ -160,7 +155,7 @@ fn collect_layer_popup_elements(
             (popup_offset - popup.geometry().loc).to_physical_precise_round(scale);
         popups.extend(render_elements_from_surface_tree::<
             _,
-            WaylandSurfaceRenderElement<GlesRenderer>,
+            WaylandSurfaceRenderElement<R>,
         >(
             renderer,
             popup.wl_surface(),
@@ -177,14 +172,14 @@ fn collect_layer_popup_elements(
 /// Resolves chrome per-instance via `resolve_window_rules_for_layer_instance` so
 /// multi-instance layer-shells (e.g. two waybar bars at different positions) pick
 /// up only their own rule's chrome.
-pub(super) fn build_canvas_layer_elements(
+pub(super) fn build_canvas_layer_elements<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     output_scale: f64,
     camera: Point<f64, Logical>,
     zoom: f64,
     visible_rect: Rectangle<i32, Logical>,
-) -> Vec<OutputRenderElements> {
+) -> Vec<OutputRenderElements<R>> {
     let scale: Scale<f64> = output_scale.into();
     let mut elements = Vec::new();
 
@@ -234,15 +229,14 @@ pub(super) fn build_canvas_layer_elements(
         let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
 
         let wl_surface = state.canvas_layers[idx].surface.wl_surface().clone();
-        let surface_elements =
-            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
-                renderer,
-                &wl_surface,
-                physical_loc,
-                scale,
-                opacity as f32,
-                Kind::Unspecified,
-            );
+        let surface_elements = render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<R>>(
+            renderer,
+            &wl_surface,
+            physical_loc,
+            scale,
+            opacity as f32,
+            Kind::Unspecified,
+        );
         let popup_elements = collect_layer_popup_elements(
             renderer,
             &wl_surface,
@@ -282,13 +276,13 @@ pub(super) fn build_canvas_layer_elements(
 /// elements. Blur is captured behind the surface elements only; chrome
 /// elements (border / shadow) are pushed *after* the blur request snapshot so
 /// the blur insertion point stays at the surface boundary.
-pub(super) fn build_layer_elements(
+pub(super) fn build_layer_elements<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
     output: &Output,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     layer: WlrLayer,
     blur_layer_tag: Option<BlurLayer>,
-) -> (Vec<OutputRenderElements>, Vec<BlurRequestData>) {
+) -> (Vec<OutputRenderElements<R>>, Vec<BlurRequestData>) {
     let map = layer_map_for_output(output);
     let output_scale = output.current_scale().fractional_scale();
     let scale: Scale<f64> = output_scale.into();
@@ -320,15 +314,14 @@ pub(super) fn build_layer_elements(
         // the bar itself — popups (tray menus, dropdowns, tooltips) can sit
         // outside the bar's geometry and must not be cropped to it.
         let wl_surface = surface.wl_surface();
-        let surface_elements =
-            render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<GlesRenderer>>(
-                renderer,
-                wl_surface,
-                loc,
-                scale,
-                opacity as f32,
-                Kind::Unspecified,
-            );
+        let surface_elements = render_elements_from_surface_tree::<_, WaylandSurfaceRenderElement<R>>(
+            renderer,
+            wl_surface,
+            loc,
+            scale,
+            opacity as f32,
+            Kind::Unspecified,
+        );
         let surface_has_buffer = !surface_elements.is_empty();
         let popup_elements =
             collect_layer_popup_elements(renderer, wl_surface, loc, scale, opacity as f32);

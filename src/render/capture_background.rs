@@ -24,6 +24,7 @@ use smithay::utils::{Buffer, Logical, Point, Rectangle, Size};
 use driftwm::config::BackgroundKind;
 
 use super::OutputRenderElements;
+use super::bridge::GlesBridge;
 use super::elements::TileShaderElement;
 
 /// Largest dimension of the gigapixel-TIFF coarse LOD decoded for a capture.
@@ -124,9 +125,9 @@ impl CaptureBackground {
                     ],
                     Kind::Unspecified,
                 );
-                vec![OutputRenderElements::Background(
+                vec![OutputRenderElements::Background(GlesBridge(
                     RescaleRenderElement::from_element(elem, (0, 0).into(), 1.0),
-                )]
+                ))]
             }
             Self::Tile {
                 shader,

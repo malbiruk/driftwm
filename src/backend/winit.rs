@@ -49,7 +49,12 @@ pub fn init_winit(
     output.create_global::<crate::state::DriftWm>(&data.display_handle);
 
     // Create DMA-BUF global — advertise GPU buffer formats to clients
-    let formats = data.backend.as_mut().unwrap().renderer().dmabuf_formats();
+    let formats = data
+        .backend
+        .as_mut()
+        .unwrap()
+        .with_renderer(|r| r.dmabuf_formats())
+        .expect("winit renderer is always available");
     let dmabuf_global = data
         .dmabuf_state
         .create_global::<crate::state::DriftWm>(&data.display_handle, formats);
@@ -57,16 +62,18 @@ pub fn init_winit(
 
     {
         let mut backend = data.backend.take().unwrap();
-        crate::render::init_background(data, backend.renderer(), size.to_logical(1), "winit");
-        data.render.shadow_shader = crate::render::compile_shadow_shader(backend.renderer());
-        data.render.border_shader = crate::render::compile_border_shader(backend.renderer());
-        data.render.corner_clip_shader =
-            crate::render::compile_corner_clip_shader(backend.renderer());
-        let (blur_down, blur_up, blur_mask) =
-            crate::render::compile_blur_shaders(backend.renderer());
-        data.render.blur_down_shader = blur_down;
-        data.render.blur_up_shader = blur_up;
-        data.render.blur_mask_shader = blur_mask;
+        backend
+            .with_renderer(|r| {
+                crate::render::init_background(data, r, size.to_logical(1), "winit");
+                data.render.shadow_shader = crate::render::compile_shadow_shader(r);
+                data.render.border_shader = crate::render::compile_border_shader(r);
+                data.render.corner_clip_shader = crate::render::compile_corner_clip_shader(r);
+                let (blur_down, blur_up, blur_mask) = crate::render::compile_blur_shaders(r);
+                data.render.blur_down_shader = blur_down;
+                data.render.blur_up_shader = blur_up;
+                data.render.blur_mask_shader = blur_mask;
+            })
+            .expect("winit renderer is always available");
         data.backend = Some(backend);
     }
 

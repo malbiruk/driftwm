@@ -591,10 +591,11 @@ pub struct DriftWm {
 
     pub satellite: Option<crate::xwayland::Satellite>,
 
-    /// Udev backend handle (Rc — cloneable). Single owner here; render loop
-    /// and protocols (gamma_control) borrow via `udev_device.as_ref()`.
-    /// `None` when the winit backend is in use.
-    pub udev_device: Option<crate::backend::udev::UdevDevice>,
+    /// Udev backend devices, keyed by their KMS (primary) DRM node. Each value
+    /// is an `Rc`-cloneable handle so the render loop and protocols
+    /// (gamma_control) can borrow independently of `DriftWm`. Empty when the
+    /// winit backend is in use; one entry per GPU we drive.
+    pub udev_devices: HashMap<smithay::backend::drm::DrmNode, crate::backend::udev::UdevDevice>,
 
     pub last_titlebar_click: Option<(
         Instant,

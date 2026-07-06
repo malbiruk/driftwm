@@ -18,6 +18,7 @@ smithay = { git = "https://github.com/Smithay/smithay.git", rev = "5312d5caedd0c
     "backend_session_libseat",
     "backend_egl",
     "renderer_gl",
+    "renderer_multi",
     "wayland_frontend",
     "desktop",
 ] }

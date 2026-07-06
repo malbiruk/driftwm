@@ -56,6 +56,10 @@ driftwm doesn't embed XWayland directly. X11 apps reach the compositor via [`xwa
 - **Clipboard works through standard Wayland data-device protocol.** xwayland-satellite owns selections as a normal Wayland client; the compositor doesn't bridge clipboards manually.
 - **No respawn-on-crash.** If satellite dies mid-session (rare), X11 stays dead until driftwm restart. Future enhancement.
 
+## Bridged draws must record damage on the MultiFrame
+
+The multi-GPU `MultiFrame` only PRIME-copies to a secondary GPU the regions drawn through *its own* methods; anything painted via `as_gles_frame()` is invisible to that copy and leaves stale trails on secondary-GPU outputs. Any `RenderElement<MultiGpuRenderer>::draw` impl that reaches the underlying `GlesFrame` must first call `render::bridge::record_bridged_damage(frame, dst, damage)`. See `dev/docs/multi-gpu.md`.
+
 ## What to unit test
 
 Smithay glue code (handlers, delegates) is not worth testing — it's framework boilerplate. Write tests for **your** logic:

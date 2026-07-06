@@ -180,6 +180,9 @@ impl CompositorHandler for DriftWm {
 
         // Without this, bbox_from_surface_tree returns 0x0.
         smithay::backend::renderer::utils::on_commit_buffer_handler::<DriftWm>(surface);
+        if let Some(backend) = self.backend.as_mut() {
+            backend.early_import(surface);
+        }
 
         // Accumulate `wl_surface.attach` offset onto the DnD icon so it
         // stays anchored to the client's grab point.

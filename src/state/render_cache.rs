@@ -29,6 +29,11 @@ pub struct RenderCache {
     pub blur_mask_shader: Option<GlesTexProgram>,
     pub blur_cache: HashMap<ObjectId, crate::render::BlurCache>,
     pub blur_bg_fbo: Option<(GlesTexture, Size<i32, Physical>)>,
+    /// The frame being composed targets an output scanned out by a secondary
+    /// GPU (cross-GPU MultiRenderer). Set per frame by the udev render loop;
+    /// blur skips such frames — its GLES passes run on the primary context,
+    /// which can't see FBOs the frame renderer binds on the scanout GPU.
+    pub frame_is_cross_gpu: bool,
     pub blur_geometry_generation: u64,
     pub blur_camera_generation: u64,
     pub shadow_cache: HashMap<ObjectId, ShadowCacheEntry>,
@@ -65,6 +70,7 @@ impl RenderCache {
             blur_mask_shader: None,
             blur_cache: HashMap::new(),
             blur_bg_fbo: None,
+            frame_is_cross_gpu: false,
             blur_geometry_generation: 0,
             blur_camera_generation: 0,
             shadow_cache: HashMap::new(),

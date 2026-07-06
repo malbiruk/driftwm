@@ -11,13 +11,17 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
+use smithay::backend::renderer::element::RenderElement;
+
 use super::OutputRenderElements;
+use super::bridge::GlesBridge;
+use super::renderer::DriftRenderer;
 
 static BLUR_DOWN_SRC: &str = include_str!("../shaders/blur_down.glsl");
 static BLUR_UP_SRC: &str = include_str!("../shaders/blur_up.glsl");
 
-fn hash_background_elements(
-    elements: &[OutputRenderElements],
+fn hash_background_elements<R: DriftRenderer>(
+    elements: &[OutputRenderElements<R>],
     window_rect: Rectangle<i32, Physical>,
     region_rects: Option<&[Rectangle<i32, Physical>]>,
 ) -> u64 {
@@ -273,22 +277,39 @@ pub(crate) struct BlurRequestData {
 /// Process blur requests: for each blurred window, render behind-content to FBO,
 /// crop the window region, run Kawase blur passes, and insert the result.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn process_blur_requests(
+pub(crate) fn process_blur_requests<R: DriftRenderer>(
     state: &mut crate::state::DriftWm,
-    renderer: &mut GlesRenderer,
+    renderer: &mut R,
     output: &Output,
     output_scale: f64,
-    all_elements: &mut Vec<OutputRenderElements>,
+    all_elements: &mut Vec<OutputRenderElements<R>>,
     blur_requests: &[BlurRequestData],
     overlay_prefix: usize,
     top_prefix: usize,
     pinned_prefix: usize,
     normal_prefix: usize,
     widget_prefix: usize,
-) {
+)
+// Rendering the behind-content / surface-alpha snapshots needs the element enum
+// to draw on R. Concrete renderers (GlesRenderer, MultiGpuRenderer) satisfy this
+// via the macro-generated impls; the bound just carries it through the generic.
+where
+    OutputRenderElements<R>: RenderElement<R>,
+{
     use smithay::backend::renderer::Color32F;
     use smithay::backend::renderer::damage::OutputDamageTracker;
     use smithay::backend::renderer::{Bind, Frame, Offscreen, Renderer};
+
+    // The blur pipeline mixes frame-renderer binds with raw GLES passes on the
+    // primary GPU's context. On a cross-GPU output those are two different GL
+    // contexts that can't share textures — render such frames without blur.
+    if state.render.frame_is_cross_gpu {
+        static CROSS_GPU_BLUR: std::sync::Once = std::sync::Once::new();
+        CROSS_GPU_BLUR.call_once(|| {
+            tracing::info!("blur is unavailable on outputs driven by a secondary GPU");
+        });
+        return;
+    }
 
     let logical_size = crate::state::output_logical_size(output);
     let output_size: Size<i32, Physical> = logical_size.to_physical_precise_round(output_scale);
@@ -298,9 +319,11 @@ pub(crate) fn process_blur_requests(
     let mut bg_tex = match state.render.blur_bg_fbo.take() {
         Some((tex, cached_size)) if cached_size == output_size => tex,
         _ => {
-            let Ok(t) =
-                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size)
-            else {
+            let Ok(t) = Offscreen::<GlesTexture>::create_buffer(
+                renderer.as_gles_renderer(),
+                Fourcc::Abgr8888,
+                out_buf_size,
+            ) else {
                 return;
             };
             t
@@ -311,7 +334,7 @@ pub(crate) fn process_blur_requests(
     let up_shader = state.render.blur_up_shader.clone().unwrap();
     let blur_passes = state.config.effects.blur_radius as usize;
     let blur_strength = state.config.effects.blur_strength as f32;
-    let context_id = renderer.context_id();
+    let context_id = renderer.as_gles_renderer().context_id();
     let geom_gen = state.render.blur_geometry_generation;
     let camera_gen = state.render.blur_camera_generation;
     // Animated background shaders update per frame but the element Id is stable,
@@ -344,7 +367,7 @@ pub(crate) fn process_blur_requests(
         }
 
         if !state.render.blur_cache.contains_key(&req.surface_id) {
-            if let Some(c) = BlurCache::new(renderer, win_size) {
+            if let Some(c) = BlurCache::new(renderer.as_gles_renderer(), win_size) {
                 state.render.blur_cache.insert(req.surface_id.clone(), c);
             } else {
                 needs_recompute.push(false);
@@ -353,7 +376,7 @@ pub(crate) fn process_blur_requests(
         }
         let cache = state.render.blur_cache.get_mut(&req.surface_id).unwrap();
         if cache.size != win_size {
-            cache.resize(renderer, win_size);
+            cache.resize(renderer.as_gles_renderer(), win_size);
         }
 
         let bg_hash = hash_background_elements(
@@ -419,13 +442,15 @@ pub(crate) fn process_blur_requests(
             last_bg_depth = Some(behind);
         }
 
-        // Crop from bg_tex into cache.texture
+        // Crop from bg_tex into cache.texture. Pure GlesTexture work on the
+        // primary renderer: render_texture_from_to takes the concrete TextureId.
         {
             let bg_src = bg_tex.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+            let gles = renderer.as_gles_renderer();
+            let Ok(mut target) = gles.bind(&mut cache.texture) else {
                 continue;
             };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+            let Ok(mut frame) = gles.render(&mut target, win_size, Transform::Normal) else {
                 continue;
             };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
@@ -450,7 +475,7 @@ pub(crate) fn process_blur_requests(
         // Run Kawase blur passes
         let offset = blur_strength * output_scale as f32;
         let _ = render_blur(
-            renderer,
+            renderer.as_gles_renderer(),
             &down_shader,
             &up_shader,
             &mut cache.texture,
@@ -508,10 +533,11 @@ pub(crate) fn process_blur_requests(
         let whole_mask = [Rectangle::from_size(win_size)];
         {
             let bg_src = bg_tex.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.mask) else {
+            let gles = renderer.as_gles_renderer();
+            let Ok(mut target) = gles.bind(&mut cache.mask) else {
                 continue;
             };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+            let Ok(mut frame) = gles.render(&mut target, win_size, Transform::Normal) else {
                 continue;
             };
             let _ = frame.clear(Color32F::TRANSPARENT, &whole_mask);
@@ -544,10 +570,11 @@ pub(crate) fn process_blur_requests(
         {
             use smithay::backend::renderer::gles::ffi;
             let mask_src = cache.mask.clone();
-            let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+            let gles = renderer.as_gles_renderer();
+            let Ok(mut target) = gles.bind(&mut cache.texture) else {
                 continue;
             };
-            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+            let Ok(mut frame) = gles.render(&mut target, win_size, Transform::Normal) else {
                 continue;
             };
             let _ = frame.with_context(|gl| unsafe {
@@ -615,7 +642,10 @@ pub(crate) fn process_blur_requests(
             cache.damage_bag.snapshot(),
             Kind::Unspecified,
         );
-        all_elements.insert(insert_idx, OutputRenderElements::Blur(blur_elem));
+        all_elements.insert(
+            insert_idx,
+            OutputRenderElements::Blur(GlesBridge(blur_elem)),
+        );
         index_shift += 1;
     }
 
