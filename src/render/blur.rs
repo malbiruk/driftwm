@@ -47,7 +47,6 @@ fn hash_background_elements(
 /// Per-window cached textures for Kawase blur ping-pong passes.
 pub struct BlurCache {
     pub texture: GlesTexture,
-    pub scratch: GlesTexture,
     pub mask: GlesTexture,
     /// Padded ping-pong pair for the blur itself. Blurring exactly the
     /// window rect makes edge samples clamp to the border pixels, which
@@ -91,16 +90,13 @@ impl BlurCache {
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let t2 =
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
-        let t3 =
-            Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size).ok()?;
         let p1 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
             .ok()?;
         let p2 = Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
             .ok()?;
         Some(Self {
             texture: t1,
-            scratch: t2,
-            mask: t3,
+            mask: t2,
             pad_a: p1,
             pad_b: p2,
             pad_size,
@@ -128,16 +124,13 @@ impl BlurCache {
             Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(t2) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
-            && let Ok(t3) =
-                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, buf_size)
             && let Ok(p1) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
             && let Ok(p2) =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, pad_buf_size)
         {
             self.texture = t1;
-            self.scratch = t2;
-            self.mask = t3;
+            self.mask = t2;
             self.pad_a = p1;
             self.pad_b = p2;
             self.pad_size = pad_size;
@@ -479,28 +472,29 @@ pub(crate) fn process_blur_requests(
                 (req.screen_rect.loc.x - pad, req.screen_rect.loc.y - pad).into(),
                 pad_size,
             );
-            if let Some(clipped) = want.intersection(Rectangle::from_size(output_size)) {
-                if clipped.size.w > 0 && clipped.size.h > 0 {
-                    let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
-                        (clipped.loc.x as f64, clipped.loc.y as f64).into(),
-                        (clipped.size.w as f64, clipped.size.h as f64).into(),
-                    );
-                    let dst = Rectangle::<i32, Physical>::new(
-                        (clipped.loc.x - want.loc.x, clipped.loc.y - want.loc.y).into(),
-                        clipped.size,
-                    );
-                    let _ = frame.render_texture_from_to(
-                        &bg_src,
-                        src_rect,
-                        dst,
-                        &[dst],
-                        &[],
-                        Transform::Normal,
-                        1.0,
-                        None,
-                        &[],
-                    );
-                }
+            if let Some(clipped) = want.intersection(Rectangle::from_size(output_size))
+                && clipped.size.w > 0
+                && clipped.size.h > 0
+            {
+                let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
+                    (clipped.loc.x as f64, clipped.loc.y as f64).into(),
+                    (clipped.size.w as f64, clipped.size.h as f64).into(),
+                );
+                let dst = Rectangle::<i32, Physical>::new(
+                    (clipped.loc.x - want.loc.x, clipped.loc.y - want.loc.y).into(),
+                    clipped.size,
+                );
+                let _ = frame.render_texture_from_to(
+                    &bg_src,
+                    src_rect,
+                    dst,
+                    &[dst],
+                    &[],
+                    Transform::Normal,
+                    1.0,
+                    None,
+                    &[],
+                );
             }
             let _ = frame.finish();
         }
