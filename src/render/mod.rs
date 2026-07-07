@@ -1250,10 +1250,13 @@ pub fn compose_frame(
             .iter()
             .map(|r| r.surface_id.clone())
             .collect();
+        // Prune only this output's stale entries: another output's caches are
+        // keyed under its own name and must survive this output's frame.
+        let name = output.name();
         state
             .render
             .blur_cache
-            .retain(|id, _| active_ids.contains(id));
+            .retain(|(out, id), _| out != &name || active_ids.contains(id));
     }
 
     // Error bar sits above every window and layer-shell surface but below the

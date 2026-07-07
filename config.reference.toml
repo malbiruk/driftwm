@@ -176,15 +176,14 @@
 [effects]
 # blur_radius = 2                # number of Kawase down+up passes (default: 2)
 # blur_strength = 1.1            # per-pass texel spread (default: 1.1)
-# animate_blur = false           # keep blur live under an animated wallpaper (default: false —
-                                 # blur is captured once and only refreshed when geometry/camera/
-                                 # static bg change). The background is blurred once into a shared
-                                 # full-output texture and each window slices its rect from it, so
-                                 # cost stays flat as windows are added. A window stacked over other
-                                 # windows falls back to an exact per-window blur at the same cadence.
-# animate_blur_fps = 20          # refresh rate of the shared animated blur (1-144). Animated
-                                 # wallpapers evolve slowly; well below the output rate still looks
-                                 # continuous through frosted glass. Camera moves force a refresh.
+# animate_blur_fps = 20          # refresh rate of blur under an animated wallpaper (0-144, default
+                                 # 20; 0 = off, freezing the frost so it stops re-sampling the
+                                 # wallpaper). The background is blurred once into a shared full-output
+                                 # texture and each window slices its rect from it, so cost stays flat
+                                 # as windows are added; a window stacked over other windows falls back
+                                 # to an exact per-window blur at the same cadence. Animated wallpapers
+                                 # evolve slowly, so well below the output rate still looks continuous
+                                 # through frosted glass. Camera moves force a refresh.
 
 [background]
 # # Five types: "default" (built-in dot-grid — the default), "shader", "tile",

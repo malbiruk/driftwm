@@ -707,7 +707,8 @@ impl DriftWm {
         self.pending_size.remove(surface);
         self.pending_fit.remove(surface);
         self.pending_fullscreen.remove(surface);
-        self.render.blur_cache.remove(&id);
+        // blur_cache is keyed per output, so drop every output's entry for this surface.
+        self.render.blur_cache.retain(|(_, sid), _| sid != &id);
         self.render.shadow_cache.remove(&id);
         self.render.border_cache.remove(&id);
         // capture_state keys this surface's texture/damage tracker under "cap-tl:".
@@ -1436,11 +1437,17 @@ impl DriftWm {
             let cam = output_state(&output).camera.to_i32_round();
             if self.space.output_geometry(&output).map(|g| g.loc) != Some(cam) {
                 changed = true;
+                // Per-output bump: a shared blur only refreshes off-throttle for
+                // the output whose camera actually moved, not every output.
+                *self
+                    .render
+                    .blur_camera_generation
+                    .entry(output.name())
+                    .or_insert(0) += 1;
             }
             self.space.map_output(&output, cam);
         }
         if changed {
-            self.render.blur_camera_generation += 1;
             self.sync_pinned_locs();
         }
     }

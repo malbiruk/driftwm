@@ -1040,7 +1040,12 @@ mod tests {
 
         const REFERENCE: &str = include_str!("../../config.reference.toml");
         // Deprecated, migration-only — intentionally undocumented.
-        const ALLOWLIST: &[&str] = &["navigation.friction", "snap.same_edge", "snap.edge_center"];
+        const ALLOWLIST: &[&str] = &[
+            "navigation.friction",
+            "snap.same_edge",
+            "snap.edge_center",
+            "effects.animate_blur",
+        ];
 
         // Each `[a.b]` header is itself a documented path and sets the section
         // for the `key = …` lines under it (→ `a.b.key`).
@@ -1162,6 +1167,31 @@ mod tests {
         let (config, warnings) = Config::from_toml_collect(toml_str).unwrap();
         assert_eq!(config.animation_speed, 0.3);
         assert!(warnings.iter().any(|w| w.contains("animation_speed")));
+    }
+
+    #[test]
+    fn deprecated_animate_blur_warns() {
+        let toml_str = r#"
+            [effects]
+            animate_blur = true
+        "#;
+        let (_config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("animate_blur is deprecated")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn animate_blur_fps_zero_is_preserved() {
+        let toml_str = r#"
+            [effects]
+            animate_blur_fps = 0
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.effects.animate_blur_fps, 0);
     }
 
     #[test]

@@ -418,6 +418,14 @@ pub(super) fn parse_window_rule(
 }
 
 pub(super) fn parse_effects_config(raw: EffectsFileConfig, errors: &mut Warnings) -> EffectsConfig {
+    if raw.animate_blur.is_some() {
+        collect_warn(
+            errors,
+            "config: [effects] animate_blur is deprecated — animated blur is throttled by \
+             animate_blur_fps now (default 20, 0 = off)"
+                .to_string(),
+        );
+    }
     EffectsConfig {
         blur_radius: raw.blur_radius.unwrap_or(2),
         blur_strength: non_negative(
@@ -425,8 +433,8 @@ pub(super) fn parse_effects_config(raw: EffectsFileConfig, errors: &mut Warnings
             "effects.blur_strength",
             errors,
         ),
-        animate_blur: raw.animate_blur.unwrap_or(false),
-        animate_blur_fps: raw.animate_blur_fps.unwrap_or(20).clamp(1, 144),
+        // 0 = off (frost freezes, stops re-sampling the animated wallpaper).
+        animate_blur_fps: raw.animate_blur_fps.unwrap_or(20).min(144),
     }
 }
 

@@ -385,8 +385,14 @@ pub(crate) fn process_blur_requests(
     let blur_passes = state.config.effects.blur_radius as usize;
     let blur_strength = state.config.effects.blur_strength as f32;
     let context_id = renderer.context_id();
+    let output_name = output.name();
     let geom_gen = state.render.blur_geometry_generation;
-    let camera_gen = state.render.blur_camera_generation;
+    let camera_gen = state
+        .render
+        .blur_camera_generation
+        .get(&output_name)
+        .copied()
+        .unwrap_or(0);
     // Animated background shaders update per frame but the element Id is stable,
     // so the bg_hash optimisation can't detect the change. Re-blurring per
     // window per frame re-renders the whole scene each time and scales with
@@ -394,8 +400,12 @@ pub(crate) fn process_blur_requests(
     // full-output texture (throttled to [effects].animate_blur_fps, forced on
     // camera moves) and each window slices its rect out of it. Trade-off: a
     // window overlapping another window frosts only the background beneath.
-    let animated_bg = state.render.background_is_animated && state.config.effects.animate_blur;
-    let output_name = output.name();
+    // animate_blur_fps == 0 disables the live refresh: the frost is captured
+    // once and only recomputed on camera/geometry change, so it freezes over an
+    // animated wallpaper instead of re-sampling it every 1/fps (also avoids the
+    // 1.0/fps division below).
+    let animated_bg =
+        state.render.background_is_animated && state.config.effects.animate_blur_fps > 0;
     let mut shared_refreshed = false;
     if animated_bg {
         let min_interval =
@@ -488,15 +498,16 @@ pub(crate) fn process_blur_requests(
         }
         let pad_size: Size<i32, Physical> = (win_size.w + 2 * pad, win_size.h + 2 * pad).into();
 
-        if !state.render.blur_cache.contains_key(&req.surface_id) {
+        let key = (output_name.clone(), req.surface_id.clone());
+        if !state.render.blur_cache.contains_key(&key) {
             if let Some(c) = BlurCache::new(renderer, win_size, pad_size) {
-                state.render.blur_cache.insert(req.surface_id.clone(), c);
+                state.render.blur_cache.insert(key.clone(), c);
             } else {
                 needs_recompute.push(false);
                 continue;
             }
         }
-        let cache = state.render.blur_cache.get_mut(&req.surface_id).unwrap();
+        let cache = state.render.blur_cache.get_mut(&key).unwrap();
         if cache.size != win_size || cache.pad_size != pad_size {
             cache.resize(renderer, win_size, pad_size);
         }
@@ -543,7 +554,8 @@ pub(crate) fn process_blur_requests(
         if win_size.w <= 0 || win_size.h <= 0 {
             continue;
         }
-        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else {
+        let key = (output_name.clone(), req.surface_id.clone());
+        let Some(cache) = state.render.blur_cache.get_mut(&key) else {
             continue;
         };
 
@@ -722,7 +734,8 @@ pub(crate) fn process_blur_requests(
             );
         }
 
-        let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else {
+        let key = (output_name.clone(), req.surface_id.clone());
+        let Some(cache) = state.render.blur_cache.get_mut(&key) else {
             continue;
         };
 
@@ -811,7 +824,8 @@ pub(crate) fn process_blur_requests(
         if win_size.w <= 0 || win_size.h <= 0 {
             continue;
         }
-        let Some(cache) = state.render.blur_cache.get(&req.surface_id) else {
+        let key = (output_name.clone(), req.surface_id.clone());
+        let Some(cache) = state.render.blur_cache.get(&key) else {
             continue;
         };
 
