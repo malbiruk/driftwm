@@ -15,8 +15,8 @@ mod tile_chunks_tiff;
 mod tile_worker;
 
 pub use background::{BackgroundElement, init_background, update_background_element};
-pub use blur::BlurCache;
 pub(crate) use blur::compile_blur_shaders;
+pub use blur::{BlurCache, SharedBlur};
 pub use capture::{render_capture_frames, render_screencopy, render_toplevel_captures};
 pub use cursor::build_cursor_elements;
 pub use elements::{
@@ -1207,6 +1207,12 @@ pub fn compose_frame(
             + background_layer_elements.len(),
     );
     let cursor_count = cursor_elements.len();
+    // Everything from bottom_elements down is scene background for the
+    // shared animated blur (below all windows and widgets).
+    let background_suffix = bottom_elements.len()
+        + outline_elements.len()
+        + bg_elements.len()
+        + background_layer_elements.len();
     all_elements.extend(cursor_elements);
     all_elements.extend(overlay_elements);
     all_elements.extend(top_elements);
@@ -1218,6 +1224,7 @@ pub fn compose_frame(
     all_elements.extend(outline_elements);
     all_elements.extend(bg_elements);
     all_elements.extend(background_layer_elements);
+    let background_start = all_elements.len() - background_suffix;
 
     if !all_blur_requests.is_empty() {
         #[cfg(feature = "profile-with-tracy")]
@@ -1234,6 +1241,7 @@ pub fn compose_frame(
             pinned_prefix,
             normal_prefix,
             widget_prefix,
+            background_start,
         );
     }
 

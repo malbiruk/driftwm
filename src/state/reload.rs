@@ -90,6 +90,10 @@ impl DriftWm {
         self.render.background_uses_camera = false;
         self.render.background_uses_zoom = false;
         self.render.cached_bg.clear();
+        // Shared animated-blur textures are only touched while `animate_blur`
+        // is on; without this, disabling it would strand two full-output
+        // textures (~66 MB at 4K) until exit.
+        self.render.shared_blur.clear();
         self.render.tile_shader = None;
         self.render.tile_mirror_shader = None;
         self.render.wallpaper_shader = None;

@@ -142,6 +142,19 @@ impl BlurCache {
     }
 }
 
+/// Per-output shared blurred-background state for `animate_blur`: ping-pong
+/// pair plus its refresh throttle. Keyed per output in `RenderCache` —
+/// outputs differ in size and render on their own vblanks, so one global
+/// entry would thrash (recreate + full re-blur on every size mismatch) the
+/// moment a second output exists.
+pub struct SharedBlur {
+    pub tex_a: GlesTexture,
+    pub tex_b: GlesTexture,
+    pub size: Size<i32, Physical>,
+    pub refreshed_at: Option<std::time::Instant>,
+    pub camera_generation: u64,
+}
+
 /// Padding around the blur crop so the Kawase reach never touches a texture
 /// edge: window-edge samples must see real backdrop, not clamped border
 /// pixels. Sized to the blur's worst-case reach at the deepest mip.
@@ -317,6 +330,7 @@ pub(crate) fn process_blur_requests(
     pinned_prefix: usize,
     normal_prefix: usize,
     widget_prefix: usize,
+    background_start: usize,
 ) {
     use smithay::backend::renderer::Color32F;
     use smithay::backend::renderer::damage::OutputDamageTracker;
@@ -374,9 +388,79 @@ pub(crate) fn process_blur_requests(
     let geom_gen = state.render.blur_geometry_generation;
     let camera_gen = state.render.blur_camera_generation;
     // Animated background shaders update per frame but the element Id is stable,
-    // so the bg_hash optimisation can't detect the change. Re-blurring every frame
-    // is expensive, so it's opt-in via [effects].animate_blur.
+    // so the bg_hash optimisation can't detect the change. Re-blurring per
+    // window per frame re-renders the whole scene each time and scales with
+    // window count; instead the background is blurred ONCE into a shared
+    // full-output texture (throttled to [effects].animate_blur_fps, forced on
+    // camera moves) and each window slices its rect out of it. Trade-off: a
+    // window overlapping another window frosts only the background beneath.
     let animated_bg = state.render.background_is_animated && state.config.effects.animate_blur;
+    let output_name = output.name();
+    let mut shared_refreshed = false;
+    if animated_bg {
+        let min_interval =
+            std::time::Duration::from_secs_f64(1.0 / state.config.effects.animate_blur_fps as f64);
+        let size_ok = state
+            .render
+            .shared_blur
+            .get(&output_name)
+            .is_some_and(|s| s.size == output_size);
+        if !size_ok {
+            let a =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size);
+            let b =
+                Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size);
+            if let (Ok(a), Ok(b)) = (a, b) {
+                state.render.shared_blur.insert(
+                    output_name.clone(),
+                    SharedBlur {
+                        tex_a: a,
+                        tex_b: b,
+                        size: output_size,
+                        refreshed_at: None,
+                        camera_generation: 0,
+                    },
+                );
+            }
+        }
+        if let Some(mut shared) = state.render.shared_blur.remove(&output_name) {
+            let camera_moved = shared.camera_generation != camera_gen;
+            let due = shared
+                .refreshed_at
+                .is_none_or(|at| at.elapsed() >= min_interval);
+            if due || camera_moved {
+                let mut rendered = false;
+                if let Ok(mut target) = renderer.bind(&mut shared.tex_a) {
+                    let mut dt =
+                        OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
+                    rendered = dt
+                        .render_output(
+                            renderer,
+                            &mut target,
+                            0,
+                            &all_elements[background_start.min(all_elements.len())..],
+                            [0.0f32, 0.0, 0.0, 1.0],
+                        )
+                        .is_ok();
+                }
+                if rendered {
+                    let _ = render_blur(
+                        renderer,
+                        &down_shader,
+                        &up_shader,
+                        &mut shared.tex_a,
+                        &mut shared.tex_b,
+                        blur_strength * output_scale as f32,
+                        blur_passes,
+                    );
+                    shared.refreshed_at = Some(std::time::Instant::now());
+                    shared.camera_generation = camera_gen;
+                    shared_refreshed = true;
+                }
+            }
+            state.render.shared_blur.insert(output_name.clone(), shared);
+        }
+    }
 
     // Precompute per-request behind depth (index into all_elements where "below this window" begins)
     let behind_starts: Vec<usize> = blur_requests
@@ -431,7 +515,7 @@ pub(crate) fn process_blur_requests(
             BlurLayer::Overlay | BlurLayer::Top | BlurLayer::Pinned
         ) && cache.last_camera_generation != camera_gen;
 
-        if background_changed || geom_changed || camera_dirty || animated_bg {
+        if background_changed || geom_changed || camera_dirty || (animated_bg && shared_refreshed) {
             cache.dirty = true;
         }
         if cache.force_dirty_frames > 0 {
@@ -462,6 +546,47 @@ pub(crate) fn process_blur_requests(
         let Some(cache) = state.render.blur_cache.get_mut(&req.surface_id) else {
             continue;
         };
+
+        // The shared slice is only exact when nothing but scene background
+        // lies beneath this window; a window stacked over other windows
+        // falls through to the per-window path (throttled by the same
+        // shared_refreshed cadence), so lower windows show in its frost.
+        // Missing shared textures (GL alloc failure) also fall through —
+        // skipping would insert this window's never-rendered texture as an
+        // invisible blur.
+        if animated_bg
+            && behind_starts[i] >= background_start
+            && let Some(shared) = state.render.shared_blur.get(&output_name)
+        {
+            // Slice this window's rect out of the shared blurred background.
+            // Already blurred full-screen, so edges see real neighbours and
+            // no padding is needed.
+            let shared_src = shared.tex_a.clone();
+            let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+                continue;
+            };
+            let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                continue;
+            };
+            let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
+            let src_rect: Rectangle<f64, smithay::utils::Buffer> = Rectangle::new(
+                (req.screen_rect.loc.x as f64, req.screen_rect.loc.y as f64).into(),
+                (win_size.w as f64, win_size.h as f64).into(),
+            );
+            let _ = frame.render_texture_from_to(
+                &shared_src,
+                src_rect,
+                Rectangle::from_size(win_size),
+                &[Rectangle::from_size(win_size)],
+                &[],
+                Transform::Normal,
+                1.0,
+                None,
+                &[],
+            );
+            let _ = frame.finish();
+            continue;
+        }
 
         let behind = behind_starts[i];
         if last_bg_depth != Some(behind) {

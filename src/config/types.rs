@@ -770,6 +770,10 @@ pub struct EffectsConfig {
     pub blur_radius: u32,
     pub blur_strength: f64,
     pub animate_blur: bool,
+    /// Refresh rate of the shared animated-background blur. Animated
+    /// wallpapers evolve slowly; re-blurring at a fraction of the output
+    /// rate looks continuous through frosted glass at a fraction of the cost.
+    pub animate_blur_fps: u32,
 }
 
 impl Default for EffectsConfig {
@@ -778,6 +782,7 @@ impl Default for EffectsConfig {
             blur_radius: 2,
             blur_strength: 1.1,
             animate_blur: false,
+            animate_blur_fps: 20,
         }
     }
 }
