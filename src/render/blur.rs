@@ -142,6 +142,19 @@ impl BlurCache {
     }
 }
 
+/// Per-output shared blurred-background state for `animate_blur`: ping-pong
+/// pair plus its refresh throttle. Keyed per output in `RenderCache` —
+/// outputs differ in size and render on their own vblanks, so one global
+/// entry would thrash (recreate + full re-blur on every size mismatch) the
+/// moment a second output exists.
+pub struct SharedBlur {
+    pub tex_a: GlesTexture,
+    pub tex_b: GlesTexture,
+    pub size: Size<i32, Physical>,
+    pub refreshed_at: Option<std::time::Instant>,
+    pub camera_generation: u64,
+}
+
 /// Padding around the blur crop so the Kawase reach never touches a texture
 /// edge: window-edge samples must see real backdrop, not clamped border
 /// pixels. Sized to the blur's worst-case reach at the deepest mip.
@@ -355,59 +368,70 @@ pub(crate) fn process_blur_requests(
     // camera moves) and each window slices its rect out of it. Trade-off: a
     // window overlapping another window frosts only the background beneath.
     let animated_bg = state.render.background_is_animated && state.config.effects.animate_blur;
+    let output_name = output.name();
     let mut shared_refreshed = false;
     if animated_bg {
         let min_interval =
             std::time::Duration::from_secs_f64(1.0 / state.config.effects.animate_blur_fps as f64);
-        let camera_moved = state.render.shared_blur_camera_generation != camera_gen;
-        let due = state
-            .render
-            .shared_blur_at
-            .is_none_or(|at| at.elapsed() >= min_interval);
         let size_ok = state
             .render
             .shared_blur
-            .as_ref()
-            .is_some_and(|(_, _, s)| *s == output_size);
+            .get(&output_name)
+            .is_some_and(|s| s.size == output_size);
         if !size_ok {
             let a =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size);
             let b =
                 Offscreen::<GlesTexture>::create_buffer(renderer, Fourcc::Abgr8888, out_buf_size);
             if let (Ok(a), Ok(b)) = (a, b) {
-                state.render.shared_blur = Some((a, b, output_size));
+                state.render.shared_blur.insert(
+                    output_name.clone(),
+                    SharedBlur {
+                        tex_a: a,
+                        tex_b: b,
+                        size: output_size,
+                        refreshed_at: None,
+                        camera_generation: 0,
+                    },
+                );
             }
         }
-        if (due || camera_moved || !size_ok) && state.render.shared_blur.is_some() {
-            let (mut sa, mut sb, ssize) = state.render.shared_blur.take().unwrap();
-            let mut rendered = false;
-            if let Ok(mut target) = renderer.bind(&mut sa) {
-                let mut dt = OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
-                rendered = dt
-                    .render_output(
+        if let Some(mut shared) = state.render.shared_blur.remove(&output_name) {
+            let camera_moved = shared.camera_generation != camera_gen;
+            let due = shared
+                .refreshed_at
+                .is_none_or(|at| at.elapsed() >= min_interval);
+            if due || camera_moved {
+                let mut rendered = false;
+                if let Ok(mut target) = renderer.bind(&mut shared.tex_a) {
+                    let mut dt =
+                        OutputDamageTracker::new(output_size, output_scale, Transform::Normal);
+                    rendered = dt
+                        .render_output(
+                            renderer,
+                            &mut target,
+                            0,
+                            &all_elements[background_start.min(all_elements.len())..],
+                            [0.0f32, 0.0, 0.0, 1.0],
+                        )
+                        .is_ok();
+                }
+                if rendered {
+                    let _ = render_blur(
                         renderer,
-                        &mut target,
-                        0,
-                        &all_elements[background_start.min(all_elements.len())..],
-                        [0.0f32, 0.0, 0.0, 1.0],
-                    )
-                    .is_ok();
+                        &down_shader,
+                        &up_shader,
+                        &mut shared.tex_a,
+                        &mut shared.tex_b,
+                        blur_strength * output_scale as f32,
+                        blur_passes,
+                    );
+                    shared.refreshed_at = Some(std::time::Instant::now());
+                    shared.camera_generation = camera_gen;
+                    shared_refreshed = true;
+                }
             }
-            if rendered {
-                let _ = render_blur(
-                    renderer,
-                    &down_shader,
-                    &up_shader,
-                    &mut sa,
-                    &mut sb,
-                    blur_strength * output_scale as f32,
-                    blur_passes,
-                );
-                state.render.shared_blur_at = Some(std::time::Instant::now());
-                state.render.shared_blur_camera_generation = camera_gen;
-                shared_refreshed = true;
-            }
-            state.render.shared_blur = Some((sa, sb, ssize));
+            state.render.shared_blur.insert(output_name.clone(), shared);
         }
     }
 
@@ -504,10 +528,10 @@ pub(crate) fn process_blur_requests(
             // Slice this window's rect out of the shared blurred background.
             // Already blurred full-screen, so edges see real neighbours and
             // no padding is needed.
-            let Some((shared, _, _)) = state.render.shared_blur.as_ref() else {
+            let Some(shared) = state.render.shared_blur.get(&output_name) else {
                 continue;
             };
-            let shared_src = shared.clone();
+            let shared_src = shared.tex_a.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else {
                 continue;
             };

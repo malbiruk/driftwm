@@ -15,8 +15,8 @@ mod tile_chunks_tiff;
 mod tile_worker;
 
 pub use background::{BackgroundElement, init_background, update_background_element};
-pub use blur::BlurCache;
 pub(crate) use blur::compile_blur_shaders;
+pub use blur::{BlurCache, SharedBlur};
 pub use capture::{render_capture_frames, render_screencopy, render_toplevel_captures};
 pub use cursor::build_cursor_elements;
 pub use elements::{

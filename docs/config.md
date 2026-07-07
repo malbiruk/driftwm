@@ -506,7 +506,7 @@ per-pass texel spread (default: 1.1)
 
 Default: `false`
 
-keep blur live under an animated wallpaper (default: false — blur is captured once and only refreshed when geometry/camera/static bg change). The background is blurred once into a shared full-output texture and each window slices its rect from it, so cost stays flat as windows are added. A window stacked over other windows falls back to an exact per-window blur at the same cadence.
+keep blur live under an animated wallpaper (default: false — blur is captured once and only refreshed when geometry/camera/ static bg change). The background is blurred once into a shared full-output texture and each window slices its rect from it, so cost stays flat as windows are added. A window stacked over other windows falls back to an exact per-window blur at the same cadence.
 
 ### `animate_blur_fps`
 

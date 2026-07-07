@@ -33,10 +33,9 @@ pub struct RenderCache {
     pub blur_camera_generation: u64,
     /// Shared full-output blurred background for `animate_blur`: ping-pong
     /// pair, blurred once per refresh and sliced per window, so cost stops
-    /// scaling with the number of blurred windows.
-    pub shared_blur: Option<(GlesTexture, GlesTexture, Size<i32, Physical>)>,
-    pub shared_blur_at: Option<std::time::Instant>,
-    pub shared_blur_camera_generation: u64,
+    /// scaling with the number of blurred windows. Keyed by output name —
+    /// outputs differ in size and render on their own vblanks.
+    pub shared_blur: HashMap<String, crate::render::SharedBlur>,
     pub shadow_cache: HashMap<ObjectId, ShadowCacheEntry>,
     pub border_cache: HashMap<ObjectId, BorderCacheEntry>,
     /// One element per output for the configured background (shader / tile /
@@ -73,9 +72,7 @@ impl RenderCache {
             blur_bg_fbo: None,
             blur_geometry_generation: 0,
             blur_camera_generation: 0,
-            shared_blur: None,
-            shared_blur_at: None,
-            shared_blur_camera_generation: 0,
+            shared_blur: HashMap::new(),
             shadow_cache: HashMap::new(),
             border_cache: HashMap::new(),
             cached_bg: HashMap::new(),
@@ -118,6 +115,7 @@ impl RenderCache {
     /// of reusing a stale element with the previous geometry.
     pub fn remove_output(&mut self, output_name: &str) {
         self.cached_bg.remove(output_name);
+        self.shared_blur.remove(output_name);
         self.cached_error_bar.remove(output_name);
         self.remove_background_chunks(output_name);
         self.remove_capture_state(output_name);
