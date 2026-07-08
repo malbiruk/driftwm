@@ -1175,15 +1175,16 @@ impl DriftWm {
             .is_none_or(|t| t.elapsed() >= std::time::Duration::from_secs_f64(1.0 / fps as f64))
     }
 
-    /// Outputs whose animated background can actually render: active and not
-    /// fullscreen (fullscreen skips the background entirely, so it never
-    /// stamps `background_last_animate` and would otherwise look permanently
-    /// due). Shared by the idle due-check, the tick-timer arming wait, and
-    /// the per-frame dirty-marking so all three agree on which outputs count.
+    /// Outputs whose animated background can actually render: active, not
+    /// fullscreen, not DPMS-off. Fullscreen and DPMS-off outputs stop
+    /// rendering the background, so their `background_last_animate` stamps
+    /// go stale and would otherwise read as permanently due. Shared by the
+    /// idle due-check, the tick-timer arming wait, and the per-frame
+    /// dirty-marking so all three agree on which outputs count.
     pub(crate) fn background_render_eligible_outputs(&self) -> impl Iterator<Item = &Output> {
         self.active_outputs
             .iter()
-            .filter(|o| !self.is_output_fullscreen(o))
+            .filter(|o| !self.is_output_fullscreen(o) && !self.dpms_off_outputs.contains(o))
     }
 
     /// Owned-name variant of [`Self::background_render_eligible_outputs`] for
@@ -1195,8 +1196,8 @@ impl DriftWm {
 
     /// True when any eligible output's animated background is due (idle
     /// wake-up check). Restricted to outputs that actually render the
-    /// background — a DPMS-off or fullscreen output never gets a
-    /// `background_last_animate` stamp, so including it here would read as
+    /// background — a DPMS-off or fullscreen output stops stamping
+    /// `background_last_animate`, so including it here would read as
     /// permanently due and defeat the idle fast path (see
     /// `background_render_eligible_outputs`).
     pub fn background_animation_due_any(&self) -> bool {
