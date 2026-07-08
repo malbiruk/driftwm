@@ -536,7 +536,7 @@ impl TouchGestureGrab {
         let (camera, zoom) = self.camera_zoom();
         let canvas = screen_to_canvas(ScreenPos(self.start_centroid), camera, zoom).0;
         let serial = SERIAL_COUNTER.next_serial();
-        let under = data.space.element_under(canvas).map(|(w, _)| w.clone());
+        let under = data.element_under_raw(canvas).map(|(w, _)| w.clone());
         if let Some(window) = &under {
             data.raise_and_focus(window, serial);
         }

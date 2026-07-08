@@ -871,45 +871,51 @@ impl DriftWm {
             .is_some_and(|fs| active.as_ref() != Some(&fs))
     }
 
-    /// Isolation-aware `Space::element_under`: the same hit-test, but skips a
-    /// window fullscreen on another output (see `fullscreen_on_other_output`).
-    /// Every canvas-space pointer path must use this rather than
-    /// `self.space.element_under`, or an off-output fullscreen window leaks into
+    /// Stage-side `Space::element_under` (bbox filter, render_location, input
+    /// region), minus the windows `skip` rejects.
+    fn element_under_where(
+        &self,
+        point: Point<f64, Logical>,
+        mut skip: impl FnMut(&Window) -> bool,
+    ) -> Option<(&Window, Point<i32, Logical>)> {
+        self.stage
+            .windows()
+            .rev()
+            .filter(|w| !skip(w))
+            .filter(|w| {
+                self.window_bbox(w)
+                    .is_some_and(|bbox| bbox.to_f64().contains(point))
+            })
+            .find_map(|w| {
+                let render_location = self.stage.position_of(w)? - w.geometry().loc;
+                w.is_in_input_region(&(point - render_location.to_f64()))
+                    .then_some((w, render_location))
+            })
+    }
+
+    /// Isolation-aware hit-test: skips a window fullscreen on an output other
+    /// than the pointer's (see `fullscreen_on_other_output`). Every canvas-space
+    /// pointer path must use this, or an off-output fullscreen window leaks into
     /// focus / grab / binding-context lookups on the other monitor.
     pub(crate) fn element_under(
         &self,
         point: Point<f64, Logical>,
     ) -> Option<(&Window, Point<i32, Logical>)> {
         let active = self.active_output();
-        // Fast path: smithay's native O(n) hit-test. Reuse it verbatim unless
-        // the top hit is an off-output fullscreen window — the only case the
-        // skip matters (and only possible while some output is fullscreen).
-        let hit = self.space.element_under(point);
-        let needs_skip = matches!(&hit, Some((w, _))
-            if w.wl_surface().is_some_and(|s| self.fullscreen_on_other_output(&s, &active)));
-        if !needs_skip {
-            return hit;
-        }
-        // Rare: redo the hit-test skipping off-output fullscreen windows, so a
-        // window beneath one on this output is still found. Mirrors smithay's
-        // `Space::element_under` (bbox filter, render_location, input region).
-        self.space
-            .elements()
-            .rev()
-            .filter(|w| {
-                w.wl_surface()
-                    .is_none_or(|s| !self.fullscreen_on_other_output(&s, &active))
-            })
-            .filter(|w| {
-                self.space
-                    .element_bbox(w)
-                    .is_some_and(|bbox| bbox.to_f64().contains(point))
-            })
-            .find_map(|w| {
-                let render_location = self.space.element_location(w)? - w.geometry().loc;
-                w.is_in_input_region(&(point - render_location.to_f64()))
-                    .then_some((w, render_location))
-            })
+        self.element_under_where(point, |w| {
+            w.wl_surface()
+                .is_some_and(|s| self.fullscreen_on_other_output(&s, &active))
+        })
+    }
+
+    /// Hit-test without the off-output-fullscreen skip, for paths whose point
+    /// is not anchored to the pointer's active output (touch: the finger may be
+    /// on the very output the skip would key against).
+    pub(crate) fn element_under_raw(
+        &self,
+        point: Point<f64, Logical>,
+    ) -> Option<(&Window, Point<i32, Logical>)> {
+        self.element_under_where(point, |_| false)
     }
 
     /// Find the Wayland surface and local coordinates under the given canvas position.
