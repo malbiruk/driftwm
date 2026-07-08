@@ -63,7 +63,7 @@ impl DriftWm {
             }
         };
 
-        let window_loc = self.space.element_location(window).unwrap_or_default();
+        let window_loc = self.stage.position_of(window).unwrap_or_default();
         let window_size = window.geometry().size;
         let bar = self.window_ssd_bar(window);
         let vc = self.usable_center_screen_on(output);
@@ -108,7 +108,7 @@ impl DriftWm {
                 .elements()
                 .filter(|w| self.is_canvas_window(w))
                 .map(|w| {
-                    let loc = self.space.element_location(w).unwrap_or_default();
+                    let loc = self.stage.position_of(w).unwrap_or_default();
                     let size = w.geometry().size;
                     (loc, size)
                 }),

@@ -385,7 +385,7 @@ impl CompositorHandler for DriftWm {
                             (p.x, p.y)
                         } else if let Some(parent_surface) = window.parent_surface()
                             && let Some(parent_win) = self.window_for_surface(&parent_surface)
-                            && let Some(parent_loc) = self.space.element_location(&parent_win)
+                            && let Some(parent_loc) = self.stage.position_of(&parent_win)
                         {
                             let parent_size = parent_win.geometry().size;
                             (
@@ -949,7 +949,7 @@ impl DriftWm {
             return;
         };
         let new_loc = Point::from((x, y));
-        if self.space.element_location(window) == Some(new_loc) {
+        if self.stage.position_of(window) == Some(new_loc) {
             return;
         }
         self.map_window(window.clone(), new_loc, false);

@@ -444,7 +444,7 @@ impl TouchGestureGrab {
         }
         let serial = SERIAL_COUNTER.next_serial();
         data.raise_and_focus(&window, serial);
-        let initial = data.space.element_location(&window).unwrap_or(loc);
+        let initial = data.stage.position_of(&window).unwrap_or(loc);
         let (members, surfaces) = if cluster {
             data.cluster_snapshot_for_drag(&window, initial)
         } else {
@@ -497,7 +497,7 @@ impl TouchGestureGrab {
         if !data.is_canvas_window(&window) {
             return false;
         }
-        let Some(loc) = data.space.element_location(&window) else {
+        let Some(loc) = data.stage.position_of(&window) else {
             return false;
         };
         let edges = edge_from_origin(origin, loc, window.geometry().size);

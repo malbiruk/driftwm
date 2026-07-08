@@ -266,8 +266,7 @@ impl DriftWm {
                                 // cluster drag is a separate explicit action
                                 // (`MoveSnappedWindows`, default Alt+Shift+Left).
                                 self.raise_and_focus(&window, serial);
-                                let Some(initial_window_location) =
-                                    self.space.element_location(&window)
+                                let Some(initial_window_location) = self.stage.position_of(&window)
                                 else {
                                     return;
                                 };
@@ -328,8 +327,7 @@ impl DriftWm {
                         {
                             self.raise_and_focus(&window, serial);
 
-                            let Some(initial_window_location) =
-                                self.space.element_location(&window)
+                            let Some(initial_window_location) = self.stage.position_of(&window)
                             else {
                                 return;
                             };
@@ -648,7 +646,7 @@ impl DriftWm {
         explicit_edge: Option<xdg_toplevel::ResizeEdge>,
         want_cluster: bool,
     ) {
-        let Some(initial_window_location) = self.space.element_location(window) else {
+        let Some(initial_window_location) = self.stage.position_of(window) else {
             return;
         };
         let initial_window_size = window.geometry().size;

@@ -65,7 +65,7 @@ impl DriftWm {
             }
             Action::NudgeWindow(dir) => {
                 if let Some(window) = self.focused_window().filter(|w| self.is_canvas_window(w))
-                    && let Some(loc) = self.space.element_location(&window)
+                    && let Some(loc) = self.stage.position_of(&window)
                 {
                     let step = self.config.nudge_step;
                     let (ux, uy) = dir.to_unit_vec();
@@ -168,7 +168,7 @@ impl DriftWm {
 
                 let (origin, skip) = if let Some(ref w) = anchor {
                     let center = self.window_visual_center(w).unwrap_or_else(|| {
-                        let loc = self.space.element_location(w).unwrap_or_default();
+                        let loc = self.stage.position_of(w).unwrap_or_default();
                         let size = w.geometry().size;
                         Point::from((
                             loc.x as f64 + size.w as f64 / 2.0,
@@ -185,7 +185,7 @@ impl DriftWm {
                     .elements()
                     .filter(|w| self.is_canvas_window(w))
                     .map(|w| {
-                        let loc = self.space.element_location(w).unwrap_or_default();
+                        let loc = self.stage.position_of(w).unwrap_or_default();
                         let size = w.geometry().size;
                         let closest = canvas::closest_point_on_rect(origin, loc, size);
                         let point = if closest == origin {
@@ -254,7 +254,7 @@ impl DriftWm {
                         let can_fullscreen = ret
                             .fullscreen_window
                             .as_ref()
-                            .is_some_and(|w| self.space.elements().any(|e| e == w));
+                            .is_some_and(|w| self.stage.contains(w));
                         if can_fullscreen {
                             // Set camera/zoom directly — enter_fullscreen locks the viewport
                             self.set_camera(ret.camera);
@@ -325,7 +325,7 @@ impl DriftWm {
                         .elements()
                         .filter(|w| self.is_canvas_window(w))
                         .map(|w| {
-                            let loc = self.space.element_location(w).unwrap_or_default();
+                            let loc = self.stage.position_of(w).unwrap_or_default();
                             let size = w.geometry().size;
                             (loc, size)
                         });
@@ -359,7 +359,7 @@ impl DriftWm {
                         .elements()
                         .filter(|w| cluster.contains(w))
                         .map(|w| {
-                            let loc = self.space.element_location(w).unwrap_or_default();
+                            let loc = self.stage.position_of(w).unwrap_or_default();
                             let size = w.geometry().size;
                             (loc, size)
                         });
@@ -540,7 +540,7 @@ impl DriftWm {
             let Some(output) = self.output_for_window(&window) else {
                 return;
             };
-            let Some(loc) = self.space.element_location(&window) else {
+            let Some(loc) = self.stage.position_of(&window) else {
                 return;
             };
             let (camera, zoom) = {

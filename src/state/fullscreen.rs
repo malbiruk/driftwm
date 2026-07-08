@@ -85,7 +85,7 @@ impl DriftWm {
         }
 
         let viewport_size = super::output_logical_size(&output);
-        let saved_location = self.space.element_location(window).unwrap_or_default();
+        let saved_location = self.stage.position_of(window).unwrap_or_default();
 
         // If the window is fit, capture the fit-era geometry so exit_fullscreen
         // restores it back to fit size with the fit state still intact. Otherwise

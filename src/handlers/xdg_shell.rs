@@ -340,7 +340,7 @@ impl XdgShellHandler for DriftWm {
                         }
                         (Some(out), _) => {
                             let from = self.window_visual_center(window).unwrap_or_else(|| {
-                                let loc = self.space.element_location(window).unwrap_or_default();
+                                let loc = self.stage.position_of(window).unwrap_or_default();
                                 let size = window.geometry().size;
                                 Point::from((
                                     loc.x as f64 + size.w as f64 / 2.0,
@@ -403,7 +403,7 @@ impl XdgShellHandler for DriftWm {
                 );
                 return;
             }
-            let Some(initial_window_location) = self.space.element_location(&window) else {
+            let Some(initial_window_location) = self.stage.position_of(&window) else {
                 return;
             };
             let Some(output) = self.active_output() else {
@@ -431,7 +431,7 @@ impl XdgShellHandler for DriftWm {
             if self.stage.is_pinned(&window) {
                 return;
             }
-            let Some(initial_window_location) = self.space.element_location(&window) else {
+            let Some(initial_window_location) = self.stage.position_of(&window) else {
                 return;
             };
             // The initiating touch-down resolved and stored the touch's output as
@@ -482,7 +482,7 @@ impl XdgShellHandler for DriftWm {
             return;
         };
 
-        let Some(initial_window_location) = self.space.element_location(&window) else {
+        let Some(initial_window_location) = self.stage.position_of(&window) else {
             return;
         };
         let initial_window_size = window.geometry().size;
@@ -649,7 +649,7 @@ impl DriftWm {
             // the canvas: when zoomed/panned, output_geo translated by window_loc
             // describes a phantom screen far from the popup's anchor, and the
             // positioner mis-flips the popup to "fit" it.
-            let window_loc = self.space.element_location(window).unwrap_or_default();
+            let window_loc = self.stage.position_of(window).unwrap_or_default();
             let viewport_size = active_output
                 .as_ref()
                 .and_then(|o| self.space.output_geometry(o))

@@ -84,7 +84,7 @@ impl DriftWm {
     pub fn window_inventory(&self) -> Vec<WindowInfo> {
         let focused = self.focused_window();
         let mut windows: Vec<WindowInfo> = Vec::new();
-        for window in self.space.elements() {
+        for window in self.stage.windows() {
             let Some(surface) = window.wl_surface() else {
                 continue;
             };
@@ -99,7 +99,7 @@ impl DriftWm {
             if app_id.is_empty() {
                 continue;
             }
-            let loc = self.space.element_location(window).unwrap_or_default();
+            let loc = self.stage.position_of(window).unwrap_or_default();
             // window.geometry().size can flicker for some Chromium-class clients
             // (see fit.rs), causing the occasional spurious write.
             let size = window.geometry().size;
@@ -143,7 +143,7 @@ impl DriftWm {
         fullscreen.sort_by(|a, b| (&a.output, &a.app_id).cmp(&(&b.output, &b.app_id)));
 
         let mut pinned: Vec<OutputPinned> = Vec::new();
-        for window in self.space.elements() {
+        for window in self.stage.windows() {
             let Some(surface) = window.wl_surface() else {
                 continue;
             };
@@ -198,7 +198,7 @@ impl DriftWm {
         // into fullscreen on an untouched monitor (no camera move, never in the
         // canvas list).
         let mut pinned_by_output: HashMap<String, Vec<PinnedInfo>> = HashMap::new();
-        for window in self.space.elements() {
+        for window in self.stage.windows() {
             let Some(surface) = window.wl_surface() else {
                 continue;
             };

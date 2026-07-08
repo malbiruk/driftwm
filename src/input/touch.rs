@@ -166,7 +166,7 @@ impl DriftWm {
         output: Output,
         slots: usize,
     ) -> Option<ResizeSurfaceGrab> {
-        let initial_window_location = self.space.element_location(window)?;
+        let initial_window_location = self.stage.position_of(window)?;
         let initial_window_size = window.geometry().size;
         let wl_surface = window.wl_surface().map(|s| s.into_owned())?;
 
@@ -338,7 +338,7 @@ impl DriftWm {
         serial: smithay::utils::Serial,
         output: Output,
     ) {
-        let Some(initial) = self.space.element_location(window) else {
+        let Some(initial) = self.stage.position_of(window) else {
             return;
         };
         self.raise_and_focus(window, serial);

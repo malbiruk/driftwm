@@ -233,7 +233,7 @@ pub fn init_winit(
             // Without this, buffer-age optimisation reuses the stale composited result for
             // transparent windows — the background appears frozen inside them.
             if age > 0 && bg_animated {
-                let has_transparent = data.space.elements().any(|w| {
+                let has_transparent = data.stage.windows().any(|w| {
                     w.wl_surface()
                         .as_deref()
                         .and_then(driftwm::config::applied_rule)

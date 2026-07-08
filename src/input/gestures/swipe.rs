@@ -434,7 +434,7 @@ impl DriftWm {
         // single window. Cluster drag is a mouse action (Alt+Shift+Left);
         // there's no modifier on a gesture to distinguish single-vs-cluster,
         // so gestures always move the focused window alone.
-        let initial_window_location = self.space.element_location(&window).unwrap_or_default();
+        let initial_window_location = self.stage.position_of(&window).unwrap_or_default();
         let pointer = self.seat.get_pointer().unwrap();
         let Some(output) = self.active_output() else {
             return;
@@ -493,7 +493,7 @@ impl DriftWm {
             return;
         }
 
-        let Some(initial_location) = self.space.element_location(&window) else {
+        let Some(initial_location) = self.stage.position_of(&window) else {
             return;
         };
         let initial_size = window.geometry().size;
@@ -587,7 +587,7 @@ impl DriftWm {
         if let Some((focus, _)) = self.pinned_window_under(screen_pos, pos)
             && let Some(window) = self.window_for_surface(&focus.0)
         {
-            let loc = self.space.element_location(&window).unwrap_or_default();
+            let loc = self.stage.position_of(&window).unwrap_or_default();
             return Some((window, loc));
         }
         // SSD chrome (title bar / border) lies outside the surface bbox, so
@@ -596,7 +596,7 @@ impl DriftWm {
             .map(|(w, l)| (w.clone(), l))
             .or_else(|| {
                 self.decoration_under(pos)
-                    .and_then(|(w, _)| self.space.element_location(&w).map(|l| (w, l)))
+                    .and_then(|(w, _)| self.stage.position_of(&w).map(|l| (w, l)))
             })
     }
 

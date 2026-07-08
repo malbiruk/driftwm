@@ -301,7 +301,7 @@ fn cmd_move(arg: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
     let size = window.geometry().size;
     match arg {
         None => {
-            let loc = state.space.element_location(&window).unwrap_or_default();
+            let loc = state.stage.position_of(&window).unwrap_or_default();
             let (x, y) = driftwm::canvas::internal_to_rule(loc, size);
             Ok(Response::Position { x, y })
         }
@@ -374,7 +374,7 @@ fn resolve_screenshot_region(
         }
         ScreenshotTarget::All => {
             let mut acc: Option<Rectangle<i32, Logical>> = None;
-            for w in state.space.elements().filter(|w| state.is_canvas_window(w)) {
+            for w in state.stage.windows().filter(|w| state.is_canvas_window(w)) {
                 let Some(r) = window_visual_rect(state, w) else {
                     continue;
                 };
@@ -448,7 +448,7 @@ fn window_visual_rect(
     state: &DriftWm,
     window: &smithay::desktop::Window,
 ) -> Option<Rectangle<i32, Logical>> {
-    let loc = state.space.element_location(window)?;
+    let loc = state.stage.position_of(window)?;
     let size = window.geometry().size;
     if size.w <= 0 || size.h <= 0 {
         return None;

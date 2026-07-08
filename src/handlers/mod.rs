@@ -349,7 +349,7 @@ impl PointerConstraintsHandler for DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(surface))
             .cloned();
         if let Some(window) = window
-            && let Some(loc) = self.space.element_location(&window)
+            && let Some(loc) = self.stage.position_of(&window)
         {
             pointer.set_location(loc.to_f64() + location);
         }

@@ -97,7 +97,7 @@ fn window_origin_for_surface(
         .space
         .elements()
         .find(|w| w.wl_surface().as_deref() == Some(surface))?;
-    Some(state.space.element_location(window)?.to_f64())
+    Some(state.stage.position_of(window)?.to_f64())
 }
 
 impl DriftWm {
@@ -932,7 +932,7 @@ impl DriftWm {
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
         let active_output = self.active_output();
 
-        for window in self.space.elements().rev() {
+        for window in self.stage.windows().rev() {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -954,7 +954,7 @@ impl DriftWm {
                 }
             }
 
-            let Some(loc) = self.space.element_location(window) else {
+            let Some(loc) = self.stage.position_of(window) else {
                 continue;
             };
 
@@ -1027,7 +1027,7 @@ impl DriftWm {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
-        for window in self.space.elements().rev() {
+        for window in self.stage.windows().rev() {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1114,7 +1114,7 @@ impl DriftWm {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
-        for window in self.space.elements().rev() {
+        for window in self.stage.windows().rev() {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1268,7 +1268,7 @@ impl DriftWm {
         let active = self.active_output();
 
         // Iterate in z-order (topmost first, matching space.elements().rev())
-        for window in self.space.elements().rev() {
+        for window in self.stage.windows().rev() {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1283,7 +1283,7 @@ impl DriftWm {
             if self.fullscreen_on_other_output(&wl_surface, &active) {
                 continue;
             }
-            let Some(loc) = self.space.element_location(window) else {
+            let Some(loc) = self.stage.position_of(window) else {
                 continue;
             };
             let size = window.geometry().size;

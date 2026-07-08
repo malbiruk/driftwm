@@ -228,7 +228,7 @@ impl DriftWm {
         if self.is_pinned(window) || config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
         }
-        let Some(old_loc) = self.space.element_location(window) else {
+        let Some(old_loc) = self.stage.position_of(window) else {
             return;
         };
         let old_size = self
@@ -268,7 +268,7 @@ impl DriftWm {
         let Some(saved_size) = self.stage.fit_saved_size(window) else {
             return;
         };
-        let Some(old_loc) = self.space.element_location(window) else {
+        let Some(old_loc) = self.stage.position_of(window) else {
             return;
         };
         let old_size = window.geometry().size;

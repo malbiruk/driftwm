@@ -103,7 +103,7 @@ impl DriftWm {
         let mut rects: Vec<driftwm::layout::auto_placement::Rect> = Vec::new();
         let mut eligible: HashSet<usize> = HashSet::new();
         let mut anchor_idx: Option<usize> = None;
-        for w in self.space.elements() {
+        for w in self.stage.windows() {
             if w == placing {
                 continue;
             }
@@ -115,7 +115,7 @@ impl DriftWm {
             if widget || is_fs || self.is_pinned(w) {
                 continue;
             }
-            let Some(loc) = self.space.element_location(w) else {
+            let Some(loc) = self.stage.position_of(w) else {
                 continue;
             };
             let size = w.geometry().size;
@@ -218,7 +218,7 @@ impl DriftWm {
         let mut eligible: HashSet<usize> = HashSet::new();
         eligible.insert(0);
 
-        for w in self.space.elements() {
+        for w in self.stage.windows() {
             if w == new_window || w == &fs.window {
                 continue;
             }
@@ -229,7 +229,7 @@ impl DriftWm {
             if widget || self.is_window_fullscreen(w) || self.is_pinned(w) {
                 continue;
             }
-            let Some(loc) = self.space.element_location(w) else {
+            let Some(loc) = self.stage.position_of(w) else {
                 continue;
             };
             let size = w.geometry().size;
@@ -286,7 +286,7 @@ impl DriftWm {
     pub fn cascade_position(&self, mut pos: (i32, i32), skip: &Window) -> (i32, i32) {
         let step = self.config.decorations.title_bar_height;
         loop {
-            let dominated = self.space.elements().any(|w| {
+            let dominated = self.stage.windows().any(|w| {
                 w != skip
                     && self
                         .space

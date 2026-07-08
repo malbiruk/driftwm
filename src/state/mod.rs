@@ -1275,7 +1275,7 @@ impl DriftWm {
         if let Some(site) = self.stage.pin_of(window) {
             return self.output_by_name(&site.output);
         }
-        let loc = self.space.element_location(window)?;
+        let loc = self.stage.position_of(window)?;
         let geo = window.geometry();
         let center: Point<f64, Logical> = Point::from((
             loc.x as f64 + geo.size.w as f64 / 2.0,
@@ -1361,7 +1361,7 @@ impl DriftWm {
         camera: Point<f64, Logical>,
         zoom: f64,
     ) -> Option<(Point<f64, Logical>, f64)> {
-        let loc = self.space.element_location(window)?;
+        let loc = self.stage.position_of(window)?;
         let geom_loc = window.geometry().loc;
         // A fullscreen window is visible only on its own output. For any other
         // output — and for the off-screen capture pass (`output == None`) — it
@@ -1677,7 +1677,7 @@ impl DriftWm {
 
     /// Visual center accounting for SSD title bar above content.
     pub fn window_visual_center(&self, window: &Window) -> Option<Point<f64, Logical>> {
-        let loc = self.space.element_location(window)?;
+        let loc = self.stage.position_of(window)?;
         let size = window.geometry().size;
         let bar = self.window_ssd_bar(window) as f64;
         Some(Point::from((
@@ -1701,7 +1701,7 @@ impl DriftWm {
         output: &Output,
         threshold: f64,
     ) -> bool {
-        let Some(loc) = self.space.element_location(window) else {
+        let Some(loc) = self.stage.position_of(window) else {
             return false;
         };
         let os = output_state(output);

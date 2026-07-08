@@ -9,8 +9,9 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
+use crate::stage::Stage;
 use crate::window_ext::WindowExt;
-use smithay::desktop::{Space, Window};
+use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_protocols_wlr;
@@ -93,7 +94,7 @@ impl ForeignToplevelManagerState {
 pub fn refresh<D>(
     ft_state: &mut ForeignToplevelManagerState,
     ext_state: &mut ForeignToplevelListState,
-    space: &Space<Window>,
+    stage: &Stage<Window>,
     focused_surface: Option<&WlSurface>,
     outputs: &[Output],
 ) where
@@ -106,7 +107,7 @@ pub fn refresh<D>(
 {
     // 1. Remove closed or widget windows
     ft_state.toplevels.retain(|surface, data| {
-        let alive = space.elements().any(|w| {
+        let alive = stage.windows().any(|w| {
             w.wl_surface().as_deref() == Some(surface)
                 && !crate::config::applied_rule(surface).is_some_and(|r| r.widget)
         });
@@ -121,7 +122,7 @@ pub fn refresh<D>(
 
     // 2. Refresh non-focused windows first (deactivate-before-activate ordering)
     let mut focused_entry = None;
-    for window in space.elements() {
+    for window in stage.windows() {
         let Some(wl_surface) = window.wl_surface() else {
             continue;
         };

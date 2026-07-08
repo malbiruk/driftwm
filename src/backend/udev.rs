@@ -1490,7 +1490,7 @@ fn render_frame(
     // Only on frames where the animation actually advanced — between capped
     // ticks the composited result is intentionally reused.
     if bg_animated {
-        let has_transparent = data.space.elements().any(|w| {
+        let has_transparent = data.stage.windows().any(|w| {
             w.wl_surface()
                 .as_deref()
                 .and_then(driftwm::config::applied_rule)

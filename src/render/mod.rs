@@ -194,10 +194,10 @@ pub(crate) fn compose_capture_elements(
     let mut widgets: Vec<OutputRenderElements> = Vec::new();
 
     // Collect first: the surface-tree calls borrow `state`, which would conflict
-    // with an in-flight `state.space.elements()` iterator. Windows are Arc-backed.
-    let windows: Vec<smithay::desktop::Window> = state.space.elements().rev().cloned().collect();
+    // with an in-flight `state.stage.windows()` iterator. Windows are Arc-backed.
+    let windows: Vec<smithay::desktop::Window> = state.stage.windows().rev().cloned().collect();
     for window in &windows {
-        let Some(loc) = state.space.element_location(window) else {
+        let Some(loc) = state.stage.position_of(window) else {
             continue;
         };
         let geom_loc = window.geometry().loc;
@@ -609,8 +609,8 @@ pub fn compose_frame(
     let _windows_span = tracy_client::span!("compose::windows");
     #[cfg(feature = "profile-with-tracy")]
     let (mut visible_windows, mut shadow_elems) = (0u32, 0u32);
-    for window in state.space.elements().rev() {
-        let Some(loc) = state.space.element_location(window) else {
+    for window in state.stage.windows().rev() {
+        let Some(loc) = state.stage.position_of(window) else {
             continue;
         };
         if output_fullscreen && fullscreen_window.as_ref() != Some(window) {
