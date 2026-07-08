@@ -162,9 +162,8 @@ impl DriftWm {
                     // Skip when it already holds focus so a click doesn't re-emit
                     // a keyboard enter (and a popup grab keeps its focus).
                     if let Some(surface) = self
-                        .active_fullscreen()
-                        .and_then(|fs| fs.window.wl_surface())
-                        .map(|s| FocusTarget(s.into_owned()))
+                        .active_fullscreen_window()
+                        .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())))
                     {
                         let already = self.window_focus.as_ref().is_some_and(|f| f.0 == surface.0);
                         if !already {
@@ -683,7 +682,7 @@ impl DriftWm {
         };
 
         // Clear fit state — user took manual control
-        crate::state::fit::clear_fit_state(&wl_surface);
+        self.stage.clear_fit(window);
 
         // Pinned windows resize in screen space; capture their `screen_pos` and
         // fixed output so the grab and the commit-time reposition use the right
@@ -706,7 +705,7 @@ impl DriftWm {
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|state| {
                 state.states.set(xdg_toplevel::State::Resizing);
-                // Mirror the FitState clear above so the client's view stays
+                // Mirror the fit-state clear above so the client's view stays
                 // in sync — otherwise its own restore button dispatches an
                 // unmaximize_request that `unfit_window` would silently drop.
                 state.states.unset(xdg_toplevel::State::Maximized);

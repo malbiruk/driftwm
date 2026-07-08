@@ -403,6 +403,7 @@ impl ResizeSurfaceGrab {
         }
 
         self.cluster_resize.apply_member_shifts(
+            &mut data.stage,
             &mut data.space,
             &self.window,
             self.initial_window_size,

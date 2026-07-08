@@ -325,7 +325,7 @@ impl DriftWm {
         // On a fullscreen output the window owns focus; re-assert it rather than
         // hit-testing for a hover target. This reclaims focus that hover moved to
         // another output's window, which nothing else here would restore.
-        if let Some(window) = self.active_fullscreen().map(|fs| fs.window.clone()) {
+        if let Some(window) = self.active_fullscreen_window() {
             let focus_surface = window.wl_surface().map(|s| FocusTarget(s.into_owned()));
             let already_focused = focus_surface
                 .as_ref()

@@ -342,7 +342,7 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
             let canvas = screen_to_canvas(ScreenPos(new_screen_pos.to_f64()), camera, zoom)
                 .0
                 .to_i32_round();
-            data.space.map_element(self.window.clone(), canvas, false);
+            data.map_window(self.window.clone(), canvas, false);
             if self.last_mapped_loc != Some(canvas) {
                 data.render.blur_geometry_generation += 1;
                 self.last_mapped_loc = Some(canvas);
@@ -393,10 +393,9 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
                     continue;
                 }
                 let member_pos = self.initial_window_location + *offset;
-                data.space.map_element(member.clone(), member_pos, false);
+                data.map_window(member.clone(), member_pos, false);
             }
-            data.space
-                .map_element(self.window.clone(), self.initial_window_location, false);
+            data.map_window(self.window.clone(), self.initial_window_location, false);
 
             // Output crossing always invalidates blur (different camera/zoom,
             // different background sample region).
@@ -545,9 +544,9 @@ impl MoveSurfaceGrab {
                 continue;
             }
             let member_pos = new_loc + *offset;
-            data.space.map_element(member.clone(), member_pos, false);
+            data.map_window(member.clone(), member_pos, false);
         }
-        data.space.map_element(self.window.clone(), new_loc, false);
+        data.map_window(self.window.clone(), new_loc, false);
 
         // Sub-pixel motion that resolves to the same integer canvas position
         // doesn't actually shift the window, so blurred neighbours don't need

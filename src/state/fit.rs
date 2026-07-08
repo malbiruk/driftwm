@@ -1,29 +1,13 @@
 use smithay::{
     desktop::Window,
-    reexports::wayland_server::{Resource, protocol::wl_surface::WlSurface},
+    reexports::wayland_server::Resource,
     utils::{Logical, Point, Size},
-    wayland::{compositor::with_states, seat::WaylandFocus},
+    wayland::seat::WaylandFocus,
 };
 
 use super::{DriftWm, PendingRecenter};
 use driftwm::config;
 use driftwm::window_ext::WindowExt;
-
-/// Per-window fit state stored in the surface data_map via Mutex.
-/// Some(size) = currently fit, holding the pre-fit size.
-/// None = not fit.
-pub struct FitState(pub Option<Size<i32, Logical>>);
-
-/// Per-window "restore-to" size, used by fit/fullscreen to remember what to
-/// resize back to. Tracked separately from `window.geometry().size` because
-/// Chromium progressively shrinks its reported geometry after each
-/// `Some(size)` configure (its CSD titlebar isn't suppressed by the Tiled
-/// hint) — re-reading geometry on each fit would cause a spiral.
-///
-/// Updated on first map (client's preferred size) and at the end of a user
-/// resize grab. Not touched on passive commits, so Chromium's shrunk
-/// reported size never leaks in.
-pub struct RestoreSize(pub Size<i32, Logical>);
 
 /// Build a `SnapRect` from a hypothetical canvas position, size, SSD
 /// bar, and border width — used by `fit_window_snapped` /
@@ -43,60 +27,6 @@ fn snap_rect_at(
         y_low: (loc.y - bar) as f64 - bw,
         y_high: (loc.y + size.h) as f64 + bw,
     }
-}
-
-pub fn is_fit(window: &Window) -> bool {
-    let Some(wl_surface) = window.wl_surface() else {
-        return false;
-    };
-    with_states(&wl_surface, |states| {
-        states
-            .data_map
-            .get::<std::sync::Mutex<FitState>>()
-            .and_then(|m| m.lock().ok())
-            .is_some_and(|guard| guard.0.is_some())
-    })
-}
-
-pub fn clear_fit_state(wl_surface: &WlSurface) {
-    with_states(wl_surface, |states| {
-        if let Some(m) = states.data_map.get::<std::sync::Mutex<FitState>>()
-            && let Ok(mut guard) = m.lock()
-        {
-            guard.0 = None;
-        }
-    });
-}
-
-pub fn restore_size(wl_surface: &WlSurface) -> Option<Size<i32, Logical>> {
-    with_states(wl_surface, |states| {
-        states
-            .data_map
-            .get::<std::sync::Mutex<RestoreSize>>()
-            .and_then(|m| m.lock().ok())
-            .map(|g| g.0)
-    })
-}
-
-pub fn set_restore_size(wl_surface: &WlSurface, size: Size<i32, Logical>) {
-    with_states(wl_surface, |states| {
-        states
-            .data_map
-            .insert_if_missing_threadsafe(|| std::sync::Mutex::new(RestoreSize(size)));
-        if let Some(m) = states.data_map.get::<std::sync::Mutex<RestoreSize>>()
-            && let Ok(mut guard) = m.lock()
-        {
-            guard.0 = size;
-        }
-    });
-}
-
-pub fn set_restore_size_if_missing(wl_surface: &WlSurface, size: Size<i32, Logical>) {
-    with_states(wl_surface, |states| {
-        states
-            .data_map
-            .insert_if_missing_threadsafe(|| std::sync::Mutex::new(RestoreSize(size)));
-    });
 }
 
 /// Fit geometry for a primary window: the canvas position, size, camera
@@ -148,21 +78,14 @@ impl DriftWm {
             return;
         }
 
-        // Use the tracked RestoreSize rather than window.geometry().size —
+        // Use the tracked restore size rather than window.geometry().size —
         // for Chromium the latter shrinks on each unfit round-trip.
-        let current_size = restore_size(&wl_surface).unwrap_or_else(|| window.geometry().size);
+        let current_size = self
+            .stage
+            .restore_size(window)
+            .unwrap_or_else(|| window.geometry().size);
 
-        // Save current size into data_map
-        with_states(&wl_surface, |states| {
-            states
-                .data_map
-                .insert_if_missing_threadsafe(|| std::sync::Mutex::new(FitState(None)));
-            if let Some(m) = states.data_map.get::<std::sync::Mutex<FitState>>()
-                && let Ok(mut guard) = m.lock()
-            {
-                guard.0 = Some(current_size);
-            }
-        });
+        self.stage.set_fit(window, current_size);
 
         let FitGeometry {
             new_loc,
@@ -172,7 +95,7 @@ impl DriftWm {
         } = self.compute_fit_geometry(window);
 
         window.enter_fit_configure(target_size);
-        self.space.map_element(window.clone(), new_loc, false);
+        self.map_window(window.clone(), new_loc, false);
         // Don't refresh `stable_snap_rects` here — the fit canvas position
         // snap-touches nothing, so close-time `cluster_of` would degrade to
         // `{self}`. The pre-fit rect is the window's cluster identity.
@@ -195,22 +118,9 @@ impl DriftWm {
             return;
         };
 
-        let saved_size = with_states(&wl_surface, |states| {
-            let size = states
-                .data_map
-                .get::<std::sync::Mutex<FitState>>()
-                .and_then(|m| m.lock().ok())
-                .and_then(|guard| guard.0);
-            // Clear fit state
-            if let Some(m) = states.data_map.get::<std::sync::Mutex<FitState>>()
-                && let Ok(mut guard) = m.lock()
-            {
-                guard.0 = None;
-            }
-            size
-        });
-
-        let Some(saved_size) = saved_size else { return };
+        let Some(saved_size) = self.stage.take_fit_saved_size(window) else {
+            return;
+        };
 
         // Resize in-place: keep visual center, compute new loc from saved size
         let center = self.window_visual_center(window).unwrap_or_default();
@@ -227,7 +137,7 @@ impl DriftWm {
         let pre_exit_size = window.geometry().size;
 
         window.exit_fit_configure(saved_size);
-        self.space.map_element(window.clone(), new_loc, false);
+        self.map_window(window.clone(), new_loc, false);
 
         self.pending_recenter.insert(
             wl_surface.id(),
@@ -239,7 +149,7 @@ impl DriftWm {
     }
 
     pub fn toggle_fit_window(&mut self, window: &Window) {
-        if is_fit(window) {
+        if self.stage.is_fit(window) {
             self.unfit_window(window);
         } else {
             self.fit_window(window);
@@ -286,6 +196,7 @@ impl DriftWm {
         let mut br =
             self.cluster_snapshot_for_resize(primary, xdg_toplevel::ResizeEdge::BottomRight);
         br.apply_member_shifts(
+            &mut self.stage,
             &mut self.space,
             primary,
             old_size,
@@ -299,6 +210,7 @@ impl DriftWm {
         // left members shift by dx_left). Same reasoning for top.
         let mut tl = self.cluster_snapshot_for_resize(primary, xdg_toplevel::ResizeEdge::TopLeft);
         tl.apply_member_shifts(
+            &mut self.stage,
             &mut self.space,
             primary,
             old_size,
@@ -318,7 +230,10 @@ impl DriftWm {
         let Some(old_loc) = self.space.element_location(window) else {
             return;
         };
-        let old_size = restore_size(&wl_surface).unwrap_or_else(|| window.geometry().size);
+        let old_size = self
+            .stage
+            .restore_size(window)
+            .unwrap_or_else(|| window.geometry().size);
         let bar = self.window_ssd_bar(window);
         let bw = self.window_border_width(&wl_surface);
         let fit = self.compute_fit_geometry(window);
@@ -349,14 +264,9 @@ impl DriftWm {
         let Some(wl_surface) = window.wl_surface() else {
             return;
         };
-        let saved_size = with_states(&wl_surface, |states| {
-            states
-                .data_map
-                .get::<std::sync::Mutex<FitState>>()
-                .and_then(|m| m.lock().ok())
-                .and_then(|g| g.0)
-        });
-        let Some(saved_size) = saved_size else { return };
+        let Some(saved_size) = self.stage.fit_saved_size(window) else {
+            return;
+        };
         let Some(old_loc) = self.space.element_location(window) else {
             return;
         };
@@ -390,7 +300,7 @@ impl DriftWm {
     }
 
     pub fn toggle_fit_window_snapped(&mut self, window: &Window) {
-        if is_fit(window) {
+        if self.stage.is_fit(window) {
             self.unfit_window_snapped(window);
         } else {
             self.fit_window_snapped(window);

@@ -129,12 +129,12 @@ impl DriftWm {
     /// deterministic output (the underlying maps are unordered).
     pub fn screen_space_inventory(&self) -> (Vec<OutputFullscreen>, Vec<OutputPinned>) {
         let mut fullscreen: Vec<OutputFullscreen> = Vec::new();
-        for (output, fs) in &self.fullscreen {
+        for (output, fs) in self.stage.fullscreen_entries() {
             if let Some(surface) = fs.window.wl_surface() {
                 let (app_id, title) = window_app_id_title(&surface);
                 if !app_id.is_empty() {
                     fullscreen.push(OutputFullscreen {
-                        output: output.name(),
+                        output: output.clone(),
                         app_id,
                         title,
                     });
@@ -223,11 +223,11 @@ impl DriftWm {
         }
 
         let mut fullscreen_by_output: HashMap<String, FullscreenInfo> = HashMap::new();
-        for (output, fs) in &self.fullscreen {
+        for (output, fs) in self.stage.fullscreen_entries() {
             if let Some(surface) = fs.window.wl_surface() {
                 let (app_id, title) = window_app_id_title(&surface);
                 if !app_id.is_empty() {
-                    fullscreen_by_output.insert(output.name(), FullscreenInfo { app_id, title });
+                    fullscreen_by_output.insert(output.clone(), FullscreenInfo { app_id, title });
                 }
             }
         }

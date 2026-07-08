@@ -112,7 +112,7 @@ impl SeatHandler for DriftWm {
         set_primary_focus(dh, seat, client);
 
         // Update focus history (skip during Alt-Tab cycling — history is frozen)
-        if self.cycle_state.is_none()
+        if self.stage.cycle_state().is_none()
             && let Some(focus) = focused
         {
             self.update_focus_history(&focus.0);
@@ -1017,7 +1017,7 @@ impl SessionLockHandler for DriftWm {
         self.cursor.grab_cursor = false;
         // Lock may swallow key releases and prevents focus history updates while
         // mid-cycle; reset these so none survive the locked window.
-        self.cycle_state = None;
+        self.stage.cancel_cycle();
         self.suppressed_keys.clear();
         self.tap.reset();
         if let Some(pending) = self.pending_middle_click.take() {

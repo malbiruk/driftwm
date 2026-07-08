@@ -142,8 +142,7 @@ impl DriftWm {
             if window.is_modal() {
                 return;
             }
-            self.focus_history.retain(|w| w != &window);
-            self.focus_history.insert(0, window);
+            self.stage.push_focus(&window);
         }
     }
 
@@ -260,7 +259,8 @@ impl DriftWm {
         }
         let cluster = driftwm::layout::cluster::cluster_of(destroyed, &rects, self.config.snap_gap);
 
-        self.focus_history
+        self.stage
+            .focus_history()
             .iter()
             .filter(|w| *w != destroyed)
             .find(|w| {
@@ -274,12 +274,6 @@ impl DriftWm {
 
     /// End Alt-Tab cycling: commit the selected window to focus history.
     pub fn end_cycle(&mut self) {
-        let idx = self.cycle_state.take();
-        if let Some(idx) = idx
-            && let Some(window) = self.focus_history.get(idx).cloned()
-        {
-            self.focus_history.retain(|w| w != &window);
-            self.focus_history.insert(0, window);
-        }
+        self.stage.end_cycle();
     }
 }

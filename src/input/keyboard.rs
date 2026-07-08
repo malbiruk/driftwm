@@ -39,7 +39,7 @@ impl DriftWm {
                             let vt = (raw - 0x1008FE01 + 1) as i32;
                             // VT switch may not deliver releases; reset key/cycle state.
                             state.suppressed_keys.clear();
-                            state.cycle_state = None;
+                            state.stage.cancel_cycle();
                             state.tap.reset();
                             if let Some(ref mut session) = state.session
                                 && let Err(e) = session.change_vt(vt)
@@ -85,7 +85,9 @@ impl DriftWm {
                     state.pending_tap_action = Some(action.clone());
                 }
 
-                if state.cycle_state.is_some() && !state.config.cycle_hold.all_held(modifiers) {
+                if state.stage.cycle_state().is_some()
+                    && !state.config.cycle_hold.all_held(modifiers)
+                {
                     state.end_cycle();
                     return FilterResult::Forward;
                 }
@@ -105,7 +107,7 @@ impl DriftWm {
                     let vt = (raw - 0x1008FE01 + 1) as i32;
                     // VT switch may not deliver releases; reset key/cycle state.
                     state.suppressed_keys.clear();
-                    state.cycle_state = None;
+                    state.stage.cancel_cycle();
                     state.tap.reset();
                     if let Some(ref mut session) = state.session
                         && let Err(e) = session.change_vt(vt)

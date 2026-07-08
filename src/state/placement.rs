@@ -191,16 +191,14 @@ impl DriftWm {
         let output = anchor
             .as_ref()
             .and_then(|a| {
-                self.fullscreen
-                    .iter()
-                    .find(|(_, fs)| &fs.window == a)
-                    .map(|(o, _)| o.clone())
+                let name = self.stage.fullscreen_output_of(a)?;
+                self.space.outputs().find(|o| o.name() == name).cloned()
             })
             .or_else(|| {
                 let out = self.active_output()?;
                 self.fullscreen.contains_key(&out).then_some(out)
             })?;
-        let fs = self.fullscreen.get(&output)?;
+        let fs = self.stage.fullscreen_on(&output.name())?;
 
         // Anchor rect = the fullscreen window's canvas home, reconstructed as a
         // frame rect (borders + SSD bar) exactly like `auto_placement_pos`.

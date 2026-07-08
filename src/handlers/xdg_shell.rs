@@ -75,8 +75,8 @@ impl XdgShellHandler for DriftWm {
         // Sending one here would produce a configure with unresolved state,
         // and a second on first commit — SDL2/SCTK clients have historically
         // desynced on back-to-back initial configures.
-        self.space.map_element(window.clone(), pos, true);
-        self.space.raise_element(&window, true);
+        self.map_window(window.clone(), pos.into(), true);
+        self.raise_window(&window, true);
         self.enforce_below_windows();
         // Don't focus here: a pre-buffer wl_keyboard.enter is unusable, and
         // set_focus is a no-op when the target is unchanged, so focusing now
@@ -253,16 +253,17 @@ impl XdgShellHandler for DriftWm {
             // still parked at the fullscreen window's position until this
             // runs.
             let fs_output = self
-                .fullscreen
-                .iter()
-                .find(|(_, fs)| &fs.window == window)
-                .map(|(o, _)| o.clone());
-            if let Some(ref output) = fs_output
-                && let Some(fs) = self.fullscreen.remove(output)
-            {
-                output_state(output).camera = fs.saved_camera;
-                output_state(output).zoom = fs.saved_zoom;
-                self.update_output_from_camera();
+                .stage
+                .fullscreen_output_of(window)
+                .map(str::to_owned)
+                .and_then(|name| self.space.outputs().find(|o| o.name() == name).cloned());
+            if let Some(ref output) = fs_output {
+                self.stage.take_fullscreen(&output.name());
+                if let Some(fs) = self.fullscreen.remove(output) {
+                    output_state(output).camera = fs.saved_camera;
+                    output_state(output).zoom = fs.saved_zoom;
+                    self.update_output_from_camera();
+                }
             }
 
             // Pick a window to follow when the destroyed one was focused.
@@ -295,7 +296,8 @@ impl XdgShellHandler for DriftWm {
                 .as_ref()
                 .is_some_and(|f| focus_belongs_to_toplevel(&f.0, &wl_surface));
             let was_last_focused = self
-                .focus_history
+                .stage
+                .focus_history()
                 .first()
                 .is_some_and(|last_focused| last_focused == window);
             if focus_on_this_toplevel || was_last_focused || no_keyboard_focus {
@@ -325,7 +327,12 @@ impl XdgShellHandler for DriftWm {
                         .clone()
                         .or_else(|| self.output_for_window(window))
                         .or_else(|| self.active_output());
-                    let mru = self.focus_history.iter().find(|w| w != &window).cloned();
+                    let mru = self
+                        .stage
+                        .focus_history()
+                        .iter()
+                        .find(|w| w != &window)
+                        .cloned();
                     let target = match (home.as_ref(), mru) {
                         (Some(out), Some(m)) if self.window_intersects_viewport_on(&m, out) => {
                             Some(m)
@@ -352,17 +359,9 @@ impl XdgShellHandler for DriftWm {
                     }
                 }
             }
-            // Remove from focus history before unmapping
-            self.focus_history.retain(|w| w != window);
-            // Clamp or clear cycle index if cycling is active
-            if self.cycle_state.is_some() {
-                if self.focus_history.is_empty() {
-                    self.cycle_state = None;
-                } else if let Some(ref mut idx) = self.cycle_state {
-                    *idx = (*idx).min(self.focus_history.len() - 1);
-                }
-            }
-            self.space.unmap_elem(window);
+            // Unmap from stage and space; the stage side also drops the window
+            // from the focus history, clamping any active cycle index.
+            self.unmap_window(window);
             // The window may have sat under the cursor; re-target pointer focus
             // now that it's gone so clicks don't fall into the destroyed surface.
             self.refresh_pointer_focus();
@@ -497,7 +496,7 @@ impl XdgShellHandler for DriftWm {
         };
 
         // Clear fit state — user took manual control
-        crate::state::fit::clear_fit_state(&wl_surface);
+        self.stage.clear_fit(&window);
 
         // Pinned windows resize in screen space (see start_compositor_resize_with_edge).
         let pinned_initial_screen_pos = self.pinned.get(&wl_surface.id()).map(|p| p.screen_pos);

@@ -74,10 +74,14 @@ impl ClusterResizeSnapshot {
     }
 
     /// Compute shifts, reposition every affected cluster member, and re-map
-    /// the primary to the tail of `Space::elements` so it stays on top of
-    /// its own cluster.
+    /// the primary to the top of the z-order so it stays on top of its own
+    /// cluster. Writes go through stage and space together (the map_window
+    /// contract, inlined here because the grab owns this snapshot, not
+    /// `DriftWm`).
+    #[allow(clippy::too_many_arguments)]
     pub fn apply_member_shifts(
         &mut self,
+        stage: &mut driftwm::stage::Stage<Window>,
         space: &mut Space<Window>,
         primary: &Window,
         initial_size: Size<i32, Logical>,
@@ -99,12 +103,14 @@ impl ClusterResizeSnapshot {
                 continue;
             }
             let new_pos = m.initial_pos + Point::from((*dx, *dy));
+            stage.map(m.window.clone(), new_pos);
             space.map_element(m.window.clone(), new_pos, false);
         }
 
         if !shifts.is_empty()
             && let Some(cur) = space.element_location(primary)
         {
+            stage.map(primary.clone(), cur);
             space.map_element(primary.clone(), cur, false);
         }
     }

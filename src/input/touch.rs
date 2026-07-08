@@ -174,7 +174,7 @@ impl DriftWm {
         let initial_window_size = window.geometry().size;
         let wl_surface = window.wl_surface().map(|s| s.into_owned())?;
 
-        crate::state::fit::clear_fit_state(&wl_surface);
+        self.stage.clear_fit(window);
 
         with_states(&wl_surface, |states| {
             states

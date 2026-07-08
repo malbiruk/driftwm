@@ -648,12 +648,7 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                 // window off its camera origin. Stash the exited window so a 4-finger
                 // nav firing right after can still anchor to it. Uses the touch output,
                 // which may differ from the active/pointer output.
-                if crossed_system
-                    && let Some(window) = data
-                        .fullscreen
-                        .get(&self.output)
-                        .map(|fs| fs.window.clone())
-                {
+                if crossed_system && let Some(window) = data.fullscreen_window_on(&self.output) {
                     data.gesture_exited_fullscreen = Some(window);
                     data.exit_fullscreen_on(&self.output);
                 }

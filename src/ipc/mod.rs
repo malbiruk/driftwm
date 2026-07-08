@@ -307,7 +307,7 @@ fn cmd_move(arg: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
         }
         Some((x, y)) => {
             let loc = driftwm::canvas::rule_to_internal(x, y, size);
-            state.space.map_element(window, loc, true);
+            state.map_window(window, loc, true);
             Ok(Response::Position { x, y })
         }
     }
@@ -455,7 +455,7 @@ fn window_visual_rect(
     }
     let wl_surface = window.wl_surface()?;
 
-    let is_fullscreen = state.fullscreen.values().any(|fs| &fs.window == window);
+    let is_fullscreen = state.stage.is_fullscreen(window);
     let has_ssd = !is_fullscreen && state.decorations.contains_key(&wl_surface.id());
     let applied = driftwm::config::applied_rule(&wl_surface);
     let mode = driftwm::config::effective_decoration_mode(

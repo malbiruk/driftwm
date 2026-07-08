@@ -205,7 +205,7 @@ pub(crate) fn compose_capture_elements(
         let Some(wl_surface) = window.wl_surface() else {
             continue;
         };
-        let is_fullscreen = state.fullscreen.values().any(|fs| &fs.window == window);
+        let is_fullscreen = state.stage.is_fullscreen(window);
         let has_ssd = !is_fullscreen && state.decorations.contains_key(&wl_surface.id());
 
         let applied = driftwm::config::applied_rule(&wl_surface);
@@ -543,7 +543,7 @@ pub fn compose_frame(
     // The fullscreen window fully occludes its output: only it, the overlay
     // layer, and the cursor render; everything beneath is culled below. Pinned
     // windows count as top-tier toplevels and get covered like the top layer.
-    let fullscreen_window = state.fullscreen.get(output).map(|fs| fs.window.clone());
+    let fullscreen_window = state.fullscreen_window_on(output);
     let mut did_init_bg = false;
     if output_fullscreen {
         // Fullscreen fully occludes the canvas: free its chunk caches and skip
@@ -621,7 +621,7 @@ pub fn compose_frame(
         let Some(wl_surface) = window.wl_surface() else {
             continue;
         };
-        let is_fullscreen = state.fullscreen.values().any(|fs| &fs.window == window);
+        let is_fullscreen = state.stage.is_fullscreen(window);
         let has_ssd = !is_fullscreen && state.decorations.contains_key(&wl_surface.id());
 
         let applied = driftwm::config::applied_rule(&wl_surface);

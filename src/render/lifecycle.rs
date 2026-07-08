@@ -268,10 +268,14 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
         );
     }
 
-    // Cleanup
+    // Cleanup. The stage mirrors Space::refresh's dead-window retention so
+    // the two stay in lockstep between destroy dispatches.
+    state.stage.retain_alive();
     state.space.refresh();
     state.popups.cleanup();
     layer_map_for_output(output).cleanup();
+    #[cfg(debug_assertions)]
+    state.verify_stage_parity();
 
     state.refresh_idle_inhibit();
 }

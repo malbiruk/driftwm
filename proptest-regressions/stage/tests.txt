@@ -1,0 +1,10 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 79f1b0d33ac96505e1fd9cca1ac6312952b638059e9c6592232497e6e9b32ae1 # shrinks to ops = [MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, RaiseAndFocus { idx: 29 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, Cycle { backward: false }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MakeWidget { idx: 14 }]
+cc 11041363974e2fb9073d9d2eba178124e26b57456dda7f6c1047772b43be17ef # shrinks to ops = [MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, RaiseAndFocus { idx: 48 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, Cycle { backward: false }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MakeWidget { idx: 25 }]
+cc df9829c20b8aedd9eb0b7502a5528a8e4e00ef104c5bc158a39e3b6bf600b21c # shrinks to ops = [MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, SetParent { child: 45, parent: 11 }, ToggleFit { idx: 29 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, SetParent { child: 2, parent: 28 }, Cycle { backward: false }]
+cc 43830319b9d6cf6226c79b32f719131d891fbc92c5f48f64c1116737dd07e7f9 # shrinks to ops = [MapNew { x: 0, y: 0, w: 50, h: 50 }, MapNew { x: 0, y: 0, w: 50, h: 50 }, SetParent { child: 44, parent: 19 }, SetParent { child: 1, parent: 12 }, RaiseAndFocus { idx: 0 }]

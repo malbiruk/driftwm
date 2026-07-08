@@ -174,13 +174,13 @@ pub struct HomeReturn {
     pub fullscreen_window: Option<Window>,
 }
 
-/// Pre-fullscreen geometry + viewport, restored on exit.
+/// The viewport half of fullscreen state, restored on exit. The membership
+/// and geometry half (window, saved location/size) lives on the stage —
+/// cameras are not stage domain, so the two are split along that line and
+/// always inserted/removed together.
 pub struct FullscreenState {
-    pub window: Window,
-    pub saved_location: Point<i32, Logical>,
     pub saved_camera: Point<f64, Logical>,
     pub saved_zoom: f64,
-    pub saved_size: Size<i32, Logical>,
     /// If the window was screen-pinned when it entered fullscreen, its pin
     /// state, re-inserted on exit so fullscreen is a transparent round-trip
     /// (pinned → fullscreen → pinned) rather than a permanent unpin.
@@ -363,6 +363,12 @@ pub struct DriftWm {
     pub loop_handle: LoopHandle<'static, DriftWm>,
     pub loop_signal: LoopSignal,
 
+    /// Source of truth for the window list, z-order, positions, focus
+    /// history / MRU cycle, fullscreen membership, and fit state. `space`
+    /// mirrors it for rendering — mutate both together through
+    /// [`Self::map_window`] / [`Self::raise_window`] / [`Self::unmap_window`]
+    /// and the stage-backed methods.
+    pub stage: driftwm::stage::Stage<Window>,
     pub space: Space<Window>,
     pub popups: PopupManager,
 
@@ -496,9 +502,6 @@ pub struct DriftWm {
         smithay::reexports::wayland_server::backend::ObjectId,
         driftwm::layout::snap::SnapRect,
     >,
-
-    pub focus_history: Vec<Window>,
-    pub cycle_state: Option<usize>,
 
     /// Window-level keyboard-focus intent. The actual keyboard focus is
     /// derived from this plus any higher-priority owner (session lock,
@@ -660,26 +663,8 @@ impl DriftWm {
     /// Called after every `raise_element()` to maintain stacking.
     pub fn enforce_below_windows(&mut self) {
         self.render.blur_geometry_generation += 1;
-        // Space stores elements with last = topmost, and raise_element appends.
-        // Raise non-below windows in reverse to keep their relative stacking
-        // while ensuring they sit above any below windows.
-        let non_below: Vec<_> = self
-            .space
-            .elements()
-            .filter(|w| {
-                !w.wl_surface()
-                    .and_then(|s| driftwm::config::applied_rule(&s))
-                    .is_some_and(|r| r.widget)
-            })
-            .cloned()
-            .collect();
-
-        for w in non_below {
+        for w in self.stage.enforce_stacking() {
             self.space.raise_element(&w, false);
-        }
-
-        for fs in self.fullscreen.values() {
-            self.space.raise_element(&fs.window, false);
         }
     }
 
@@ -687,15 +672,30 @@ impl DriftWm {
     /// directly above its own parent without jumping over unrelated windows
     /// that sit higher in the stack.
     pub fn raise_with_children(&mut self, window: &Window) {
-        let stack: Vec<Window> = self.space.elements().cloned().collect();
-        let order = subtree_raise_order(&stack, window, |child, parent| {
-            parent
-                .wl_surface()
-                .is_some_and(|s| child.parent_surface().as_ref() == Some(&*s))
-        });
-        for w in &order {
-            self.space.raise_element(w, true);
+        for w in self.stage.raise_with_children(window) {
+            self.space.raise_element(&w, true);
         }
+    }
+
+    /// Map (or move) `window` at `pos` in stage and space together. `activate`
+    /// keeps `Space::map_element` semantics: set the xdg Activated state on
+    /// this window and clear it on every other.
+    pub fn map_window(&mut self, window: Window, pos: Point<i32, Logical>, activate: bool) {
+        self.stage.map(window.clone(), pos);
+        self.space.map_element(window, pos, activate);
+    }
+
+    pub fn raise_window(&mut self, window: &Window, activate: bool) {
+        self.stage.raise(window);
+        self.space.raise_element(window, activate);
+    }
+
+    /// Remove `window` from stage and space. The stage side also purges it
+    /// from the focus history (clamping any active cycle) and from fullscreen
+    /// membership, so a closed window appears nowhere.
+    pub fn unmap_window(&mut self, window: &Window) {
+        self.stage.remove(window);
+        self.space.unmap_elem(window);
     }
 
     /// Drop every per-surface map/cache entry keyed by `surface`. Shared by the
@@ -856,7 +856,8 @@ impl DriftWm {
         match &self.window_focus {
             Some(t) if t.0.alive() => Some(t.clone()),
             Some(_) => self
-                .focus_history
+                .stage
+                .focus_history()
                 .iter()
                 .find(|w| w.alive())
                 .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned()))),
@@ -1258,10 +1259,6 @@ impl DriftWm {
             .or_else(|| self.space.outputs().next().cloned())
     }
 
-    pub fn active_fullscreen(&self) -> Option<&FullscreenState> {
-        self.active_output().and_then(|o| self.fullscreen.get(&o))
-    }
-
     pub fn is_fullscreen(&self) -> bool {
         self.active_output()
             .is_some_and(|o| self.fullscreen.contains_key(&o))
@@ -1308,7 +1305,20 @@ impl DriftWm {
 
     /// True if `window` is currently fullscreen on some output.
     pub fn is_window_fullscreen(&self, window: &Window) -> bool {
-        self.fullscreen.values().any(|fs| &fs.window == window)
+        self.stage.is_fullscreen(window)
+    }
+
+    /// The fullscreen window on `output`, if any.
+    pub fn fullscreen_window_on(&self, output: &Output) -> Option<Window> {
+        self.stage
+            .fullscreen_on(&output.name())
+            .map(|fs| fs.window.clone())
+    }
+
+    /// The fullscreen window on the active output, if any.
+    pub fn active_fullscreen_window(&self) -> Option<Window> {
+        self.active_output()
+            .and_then(|o| self.fullscreen_window_on(&o))
     }
 
     /// True if `window` is a real canvas window — not a widget (wallpaper
@@ -1546,7 +1556,7 @@ impl DriftWm {
             )
             .0
             .to_i32_round();
-            self.space.map_element(window, canvas, false);
+            self.map_window(window, canvas, false);
         }
     }
 
@@ -1718,27 +1728,51 @@ impl DriftWm {
     }
 }
 
-/// Order in which to raise `target` and its descendants so each child ends up
-/// directly above its own parent: `target` first, then descendants breadth-first,
-/// leaving unrelated windows below the subtree untouched. `is_child(a, b)` reports
-/// whether `a`'s parent is `b`. Already-visited windows are skipped, so cyclic
-/// parent links still terminate.
-fn subtree_raise_order<T>(stack: &[T], target: &T, is_child: impl Fn(&T, &T) -> bool) -> Vec<T>
-where
-    T: Clone + PartialEq,
-{
-    let mut order = vec![target.clone()];
-    let mut i = 0;
-    while i < order.len() {
-        let parent = order[i].clone();
-        for w in stack {
-            if !order.contains(w) && is_child(w, &parent) {
-                order.push(w.clone());
-            }
+impl DriftWm {
+    /// Debug-only end-of-tick check: the stage and its `Space` mirror must
+    /// agree on the window set, z-order, and positions; the two halves of the
+    /// fullscreen split must cover the same outputs; and every SSD decoration
+    /// entry must belong to a live window. Any mismatch is a routing bug —
+    /// some mutation bypassed the stage wrappers.
+    #[cfg(debug_assertions)]
+    pub fn verify_stage_parity(&self) {
+        self.stage.verify_invariants();
+
+        let stage_windows: Vec<&Window> = self.stage.windows().collect();
+        let space_windows: Vec<&Window> = self.space.elements().collect();
+        assert_eq!(
+            stage_windows.len(),
+            space_windows.len(),
+            "stage/space window count mismatch"
+        );
+        for (s, sp) in stage_windows.iter().zip(&space_windows) {
+            assert_eq!(*s, *sp, "stage/space z-order mismatch");
+            assert_eq!(
+                self.stage.position_of(s),
+                self.space.element_location(sp),
+                "stage/space position mismatch"
+            );
         }
-        i += 1;
+
+        let mut stage_fs: Vec<&str> = self
+            .stage
+            .fullscreen_entries()
+            .map(|(o, _)| o.as_str())
+            .collect();
+        let mut wm_fs: Vec<String> = self.fullscreen.keys().map(|o| o.name()).collect();
+        stage_fs.sort_unstable();
+        wm_fs.sort_unstable();
+        assert_eq!(stage_fs, wm_fs, "stage/DriftWm fullscreen output mismatch");
+
+        for id in self.decorations.keys() {
+            assert!(
+                self.stage
+                    .windows()
+                    .any(|w| w.wl_surface().is_some_and(|s| s.id() == *id)),
+                "decoration entry for a window not on the stage"
+            );
+        }
     }
-    order
 }
 
 #[cfg(test)]
@@ -1768,46 +1802,6 @@ mod tests {
             layout_position: Point::from(layout_position),
             home_return: None,
         }
-    }
-
-    #[derive(Clone, PartialEq, Debug)]
-    struct StackWin {
-        id: u32,
-        parent: Option<u32>,
-    }
-
-    fn win(id: u32, parent: Option<u32>) -> StackWin {
-        StackWin { id, parent }
-    }
-
-    fn raise(stack: &[StackWin], target: u32) -> Vec<u32> {
-        let target = stack.iter().find(|w| w.id == target).unwrap();
-        subtree_raise_order(stack, target, |c, p| c.parent == Some(p.id))
-            .iter()
-            .map(|w| w.id)
-            .collect()
-    }
-
-    #[test]
-    fn raise_lifts_only_own_children() {
-        // 0 has child 1; 2 is unrelated.
-        let stack = [win(0, None), win(1, Some(0)), win(2, None)];
-        assert_eq!(raise(&stack, 0), vec![0, 1]);
-        assert_eq!(raise(&stack, 2), vec![2]);
-    }
-
-    #[test]
-    fn raise_follows_nested_modal_chain() {
-        // 0 -> 1 -> 2 (dialog of a dialog), plus unrelated 3.
-        let stack = [win(0, None), win(1, Some(0)), win(2, Some(1)), win(3, None)];
-        assert_eq!(raise(&stack, 0), vec![0, 1, 2]);
-    }
-
-    #[test]
-    fn raise_terminates_on_cyclic_parents() {
-        // 0 and 1 claim each other as parent; must not loop forever.
-        let stack = [win(0, Some(1)), win(1, Some(0))];
-        assert_eq!(raise(&stack, 0), vec![0, 1]);
     }
 
     #[test]

@@ -49,15 +49,8 @@ impl CompositorHandler for DriftWm {
         // lock_surfaces is keyed by output — sweep values.
         self.lock_surfaces
             .retain(|_, ls| ls.wl_surface() != surface);
-        self.focus_history
-            .retain(|w| w.wl_surface().as_deref() != Some(surface));
-        if self.cycle_state.is_some() {
-            if self.focus_history.is_empty() {
-                self.cycle_state = None;
-            } else if let Some(ref mut idx) = self.cycle_state {
-                *idx = (*idx).min(self.focus_history.len() - 1);
-            }
-        }
+        self.stage
+            .remove_from_history_matching(|w| w.wl_surface().as_deref() == Some(surface));
     }
 
     fn new_surface(
@@ -233,12 +226,12 @@ impl CompositorHandler for DriftWm {
                 if self.pending_center.remove(&root) {
                     let geo = window.geometry();
                     let has_size = geo.size.w > 0 && geo.size.h > 0;
-                    let is_fullscreen = self.fullscreen.values().any(|fs| fs.window == window);
+                    let is_fullscreen = self.stage.is_fullscreen(&window);
 
                     // Capture preferred size once; later updated only on
                     // user resize-grab completion.
-                    if has_size && !crate::state::fit::is_fit(&window) && !is_fullscreen {
-                        crate::state::fit::set_restore_size_if_missing(&root, geo.size);
+                    if has_size && !self.stage.is_fit(&window) && !is_fullscreen {
+                        self.stage.set_restore_size_if_missing(&window, geo.size);
                     }
 
                     let (app_id, title) = with_states(&root, |states| {
@@ -374,8 +367,8 @@ impl CompositorHandler for DriftWm {
                         let activate = applied.as_ref().is_none_or(|a| !a.widget);
                         self.pinned
                             .insert(root.id(), PinnedState { output, screen_pos });
-                        self.space.map_element(window.clone(), canvas, activate);
-                    } else if has_size && !is_fullscreen && !crate::state::fit::is_fit(&window) {
+                        self.map_window(window.clone(), canvas, activate);
+                    } else if has_size && !is_fullscreen && !self.stage.is_fit(&window) {
                         // Fullscreen / fit windows already sit at their final
                         // location — skip positioning so bar-shifted
                         // centering doesn't override that.
@@ -458,7 +451,7 @@ impl CompositorHandler for DriftWm {
                         // fullscreen window focused and on top.
                         let activate =
                             !place_in_background && applied.as_ref().is_none_or(|a| !a.widget);
-                        self.space.map_element(window.clone(), pos, activate);
+                        self.map_window(window.clone(), pos.into(), activate);
                     }
 
                     if let Some(toplevel) = window.toplevel() {
@@ -512,8 +505,8 @@ impl CompositorHandler for DriftWm {
                         }
 
                         if applied.widget {
-                            self.focus_history.retain(|w| w != &window);
-                            if let Some(prev) = self.focus_history.first().cloned() {
+                            self.stage.drop_from_focus_history(&window);
+                            if let Some(prev) = self.stage.focus_history().first().cloned() {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 let focus = prev.wl_surface().map(|s| FocusTarget(s.into_owned()));
                                 self.set_window_focus(focus, serial);
@@ -607,7 +600,7 @@ impl CompositorHandler for DriftWm {
                             (target_center.x - geo.size.w as f64 / 2.0) as i32,
                             (target_center.y - total_h as f64 / 2.0) as i32 + bar,
                         ));
-                        self.space.map_element(window.clone(), new_loc, false);
+                        self.map_window(window.clone(), new_loc, false);
                         self.refresh_stable_snap_rect(&window);
                         self.pending_recenter.remove(&root.id());
                     }
@@ -835,7 +828,7 @@ impl DriftWm {
                 )
                 .0
                 .to_i32_round();
-                self.space.map_element(window.clone(), canvas, false);
+                self.map_window(window.clone(), canvas, false);
             }
         } else {
             let mut new_loc = initial_window_location;
@@ -847,13 +840,13 @@ impl DriftWm {
                 new_loc.x =
                     initial_window_location.x + (initial_window_size.w - current_geo.size.w);
             }
-            self.space.map_element(window.clone(), new_loc, false);
+            self.map_window(window.clone(), new_loc, false);
         }
 
         if matches!(resize_state, ResizeState::WaitingForLastCommit { .. }) {
             // Anchor restore_size to the user's final choice so a subsequent
             // fit/fullscreen round-trip restores to this.
-            crate::state::fit::set_restore_size(surface, current_geo.size);
+            self.stage.set_restore_size(window, current_geo.size);
             with_states(surface, |states| {
                 states
                     .data_map
@@ -888,7 +881,7 @@ impl DriftWm {
         if !matches!(resize_state, ResizeState::Idle) {
             return;
         }
-        if self.is_window_fullscreen(window) || crate::state::fit::is_fit(window) {
+        if self.is_window_fullscreen(window) || self.stage.is_fit(window) {
             return;
         }
 
@@ -944,7 +937,7 @@ impl DriftWm {
         if self.space.element_location(window) == Some(new_loc) {
             return;
         }
-        self.space.map_element(window.clone(), new_loc, false);
+        self.map_window(window.clone(), new_loc, false);
         self.refresh_stable_snap_rect(window);
 
         // Recenter only when the reflow pushed the focused window (partly) out

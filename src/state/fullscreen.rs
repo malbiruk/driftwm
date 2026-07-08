@@ -58,8 +58,8 @@ impl DriftWm {
         // buffer was never committed in between — so a later exit "restores" to
         // full size and toggling can never recover. Keep the existing saved_*.
         if self
-            .fullscreen
-            .get(&output)
+            .stage
+            .fullscreen_on(&output.name())
             .is_some_and(|fs| &fs.window == window)
         {
             window.enter_fullscreen_configure(super::output_logical_size(&output));
@@ -89,14 +89,13 @@ impl DriftWm {
         let saved_location = self.space.element_location(window).unwrap_or_default();
 
         // If the window is fit, capture the fit-era geometry so exit_fullscreen
-        // restores it back to fit size with FitState still intact. Otherwise
-        // prefer RestoreSize over geometry to dodge Chromium's CSD shrink spiral.
-        let saved_size = if super::fit::is_fit(window) {
+        // restores it back to fit size with the fit state still intact. Otherwise
+        // prefer the restore size over geometry to dodge Chromium's CSD shrink spiral.
+        let saved_size = if self.stage.is_fit(window) {
             window.geometry().size
         } else {
-            window
-                .wl_surface()
-                .and_then(|s| super::fit::restore_size(&s))
+            self.stage
+                .restore_size(window)
                 .unwrap_or_else(|| window.geometry().size)
         };
 
@@ -107,7 +106,7 @@ impl DriftWm {
 
         // A game that maps straight into fullscreen commits its first buffer at
         // a throwaway default before it learns it's fullscreen, and that size is
-        // frozen into RestoreSize (X11 clients via xwayland-satellite often map
+        // frozen into the restore size (X11 clients via xwayland-satellite often map
         // 1x1 first). Restoring it verbatim on exit would shrink the window to
         // nothing, so a captured size below the client's min — or a floor, since
         // many clients declare none — falls back to a half-viewport default.
@@ -134,14 +133,13 @@ impl DriftWm {
             .wl_surface()
             .and_then(|s| self.pinned.remove(&s.id()));
 
+        self.stage
+            .set_fullscreen(&output.name(), window.clone(), saved_location, saved_size);
         self.fullscreen.insert(
             output.clone(),
             FullscreenState {
-                window: window.clone(),
-                saved_location,
                 saved_camera,
                 saved_zoom,
-                saved_size,
                 saved_pinned,
             },
         );
@@ -170,8 +168,8 @@ impl DriftWm {
             Point::from((camera_i32.x as f64, camera_i32.y as f64));
 
         // Place window at viewport origin and raise
-        self.space.map_element(window.clone(), camera_i32, true);
-        self.space.raise_element(window, true);
+        self.map_window(window.clone(), camera_i32, true);
+        self.raise_window(window, true);
         self.enforce_below_windows();
         self.update_output_from_camera();
 
@@ -237,12 +235,14 @@ impl DriftWm {
         let Some(fs) = self.fullscreen.remove(output) else {
             return;
         };
+        let Some(entry) = self.stage.take_fullscreen(&output.name()) else {
+            return;
+        };
 
-        fs.window.exit_fullscreen_configure(fs.saved_size);
+        entry.window.exit_fullscreen_configure(entry.saved_size);
 
         // Restore window position, camera, zoom on the specific output
-        self.space
-            .map_element(fs.window.clone(), fs.saved_location, false);
+        self.map_window(entry.window.clone(), entry.saved_location, false);
         {
             let mut os = super::output_state(output);
             os.camera = fs.saved_camera;
@@ -260,7 +260,8 @@ impl DriftWm {
         // back to screen_pos (update_output_from_camera's sync only fires on a
         // camera change, which restoring the saved camera may not be).
         let was_pinned = fs.saved_pinned.is_some();
-        if let (Some(pinned), Some(id)) = (fs.saved_pinned, fs.window.wl_surface().map(|s| s.id()))
+        if let (Some(pinned), Some(id)) =
+            (fs.saved_pinned, entry.window.wl_surface().map(|s| s.id()))
         {
             self.pinned.insert(id, pinned);
         }
@@ -279,7 +280,7 @@ impl DriftWm {
         output: &smithay::output::Output,
         new_size: smithay::utils::Size<i32, smithay::utils::Logical>,
     ) {
-        let Some(fs) = self.fullscreen.get(output) else {
+        let Some(fs) = self.stage.fullscreen_on(&output.name()) else {
             return;
         };
         fs.window.enter_fullscreen_configure(new_size);
@@ -290,10 +291,12 @@ impl DriftWm {
         &self,
         wl_surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> Option<smithay::output::Output> {
-        self.fullscreen
-            .iter()
+        let name = self
+            .stage
+            .fullscreen_entries()
             .find(|(_, fs)| fs.window.wl_surface().as_deref() == Some(wl_surface))
-            .map(|(o, _)| o.clone())
+            .map(|(name, _)| name.clone())?;
+        self.space.outputs().find(|o| o.name() == name).cloned()
     }
 
     /// Exit fullscreen and remap the pointer to maintain its screen position

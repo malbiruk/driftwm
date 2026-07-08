@@ -710,7 +710,7 @@ pub fn init_udev(
                     // Releases for held keys / cycle modifiers may not be delivered
                     // when the session is paused.
                     data.suppressed_keys.clear();
-                    data.cycle_state = None;
+                    data.stage.cancel_cycle();
                     data.tap.reset();
                 }
                 SessionEvent::ActivateSession => {
@@ -1410,6 +1410,7 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
         }
         data.recompute_decoration_scale();
         data.fullscreen.remove(&output);
+        data.stage.take_fullscreen(&output.name());
         data.dpms_off_outputs.remove(&output);
         data.pending_dpms.remove(&output);
 

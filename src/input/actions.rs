@@ -33,8 +33,7 @@ impl DriftWm {
         // Also check gesture_exited_fullscreen (set by exit_fullscreen_for_gesture
         // which runs before execute_action in the gesture path).
         let was_fullscreen = self
-            .active_fullscreen()
-            .map(|fs| fs.window.clone())
+            .active_fullscreen_window()
             .or_else(|| self.gesture_exited_fullscreen.take());
 
         // Any action except ToggleFullscreen/Spawn/ReloadConfig/ToggleCursorPan exits fullscreen first
@@ -76,7 +75,7 @@ impl DriftWm {
                         (uy * step as f64).round() as i32,
                     );
                     let new_loc = loc + Point::from(offset);
-                    self.space.map_element(window.clone(), new_loc, false);
+                    self.map_window(window.clone(), new_loc, false);
                 }
             }
             Action::PanViewport(dir) => {
@@ -231,46 +230,13 @@ impl DriftWm {
                 }
             }
             Action::CycleWindows { backward } => {
-                if self.focus_history.is_empty() {
-                    return;
-                }
-
-                let len = self.focus_history.len();
-                let step = |i: usize| {
-                    if *backward {
-                        (i + len - 1) % len
-                    } else {
-                        (i + 1) % len
-                    }
-                };
-                // First Tab press jumps to the previous window (index 1).
-                let mut idx = match self.cycle_state {
-                    Some(cur) => step(cur),
-                    None => 1 % len,
-                };
                 // The active output's fullscreen was already exited above (not
-                // allowlisted), so any fullscreen entry left here is on another
-                // output — shown only on its own monitor, never a target here.
-                // Bounded by `len` so an all-fullscreen history can't loop.
-                let mut steps = 0;
-                while steps < len
-                    && self
-                        .focus_history
-                        .get(idx)
-                        .is_some_and(|w| self.is_window_fullscreen(w))
-                {
-                    idx = step(idx);
-                    steps += 1;
-                }
-                let Some(window) = self
-                    .focus_history
-                    .get(idx)
-                    .filter(|w| !self.is_window_fullscreen(w))
-                    .cloned()
-                else {
+                // allowlisted), so any fullscreen entry the stage skips is on
+                // another output — shown only on its own monitor, never a
+                // target here.
+                let Some(window) = self.stage.cycle_step(*backward) else {
                     return;
                 };
-                self.cycle_state = Some(idx);
                 self.navigate_to_window(&window, false);
             }
             Action::HomeToggle => {
@@ -458,7 +424,7 @@ impl DriftWm {
                         (center_x - geo.size.w as f64 / 2.0) as i32,
                         (center_y - geo.size.h as f64 / 2.0) as i32,
                     ));
-                    self.space.map_element(window.clone(), new_loc, true);
+                    self.map_window(window.clone(), new_loc, true);
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     self.raise_and_focus(&window, serial);
                 }
@@ -569,7 +535,7 @@ impl DriftWm {
                 )
                 .0
                 .to_i32_round();
-                self.space.map_element(window.clone(), canvas, true);
+                self.map_window(window.clone(), canvas, true);
             }
             self.pinned.remove(&id);
         } else {
@@ -592,7 +558,7 @@ impl DriftWm {
             .0;
             let screen_pos = Point::from((screen.x.round() as i32, screen.y.round() as i32));
             // Pinned windows are out of the focus cycle.
-            self.focus_history.retain(|w| w != &window);
+            self.stage.drop_from_focus_history(&window);
             self.pinned
                 .insert(id, crate::state::PinnedState { output, screen_pos });
         }
