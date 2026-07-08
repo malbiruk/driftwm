@@ -272,11 +272,7 @@ impl XdgActivationHandler for DriftWm {
         if token_data.serial.is_none() {
             return;
         }
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&surface))
-            .cloned();
+        let window = self.window_for_surface(&surface);
         if let Some(window) = window {
             // Skip windows that haven't rendered yet — navigate_to_window on a
             // zero-sized window sets a fractional camera that breaks cascade.
@@ -343,11 +339,7 @@ impl PointerConstraintsHandler for DriftWm {
         // recreates its lock (Wine/Proton does this constantly), motion events
         // delivered during the gap reach the surface with stale surface-local
         // coordinates and the game snaps the camera back.
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(surface))
-            .cloned();
+        let window = self.window_for_surface(surface);
         if let Some(window) = window
             && let Some(loc) = self.stage.position_of(&window)
         {
@@ -563,11 +555,7 @@ impl XdgDecorationHandler for DriftWm {
 
         if create_titlebar {
             self.pending_ssd.insert(wl_surface.id());
-            let window = self
-                .stage
-                .windows()
-                .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-                .cloned();
+            let window = self.window_for_surface(&wl_surface);
             if let Some(window) = window {
                 let geo = window.geometry();
                 if geo.size.w > 0 && !self.decorations.contains_key(&wl_surface.id()) {
@@ -613,22 +601,14 @@ impl ForeignToplevelHandler for DriftWm {
     }
 
     fn activate(&mut self, wl_surface: WlSurface) {
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             self.activate_window_output_local(&window);
         }
     }
 
     fn close(&mut self, wl_surface: WlSurface) {
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             window.send_close();
         }
@@ -640,11 +620,7 @@ impl ForeignToplevelHandler for DriftWm {
             self.pending_fullscreen.insert(wl_surface, client_output);
             return;
         }
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             let target = self.resolve_fullscreen_output(&wl_surface, client_output);
             self.enter_fullscreen(&window, target);
@@ -663,11 +639,7 @@ impl ForeignToplevelHandler for DriftWm {
             self.pending_fit.insert(wl_surface);
             return;
         }
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             self.decoration_fit(&window);
         }
@@ -675,11 +647,7 @@ impl ForeignToplevelHandler for DriftWm {
 
     fn unset_maximized(&mut self, wl_surface: WlSurface) {
         self.pending_fit.remove(&wl_surface);
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             self.decoration_unfit(&window);
         }

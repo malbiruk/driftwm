@@ -1058,11 +1058,7 @@ impl DriftWm {
 
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
 
-        if let Some(window) = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&root))
-            .cloned()
+        if let Some(window) = self.window_for_surface(&root)
             && let Some(win_bbox) = self.window_bbox(&window)
         {
             // Use zoom-aware visible canvas rect rather than

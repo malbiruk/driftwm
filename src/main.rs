@@ -349,6 +349,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting event loop — launch apps with: WAYLAND_DISPLAY={socket_name} <app>");
     event_loop.run(None, &mut data, |data| {
         backend::udev::render_if_needed(data);
+        // Cull dead windows from both stores even on idle (no-render) turns,
+        // or a client that died without a clean unmap lingers in the read
+        // model until the next damage-driven render.
+        data.stage.retain_alive();
         data.space.refresh();
         data.popups.cleanup();
         data.display_handle.flush_clients().ok();

@@ -873,7 +873,7 @@ impl DriftWm {
 
     /// Stage-side `Space::element_under` (bbox filter, render_location, input
     /// region), minus the windows `skip` rejects.
-    fn element_under_where(
+    fn element_under_skipping(
         &self,
         point: Point<f64, Logical>,
         mut skip: impl FnMut(&Window) -> bool,
@@ -902,7 +902,7 @@ impl DriftWm {
         point: Point<f64, Logical>,
     ) -> Option<(&Window, Point<i32, Logical>)> {
         let active = self.active_output();
-        self.element_under_where(point, |w| {
+        self.element_under_skipping(point, |w| {
             w.wl_surface()
                 .is_some_and(|s| self.fullscreen_on_other_output(&s, &active))
         })
@@ -915,7 +915,7 @@ impl DriftWm {
         &self,
         point: Point<f64, Logical>,
     ) -> Option<(&Window, Point<i32, Logical>)> {
-        self.element_under_where(point, |_| false)
+        self.element_under_skipping(point, |_| false)
     }
 
     /// Find the Wayland surface and local coordinates under the given canvas position.
@@ -1267,7 +1267,7 @@ impl DriftWm {
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
         let active = self.active_output();
 
-        // Iterate in z-order (topmost first, matching space.elements().rev())
+        // Iterate in z-order (topmost first, matching stage.windows().rev())
         for window in self.stage.windows().rev() {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;

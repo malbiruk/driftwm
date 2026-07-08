@@ -3,7 +3,6 @@ use smithay::backend::renderer::gles::GlesRenderer;
 use smithay::output::Output;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Physical, Rectangle, Scale, Size, Transform};
-use smithay::wayland::seat::WaylandFocus;
 
 use super::OutputRenderElements;
 
@@ -638,11 +637,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
         };
 
         // Locate the window. If it's gone or has zero geometry, fail the frame.
-        let window = state
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(surface))
-            .cloned();
+        let window = state.window_for_surface(surface);
         let Some(window) = window else {
             capture.frame.failed(fail_reason);
             continue;

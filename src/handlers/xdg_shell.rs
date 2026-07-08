@@ -179,11 +179,7 @@ impl XdgShellHandler for DriftWm {
             self.pending_fullscreen.insert(wl_surface, client_output);
             return;
         }
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             let target = self.resolve_fullscreen_output(&wl_surface, client_output);
             self.enter_fullscreen(&window, target);
@@ -203,11 +199,7 @@ impl XdgShellHandler for DriftWm {
             self.pending_fit.insert(wl_surface);
             return;
         }
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             self.decoration_fit(&window);
         }
@@ -216,11 +208,7 @@ impl XdgShellHandler for DriftWm {
     fn unmaximize_request(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface().clone();
         self.pending_fit.remove(&wl_surface);
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
             self.decoration_unfit(&window);
         }
@@ -240,12 +228,8 @@ impl XdgShellHandler for DriftWm {
 
     fn toplevel_destroyed(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface().clone();
-        // Collect first to avoid holding an immutable borrow on space
-        let window = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned();
+        // Collect first to avoid holding an immutable borrow on the stage
+        let window = self.window_for_surface(&wl_surface);
         // Restore the per-output camera/zoom first if the destroyed window
         // was fullscreen. Keyed by surface, not the window lookup above: on
         // the crash path `Space::refresh` may already have dropped the dead
@@ -376,12 +360,7 @@ impl XdgShellHandler for DriftWm {
         if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
         }
-        let Some(window) = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned()
-        else {
+        let Some(window) = self.window_for_surface(&wl_surface) else {
             return;
         };
 
@@ -468,12 +447,7 @@ impl XdgShellHandler for DriftWm {
         if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
             return;
         }
-        let Some(window) = self
-            .stage
-            .windows()
-            .find(|w| w.wl_surface().as_deref() == Some(&wl_surface))
-            .cloned()
-        else {
+        let Some(window) = self.window_for_surface(&wl_surface) else {
             return;
         };
 

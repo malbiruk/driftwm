@@ -72,7 +72,7 @@ impl DriftWm {
     /// 3. Left-click on empty canvas → pan canvas
     pub(super) fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
         // Outputs can transiently disappear (cable unplug, GPU resume race);
-        // bail out so downstream active_output() / element_location() can't panic.
+        // bail out so downstream active_output() / position lookups can't panic.
         if self.space.outputs().next().is_none() {
             return;
         }
