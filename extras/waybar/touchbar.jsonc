@@ -1,0 +1,59 @@
+{
+    // Minimal white-on-black touch bar: keyboard toggle left; wifi/volume/battery/clock right.
+    // Launch with:
+    //   waybar -c ~/.config/waybar/touchbar.jsonc -s ~/.config/waybar/touchbar.css
+    "layer": "top",
+    "position": "bottom",
+    "height": 52,
+    "spacing": 6,
+
+    "modules-left": ["custom/keyboard"],
+    "modules-center": [],
+    "modules-right": ["network", "pulseaudio", "battery", "clock"],
+
+    "custom/keyboard": {
+        "format": "⌨",
+        "tooltip": false,
+        "on-click": "$HOME/.config/waybar/wvkbd-toggle.sh"
+    },
+
+    "network": {
+        // icon only; tap toggles the % inline, hover shows it in the tooltip
+        "format-wifi": "{icon}",
+        "format-ethernet": "󰈁",
+        "format-disconnected": "󰤭",
+        "format-alt": "{icon}  {signalStrength}%",
+        "format-icons": ["󰤟", "󰤢", "󰤥", "󰤨"],
+        "tooltip-format-wifi": "{essid}  ({signalStrength}%)",
+        "tooltip-format-ethernet": "{ifname}",
+        "tooltip-format-disconnected": "disconnected"
+    },
+
+    "pulseaudio": {
+        "format": "{icon}",
+        "format-muted": "󰝟",
+        "format-alt": "{icon}  {volume}%",
+        "format-icons": { "default": ["󰕿", "󰖀", "󰕾"] },
+        "tooltip-format": "{volume}%"
+    },
+
+    "battery": {
+        // format-icons keyed by status: "charging" gives a lightning ramp that still
+        // tracks capacity. Driving charge state through the icon (not a format-charging
+        // string) keeps format-alt working, so tap-to-reveal fires while charging too.
+        "format": "{icon}",
+        "format-alt": "{icon}  {capacity}%",
+        "format-icons": {
+            "charging": ["󰢜", "󰂆", "󰂇", "󰂈", "󰂉", "󰂊", "󰂋", "󰂅"],
+            "default":  ["󰁺", "󰁻", "󰁼", "󰁽", "󰁾", "󰁿", "󰂀", "󰂁", "󰂂", "󰁹"]
+        },
+        "states": { "warning": 20, "critical": 10 },
+        "tooltip-format": "{capacity}%  ({timeTo})"
+    },
+
+    "clock": {
+        "format": "{:%H:%M}",
+        "format-alt": "{:%H:%M:%S}",
+        "tooltip-format": "<big>{:%A  %d %B %Y}</big>"
+    }
+}

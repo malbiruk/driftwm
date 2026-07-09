@@ -1,0 +1,46 @@
+* {
+    /* Text font first, Nerd Font for the glyphs (Pango falls through per-glyph). */
+    font-family: "DejaVu Sans", "Symbols Nerd Font", sans-serif;
+    font-size: 20px;
+    min-height: 0;
+}
+
+window#waybar {
+    background: #000000;
+    color: #ffffff;
+}
+
+#custom-keyboard,
+#network,
+#pulseaudio,
+#battery,
+#clock {
+    padding: 0 16px;
+    margin: 0;
+    color: #ffffff;
+    background: transparent;
+}
+
+/* Big tap target for the keyboard toggle */
+#custom-keyboard {
+    font-size: 28px;
+    padding: 0 26px;
+}
+
+#custom-keyboard:hover,
+#custom-keyboard:active {
+    background: #1c1c1c;
+}
+
+#clock {
+    padding-right: 22px;
+}
+
+#battery.warning  { color: #e0c000; }
+#battery.critical { color: #e05a5a; }
+
+tooltip {
+    background: #000000;
+    border: 1px solid #333333;
+    color: #ffffff;
+}
