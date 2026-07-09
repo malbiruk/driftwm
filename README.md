@@ -125,7 +125,7 @@ trackpad.
 | 3-finger pinch           | Zoom                        | anywhere  |
 | 4-finger swipe           | Jump to nearest window      | anywhere  |
 | 4-finger pinch in / out  | Zoom-to-fit / home toggle   | anywhere  |
-| 3-finger tap             | Center window               | on-window |
+| 3-finger tap             | Center window               | anywhere  |
 | 3-finger double-tap      | Fit window                  | on-window |
 | 3-finger doubletap-swipe | Move window (hold: cluster) | on-window |
 | 3-finger hold-swipe      | Resize window               | on-window |
