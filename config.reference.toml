@@ -656,7 +656,8 @@
 # #                 (higher = on top; ties stack by map order, newest on top).
 # #                 The protocol has no z-index within a layer, so two overlay
 # #                 clients (e.g. an on-screen keyboard and a touch visualizer)
-# #                 otherwise stack by launch order. Ignored for regular windows.
+# #                 otherwise stack by launch order. Also orders canvas-positioned
+# #                 layers among themselves. Ignored for regular windows.
 # #
 # # Example: keep the on-screen keyboard above other overlay surfaces
 # # [[window_rules]]

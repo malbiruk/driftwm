@@ -192,6 +192,29 @@ impl DriftWm {
             }
         }
 
+        // Canvas-positioned layers bypass the layer map; report them with
+        // their canvas rect (rule coordinates, like `windows=`) so tools can
+        // discover their namespaces and placement.
+        let mut canvas_layer_infos: Vec<CanvasLayerInfo> = self
+            .canvas_layers
+            .iter()
+            .filter_map(|cl| {
+                let pos = cl.position?;
+                let size = cl.surface.bbox().size;
+                let (rx, ry) = driftwm::canvas::internal_to_rule(pos, size);
+                Some(CanvasLayerInfo {
+                    app_id: cl.namespace.clone(),
+                    position: [rx, ry],
+                    size: [size.w, size.h],
+                })
+            })
+            .collect();
+        canvas_layer_infos.sort_by(|a, b| (&a.app_id, a.position).cmp(&(&b.app_id, b.position)));
+        let canvas_sig: Vec<(String, [i32; 2], [i32; 2])> = canvas_layer_infos
+            .iter()
+            .map(|c| (c.app_id.clone(), c.position, c.size))
+            .collect();
+
         // Screen-space windows (pinned + fullscreen) live outside `windows=`, so
         // they need their own change detection or the per-output sections go
         // stale — e.g. dragging a pinned window, or a window opening straight
@@ -267,7 +290,8 @@ impl DriftWm {
             }
         }
         let windows_dirty = window_list_changed(&window_fps, &self.state_file_windows)
-            || layers.len() != self.state_file_layer_count;
+            || layers.len() != self.state_file_layer_count
+            || canvas_sig != self.state_file_canvas_layers;
         let screen_space_dirty =
             pinned_sig != self.state_file_pinned || fullscreen_sig != self.state_file_fullscreen;
 
@@ -315,6 +339,12 @@ impl DriftWm {
             content += &format!("layers={}\n", layers.join(","));
         }
 
+        if !canvas_layer_infos.is_empty()
+            && let Ok(json) = serde_json::to_string(&canvas_layer_infos)
+        {
+            content += &format!("canvas_layers={json}\n");
+        }
+
         // Per-output camera/zoom + screen-space (fullscreen, pinned) inventory.
         for output in self.space.outputs() {
             let name = output.name();
@@ -354,8 +384,21 @@ impl DriftWm {
             self.state_file_windows = window_fps;
             self.state_file_pinned = pinned_sig;
             self.state_file_fullscreen = fullscreen_sig;
+            self.state_file_canvas_layers = canvas_sig;
         }
     }
+}
+
+/// A canvas-positioned layer surface in the state file's `canvas_layers=`
+/// line. `position` uses rule coordinates (Y-up, window-centered), like
+/// `windows=`. The top-left anchor is frozen at map time while the center is
+/// derived from the *current* size, so for a surface that grew after mapping
+/// the reported center drifts from the rule that placed it.
+#[derive(serde::Serialize)]
+struct CanvasLayerInfo {
+    app_id: String,
+    position: [i32; 2],
+    size: [i32; 2],
 }
 
 fn state_file_dir() -> Option<std::path::PathBuf> {

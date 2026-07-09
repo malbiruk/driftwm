@@ -179,6 +179,13 @@ For read-only polling (status bars, scripts), driftwm also writes a throttled
 `windows=` JSON array using the same window shape as `state`. Reading that file
 avoids a socket round-trip when you only need to observe.
 
+Layer-shell clients appear too: `layers=` lists the namespaces of screen-space
+layer surfaces (bars, OSKs, overlays — useful for finding the `app_id` a
+window rule should match), and `canvas_layers=` is a JSON array of
+canvas-positioned layers with their namespace, rule-coordinate `position`, and
+`size` (the position reflects the current size, so it can drift from the
+placing rule if the surface resized after mapping).
+
 ## Limitations
 
 - There is no event/subscription stream yet — poll `state` or the state file.

@@ -188,8 +188,9 @@ pub(super) fn build_canvas_layer_elements(
     let scale: Scale<f64> = output_scale.into();
     let mut elements = Vec::new();
 
-    let layer_count = state.canvas_layers.len();
-    for idx in 0..layer_count {
+    // Topmost first — element lists are front-to-back (see
+    // `canvas_layer_indices_sorted` for the z-order contract).
+    for idx in state.canvas_layer_indices_sorted() {
         let (surface_id, inner_logical, physical_loc) = {
             let cl = &state.canvas_layers[idx];
             let Some(pos) = cl.position else { continue };

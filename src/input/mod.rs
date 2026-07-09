@@ -1346,7 +1346,8 @@ impl DriftWm {
         &self,
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
-        for cl in &self.canvas_layers {
+        for idx in self.canvas_layer_indices_sorted() {
+            let cl = &self.canvas_layers[idx];
             let Some(pos) = cl.position else {
                 continue;
             };

@@ -343,6 +343,7 @@ impl DriftWm {
             state_file_windows: Vec::new(),
             state_file_layer_count: 0,
             state_file_pinned: Vec::new(),
+            state_file_canvas_layers: Vec::new(),
             state_file_fullscreen: Vec::new(),
             autostart,
             active_outputs: HashSet::new(),

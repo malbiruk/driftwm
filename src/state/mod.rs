@@ -550,6 +550,9 @@ pub struct DriftWm {
     /// state file's per-output sections from going stale.
     pub state_file_pinned: Vec<(String, [i32; 2], [i32; 2])>,
     pub state_file_fullscreen: Vec<(String, String)>,
+    /// Sorted `(namespace, position, size)` of canvas-positioned layers, for
+    /// the same staleness detection as the pinned/fullscreen signatures.
+    pub state_file_canvas_layers: Vec<(String, [i32; 2], [i32; 2])>,
 
     pub autostart: Vec<String>,
 
@@ -921,13 +924,53 @@ impl DriftWm {
             .collect()
     }
 
+    /// Indices into `canvas_layers`, topmost first: higher `layer_order`
+    /// rules stack above; ties keep the existing first-mapped-on-top order.
+    /// Shared by canvas-layer rendering and hit-testing, like
+    /// [`Self::layers_on_sorted`] for the screen-space layers. Rules resolve
+    /// per instance (same prefix-count as the render path), so two positioned
+    /// rules for the same namespace can order their instances independently.
+    pub fn canvas_layer_indices_sorted(&self) -> Vec<usize> {
+        if self.canvas_layers.len() < 2 {
+            return (0..self.canvas_layers.len()).collect();
+        }
+        let has_orders = self
+            .config
+            .window_rules
+            .iter()
+            .any(|r| r.layer_order.is_some());
+        let mut indices: Vec<(i32, usize)> = self
+            .canvas_layers
+            .iter()
+            .enumerate()
+            .map(|(idx, cl)| {
+                let order = if has_orders {
+                    let instance_idx = self.canvas_layers[..idx]
+                        .iter()
+                        .filter(|other| other.namespace == cl.namespace)
+                        .count();
+                    self.config
+                        .resolve_window_rules_for_layer_instance(&cl.namespace, "", instance_idx)
+                        .and_then(|r| r.layer_order)
+                        .unwrap_or(0)
+                } else {
+                    0
+                };
+                (order, idx)
+            })
+            .collect();
+        indices.sort_by_key(|&(order, idx)| (std::cmp::Reverse(order), idx));
+        indices.into_iter().map(|(_, idx)| idx).collect()
+    }
+
     /// First mapped layer surface (across outputs and canvas layers) that
     /// requests `Exclusive` keyboard interactivity, in z-priority order.
     fn exclusive_layer_focus(&self) -> Option<FocusTarget> {
         use smithay::utils::IsAlive;
         use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 
-        for cl in &self.canvas_layers {
+        for idx in self.canvas_layer_indices_sorted() {
+            let cl = &self.canvas_layers[idx];
             let s = cl.surface.wl_surface();
             if s.alive()
                 && cl.surface.cached_state().keyboard_interactivity
