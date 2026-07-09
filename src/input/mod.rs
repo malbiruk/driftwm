@@ -30,22 +30,41 @@ use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use driftwm::protocols::output_power::OutputPowerHandler;
 
 /// Constant-speed edge-pan velocity for the bare cursor: a steady glide
-/// whenever the cursor sits within `zone` px of a screen edge, directed away
-/// from the edge(s) it's near. Unlike the window-drag joystick curve, the
-/// magnitude does not ramp with depth — so the speed stays the same no matter
-/// how hard the cursor is pushed into the edge. Diagonals are normalized so a
-/// corner doesn't pan √2 faster. Returns `None` outside the zone.
+/// whenever the cursor sits within `zone` px of an edge of the *usable* area
+/// (output minus layer-shell exclusive zones), directed away from the edge(s)
+/// it's near. Measuring from the usable area rather than the raw output keeps
+/// the pan zone reachable below a bar that reserves an exclusive zone — against
+/// the raw output, a bar taller than `zone` swallows that edge's zone entirely
+/// and panning toward it becomes impossible. Unlike the window-drag joystick
+/// curve, the magnitude does not ramp with depth — so the speed stays the same
+/// no matter how hard the cursor is pushed into the edge. Diagonals are
+/// normalized so a corner doesn't pan √2 faster. Returns `None` outside the
+/// zone.
 fn cursor_edge_pan_velocity(
     screen_pos: Point<f64, Logical>,
-    output_w: f64,
-    output_h: f64,
+    usable: smithay::utils::Rectangle<i32, Logical>,
     zone: f64,
     speed: f64,
 ) -> Option<Point<f64, Logical>> {
-    let dist_left = screen_pos.x;
-    let dist_right = output_w - screen_pos.x;
-    let dist_top = screen_pos.y;
-    let dist_bottom = output_h - screen_pos.y;
+    let usable_x = usable.loc.x as f64;
+    let usable_y = usable.loc.y as f64;
+    let usable_right = usable_x + usable.size.w as f64;
+    let usable_bottom = usable_y + usable.size.h as f64;
+
+    // Outside the usable area (e.g. over a bar's reserved space) the distances
+    // below go negative, which would read as "even deeper in the zone" and pan.
+    if screen_pos.x < usable_x
+        || screen_pos.x > usable_right
+        || screen_pos.y < usable_y
+        || screen_pos.y > usable_bottom
+    {
+        return None;
+    }
+
+    let dist_left = screen_pos.x - usable_x;
+    let dist_right = usable_right - screen_pos.x;
+    let dist_top = screen_pos.y - usable_y;
+    let dist_bottom = usable_bottom - screen_pos.y;
 
     let mut vx: f64 = 0.0;
     let mut vy: f64 = 0.0;
@@ -810,18 +829,29 @@ impl DriftWm {
         // to click it also pans and fights the click with pointer warps.
         // Only Top/Overlay: Background/Bottom usually hold a full-output
         // wallpaper surface, which would match everywhere and kill cursor-pan.
-        let over_layer_surface = [WlrLayer::Top, WlrLayer::Overlay]
-            .iter()
-            .any(|&layer| map.layer_under(layer, screen_pos).is_some());
+        //
+        // surface_under() rather than a bare layer_under(): a bar surface often
+        // spans the full width while only drawing a few clusters, so the bbox
+        // alone would block panning across the transparent gaps. Checking the
+        // input region makes this exactly "would a click here hit the bar?".
+        let over_layer_surface = [WlrLayer::Top, WlrLayer::Overlay].iter().any(|&layer| {
+            let Some(surface) = map.layer_under(layer, screen_pos) else {
+                return false;
+            };
+            let geo = map.layer_geometry(surface).unwrap_or_default();
+            let surface_local = screen_pos - geo.loc.to_f64();
+            surface
+                .surface_under(surface_local, WindowSurfaceType::ALL)
+                .is_some()
+        });
         if over_layer_surface {
             crate::state::output_state(&output).edge_pan_velocity = None;
             return;
         }
-        let size = crate::state::output_logical_size(&output);
+        let usable = map.non_exclusive_zone();
         let velocity = cursor_edge_pan_velocity(
             screen_pos,
-            size.w as f64,
-            size.h as f64,
+            usable,
             self.config.edge_pan_cursor_zone,
             self.config.edge_pan_max,
         );
