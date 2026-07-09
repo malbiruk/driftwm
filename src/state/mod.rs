@@ -421,6 +421,9 @@ pub struct DriftWm {
     pub keyboard_shortcuts_inhibit_state: KeyboardShortcutsInhibitState,
     #[allow(dead_code)]
     pub virtual_keyboard_state: VirtualKeyboardManagerState,
+    /// Per-virtual-keyboard xkb mirror for resolving compositor bindings on
+    /// OSK input (see `protocols::virtual_keyboard`).
+    pub virtual_kb_bindings: driftwm::protocols::virtual_keyboard::VirtualKeyboardBindings,
     #[allow(dead_code)]
     pub security_context_state: SecurityContextState,
     #[allow(dead_code)]

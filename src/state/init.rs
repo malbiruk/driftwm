@@ -286,6 +286,7 @@ impl DriftWm {
             relative_pointer_state,
             keyboard_shortcuts_inhibit_state,
             virtual_keyboard_state,
+            virtual_kb_bindings: Default::default(),
             security_context_state,
             idle_inhibit_state,
             idle_inhibiting_surfaces: HashSet::new(),

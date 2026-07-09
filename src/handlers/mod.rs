@@ -14,7 +14,7 @@ use smithay::{
     delegate_pointer_constraints, delegate_pointer_gestures, delegate_presentation,
     delegate_primary_selection, delegate_relative_pointer, delegate_seat,
     delegate_security_context, delegate_single_pixel_buffer, delegate_text_input_manager,
-    delegate_viewporter, delegate_virtual_keyboard_manager, delegate_xdg_activation,
+    delegate_viewporter, delegate_xdg_activation,
     input::{
         Seat, SeatHandler, SeatState,
         dnd::{self, DnDGrab},
@@ -401,7 +401,47 @@ impl SecurityContextHandler for DriftWm {
     }
 }
 delegate_security_context!(DriftWm);
-delegate_virtual_keyboard_manager!(DriftWm);
+
+// Replaces smithay's virtual-keyboard delegate so OSK key presses run through
+// compositor bindings first (see `protocols::virtual_keyboard`).
+impl driftwm::protocols::virtual_keyboard::VirtualKeyboardBindingHandler for DriftWm {
+    fn virtual_keyboard_bindings(
+        &mut self,
+    ) -> &mut driftwm::protocols::virtual_keyboard::VirtualKeyboardBindings {
+        &mut self.virtual_kb_bindings
+    }
+
+    fn virtual_key_binding(
+        &mut self,
+        modifiers: &keyboard::ModifiersState,
+        sym: keyboard::Keysym,
+    ) -> bool {
+        // While locked, the lock surface owns all input (an OSK may well be
+        // typing the password); bindings stay off, everything forwards.
+        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+            return false;
+        }
+        // Respect the focused window's pass_keys rule, as the physical path
+        // does: a combo the window claims forwards even when bound.
+        let pass_keys = self.focused_window().and_then(|w| {
+            let app_id = w.app_id_or_class().unwrap_or_default();
+            let title = w.window_title().unwrap_or_default();
+            self.config
+                .resolve_window_rules(&app_id, &title)
+                .map(|r| r.pass_keys)
+        });
+        if pass_keys.is_some_and(|pk| pk.allows_raw(modifiers, sym)) {
+            return false;
+        }
+        let Some(action) = self.config.lookup(modifiers, sym) else {
+            return false;
+        };
+        let action = action.clone();
+        self.execute_action(&action);
+        true
+    }
+}
+driftwm::delegate_virtual_keyboard_bindings!(DriftWm);
 
 impl InputMethodHandler for DriftWm {
     fn new_popup(&mut self, surface: PopupSurface) {
