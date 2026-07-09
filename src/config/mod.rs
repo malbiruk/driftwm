@@ -540,6 +540,7 @@ impl Config {
                 ),
                 accel_profile,
                 natural_scroll: m.natural_scroll.unwrap_or(false),
+                left_handed: m.left_handed.unwrap_or(false),
             }
         };
 

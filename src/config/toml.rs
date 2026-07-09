@@ -87,6 +87,7 @@ pub(super) struct MouseDeviceFileConfig {
     pub accel_speed: Option<f64>,
     pub accel_profile: Option<String>,
     pub natural_scroll: Option<bool>,
+    pub left_handed: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

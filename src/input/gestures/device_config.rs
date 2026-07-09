@@ -88,11 +88,12 @@ impl DriftWm {
     fn configure_mouse(&self, device: &mut smithay::reexports::input::Device) {
         let cfg = &self.config.mouse_device;
         tracing::info!(
-            "Configuring mouse: {} (accel={}, profile={:?}, natural_scroll={})",
+            "Configuring mouse: {} (accel={}, profile={:?}, natural_scroll={}, left_handed={})",
             device.name(),
             cfg.accel_speed,
             cfg.accel_profile,
             cfg.natural_scroll,
+            cfg.left_handed,
         );
 
         if let Err(e) = device.config_accel_set_speed(cfg.accel_speed) {
@@ -101,6 +102,11 @@ impl DriftWm {
         set_accel_profile(device, cfg.accel_profile);
         if let Err(e) = device.config_scroll_set_natural_scroll_enabled(cfg.natural_scroll) {
             tracing::warn!("Failed to set mouse natural_scroll: {e:?}");
+        }
+        if device.config_left_handed_is_available()
+            && let Err(e) = device.config_left_handed_set(cfg.left_handed)
+        {
+            tracing::warn!("Failed to set mouse left_handed: {e:?}");
         }
     }
 }

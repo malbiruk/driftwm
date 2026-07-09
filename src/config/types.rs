@@ -395,6 +395,7 @@ pub struct MouseDeviceSettings {
     pub accel_speed: f64,
     pub accel_profile: AccelProfile,
     pub natural_scroll: bool,
+    pub left_handed: bool,
 }
 
 impl Default for MouseDeviceSettings {
@@ -403,6 +404,7 @@ impl Default for MouseDeviceSettings {
             accel_speed: 0.0,
             accel_profile: AccelProfile::Flat,
             natural_scroll: false,
+            left_handed: false,
         }
     }
 }
