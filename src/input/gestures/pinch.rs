@@ -13,7 +13,9 @@ use smithay::{
 };
 
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::config::{ContinuousAction, GestureConfigEntry, GestureTrigger, ThresholdAction};
+use driftwm::config::{
+    BindingContext, ContinuousAction, GestureConfigEntry, GestureTrigger, ThresholdAction,
+};
 
 use crate::state::DriftWm;
 
@@ -24,22 +26,17 @@ impl DriftWm {
         let fingers = event.fingers();
         let time = Event::time_msec(&event);
 
-        // During fullscreen: 3+ finger pinch exits fullscreen first;
-        // 2-finger pinch and hold forward to the fullscreen app.
-        if self.is_fullscreen() {
-            if fingers >= 3 {
-                self.exit_fullscreen_for_gesture();
-            } else {
-                self.forward_pinch_begin(fingers, time);
-                return;
-            }
-        }
-
         let keyboard = self.seat.get_keyboard().unwrap();
         let mods = keyboard.modifier_state();
         let pointer = self.seat.get_pointer().unwrap();
         let pos = pointer.current_location();
-        let context = self.pointer_context(pos);
+        // The fullscreen window fills the screen; a continuous zoom exits it
+        // eagerly below (the gesture baselines against post-exit camera/zoom).
+        let context = if self.is_fullscreen() {
+            BindingContext::OnWindow
+        } else {
+            self.pointer_context(pos)
+        };
 
         // Check continuous Pinch trigger first
         let pinch_trigger = GestureTrigger::Pinch { fingers };
@@ -49,6 +46,11 @@ impl DriftWm {
                 GestureConfigEntry::Continuous(ContinuousAction::Zoom)
             )
         {
+            // Exit before baselining: the gesture zooms from the restored
+            // camera/zoom, not the locked fullscreen viewport.
+            if self.is_fullscreen() {
+                self.exit_fullscreen_remap_pointer(pos);
+            }
             self.cancel_animations();
             self.gesture_output = self.active_output();
             self.gesture_state = Some(GestureState::PinchZoom {

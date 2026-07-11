@@ -90,6 +90,25 @@ impl Action {
                 | Action::Spawn(_)
         )
     }
+
+    /// Actions the fullscreen guard lets run in place — everything else
+    /// exits fullscreen before executing.
+    pub fn runs_during_fullscreen(&self) -> bool {
+        matches!(
+            self,
+            Action::ToggleFullscreen
+                | Action::Spawn(_)
+                | Action::ReloadConfig
+                | Action::SwitchLayout(_)
+                | Action::ToggleCursorPan
+        )
+    }
+
+    /// Whether dispatching this during fullscreen ends it — either the guard
+    /// exits first, or the action itself does (ToggleFullscreen).
+    pub fn ends_fullscreen(&self) -> bool {
+        !self.runs_during_fullscreen() || matches!(self, Action::ToggleFullscreen)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
@@ -300,6 +319,15 @@ pub enum ContinuousAction {
 pub enum ThresholdAction {
     CenterNearest,
     Fixed(Action),
+}
+
+impl ThresholdAction {
+    pub fn ends_fullscreen(&self) -> bool {
+        match self {
+            ThresholdAction::CenterNearest => true, // fires Action::CenterNearest
+            ThresholdAction::Fixed(a) => a.ends_fullscreen(),
+        }
+    }
 }
 
 /// Resolved at parse time from trigger + action combination.
@@ -1041,4 +1069,36 @@ pub struct BackgroundConfig {
     /// the refresh rate, and between animation ticks the compositor reuses the
     /// composited result instead of re-evaluating the shader.
     pub animate_fps: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runs_during_fullscreen_allowlist() {
+        assert!(Action::ToggleFullscreen.runs_during_fullscreen());
+        assert!(Action::Spawn("foo".into()).runs_during_fullscreen());
+        assert!(Action::ReloadConfig.runs_during_fullscreen());
+        assert!(Action::SwitchLayout(LayoutSwitch::Next).runs_during_fullscreen());
+        assert!(Action::ToggleCursorPan.runs_during_fullscreen());
+        assert!(!Action::CloseWindow.runs_during_fullscreen());
+        assert!(!Action::ZoomIn.runs_during_fullscreen());
+        assert!(!Action::CenterNearest(Direction::Up).runs_during_fullscreen());
+    }
+
+    #[test]
+    fn action_ends_fullscreen() {
+        // ends it via its own handler despite being allowlisted
+        assert!(Action::ToggleFullscreen.ends_fullscreen());
+        assert!(!Action::Spawn("foo".into()).ends_fullscreen());
+        assert!(Action::CloseWindow.ends_fullscreen());
+    }
+
+    #[test]
+    fn threshold_action_ends_fullscreen() {
+        assert!(ThresholdAction::CenterNearest.ends_fullscreen());
+        assert!(!ThresholdAction::Fixed(Action::Spawn("foo".into())).ends_fullscreen());
+        assert!(ThresholdAction::Fixed(Action::CloseWindow).ends_fullscreen());
+    }
 }

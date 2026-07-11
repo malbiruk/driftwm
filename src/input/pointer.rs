@@ -24,7 +24,7 @@ use crate::decorations::DecorationHit;
 use crate::grabs::{MoveSurfaceGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab};
 use crate::state::{ClusterResizeSnapshot, DriftWm, FocusTarget, PendingMiddleClick};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
-use driftwm::config::{self, Action, BindingContext, MouseAction};
+use driftwm::config::{self, BindingContext, MouseAction};
 use driftwm::window_ext::WindowExt;
 use smithay::reexports::wayland_server::Resource;
 
@@ -137,51 +137,54 @@ impl DriftWm {
             let keyboard = self.seat.get_keyboard().unwrap();
             let mods = keyboard.modifier_state();
 
-            // During fullscreen: bound clicks exit fullscreen first and
-            // proceed to compositor grabs; plain clicks forward to the app.
-            // ToggleFullscreen is special — exiting IS the action, so return immediately.
+            // During fullscreen the window fills the screen, so bindings resolve
+            // in the OnWindow context. Grab bindings exit fullscreen up front and
+            // dispatch on the restored canvas; discrete actions dispatch like
+            // keybindings (execute_action's guard exits when needed); unbound
+            // clicks forward to the app.
             if self.is_fullscreen() {
-                // In fullscreen the window fills the screen — treat as OnWindow
-                let fs_lookup =
-                    self.config
-                        .mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow);
-                if matches!(
-                    fs_lookup,
-                    Some(MouseAction::Action(
-                        Action::ToggleFullscreen | Action::FitWindow | Action::FitWindowSnapped
-                    ))
-                ) {
-                    self.exit_fullscreen_remap_pointer(pos);
-                    return;
-                } else if fs_lookup.is_some() {
-                    pos = self.exit_fullscreen_remap_pointer(pos);
-                } else {
-                    // Reclaim keyboard focus for the fullscreen window before
-                    // forwarding — hover on another output may have moved focus
-                    // to its window, and a plain forward wouldn't restore it.
-                    // Skip when it already holds focus so a click doesn't re-emit
-                    // a keyboard enter (and a popup grab keeps its focus).
-                    if let Some(surface) = self
-                        .active_fullscreen_window()
-                        .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())))
-                    {
-                        let already = self.window_focus.as_ref().is_some_and(|f| f.0 == surface.0);
-                        if !already {
-                            let focus_serial = SERIAL_COUNTER.next_serial();
-                            self.set_window_focus(Some(surface), focus_serial);
-                        }
+                let fs_lookup = self
+                    .config
+                    .mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow)
+                    .cloned();
+                match fs_lookup {
+                    Some(MouseAction::Action(_)) => {
+                        // Deferring to execute_action keeps its was_fullscreen
+                        // snapshot live — no pre-exit stash that could strand
+                        // if the post-exit dispatch lookup missed.
                     }
-                    pointer.button(
-                        self,
-                        &ButtonEvent {
-                            button,
-                            state: button_state,
-                            serial,
-                            time: Event::time_msec(&event),
-                        },
-                    );
-                    pointer.frame(self);
-                    return;
+                    Some(_) => {
+                        pos = self.exit_fullscreen_remap_pointer(pos);
+                    }
+                    None => {
+                        // Reclaim keyboard focus for the fullscreen window before
+                        // forwarding — hover on another output may have moved focus
+                        // to its window, and a plain forward wouldn't restore it.
+                        // Skip when it already holds focus so a click doesn't re-emit
+                        // a keyboard enter (and a popup grab keeps its focus).
+                        if let Some(surface) = self
+                            .active_fullscreen_window()
+                            .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())))
+                        {
+                            let already =
+                                self.window_focus.as_ref().is_some_and(|f| f.0 == surface.0);
+                            if !already {
+                                let focus_serial = SERIAL_COUNTER.next_serial();
+                                self.set_window_focus(Some(surface), focus_serial);
+                            }
+                        }
+                        pointer.button(
+                            self,
+                            &ButtonEvent {
+                                button,
+                                state: button_state,
+                                serial,
+                                time: Event::time_msec(&event),
+                            },
+                        );
+                        pointer.frame(self);
+                        return;
+                    }
                 }
             }
 
@@ -768,7 +771,7 @@ impl DriftWm {
         let keyboard = self.seat.get_keyboard().unwrap();
         let mods = keyboard.modifier_state();
         let pointer = self.seat.get_pointer().unwrap();
-        let pos = pointer.current_location();
+        let mut pos = pointer.current_location();
         let source = event.source();
 
         // Discrete wheel-notch bindings (wheel-up / wheel-down) run any
@@ -816,20 +819,28 @@ impl DriftWm {
             }
         }
 
-        // During fullscreen: bound scroll exits fullscreen first; plain scroll forwards.
+        // During fullscreen the window fills the screen. Scroll dispatch only
+        // implements continuous pan/zoom, so exit fullscreen for those and run
+        // them on the restored canvas; any other bound scroll falls through
+        // unexited (a no-op below); unbound scroll forwards to the app.
         if self.is_fullscreen() {
-            if self
+            match self
                 .config
                 .mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow)
-                .is_some()
+                .cloned()
             {
-                self.exit_fullscreen_remap_pointer(pos);
-                // Fall through to dispatch below
-            } else {
-                let frame = build_client_axis_frame::<I>(&event);
-                pointer.axis(self, frame);
-                pointer.frame(self);
-                return;
+                Some(MouseAction::PanViewport | MouseAction::Zoom) => {
+                    // Dispatch below anchors pan/zoom on `pos`, so it must be
+                    // the remapped post-exit position.
+                    pos = self.exit_fullscreen_remap_pointer(pos);
+                }
+                Some(_) => {}
+                None => {
+                    let frame = build_client_axis_frame::<I>(&event);
+                    pointer.axis(self, frame);
+                    pointer.frame(self);
+                    return;
+                }
             }
         }
 

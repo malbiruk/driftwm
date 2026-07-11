@@ -590,8 +590,12 @@ pub struct DriftWm {
     pub focused_output: Option<Output>,
     /// Output a gesture started on (pinned for the gesture's duration).
     pub gesture_output: Option<Output>,
-    /// Fullscreen window exited by a gesture (saved before execute_action runs).
-    pub gesture_exited_fullscreen: Option<Window>,
+    /// A fullscreen window that input-layer code exited ahead of dispatching an
+    /// action, so `execute_action` can still treat it as the was-fullscreen
+    /// window. Set by the touch tier-crossing exit, consumed by
+    /// `execute_action`, and cleared on touch-grab teardown so it can't leak
+    /// into a later action.
+    pub pre_exited_fullscreen: Option<Window>,
     /// Virtual output placeholders kept when all physical outputs disconnect,
     /// so `active_output().unwrap()` doesn't panic.
     pub disconnected_outputs: HashSet<String>,

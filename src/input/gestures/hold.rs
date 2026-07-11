@@ -6,7 +6,7 @@ use smithay::{
     utils::SERIAL_COUNTER,
 };
 
-use driftwm::config::{GestureConfigEntry, GestureTrigger, ThresholdAction};
+use driftwm::config::{BindingContext, GestureConfigEntry, GestureTrigger, ThresholdAction};
 
 use crate::state::DriftWm;
 
@@ -21,7 +21,13 @@ impl DriftWm {
         let mods = keyboard.modifier_state();
         let pointer = self.seat.get_pointer().unwrap();
         let pos = pointer.current_location();
-        let context = self.pointer_context(pos);
+        // The fullscreen window fills the screen; the hold action fires on
+        // release through execute_action, whose guard exits fullscreen then.
+        let context = if self.is_fullscreen() {
+            BindingContext::OnWindow
+        } else {
+            self.pointer_context(pos)
+        };
 
         let hold_trigger = GestureTrigger::Hold { fingers };
         if let Some(entry) = self.config.gesture_lookup(&mods, &hold_trigger, context) {

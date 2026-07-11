@@ -356,7 +356,7 @@ impl DriftWm {
             commits_since_render: 0,
             focused_output: None,
             gesture_output: None,
-            gesture_exited_fullscreen: None,
+            pre_exited_fullscreen: None,
             disconnected_outputs: HashSet::new(),
             output_config_dirty: false,
             pending_mode_changes: HashMap::new(),

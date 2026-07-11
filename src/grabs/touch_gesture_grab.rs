@@ -229,6 +229,24 @@ impl Plan {
             && self.tap.is_none()
             && self.doubletap.is_none()
     }
+
+    /// Whether any binding in this tier would end fullscreen if it engaged —
+    /// continuous entries always do; threshold entries per action.
+    fn ends_fullscreen(&self) -> bool {
+        self.translation_continuous()
+            || self.has_preemptor()
+            || self.pinch.is_some()
+            || matches!(&self.swipe, Some(GestureConfigEntry::Threshold(a)) if a.ends_fullscreen())
+            || self
+                .swipe_dirs
+                .iter()
+                .flatten()
+                .any(|a| a.ends_fullscreen())
+            || [&self.pinch_in, &self.pinch_out, &self.tap, &self.doubletap]
+                .into_iter()
+                .flatten()
+                .any(|a| a.ends_fullscreen())
+    }
 }
 
 struct TouchPoint {
@@ -1016,13 +1034,19 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             // fresh baseline.
             let crossed_system = prev_max < 3 && self.max_fingers >= 3;
             let crossed_nav = prev_max < 4 && self.max_fingers >= 4;
-            // Exit fullscreen before a 3+ finger system gesture so the pan/zoom acts on
-            // the restored canvas instead of sliding the parked fullscreen window off
-            // its camera origin. Stash the exited window so a 4-finger nav firing right
-            // after can still anchor to it. Uses the touch output, which may differ from
-            // the active/pointer output.
-            if crossed_system && let Some(window) = data.fullscreen_window_on(&self.output) {
-                data.gesture_exited_fullscreen = Some(window);
+            // Exit fullscreen before a system gesture that ends it, so pan/zoom acts
+            // on the restored canvas instead of sliding the parked window off its
+            // camera origin. Gated on the tier actually binding something that ends
+            // fullscreen (an unbound touch leaves it alone); both crossings are
+            // checked since a 3-finger tier can preserve fullscreen while the
+            // 4-finger tier doesn't. Stash the window so a nav firing right after can
+            // still anchor to it. Uses the touch output, which may differ from the
+            // active/pointer output.
+            if (crossed_system || crossed_nav)
+                && self.plan.ends_fullscreen()
+                && let Some(window) = data.fullscreen_window_on(&self.output)
+            {
+                data.pre_exited_fullscreen = Some(window);
                 data.exit_fullscreen_on(&self.output);
             }
             if self.points.len() == 1 || crossed_system || crossed_nav {
@@ -1306,5 +1330,9 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         {
             data.loop_handle.remove(token);
         }
+        // unset runs on every teardown, including replacement by a move/resize
+        // grab, and after any tap fired — so an unconsumed tier-crossing stash
+        // can't leak into a later unrelated action.
+        data.pre_exited_fullscreen = None;
     }
 }

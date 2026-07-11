@@ -39,16 +39,17 @@ impl DriftWm {
         let fingers = event.fingers();
         let time = Event::time_msec(&event);
 
-        // During fullscreen: 3+ finger gestures exit fullscreen first
-        if self.is_fullscreen() && fingers >= 3 {
-            self.exit_fullscreen_for_gesture();
-        }
-
         let keyboard = self.seat.get_keyboard().unwrap();
         let mods = keyboard.modifier_state();
         let pointer = self.seat.get_pointer().unwrap();
-        let pos = pointer.current_location();
-        let context = self.pointer_context(pos);
+        let mut pos = pointer.current_location();
+        // The fullscreen window fills the screen; a continuous gesture exits it
+        // eagerly below (the grab needs post-exit geometry).
+        let context = if self.is_fullscreen() {
+            BindingContext::OnWindow
+        } else {
+            self.pointer_context(pos)
+        };
 
         // Priority 1: Pending middle-click (3-finger tap) → check DoubletapSwipe
         if let Some(pending) = self.pending_middle_click.take() {
@@ -66,6 +67,9 @@ impl DriftWm {
                         action @ (ContinuousAction::MoveWindow
                         | ContinuousAction::MoveSnappedWindows),
                     ) => {
+                        if self.is_fullscreen() {
+                            pos = self.exit_fullscreen_remap_pointer(pos);
+                        }
                         if let Some((window, _)) = self.window_under(pos) {
                             let cluster = matches!(action, ContinuousAction::MoveSnappedWindows);
                             return self.start_gesture_move(window, pos, cluster);
@@ -77,6 +81,9 @@ impl DriftWm {
                         action @ (ContinuousAction::ResizeWindow
                         | ContinuousAction::ResizeWindowSnapped),
                     ) => {
+                        if self.is_fullscreen() {
+                            pos = self.exit_fullscreen_remap_pointer(pos);
+                        }
                         if let Some((window, _)) = self.window_under(pos).filter(|(w, _)| {
                             !w.wl_surface()
                                 .as_ref()
@@ -109,6 +116,9 @@ impl DriftWm {
 
         match entry {
             Some(GestureConfigEntry::Continuous(action)) => {
+                if self.is_fullscreen() {
+                    pos = self.exit_fullscreen_remap_pointer(pos);
+                }
                 self.cancel_animations();
                 self.gesture_output = self.active_output();
                 match action {

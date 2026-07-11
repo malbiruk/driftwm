@@ -28,24 +28,14 @@ impl DriftWm {
     }
 
     pub fn execute_action(&mut self, action: &Action) {
-        // Snapshot fullscreen window before the guard exits it.
-        // Also check gesture_exited_fullscreen (set by exit_fullscreen_for_gesture
-        // which runs before execute_action in the gesture path).
+        // Snapshot fullscreen window before the guard exits it. Also check
+        // pre_exited_fullscreen (set by input-layer code that exited fullscreen
+        // ahead of dispatching this action).
         let was_fullscreen = self
             .active_fullscreen_window()
-            .or_else(|| self.gesture_exited_fullscreen.take());
+            .or_else(|| self.pre_exited_fullscreen.take());
 
-        // Any action except ToggleFullscreen/Spawn/ReloadConfig/ToggleCursorPan exits fullscreen first
-        if self.is_fullscreen()
-            && !matches!(
-                action,
-                Action::ToggleFullscreen
-                    | Action::Spawn(_)
-                    | Action::ReloadConfig
-                    | Action::SwitchLayout(_)
-                    | Action::ToggleCursorPan
-            )
-        {
+        if self.is_fullscreen() && !action.runs_during_fullscreen() {
             self.exit_fullscreen();
         }
 
@@ -371,9 +361,9 @@ impl DriftWm {
             Action::ToggleFullscreen => {
                 let focused = self.focused_window().filter(|w| !w.is_widget());
                 if was_fullscreen.is_some() && !self.is_fullscreen() {
-                    // A gesture exited the active output's fullscreen before this
-                    // ran — the toggle is done; don't re-enter or reach into
-                    // another output's fullscreen.
+                    // Input-layer code exited the active output's fullscreen
+                    // before this ran — the toggle is done; don't re-enter or
+                    // reach into another output's fullscreen.
                 } else if let Some(output) = focused
                     .as_ref()
                     .and_then(|w| w.wl_surface())
