@@ -9,6 +9,8 @@ mod render;
 mod signals;
 mod state;
 mod surface_tree;
+#[cfg(test)]
+mod tests;
 mod xwayland;
 
 use clap::Parser;
@@ -349,13 +351,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!("Starting event loop — launch apps with: WAYLAND_DISPLAY={socket_name} <app>");
     event_loop.run(None, &mut data, |data| {
         backend::udev::render_if_needed(data);
-        // Cull dead windows from the stage and refresh output membership even
-        // on idle (no-render) turns, or a client that died without a clean
-        // unmap lingers in the read model until the next damage-driven render.
-        data.stage.retain_alive();
-        data.refresh_window_outputs();
-        data.popups.cleanup();
-        data.display_handle.flush_clients().ok();
+        data.refresh_and_flush_clients();
     })?;
 
     state::remove_state_file();

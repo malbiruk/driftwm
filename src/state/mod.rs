@@ -1879,6 +1879,16 @@ impl DriftWm {
 }
 
 impl DriftWm {
+    /// Cull dead windows and refresh output membership even on idle
+    /// (no-render) turns, or a client that died without a clean unmap lingers
+    /// in the read model until the next damage-driven render. Shared by the
+    /// main loop and the test server pump so the two can't drift apart.
+    pub fn refresh_and_flush_clients(&mut self) {
+        self.stage.retain_alive();
+        self.refresh_window_outputs();
+        self.popups.cleanup();
+        self.display_handle.flush_clients().ok();
+    }
 
     /// Debug-only end-of-tick check: the stage's own structural invariants
     /// hold; the two halves of the fullscreen split (stage membership and

@@ -59,6 +59,23 @@ impl DriftWm {
         loop_handle: LoopHandle<'static, DriftWm>,
         loop_signal: LoopSignal,
     ) -> Self {
+        Self::new_with_config(
+            dh,
+            loop_handle,
+            loop_signal,
+            driftwm::config::Config::load_collect(),
+        )
+    }
+
+    /// Construct with an explicit config tuple instead of reading the user's
+    /// `config.toml`. The seam the in-process test harness builds on: it feeds a
+    /// parsed config so a live session's real config file never touches a test.
+    pub fn new_with_config(
+        dh: DisplayHandle,
+        loop_handle: LoopHandle<'static, DriftWm>,
+        loop_signal: LoopSignal,
+        config: (driftwm::config::Config, Vec<String>),
+    ) -> Self {
         // Scan system fonts off-thread so the first SSD title bar doesn't block
         // the event loop on a cold ~1s `FontSystem::new()`. The scan pings the
         // loop on completion to mark outputs dirty: udev renders are VBlank-gated,
@@ -181,10 +198,7 @@ impl DriftWm {
         let background_effect_state =
             smithay::wayland::background_effect::BackgroundEffectState::new::<Self>(&dh);
 
-        let (mut config, config_errors) = {
-            let (c, errs) = driftwm::config::Config::load_collect();
-            (c, errs)
-        };
+        let (mut config, config_errors) = config;
         let mut init_errors: BTreeMap<ErrorSource, String> = BTreeMap::new();
         if let Some(msg) = super::errors::summarize_config_errors(&config_errors) {
             init_errors.insert(ErrorSource::Config, msg);

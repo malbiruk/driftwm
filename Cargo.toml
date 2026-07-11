@@ -44,6 +44,19 @@ tracy-client = { version = "0.18.4", default-features = false, optional = true }
 
 [dev-dependencies]
 proptest = "1"
+insta = "1.47.2"
+wayland-client = "0.31.14"
+wayland-protocols = { version = "0.32.12", features = ["client", "staging", "unstable"] }
+wayland-protocols-wlr = { version = "0.3.12", features = ["client"] }
+calloop-wayland-source = "0.4.1"
+
+# Faster snapshot diffing in the in-process test harness (insta/similar are
+# recursion-heavy; unoptimized they dominate debug test time).
+[profile.dev.package.insta]
+opt-level = 3
+
+[profile.dev.package.similar]
+opt-level = 3
 
 [lints.clippy]
 # A guard locked in a scrutinee outlives the body — re-locking inside deadlocks
