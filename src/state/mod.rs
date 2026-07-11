@@ -309,6 +309,21 @@ pub fn output_logical_size(output: &Output) -> Size<i32, Logical> {
         .unwrap_or((1, 1).into())
 }
 
+/// Render-space position of a canvas window: stage position minus the client's
+/// geometry offset, relative to the camera. Single home of this formula —
+/// `window_render_transform`'s canvas branch and the isolated-capture bypass
+/// both use it, so they can't diverge.
+pub fn canvas_render_loc(
+    loc: Point<i32, Logical>,
+    geom_loc: Point<i32, Logical>,
+    camera: Point<f64, Logical>,
+) -> Point<f64, Logical> {
+    Point::from((
+        loc.x as f64 - geom_loc.x as f64 - camera.x,
+        loc.y as f64 - geom_loc.y as f64 - camera.y,
+    ))
+}
+
 pub fn output_state(output: &Output) -> MutexGuard<'_, OutputState> {
     let mutex = output
         .user_data()
@@ -1508,13 +1523,7 @@ impl DriftWm {
                 )),
                 _ => None,
             },
-            None => Some((
-                Point::from((
-                    loc.x as f64 - geom_loc.x as f64 - camera.x,
-                    loc.y as f64 - geom_loc.y as f64 - camera.y,
-                )),
-                zoom,
-            )),
+            None => Some((canvas_render_loc(loc, geom_loc, camera), zoom)),
         }
     }
 

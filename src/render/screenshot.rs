@@ -34,13 +34,16 @@ pub struct Capture {
 /// pixels per canvas unit, tiling to honor the texture-size limit, and write a
 /// PNG to `path`. Windows are drawn with their full chrome (title bar, border,
 /// rounded corners, shadow); `include_background` adds the canvas background
-/// (off for an isolated `window` capture, which stays transparent).
+/// (off for an isolated `window` capture, which stays transparent). When
+/// `isolate` is `Some`, only that window is composed — see
+/// [`compose_capture_elements`].
 pub fn capture_region_to_png(
     state: &mut crate::state::DriftWm,
     renderer: &mut GlesRenderer,
     region: Rectangle<i32, Logical>,
     dpi_scale: f64,
     include_background: bool,
+    isolate: Option<&smithay::desktop::Window>,
     path: &Path,
 ) -> Result<Capture, String> {
     if !(dpi_scale.is_finite() && dpi_scale > 0.0) {
@@ -93,6 +96,7 @@ pub fn capture_region_to_png(
                 dpi_scale,
                 tile_logical,
                 &capture_bg,
+                isolate,
             );
             let refs: Vec<&OutputRenderElements> = elements.iter().collect();
             let bytes = render_elements_to_rgba(

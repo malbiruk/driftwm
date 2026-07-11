@@ -109,10 +109,12 @@ driftwm msg screenshot window -o - | wl-copy          # capture window to clipbo
 ```
 
 Targets: **no subcommand** = the active output's viewport (what you see, minus
-panels); **`window`** (optionally `<app_id>` or `--id <n>`) = a window isolated
-on transparency, defaulting to the focused one; **`all`** / **`region`** = a
-scene with the canvas background + every window's chrome (`all` adds a
-`[zoom] fit_padding` margin).
+panels); **`window`** (optionally `<app_id>` or `--id <n>`) = just that window
+(defaulting to the focused one) composed alone on transparency, so overlapping
+windows never appear — pinned and fullscreen windows capture like any other
+(a fullscreen window has no chrome); **`all`** / **`region`** = a scene with the
+canvas background + every window's chrome (`all` adds a `[zoom] fit_padding`
+margin).
 
 - `--scale N` — pixels per canvas unit (default `1`); higher captures more detail
   than the screen shows, independent of zoom.
@@ -122,8 +124,10 @@ scene with the canvas background + every window's chrome (`all` adds a
   `./driftwm-screenshot-<time>.png`); the written path is printed.
 
 > [!NOTE]
-> Caveats: no blur (a translucent window shows a sharp backdrop, not a blurred
-> one); a gigapixel TIFF wallpaper uses a coarse pyramid level (softens at extreme
+> Caveats: no blur — in a scene capture (`all`/`region`/viewport) a translucent
+> window shows a sharp backdrop instead of a blurred one, while a `window` capture
+> keeps the translucency over transparent pixels (nothing is behind it to blur);
+> a gigapixel TIFF wallpaper uses a coarse pyramid level (softens at extreme
 > `--scale`); captures tile internally but cap at 16384 px/side.
 
 ### Subscribing to changes

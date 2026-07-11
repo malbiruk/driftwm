@@ -169,6 +169,11 @@ fn push_plain_elements(
 /// capture's keys (scale=dpi, zoom=1.0) differ from the live frame's, so the
 /// next live frame rebuilds those entries once — preferred over a second cache
 /// since captures are rare.
+///
+/// When `isolate` is `Some(window)`, only that window (plus its popups + chrome)
+/// is composed, so overlapping neighbors never leak in. It renders at its stage
+/// position regardless of kind (see the render-loc note below), which is what
+/// lets a `window` capture cover pinned and fullscreen windows too.
 pub(crate) fn compose_capture_elements(
     state: &mut crate::state::DriftWm,
     renderer: &mut GlesRenderer,
@@ -176,6 +181,7 @@ pub(crate) fn compose_capture_elements(
     dpi_scale: f64,
     viewport_logical: Size<i32, Logical>,
     capture_bg: &capture_background::CaptureBackground,
+    isolate: Option<&smithay::desktop::Window>,
 ) -> Vec<OutputRenderElements> {
     use smithay::backend::renderer::element::surface::render_elements_from_surface_tree;
 
@@ -197,6 +203,9 @@ pub(crate) fn compose_capture_elements(
     // with an in-flight `state.stage.windows()` iterator. Windows are Arc-backed.
     let windows: Vec<smithay::desktop::Window> = state.stage.windows().rev().cloned().collect();
     for window in &windows {
+        if isolate.is_some_and(|target| target != window) {
+            continue;
+        }
         let Some(loc) = state.stage.position_of(window) else {
             continue;
         };
@@ -269,9 +278,19 @@ pub(crate) fn compose_capture_elements(
         // `output: None` => off-screen canvas capture. Pinned windows return
         // None here by construction, so a canvas screenshot never includes a
         // screen-pinned window.
-        let Some((render_loc, _)) = state.window_render_transform(window, None, camera, zoom)
-        else {
-            continue;
+        //
+        // Isolation bypasses that: `window_render_transform` excludes
+        // pinned/fullscreen from off-screen renders by design, but here the
+        // target renders at its real stage position regardless of kind — the
+        // same position the capture region was derived from, so the two agree.
+        let render_loc = if isolate.is_some() {
+            crate::state::canvas_render_loc(loc, geom_loc, camera)
+        } else {
+            let Some((render_loc, _)) = state.window_render_transform(window, None, camera, zoom)
+            else {
+                continue;
+            };
+            render_loc
         };
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
 
@@ -503,9 +522,12 @@ pub(crate) fn compose_capture_elements(
 
     // Canvas-positioned layer widgets sit between normal windows and widget
     // toplevels, as in compose_frame. Screen-anchored layer surfaces (panels) are
-    // excluded — they aren't canvas content.
-    let canvas_layers =
-        build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect);
+    // excluded — they aren't canvas content. Isolated captures skip them too.
+    let canvas_layers = if isolate.is_some() {
+        Vec::new()
+    } else {
+        build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect)
+    };
     let bg = capture_bg.tile_elements(
         camera,
         viewport_logical,

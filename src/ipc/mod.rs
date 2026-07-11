@@ -436,7 +436,7 @@ fn cmd_screenshot(target: &ScreenshotTarget, scale: f64, path: &str, state: &mut
     if !std::path::Path::new(path).is_absolute() {
         return Err("screenshot path must be absolute".to_string());
     }
-    let region = resolve_screenshot_region(target, state)?;
+    let (region, isolate) = resolve_screenshot_region(target, state)?;
     // `window` captures isolate the window on transparency; every other target is
     // a scene capture with the background.
     let include_background = !matches!(target, ScreenshotTarget::Window { .. });
@@ -453,6 +453,7 @@ fn cmd_screenshot(target: &ScreenshotTarget, scale: f64, path: &str, state: &mut
             region,
             scale,
             include_background,
+            isolate.as_ref(),
             std::path::Path::new(path),
         )
     };
@@ -466,28 +467,26 @@ fn cmd_screenshot(target: &ScreenshotTarget, scale: f64, path: &str, state: &mut
     })
 }
 
-/// Resolve a screenshot target to an internal canvas rect (top-left, Y-down).
+/// Resolve a screenshot target to an internal canvas rect (top-left, Y-down)
+/// and, for a `window` target, the window to compose in isolation (`None` for
+/// scene targets, which render every window).
 fn resolve_screenshot_region(
     target: &ScreenshotTarget,
     state: &DriftWm,
-) -> Result<Rectangle<i32, Logical>, String> {
+) -> Result<(Rectangle<i32, Logical>, Option<smithay::desktop::Window>), String> {
     match target {
         ScreenshotTarget::Viewport => {
             let output = state.active_output().ok_or("no active output to capture")?;
-            Ok(crate::state::output_viewport_rect(&output))
+            Ok((crate::state::output_viewport_rect(&output), None))
         }
         ScreenshotTarget::Window { window } => {
+            // Isolation composes only this window, so pinned and fullscreen
+            // capture fine — `window_visual_rect` already returns the right
+            // rect for both (camera park / dormant canvas slot).
             let window = window_by_selector(state, window.as_ref())?;
-            // Pinned and fullscreen windows render in screen space, not on the
-            // canvas, so there's no canvas region to capture. Refuse rather than
-            // emit the background behind them.
-            if !state.is_canvas_window(&window) {
-                return Err(
-                    "pinned and fullscreen windows have no canvas region to capture".to_string(),
-                );
-            }
-            window_visual_rect(state, &window)
-                .ok_or_else(|| "window has no capturable area".to_string())
+            let rect = window_visual_rect(state, &window)
+                .ok_or_else(|| "window has no capturable area".to_string())?;
+            Ok((rect, Some(window)))
         }
         ScreenshotTarget::All => {
             let mut acc: Option<Rectangle<i32, Logical>> = None;
@@ -505,9 +504,12 @@ fn resolve_screenshot_region(
             // `fit_padding` is defined as screen px at the fit zoom; applied in
             // canvas units it equals that px count only at `--scale 1`.
             let pad = state.config.zoom_fit_padding.max(0.0).round() as i32;
-            Ok(Rectangle::new(
-                Point::<i32, Logical>::from((rect.loc.x - pad, rect.loc.y - pad)),
-                Size::<i32, Logical>::from((rect.size.w + 2 * pad, rect.size.h + 2 * pad)),
+            Ok((
+                Rectangle::new(
+                    Point::<i32, Logical>::from((rect.loc.x - pad, rect.loc.y - pad)),
+                    Size::<i32, Logical>::from((rect.size.w + 2 * pad, rect.size.h + 2 * pad)),
+                ),
+                None,
             ))
         }
         ScreenshotTarget::Region {
@@ -549,11 +551,11 @@ fn resolve_screenshot_region(
                     (w as f64 / zoom).round() as i32,
                     (h as f64 / zoom).round() as i32,
                 ));
-                Ok(Rectangle::new(loc, size))
+                Ok((Rectangle::new(loc, size), None))
             } else {
                 let size = Size::<i32, Logical>::from((w, h));
                 let loc = driftwm::canvas::rule_to_internal(x, y, size);
-                Ok(Rectangle::new(loc, size))
+                Ok((Rectangle::new(loc, size), None))
             }
         }
     }
