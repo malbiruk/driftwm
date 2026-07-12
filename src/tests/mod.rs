@@ -13,6 +13,7 @@
 mod client;
 mod fixture;
 mod headless;
+mod real;
 mod server;
 
 mod client_teardown;
@@ -21,6 +22,7 @@ mod configure_sequences;
 mod focus_timing;
 mod hotplug;
 mod popups;
+mod real_clients;
 mod soak;
 mod window_opening;
 mod window_rules;

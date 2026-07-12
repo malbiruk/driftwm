@@ -38,8 +38,16 @@ impl IpcServer {
         event_loop: &LoopHandle<'static, DriftWm>,
         wayland_display: &str,
     ) -> Result<Self, Box<dyn std::error::Error>> {
-        let socket_path = socket_path(wayland_display);
+        Self::new_at(event_loop, socket_path(wayland_display))
+    }
 
+    /// Bind the IPC listener at an explicit path instead of the
+    /// `WAYLAND_DISPLAY`-derived one. Tests point this at a private temp dir so
+    /// they never touch the live session's socket directory.
+    pub fn new_at(
+        event_loop: &LoopHandle<'static, DriftWm>,
+        socket_path: PathBuf,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         std::fs::remove_file(&socket_path).ok();
         if let Some(parent) = socket_path.parent() {
             std::fs::create_dir_all(parent)?;

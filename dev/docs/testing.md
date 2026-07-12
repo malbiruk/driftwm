@@ -63,7 +63,11 @@ asserting the counters, file descriptors, and RSS all plateau; it is gated
 behind `RUN_SLOW_TESTS=1` so the default `cargo test` lane stays fast. Run it
 alone with `RUN_SLOW_TESTS=1 cargo test --bin driftwm soak` — the fd/RSS
 assertions are process-wide, so a concurrent full suite adds noise the slack has
-to absorb. Gate any future slow test (wlcs, deeper soaks) the same way.
+to absorb. The real-client scenario (`src/tests/real_clients.rs`) rides the same
+`RUN_SLOW_TESTS=1` lane but additionally needs `foot` or `weston-terminal`
+installed: it spawns a real client binary against a private wayland + IPC socket and
+drives it over the wire, self-skipping when neither is on `PATH`. Gate any
+future slow test (wlcs, deeper soaks) the same way.
 
 **Fixture tests never touch the real session.** Construct configs with
 `Config::from_toml` + `Fixture::with_config` — never read
