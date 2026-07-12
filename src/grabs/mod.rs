@@ -117,6 +117,7 @@ mod navigate_grab;
 mod pan_grab;
 mod resize_grab;
 mod touch_gesture_grab;
+mod touch_recognizer;
 
 pub use move_grab::MoveSurfaceGrab;
 pub use navigate_grab::NavigateGrab;
