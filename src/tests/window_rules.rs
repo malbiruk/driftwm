@@ -2,35 +2,7 @@
 //! engine has its own unit suite; these drive a real client through the
 //! commit path and assert the applied effect server-side or configure-side.
 
-use driftwm::config::Config;
-
-use super::{Fixture, keyboard_focus, server_surface, window_by_app_id};
-
-fn config(toml: &str) -> Config {
-    Config::from_toml(toml).unwrap()
-}
-
-/// Map a toplevel with `app_id`, attach a buffer at `size`, and settle.
-/// Returns the client-side surface for later lookups.
-fn map_window(
-    f: &mut Fixture,
-    id: super::client::ClientId,
-    app_id: &str,
-    size: (u16, u16),
-) -> wayland_client::protocol::wl_surface::WlSurface {
-    let window = f.client(id).create_window();
-    let surface = window.surface.clone();
-    window.set_app_id(app_id);
-    window.commit();
-    f.roundtrip(id);
-
-    let window = f.client(id).window(&surface);
-    window.set_size(size.0, size.1);
-    window.attach_new_buffer();
-    window.ack_last_and_commit();
-    f.double_roundtrip(id);
-    surface
-}
+use super::{Fixture, config, keyboard_focus, map_window, server_surface, window_by_app_id};
 
 #[test]
 fn widget_rule_does_not_take_focus() {

@@ -22,8 +22,14 @@ impl DriftWm {
                 return;
             }
         };
+        self.reload_config_from_contents(&contents);
+    }
+
+    /// Apply a config from raw TOML text, bypassing disk I/O so tests can
+    /// drive reload without a config file.
+    pub fn reload_config_from_contents(&mut self, contents: &str) {
         let (mut new_config, config_errors) =
-            match driftwm::config::Config::from_toml_collect(&contents) {
+            match driftwm::config::Config::from_toml_collect(contents) {
                 Ok((c, errs)) => (c, errs),
                 Err(e) => {
                     tracing::error!("Config reload: parse error: {e}");

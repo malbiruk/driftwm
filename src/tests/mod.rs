@@ -12,6 +12,7 @@ mod headless;
 mod server;
 
 mod client_teardown;
+mod config_reload;
 mod configure_sequences;
 mod focus_timing;
 mod window_opening;
@@ -19,10 +20,37 @@ mod window_rules;
 
 use fixture::Fixture;
 
+use driftwm::config::Config;
 use driftwm::window_ext::WindowExt;
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::wayland::seat::WaylandFocus;
+
+fn config(toml: &str) -> Config {
+    Config::from_toml(toml).unwrap()
+}
+
+/// Map a toplevel with `app_id`, attach a buffer at `size`, and settle.
+/// Returns the client-side surface for later lookups.
+fn map_window(
+    f: &mut Fixture,
+    id: client::ClientId,
+    app_id: &str,
+    size: (u16, u16),
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id(app_id);
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.set_size(size.0, size.1);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    surface
+}
 
 /// Server-side surface that currently holds keyboard focus, if any.
 fn keyboard_focus(f: &mut Fixture) -> Option<WlSurface> {
