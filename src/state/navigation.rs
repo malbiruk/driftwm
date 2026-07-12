@@ -15,6 +15,11 @@ use super::{DriftWm, output_state};
 /// into view; activation is a request to look at the window.
 const ACTIVATION_VISIBLE_THRESHOLD: f64 = 1.0;
 
+/// `visible_fraction` returns exactly 0.0 with no overlap, so an epsilon
+/// separates "clipped to a hair" from "off screen entirely" without a
+/// size-dependent cutoff. See `window_already_active`.
+const ACTIVATION_ONSCREEN_THRESHOLD: f64 = f64::EPSILON;
+
 impl DriftWm {
     /// Navigate the active output's viewport to center on a window: raise,
     /// focus, animate camera. When `reset_zoom` is true, zoom animates to 1.0
@@ -107,6 +112,29 @@ impl DriftWm {
         } else {
             self.navigate_to_window_on(window, &home, self.config.zoom_reset_on_activation);
         }
+    }
+
+    /// True when `window` already holds keyboard focus and is at least partly on
+    /// screen, i.e. an activation request for it asks for a state that already
+    /// holds. A focused window panned fully off screen is *not* already active:
+    /// activation still has somewhere to take the camera.
+    pub fn window_already_active(&self, window: &Window) -> bool {
+        let focused = self
+            .seat
+            .get_keyboard()
+            .and_then(|kb| kb.current_focus())
+            .is_some_and(|focus| focus_belongs_to_window(&focus.0, window));
+        if !focused {
+            return false;
+        }
+        // Pinned windows render in screen space (see `navigate_to_window_on`),
+        // so visibility doesn't depend on the camera — skip the check below.
+        if self.stage.is_pinned(window) {
+            return true;
+        }
+        self.output_for_window(window).is_some_and(|home| {
+            self.window_visible_at_least_on(window, &home, ACTIVATION_ONSCREEN_THRESHOLD)
+        })
     }
 
     /// Dynamic minimum zoom based on the current window layout.

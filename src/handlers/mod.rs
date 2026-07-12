@@ -256,14 +256,16 @@ impl XdgActivationHandler for DriftWm {
         token_data: XdgActivationTokenData,
         surface: WlSurface,
     ) {
-        // Same client activating itself (e.g. Telegram switching chats) — cancel loading cursor
-        if let Some(req_surface) = &token_data.surface {
+        let self_activation = token_data.surface.as_ref().is_some_and(|req_surface| {
             let req_client = self.display_handle.get_client(req_surface.id()).ok();
             let act_client = self.display_handle.get_client(surface.id()).ok();
-            if req_client.is_some() && req_client == act_client {
-                self.cursor.exec_cursor_show_at = None;
-                self.cursor.exec_cursor_deadline = None;
-            }
+            req_client.is_some() && req_client == act_client
+        });
+
+        // Same client activating itself (e.g. Telegram switching chats) — cancel loading cursor
+        if self_activation {
+            self.cursor.exec_cursor_show_at = None;
+            self.cursor.exec_cursor_deadline = None;
         }
 
         // Only honor tokens created from user input (has a serial).
@@ -277,6 +279,13 @@ impl XdgActivationHandler for DriftWm {
             // Skip windows that haven't rendered yet — navigate_to_window on a
             // zero-sized window sets a fractional camera that breaks cascade.
             if window.geometry().size.w == 0 || window.geometry().size.h == 0 {
+                return;
+            }
+            // Chromium mints its activation token from the enter serial it was
+            // just handed, so under focus-follows-mouse a mere hover could
+            // self-activate and pan the camera onto a clipped window. Tokens
+            // from another client (e.g. a notification daemon) still navigate.
+            if self_activation && self.window_already_active(&window) {
                 return;
             }
             self.activate_window_output_local(&window);
