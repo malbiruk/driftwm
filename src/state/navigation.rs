@@ -53,6 +53,15 @@ impl DriftWm {
             return;
         }
 
+        // A pinned window also lives in screen space: its canvas position is
+        // re-derived from the pin's screen_pos on every camera update, so panning
+        // can never bring more of it into view — it would only slide the rest of
+        // the canvas underneath it.
+        if self.stage.is_pinned(window) {
+            self.raise_and_focus(window, serial);
+            return;
+        }
+
         self.raise_and_focus(window, serial);
 
         let target_zoom = if reset_zoom {
