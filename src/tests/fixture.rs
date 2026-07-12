@@ -91,10 +91,24 @@ impl Fixture {
     }
 
     /// Current counter snapshot — for a scenario that wants to assert its own
-    /// intermediate baseline. Scaffolding for scenarios not yet written.
-    #[allow(dead_code)]
+    /// intermediate baseline.
     pub fn counters(&mut self) -> BTreeMap<String, usize> {
         self.state().debug_counters()
+    }
+
+    /// Pump until the counters return to `target`, capped so a genuine leak
+    /// leaves the caller's following assertion to fail instead of spinning
+    /// forever. The disconnect cascade (resource destroy handlers plus the
+    /// idle work they defer) settles over several dispatch rounds, and on a
+    /// loaded machine a single zero-timeout pump makes little progress — so
+    /// pump one round at a time and re-check.
+    pub fn settle_to(&mut self, target: &BTreeMap<String, usize>) {
+        for _ in 0..1000 {
+            if self.state().debug_counters() == *target {
+                break;
+            }
+            self.pump(1);
+        }
     }
 
     /// Opt this fixture out of the drop-time baseline assertion, for a scenario
@@ -186,22 +200,12 @@ impl Drop for Fixture {
             self.kill_client(id);
         }
 
-        // The disconnect cascade (resource destroy handlers plus the idle work
-        // they defer) settles over several dispatch rounds, and on a loaded
-        // machine a single zero-timeout pump makes little progress — so pump
-        // until the counters drain rather than a fixed count, capped so a real
-        // leak still fails instead of spinning forever.
-        let mut counters = self.state().debug_counters();
-        for _ in 0..1000 {
-            if counters == self.baseline {
-                break;
-            }
-            self.pump(1);
-            counters = self.state().debug_counters();
-        }
+        let baseline = std::mem::take(&mut self.baseline);
+        self.settle_to(&baseline);
 
         assert_eq!(
-            counters, self.baseline,
+            self.state().debug_counters(),
+            baseline,
             "fixture teardown left compositor state above baseline — a \
              window/surface/client-keyed collection leaked (see \
              DriftWm::debug_counters); tear the scenario down cleanly or call \

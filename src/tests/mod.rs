@@ -19,6 +19,7 @@ mod client_teardown;
 mod config_reload;
 mod configure_sequences;
 mod focus_timing;
+mod soak;
 mod window_opening;
 mod window_rules;
 

@@ -57,9 +57,13 @@ the stage, layout, or config parsing deserves a deeper local pass:
 counterexample it writes a seed under `proptest-regressions/` — commit it;
 seeds replay first on every subsequent run, pinning the bug forever.
 
-**Slow tests are opt-in.** Nothing slow exists yet; when it does (soak/leak
-scenarios, wlcs), gate it behind an env var (`RUN_SLOW_TESTS=1`) or a separate
-CI job so the default `cargo test` lane stays fast.
+**Slow tests are opt-in.** The soak/leak scenario (`src/tests/soak.rs`) churns
+hundreds of windows through map, state transitions, and both teardown paths,
+asserting the counters, file descriptors, and RSS all plateau; it is gated
+behind `RUN_SLOW_TESTS=1` so the default `cargo test` lane stays fast. Run it
+alone with `RUN_SLOW_TESTS=1 cargo test --bin driftwm soak` — the fd/RSS
+assertions are process-wide, so a concurrent full suite adds noise the slack has
+to absorb. Gate any future slow test (wlcs, deeper soaks) the same way.
 
 **Fixture tests never touch the real session.** Construct configs with
 `Config::from_toml` + `Fixture::with_config` — never read
