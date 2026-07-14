@@ -508,6 +508,27 @@ impl<W: StageElement> Stage<W> {
         }
     }
 
+    pub fn clear_restore_size<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
+        if let Some(e) = self.entry_mut(window) {
+            e.restore_size = None;
+        }
+    }
+
+    /// Set an entry's canvas position in place — no z-order change (unlike
+    /// [`Self::map`], which raises). Used by suspend conversion to seat the
+    /// stand-in at the recorded rect without disturbing its slot.
+    pub fn set_position<Q>(&mut self, window: &Q, position: Point<i32, Logical>)
+    where
+        W: PartialEq<Q>,
+    {
+        if let Some(e) = self.entry_mut(window) {
+            e.position = position;
+        }
+    }
+
     pub fn set_restore_size_if_missing<Q>(&mut self, window: &Q, size: Size<i32, Logical>)
     where
         W: PartialEq<Q>,
