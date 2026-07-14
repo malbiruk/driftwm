@@ -41,9 +41,11 @@ size = [320, 240]
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
 
+    map_window(&mut f, id, "normal", (400, 300));
     map_window(&mut f, id, "pin", (320, 240));
     let window = window_by_app_id(&mut f, "pin").unwrap();
 
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&window)));
     let site = f.state().stage.pin_of(&window).cloned().unwrap();
     assert_eq!(site.output, "HEADLESS-1");
     // No rule `position` means output center: screen top-left =

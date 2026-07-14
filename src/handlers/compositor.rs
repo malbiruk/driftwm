@@ -543,7 +543,6 @@ impl CompositorHandler for DriftWm {
                             && !is_fullscreen
                             && !place_in_background
                             && !deferred_fit_or_fs
-                            && !self.stage.is_pinned(&window)
                         {
                             let reset = self.config.zoom_reset_on_new_window;
                             // Cursor mode is "stay put" by default; only
@@ -551,7 +550,9 @@ impl CompositorHandler for DriftWm {
                             // zoomed out and asked for reset).
                             let cursor_overview_rescue =
                                 placed_at_cursor && reset && self.zoom() < 1.0 - 1e-9;
-                            if placed_at_cursor && !cursor_overview_rescue {
+                            if self.stage.is_pinned(&window)
+                                || placed_at_cursor && !cursor_overview_rescue
+                            {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 self.raise_and_focus(&window, serial);
                             } else {
