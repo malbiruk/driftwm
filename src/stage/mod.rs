@@ -90,17 +90,24 @@ impl<W: StageElement> Stage<W> {
         Self::default()
     }
 
-    fn entry(&self, window: &W) -> Option<&Entry<W>> {
+    fn entry<Q>(&self, window: &Q) -> Option<&Entry<W>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entries.iter().find(|e| &e.window == window)
     }
 
-    fn entry_mut(&mut self, window: &W) -> Option<&mut Entry<W>> {
+    fn entry_mut<Q>(&mut self, window: &Q) -> Option<&mut Entry<W>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entries.iter_mut().find(|e| &e.window == window)
     }
 
     /// Insert `window` at the top of the z-order (or move it there) and set
     /// its position. Mirrors `Space::map_element`, which always raises.
-    pub fn map(&mut self, window: W, position: Point<i32, Logical>) {
+    pub fn map(&mut self, window: impl Into<W>, position: Point<i32, Logical>) {
+        let window = window.into();
         if let Some(idx) = self.entries.iter().position(|e| e.window == window) {
             let mut entry = self.entries.remove(idx);
             entry.position = position;
@@ -120,9 +127,34 @@ impl<W: StageElement> Stage<W> {
         }
     }
 
+    /// Swap the element in `old`'s slot for `new`, preserving the z-order
+    /// index, `ElementId`, and per-entry state (position, fit, pin, restore
+    /// size). Deliberately a pure primitive: no raise, no focus-history or
+    /// fullscreen reconciliation — the caller owns those (the old element may
+    /// linger in the history/fullscreen until it does). No-op for an unknown
+    /// `old`.
+    pub fn replace<Q>(&mut self, old: &Q, new: W)
+    where
+        W: PartialEq<Q>,
+    {
+        // Catch a compound-adoption caller that forgot to remove the new
+        // element's own entry first, at the call site rather than at the
+        // end-of-tick invariant check.
+        debug_assert!(
+            !self.contains(&new),
+            "replacement element already on the stage"
+        );
+        if let Some(e) = self.entries.iter_mut().find(|e| &e.window == old) {
+            e.window = new;
+        }
+    }
+
     /// Move an already-mapped window to the top of the z-order. No-op for
     /// unknown windows (mirrors `Space::raise_element`).
-    pub fn raise(&mut self, window: &W) {
+    pub fn raise<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(idx) = self.entries.iter().position(|e| &e.window == window) {
             let entry = self.entries.remove(idx);
             self.entries.push(entry);
@@ -131,7 +163,10 @@ impl<W: StageElement> Stage<W> {
 
     /// Remove a window everywhere: z-order, focus history (clamping any active
     /// cycle), and fullscreen.
-    pub fn remove(&mut self, window: &W) {
+    pub fn remove<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
         self.entries.retain(|e| &e.window != window);
         self.focus_history.retain(|w| w != window);
         self.clamp_cycle();
@@ -150,15 +185,24 @@ impl<W: StageElement> Stage<W> {
         self.entries.iter().map(|e| &e.window)
     }
 
-    pub fn contains(&self, window: &W) -> bool {
+    pub fn contains<Q>(&self, window: &Q) -> bool
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).is_some()
     }
 
-    pub fn position_of(&self, window: &W) -> Option<Point<i32, Logical>> {
+    pub fn position_of<Q>(&self, window: &Q) -> Option<Point<i32, Logical>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).map(|e| e.position)
     }
 
-    pub fn id_of(&self, window: &W) -> Option<ElementId> {
+    pub fn id_of<Q>(&self, window: &Q) -> Option<ElementId>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).map(|e| e.id)
     }
 
@@ -216,7 +260,10 @@ impl<W: StageElement> Stage<W> {
     /// Remove `window` from the focus history, clamping any active cycle.
     /// Used by paths that exclude a still-live window from the cycle
     /// (pinning, widget rules).
-    pub fn drop_from_focus_history(&mut self, window: &W) {
+    pub fn drop_from_focus_history<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
         self.focus_history.retain(|w| w != window);
         self.clamp_cycle();
     }
@@ -241,7 +288,10 @@ impl<W: StageElement> Stage<W> {
     /// keyboard focus, which decides where a fresh cycle starts. Returns the
     /// window to navigate to, or `None` when the history is empty or
     /// all-fullscreen.
-    pub fn cycle_step(&mut self, backward: bool, focused: Option<&W>) -> Option<W> {
+    pub fn cycle_step<Q>(&mut self, backward: bool, focused: Option<&Q>) -> Option<W>
+    where
+        W: PartialEq<Q>,
+    {
         if self.focus_history.is_empty() {
             return None;
         }
@@ -259,7 +309,11 @@ impl<W: StageElement> Stage<W> {
             // past it. But focus can sit on a window the history never records
             // (pinned, widget), and then the head is already the window the
             // user wants back.
-            None if focused.is_some_and(|f| self.focus_history.first() != Some(f)) => 0,
+            None if focused
+                .is_some_and(|f| !self.focus_history.first().is_some_and(|h| h == f)) =>
+            {
+                0
+            }
             None => 1 % len,
         };
         // Bounded by `len` so an all-fullscreen history can't loop.
@@ -276,7 +330,7 @@ impl<W: StageElement> Stage<W> {
         let window = self
             .focus_history
             .get(idx)
-            .filter(|w| !self.is_fullscreen(w))
+            .filter(|w| !self.is_fullscreen(*w))
             .cloned()?;
         self.cycle_state = Some(idx);
         Some(window)
@@ -307,14 +361,14 @@ impl<W: StageElement> Stage<W> {
     pub fn set_fullscreen(
         &mut self,
         output: &str,
-        window: W,
+        window: impl Into<W>,
         saved_location: Point<i32, Logical>,
         saved_size: Size<i32, Logical>,
     ) {
         self.fullscreen.insert(
             output.to_owned(),
             FullscreenEntry {
-                window,
+                window: window.into(),
                 saved_location,
                 saved_size,
             },
@@ -337,11 +391,17 @@ impl<W: StageElement> Stage<W> {
         !self.fullscreen.is_empty()
     }
 
-    pub fn is_fullscreen(&self, window: &W) -> bool {
+    pub fn is_fullscreen<Q>(&self, window: &Q) -> bool
+    where
+        W: PartialEq<Q>,
+    {
         self.fullscreen.values().any(|fs| &fs.window == window)
     }
 
-    pub fn fullscreen_output_of(&self, window: &W) -> Option<&str> {
+    pub fn fullscreen_output_of<Q>(&self, window: &Q) -> Option<&str>
+    where
+        W: PartialEq<Q>,
+    {
         self.fullscreen
             .iter()
             .find(|(_, fs)| &fs.window == window)
@@ -349,74 +409,109 @@ impl<W: StageElement> Stage<W> {
     }
 
     /// Mark `window` fit, saving its pre-fit size for the eventual unfit.
-    pub fn set_fit(&mut self, window: &W, saved_size: Size<i32, Logical>) {
+    pub fn set_fit<Q>(&mut self, window: &Q, saved_size: Size<i32, Logical>)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.fit_saved_size = Some(saved_size);
         }
     }
 
-    pub fn is_fit(&self, window: &W) -> bool {
+    pub fn is_fit<Q>(&self, window: &Q) -> bool
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window)
             .is_some_and(|e| e.fit_saved_size.is_some())
     }
 
-    pub fn fit_saved_size(&self, window: &W) -> Option<Size<i32, Logical>> {
+    pub fn fit_saved_size<Q>(&self, window: &Q) -> Option<Size<i32, Logical>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).and_then(|e| e.fit_saved_size)
     }
 
     /// Clear fit state, returning the saved pre-fit size (the unfit path).
-    pub fn take_fit_saved_size(&mut self, window: &W) -> Option<Size<i32, Logical>> {
+    pub fn take_fit_saved_size<Q>(&mut self, window: &Q) -> Option<Size<i32, Logical>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry_mut(window).and_then(|e| e.fit_saved_size.take())
     }
 
-    pub fn clear_fit(&mut self, window: &W) {
+    pub fn clear_fit<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.fit_saved_size = None;
         }
     }
 
     /// Mark `window` filled, saving its pre-fill position and size for restore.
-    pub fn set_fill(
+    pub fn set_fill<Q>(
         &mut self,
-        window: &W,
+        window: &Q,
         saved_position: Point<i32, Logical>,
         saved_size: Size<i32, Logical>,
-    ) {
+    ) where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.fill_saved = Some((saved_position, saved_size));
         }
     }
 
-    pub fn is_fill(&self, window: &W) -> bool {
+    pub fn is_fill<Q>(&self, window: &Q) -> bool
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).is_some_and(|e| e.fill_saved.is_some())
     }
 
     /// Clear fill state, returning the saved pre-fill position and size (the
     /// unfill path).
-    pub fn take_fill_saved(
+    pub fn take_fill_saved<Q>(
         &mut self,
-        window: &W,
-    ) -> Option<(Point<i32, Logical>, Size<i32, Logical>)> {
+        window: &Q,
+    ) -> Option<(Point<i32, Logical>, Size<i32, Logical>)>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry_mut(window).and_then(|e| e.fill_saved.take())
     }
 
-    pub fn clear_fill(&mut self, window: &W) {
+    pub fn clear_fill<Q>(&mut self, window: &Q)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.fill_saved = None;
         }
     }
 
-    pub fn restore_size(&self, window: &W) -> Option<Size<i32, Logical>> {
+    pub fn restore_size<Q>(&self, window: &Q) -> Option<Size<i32, Logical>>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).and_then(|e| e.restore_size)
     }
 
-    pub fn set_restore_size(&mut self, window: &W, size: Size<i32, Logical>) {
+    pub fn set_restore_size<Q>(&mut self, window: &Q, size: Size<i32, Logical>)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.restore_size = Some(size);
         }
     }
 
-    pub fn set_restore_size_if_missing(&mut self, window: &W, size: Size<i32, Logical>) {
+    pub fn set_restore_size_if_missing<Q>(&mut self, window: &Q, size: Size<i32, Logical>)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window)
             && e.restore_size.is_none()
         {
@@ -424,21 +519,33 @@ impl<W: StageElement> Stage<W> {
         }
     }
 
-    pub fn set_pin(&mut self, window: &W, site: PinnedSite) {
+    pub fn set_pin<Q>(&mut self, window: &Q, site: PinnedSite)
+    where
+        W: PartialEq<Q>,
+    {
         if let Some(e) = self.entry_mut(window) {
             e.pinned = Some(site);
         }
     }
 
-    pub fn take_pin(&mut self, window: &W) -> Option<PinnedSite> {
+    pub fn take_pin<Q>(&mut self, window: &Q) -> Option<PinnedSite>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry_mut(window).and_then(|e| e.pinned.take())
     }
 
-    pub fn pin_of(&self, window: &W) -> Option<&PinnedSite> {
+    pub fn pin_of<Q>(&self, window: &Q) -> Option<&PinnedSite>
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).and_then(|e| e.pinned.as_ref())
     }
 
-    pub fn is_pinned(&self, window: &W) -> bool {
+    pub fn is_pinned<Q>(&self, window: &Q) -> bool
+    where
+        W: PartialEq<Q>,
+    {
         self.entry(window).is_some_and(|e| e.pinned.is_some())
     }
 

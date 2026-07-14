@@ -26,6 +26,9 @@ struct Inner {
     label: u64,
     size: Cell<Size<i32, Logical>>,
     alive: Cell<bool>,
+    /// Models a surfaceless suspended element: alive until dismissed
+    /// (removed), regardless of the backing `alive` cell.
+    suspended: Cell<bool>,
     widget: Cell<bool>,
     modal: Cell<bool>,
     parent: RefCell<Option<TestWindow>>,
@@ -66,8 +69,21 @@ impl TestWindow {
         w
     }
 
+    /// A surfaceless suspended element (`StageWindow::Suspended` in
+    /// production): permanently `is_alive`, so it survives `retain_alive`
+    /// even after its former client dies.
+    pub fn new_suspended(label: u64) -> Self {
+        let w = Self::new(label);
+        w.0.suspended.set(true);
+        w
+    }
+
     pub fn label(&self) -> u64 {
         self.0.label
+    }
+
+    pub fn is_suspended(&self) -> bool {
+        self.0.suspended.get()
     }
 
     pub fn set_size(&self, size: Size<i32, Logical>) {
@@ -161,7 +177,7 @@ impl StageElement for TestWindow {
     }
 
     fn is_alive(&self) -> bool {
-        self.0.alive.get()
+        self.0.alive.get() || self.0.suspended.get()
     }
 
     fn is_child_of(&self, parent: &Self) -> bool {

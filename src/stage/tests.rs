@@ -387,6 +387,79 @@ fn retain_alive_drops_dead_windows_but_keeps_history() {
 }
 
 #[test]
+fn replace_preserves_index_id_and_entry_state() {
+    let (mut stage, windows) = stage_with(3);
+    let old = &windows[1];
+    let id = stage.id_of(old).unwrap();
+    stage.set_restore_size(old, Size::from((640, 480)));
+    stage.set_fit(old, Size::from((640, 480)));
+
+    let new = TestWindow::new_suspended(99);
+    stage.replace(old, new.clone());
+
+    // Same z-slot (index 1), same ElementId, per-entry state carried over.
+    assert_eq!(z_labels(&stage), vec![0, 99, 2]);
+    assert_eq!(stage.id_of(&new), Some(id));
+    assert!(!stage.contains(old));
+    assert_eq!(stage.position_of(&new), Some(Point::from((10, 0))));
+    assert_eq!(stage.restore_size(&new), Some(Size::from((640, 480))));
+    assert!(stage.is_fit(&new));
+    stage.verify_invariants();
+}
+
+#[test]
+fn replace_ignores_unknown_window() {
+    let (mut stage, windows) = stage_with(2);
+    let unknown = TestWindow::new(42);
+    stage.replace(&unknown, TestWindow::new_suspended(99));
+    assert_eq!(z_labels(&stage), vec![0, 1]);
+    assert!(stage.contains(&windows[0]));
+    stage.verify_invariants();
+}
+
+#[test]
+fn suspended_element_survives_retain_alive() {
+    let (mut stage, windows) = stage_with(2);
+    // Convert window 0 in place; its former client then dies.
+    let suspended = TestWindow::new_suspended(99);
+    stage.replace(&windows[0], suspended.clone());
+    windows[0].kill();
+    suspended.kill(); // the backing "client" is gone...
+
+    stage.retain_alive();
+
+    // ...but a suspended element stays alive until dismissed (removed).
+    assert!(stage.contains(&suspended));
+    assert!(stage.contains(&windows[1]));
+    stage.verify_invariants();
+}
+
+#[test]
+fn adoption_compound_keeps_slot_and_discards_fresh_id() {
+    // By relaunch time the new client already owns a fresh stage entry, so
+    // adoption is remove-the-fresh-entry + replace-the-suspended-one.
+    let (mut stage, windows) = stage_with(3);
+    let suspended = TestWindow::new_suspended(9);
+    stage.replace(&windows[1], suspended.clone());
+    let id = stage.id_of(&suspended).unwrap();
+
+    let fresh = TestWindow::new(10);
+    stage.map(fresh.clone(), Point::from((500, 500)));
+    let fresh_id = stage.id_of(&fresh).unwrap();
+
+    stage.remove(&fresh);
+    stage.replace(&suspended, fresh.clone());
+
+    // The adopted window takes the suspended slot, id, and position; the
+    // fresh entry's id is gone for good (ids are never reused).
+    assert_eq!(z_labels(&stage), vec![0, 10, 2]);
+    assert_eq!(stage.id_of(&fresh), Some(id));
+    assert_eq!(stage.position_of(&fresh), Some(Point::from((10, 0))));
+    assert_eq!(stage.window_by_id(fresh_id), None);
+    stage.verify_invariants();
+}
+
+#[test]
 fn remove_from_history_matching_clamps_cycle() {
     let (mut stage, windows) = stage_with(3);
     for w in &windows {
@@ -478,6 +551,15 @@ mod harness {
         CrashWindow {
             idx: usize,
         },
+        Replace {
+            idx: usize,
+        },
+        AdoptRelaunch {
+            idx: usize,
+        },
+        DismissSuspended {
+            idx: usize,
+        },
         SetParent {
             child: usize,
             parent: usize,
@@ -561,6 +643,9 @@ mod harness {
                 .prop_map(|(w, h, vx, vy)| Op::MapNewAutoPlaced { w, h, vx, vy }),
             2 => idx.clone().prop_map(|idx| Op::CloseWindow { idx }),
             1 => idx.clone().prop_map(|idx| Op::CrashWindow { idx }),
+            1 => idx.clone().prop_map(|idx| Op::Replace { idx }),
+            1 => idx.clone().prop_map(|idx| Op::AdoptRelaunch { idx }),
+            1 => idx.clone().prop_map(|idx| Op::DismissSuspended { idx }),
             1 => (idx.clone(), idx.clone()).prop_map(|(child, parent)| Op::SetParent { child, parent }),
             1 => idx.clone().prop_map(|idx| Op::MakeWidget { idx }),
             1 => idx.clone().prop_map(|idx| Op::MakeModal { idx }),
@@ -613,9 +698,10 @@ mod harness {
         placeholder: Option<String>,
     }
 
-    /// Plain window footprint (no SSD bar / border in the model).
+    /// Plain window footprint (no SSD bar / border in the model). Suspended
+    /// elements never snap or join clusters.
     fn rect_of(stage: &Stage<TestWindow>, w: &TestWindow) -> Option<SnapRect> {
-        if w.is_widget() || stage.is_fullscreen(w) || stage.is_pinned(w) {
+        if w.is_widget() || w.is_suspended() || stage.is_fullscreen(w) || stage.is_pinned(w) {
             return None;
         }
         let pos = stage.position_of(w)?;
@@ -772,6 +858,25 @@ mod harness {
             }
         }
 
+        /// Suspended elements never hold fullscreen or pin membership and
+        /// never enter the MRU history (the pinned-window pattern).
+        fn verify_suspended(&self) {
+            for w in self.stage.windows() {
+                if w.is_suspended() {
+                    assert!(!self.stage.is_pinned(w), "suspended element pinned");
+                }
+            }
+            for (output, fs) in self.stage.fullscreen_entries() {
+                assert!(
+                    !fs.window.is_suspended(),
+                    "suspended element fullscreen on {output}"
+                );
+            }
+            for w in self.stage.focus_history() {
+                assert!(!w.is_suspended(), "suspended element in focus history");
+            }
+        }
+
         fn pick(&self, idx: usize) -> Option<TestWindow> {
             (!self.windows.is_empty()).then(|| self.windows[idx % self.windows.len()].clone())
         }
@@ -816,6 +921,7 @@ mod harness {
             let focused = topmost_modal_child(&self.stage, w).unwrap_or_else(|| w.clone());
             let eligible = self.stage.cycle_state().is_none()
                 && !focused.is_widget()
+                && !focused.is_suspended()
                 && !focused.is_modal()
                 && !self.stage.is_pinned(&focused);
             let pushed = eligible.then(|| {
@@ -902,7 +1008,10 @@ mod harness {
                 if *win == anchor {
                     focused_idx = Some(idx);
                 }
-                if !win.is_widget() && !self.stage.is_fullscreen(win) && !self.stage.is_pinned(win)
+                if !win.is_widget()
+                    && !win.is_suspended()
+                    && !self.stage.is_fullscreen(win)
+                    && !self.stage.is_pinned(win)
                 {
                     eligible.insert(idx);
                     eligible_rects.push((
@@ -1017,27 +1126,154 @@ mod harness {
                         self.stage.take_fullscreen(&out);
                         self.pin_return.remove(&out);
                     }
+                    let suspended_before: Vec<TestWindow> = self
+                        .stage
+                        .windows()
+                        .filter(|x| x.is_suspended())
+                        .cloned()
+                        .collect();
                     self.stage.retain_alive();
+                    // The idle-tick sweep must never cull a suspended entry —
+                    // they have no surface to die and leave only on dismissal.
+                    for s in &suspended_before {
+                        assert!(
+                            self.stage.contains(s),
+                            "retain_alive culled a suspended entry"
+                        );
+                    }
                     self.clear_focus_if(&w);
                 }
+                Op::Replace { idx } => {
+                    // Models the suspend conversion: client torn down, its slot
+                    // replaced in place by a surfaceless element. `replace`
+                    // doesn't touch focus-history/fullscreen, so we clear those
+                    // first, mirroring the real caller's responsibility.
+                    let Some(old) = self.pick(*idx) else { return };
+                    if !self.stage.contains(&old) || old.is_suspended() {
+                        return;
+                    }
+                    if let Some(out) = self.stage.fullscreen_output_of(&old).map(str::to_owned) {
+                        self.stage.take_fullscreen(&out);
+                        self.pin_return.remove(&out);
+                    }
+                    self.stage.take_pin(&old);
+                    self.stage.clear_fit(&old);
+                    self.fit_expect.remove(&old.label());
+
+                    let id_before = self.stage.id_of(&old).unwrap();
+                    let idx_before = self.stage.windows().position(|w| *w == old).unwrap();
+
+                    let suspended = TestWindow::new_suspended(self.next_label);
+                    self.next_label += 1;
+                    self.stage.replace(&old, suspended.clone());
+
+                    old.kill();
+                    self.stage.remove_from_history_matching(|w| *w == old);
+                    self.clear_focus_if(&old);
+                    self.windows.push(suspended.clone());
+
+                    assert_eq!(
+                        self.stage.id_of(&suspended),
+                        Some(id_before),
+                        "replace changed the ElementId"
+                    );
+                    assert_eq!(
+                        self.stage.windows().position(|w| *w == suspended),
+                        Some(idx_before),
+                        "replace changed the z-order index"
+                    );
+                    assert!(!self.stage.contains(&old), "old element survived replace");
+                }
+                Op::AdoptRelaunch { idx } => {
+                    // Compound adoption: by relaunch time the new client
+                    // already owns a fresh stage entry (mapped at
+                    // new_toplevel), so a bare replace would duplicate it.
+                    // Adopt = remove the fresh entry (its id is discarded),
+                    // then replace the suspended one in place.
+                    let suspended: Vec<TestWindow> = self
+                        .stage
+                        .windows()
+                        .filter(|w| w.is_suspended())
+                        .cloned()
+                        .collect();
+                    if suspended.is_empty() {
+                        return;
+                    }
+                    let target = suspended[idx % suspended.len()].clone();
+
+                    let fresh = TestWindow::new(self.next_label);
+                    self.next_label += 1;
+                    fresh.set_size(StageElement::size(&target));
+                    self.stage.map(fresh.clone(), Point::from((0, 0)));
+                    self.stage.raise(&fresh);
+                    self.stage.enforce_stacking();
+                    let fresh_id = self.stage.id_of(&fresh).unwrap();
+
+                    let id_before = self.stage.id_of(&target).unwrap();
+                    let idx_before = self.stage.windows().position(|w| *w == target).unwrap();
+
+                    self.stage.remove(&fresh);
+                    self.stage.replace(&target, fresh.clone());
+                    self.clear_focus_if(&target);
+                    self.windows.push(fresh.clone());
+
+                    assert_eq!(
+                        self.stage.id_of(&fresh),
+                        Some(id_before),
+                        "adoption changed the ElementId"
+                    );
+                    assert_eq!(
+                        self.stage.windows().position(|w| *w == fresh),
+                        Some(idx_before),
+                        "adoption changed the z-order index"
+                    );
+                    assert!(
+                        self.stage.window_by_id(fresh_id).is_none(),
+                        "the fresh entry's discarded id still resolves"
+                    );
+                }
+                Op::DismissSuspended { idx } => {
+                    // Closing a suspended window dismisses it — plain removal,
+                    // the only way a suspended entry leaves the stage.
+                    let suspended: Vec<TestWindow> = self
+                        .stage
+                        .windows()
+                        .filter(|w| w.is_suspended())
+                        .cloned()
+                        .collect();
+                    if suspended.is_empty() {
+                        return;
+                    }
+                    let target = suspended[idx % suspended.len()].clone();
+                    self.stage.remove(&target);
+                    self.clear_focus_if(&target);
+                }
                 Op::SetParent { child, parent } => {
+                    // Suspended elements carry no xdg parent links.
                     let (Some(c), Some(p)) = (self.pick(*child), self.pick(*parent)) else {
                         return;
                     };
-                    if c != p {
+                    if c != p && !c.is_suspended() && !p.is_suspended() {
                         c.set_parent(Some(p));
                     }
                 }
                 Op::MakeWidget { idx } => {
                     // Widget rule applied on first commit: drop from history,
-                    // re-assert stacking.
+                    // re-assert stacking. Rules need a surface — suspended
+                    // elements can't become widgets.
                     let Some(w) = self.pick(*idx) else { return };
+                    if w.is_suspended() {
+                        return;
+                    }
                     w.set_widget(true);
                     self.stage.drop_from_focus_history(&w);
                     self.stage.enforce_stacking();
                 }
                 Op::MakeModal { idx } => {
                     let Some(w) = self.pick(*idx) else { return };
+                    if w.is_suspended() {
+                        return;
+                    }
                     w.set_modal(true);
                 }
                 Op::RaiseAndFocus { idx } => {
@@ -1104,7 +1340,11 @@ mod harness {
                 Op::MoveWindow { idx, dx, dy } => {
                     // NudgeWindow: canvas windows only.
                     let Some(w) = self.pick(*idx) else { return };
-                    if w.is_widget() || self.stage.is_fullscreen(&w) || self.stage.is_pinned(&w) {
+                    if w.is_widget()
+                        || w.is_suspended()
+                        || self.stage.is_fullscreen(&w)
+                        || self.stage.is_pinned(&w)
+                    {
                         return;
                     }
                     let Some(pos) = self.stage.position_of(&w) else {
@@ -1124,6 +1364,7 @@ mod harness {
                     };
                     if w == a
                         || w.is_widget()
+                        || w.is_suspended()
                         || self.stage.is_fullscreen(&w)
                         || self.stage.is_pinned(&w)
                     {
@@ -1167,7 +1408,7 @@ mod harness {
                 Op::CancelCycle => self.stage.cancel_cycle(),
                 Op::EnterFullscreen { idx, output } => {
                     let Some(w) = self.pick(*idx) else { return };
-                    if w.is_widget() || !w.is_alive() {
+                    if w.is_widget() || w.is_suspended() || !w.is_alive() {
                         return;
                     }
                     let key = self.output_at(*output);
@@ -1218,6 +1459,7 @@ mod harness {
                     // such guard — a quirk this harness deliberately does
                     // not cover.
                     if w.is_widget()
+                        || w.is_suspended()
                         || self.stage.is_fullscreen(&w)
                         || self.stage.is_pinned(&w)
                         || !self.stage.contains(&w)
@@ -1278,6 +1520,12 @@ mod harness {
                     if !self.stage.contains(&w) {
                         return;
                     }
+                    // A suspended resize only updates the element's size — no
+                    // fit/restore bookkeeping (there is no client to configure).
+                    if w.is_suspended() {
+                        w.set_size(Size::from((*nw, *nh)));
+                        return;
+                    }
                     self.stage.clear_fit(&w);
                     self.fit_expect.remove(&w.label());
                     w.set_size(Size::from((*nw, *nh)));
@@ -1288,7 +1536,8 @@ mod harness {
                     // derived canvas spot (raising); pin drops the window from
                     // the MRU history first.
                     let Some(w) = self.pick(*idx) else { return };
-                    if !self.stage.contains(&w) || self.stage.is_fullscreen(&w) {
+                    if !self.stage.contains(&w) || w.is_suspended() || self.stage.is_fullscreen(&w)
+                    {
                         return;
                     }
                     if self.stage.take_pin(&w).is_some() {
@@ -1341,7 +1590,11 @@ mod harness {
                 }
                 Op::MoveCluster { idx, dx, dy } => {
                     let Some(w) = self.pick(*idx) else { return };
-                    if w.is_widget() || self.stage.is_fullscreen(&w) || self.stage.is_pinned(&w) {
+                    if w.is_widget()
+                        || w.is_suspended()
+                        || self.stage.is_fullscreen(&w)
+                        || self.stage.is_pinned(&w)
+                    {
                         return;
                     }
                     let Some(primary_pos) = self.stage.position_of(&w) else {
@@ -1396,7 +1649,11 @@ mod harness {
         #[allow(clippy::mutable_key_type)]
         fn resize_cluster(&mut self, idx: usize, side_sel: usize, delta: i32) {
             let Some(w) = self.pick(idx) else { return };
-            if w.is_widget() || self.stage.is_fullscreen(&w) || self.stage.is_pinned(&w) {
+            if w.is_widget()
+                || w.is_suspended()
+                || self.stage.is_fullscreen(&w)
+                || self.stage.is_pinned(&w)
+            {
                 return;
             }
             let Some(primary_rect) = rect_of(&self.stage, &w) else {
@@ -1670,6 +1927,7 @@ mod harness {
                 sim.apply(op);
                 sim.stage.verify_invariants();
                 sim.verify_outputs();
+                sim.verify_suspended();
             }
         }
 
@@ -1705,6 +1963,7 @@ mod harness {
             }
             sim.stage.verify_invariants();
             sim.verify_outputs();
+            sim.verify_suspended();
         }
     }
 }
