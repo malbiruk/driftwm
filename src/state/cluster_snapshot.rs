@@ -80,7 +80,7 @@ impl ClusterResizeSnapshot {
     #[allow(clippy::too_many_arguments)]
     pub fn apply_member_shifts(
         &mut self,
-        stage: &mut driftwm::stage::Stage<Window>,
+        stage: &mut driftwm::stage::Stage<crate::state::StageWindow>,
         primary: &Window,
         initial_size: Size<i32, Logical>,
         new_w: i32,
@@ -212,7 +212,7 @@ impl DriftWm {
         // already drops widgets, pinned, and fullscreen windows; here we only
         // additionally skip the primary itself and its frozen cluster.
         let mut others = Vec::new();
-        for w in self.stage.windows() {
+        for w in self.stage.windows().filter_map(|w| w.client()) {
             let Some(surface) = w.wl_surface() else {
                 continue;
             };
@@ -231,6 +231,7 @@ impl DriftWm {
     pub fn all_windows_with_snap_rects(&self) -> Vec<(Window, driftwm::layout::snap::SnapRect)> {
         self.stage
             .windows()
+            .filter_map(|w| w.client())
             .filter_map(|w| self.snap_rect_for(w).map(|rect| (w.clone(), rect)))
             .collect()
     }
@@ -464,7 +465,7 @@ impl DriftWm {
 /// so snap/cluster math operates on the visible footprint. `None` for
 /// widgets / unmapped / surfaceless.
 fn window_snap_rect(
-    stage: &driftwm::stage::Stage<Window>,
+    stage: &driftwm::stage::Stage<crate::state::StageWindow>,
     decorations: &HashMap<smithay::reexports::wayland_server::backend::ObjectId, WindowDecoration>,
     decoration_config: &driftwm::config::DecorationConfig,
     w: &Window,

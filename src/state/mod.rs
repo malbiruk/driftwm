@@ -14,6 +14,7 @@ pub mod persistence;
 mod placement;
 mod reload;
 mod render_cache;
+mod stage_window;
 mod viewport;
 pub use cluster_snapshot::ClusterResizeSnapshot;
 pub use cursor::{CursorFrames, CursorState};
@@ -21,6 +22,7 @@ pub use errors::ErrorSource;
 pub use focus::FocusTarget;
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
+pub use stage_window::StageWindow;
 
 use smithay::{
     desktop::{PopupGrab, PopupManager, PopupUngrabStrategy, Space, Window},
@@ -424,7 +426,7 @@ pub struct DriftWm {
     /// history / MRU cycle, fullscreen membership, and fit state. Mutate
     /// through [`Self::map_window`] / [`Self::raise_window`] /
     /// [`Self::unmap_window`] and the stage-backed methods.
-    pub stage: driftwm::stage::Stage<Window>,
+    pub stage: driftwm::stage::Stage<StageWindow>,
     /// Output registry only (`map_output` / `outputs` / `output_geometry`);
     /// holds no window elements. Per-window output membership
     /// (`wl_surface.enter`/`leave`) is driven by [`Self::refresh_window_outputs`],
@@ -907,7 +909,10 @@ impl DriftWm {
     /// Replicates `Space`'s activate semantics: xdg Activated set on `target`,
     /// cleared on every other window. Pending-only — the configure rides on the
     /// next send.
-    fn set_activated_exclusive(&self, target: &Window) {
+    fn set_activated_exclusive<Q>(&self, target: &Q)
+    where
+        StageWindow: PartialEq<Q>,
+    {
         for w in self.stage.windows() {
             w.set_activated(w == target);
         }
@@ -924,14 +929,21 @@ impl DriftWm {
     /// directly above its own parent without jumping over unrelated windows
     /// that sit higher in the stack.
     pub fn raise_with_children(&mut self, window: &Window) {
-        for w in self.stage.raise_with_children(window) {
+        let target = StageWindow::from(window.clone());
+        for w in self.stage.raise_with_children(&target) {
             self.set_activated_exclusive(&w);
         }
     }
 
     /// Map (or move) `window` at `pos`, exclusively activating it if
     /// `activate` is set.
-    pub fn map_window(&mut self, window: Window, pos: Point<i32, Logical>, activate: bool) {
+    pub fn map_window(
+        &mut self,
+        window: impl Into<StageWindow>,
+        pos: Point<i32, Logical>,
+        activate: bool,
+    ) {
+        let window = window.into();
         self.stage.map(window.clone(), pos);
         if activate {
             self.set_activated_exclusive(&window);
@@ -998,6 +1010,7 @@ impl DriftWm {
         self.stage
             .windows()
             .find(|w| w.wl_surface().as_deref() == Some(surface))
+            .and_then(|w| w.client())
             .cloned()
     }
 
@@ -1010,6 +1023,7 @@ impl DriftWm {
             .stage
             .windows()
             .rfind(|w| w.parent_surface().as_ref() == Some(&*parent_surface) && w.is_modal())
+            .and_then(|w| w.client())
             .cloned()?;
         self.topmost_modal_child_inner(&child, 9).or(Some(child))
     }
@@ -1023,6 +1037,7 @@ impl DriftWm {
             .stage
             .windows()
             .rfind(|w| w.parent_surface().as_ref() == Some(&*parent_surface) && w.is_modal())
+            .and_then(|w| w.client())
             .cloned()?;
         self.topmost_modal_child_inner(&child, depth - 1)
             .or(Some(child))
@@ -1656,12 +1671,18 @@ impl DriftWm {
     }
 
     /// True if `window` is pinned to an output's screen space.
-    pub fn is_pinned(&self, window: &Window) -> bool {
+    pub fn is_pinned<Q>(&self, window: &Q) -> bool
+    where
+        StageWindow: PartialEq<Q>,
+    {
         self.stage.is_pinned(window)
     }
 
     /// True if `window` is currently fullscreen on some output.
-    pub fn is_window_fullscreen(&self, window: &Window) -> bool {
+    pub fn is_window_fullscreen<Q>(&self, window: &Q) -> bool
+    where
+        StageWindow: PartialEq<Q>,
+    {
         self.stage.is_fullscreen(window)
     }
 
@@ -1669,7 +1690,8 @@ impl DriftWm {
     pub fn fullscreen_window_on(&self, output: &Output) -> Option<Window> {
         self.stage
             .fullscreen_on(&output.name())
-            .map(|fs| fs.window.clone())
+            .and_then(|fs| fs.window.client())
+            .cloned()
     }
 
     /// The fullscreen window on the active output, if any.
@@ -1684,7 +1706,11 @@ impl DriftWm {
     /// zoom-to-fit, etc. A fullscreen window fills its own output and is parked
     /// at that output's camera origin, so it must never join another output's
     /// snap/cluster/fit geometry.
-    pub fn is_canvas_window(&self, window: &Window) -> bool {
+    pub fn is_canvas_window<Q>(&self, window: &Q) -> bool
+    where
+        Q: WindowExt,
+        StageWindow: PartialEq<Q>,
+    {
         !window.is_widget() && !self.is_pinned(window) && !self.is_window_fullscreen(window)
     }
 
@@ -1880,7 +1906,7 @@ impl DriftWm {
         if !self.stage.has_pinned() {
             return;
         }
-        let pinned: Vec<(Window, driftwm::stage::PinnedSite)> = self
+        let pinned: Vec<(StageWindow, driftwm::stage::PinnedSite)> = self
             .stage
             .pinned_windows()
             .map(|(w, site)| (w.clone(), site.clone()))
@@ -1941,7 +1967,7 @@ impl DriftWm {
     pub fn reassign_orphaned_pinned(&mut self, to: &Output) {
         let live: Vec<String> = self.space.outputs().map(|o| o.name()).collect();
         let to_size = output_logical_size(to);
-        let orphans: Vec<(Window, driftwm::stage::PinnedSite)> = self
+        let orphans: Vec<(StageWindow, driftwm::stage::PinnedSite)> = self
             .stage
             .pinned_windows()
             .filter(|(_, site)| !live.contains(&site.output))
@@ -2044,10 +2070,11 @@ impl DriftWm {
         self.stage
             .windows()
             .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
+            .and_then(|w| w.client())
             .cloned()
     }
 
-    pub fn window_ssd_bar(&self, window: &Window) -> i32 {
+    pub fn window_ssd_bar<W: WaylandFocus>(&self, window: &W) -> i32 {
         window
             .wl_surface()
             .filter(|s| self.decorations.contains_key(&s.id()))

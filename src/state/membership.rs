@@ -58,7 +58,13 @@ impl DriftWm {
         let named: Vec<(String, Rectangle<i32, Logical>)> =
             candidates.iter().map(|(o, geo)| (o.name(), *geo)).collect();
 
-        let windows: Vec<Window> = self.stage.windows().cloned().collect();
+        // Suspended elements have no surface to enter/leave — clients only.
+        let windows: Vec<Window> = self
+            .stage
+            .windows()
+            .filter_map(|w| w.client())
+            .cloned()
+            .collect();
         for window in &windows {
             let Some(pos) = self.stage.position_of(window) else {
                 continue;

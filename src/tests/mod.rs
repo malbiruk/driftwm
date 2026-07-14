@@ -117,6 +117,7 @@ fn window_by_app_id(f: &mut Fixture, app_id: &str) -> Option<Window> {
         .stage
         .windows()
         .find(|w| w.app_id_or_class().as_deref() == Some(app_id))
+        .and_then(|w| w.client())
         .cloned()
 }
 

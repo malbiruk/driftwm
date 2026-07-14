@@ -28,7 +28,7 @@ pub fn refresh_foreign_toplevels(state: &mut crate::state::DriftWm) {
         .filter(|o| !state.disconnected_outputs.contains(&o.name()))
         .cloned()
         .collect();
-    driftwm::protocols::foreign_toplevel::refresh::<crate::state::DriftWm>(
+    driftwm::protocols::foreign_toplevel::refresh::<crate::state::DriftWm, _>(
         &mut state.foreign_toplevel_state,
         &mut state.foreign_toplevel_list_state,
         &state.stage,
@@ -71,7 +71,7 @@ pub fn update_primary_scanout_output(
     use smithay::wayland::compositor::TraversalAction;
     use smithay::wayland::compositor::with_surface_tree_downward;
 
-    for window in state.stage.windows() {
+    for window in state.stage.windows().filter_map(|w| w.client()) {
         window.with_surfaces(|surface, surface_data| {
             update_surface_primary_scanout_output(
                 surface,
@@ -153,7 +153,7 @@ pub fn take_presentation_feedback(
 
     let mut feedback = OutputPresentationFeedback::new(output);
 
-    for window in state.stage.windows() {
+    for window in state.stage.windows().filter_map(|w| w.client()) {
         window.take_presentation_feedback(
             &mut feedback,
             surface_primary_scanout_output,
@@ -205,7 +205,7 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     let viewport_size = crate::state::output_logical_size(output);
     let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_size, zoom);
 
-    for window in state.stage.windows() {
+    for window in state.stage.windows().filter_map(|w| w.client()) {
         let Some(loc) = state.stage.position_of(window) else {
             continue;
         };
@@ -302,7 +302,7 @@ pub fn send_frame_callbacks_fallback(state: &mut crate::state::DriftWm) {
     let Some(output) = state.space.outputs().next().cloned() else {
         return;
     };
-    for window in state.stage.windows() {
+    for window in state.stage.windows().filter_map(|w| w.client()) {
         window.send_frame(&output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| None);
     }
     for cl in &state.canvas_layers {

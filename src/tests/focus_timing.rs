@@ -42,7 +42,14 @@ fn no_keyboard_focus_before_first_buffer() {
     window.ack_last_and_commit();
     f.double_roundtrip(id);
 
-    let mapped = f.state().stage.windows().next().cloned().unwrap();
+    let mapped = f
+        .state()
+        .stage
+        .windows()
+        .next()
+        .and_then(|w| w.client())
+        .cloned()
+        .unwrap();
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&mapped)));
 }
 
@@ -100,5 +107,5 @@ widget = true
 
     // Focus falls through to the other normal window, never the widget.
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&win_a)));
-    assert!(!f.state().stage.focus_history().contains(&widget));
+    assert!(!f.state().stage.focus_history().iter().any(|w| w == &widget));
 }

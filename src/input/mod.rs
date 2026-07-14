@@ -985,6 +985,7 @@ impl DriftWm {
         self.stage
             .windows()
             .rev()
+            .filter_map(|w| w.client())
             .filter(|w| !skip(w))
             .filter(|w| {
                 self.window_bbox_with_popups(w)
@@ -1047,7 +1048,7 @@ impl DriftWm {
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
         let active_output = self.active_output();
 
-        for window in self.stage.windows().rev() {
+        for window in self.stage.windows().rev().filter_map(|w| w.client()) {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1142,7 +1143,7 @@ impl DriftWm {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
-        for window in self.stage.windows().rev() {
+        for window in self.stage.windows().rev().filter_map(|w| w.client()) {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1241,7 +1242,7 @@ impl DriftWm {
         let bar_height = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
-        for window in self.stage.windows().rev() {
+        for window in self.stage.windows().rev().filter_map(|w| w.client()) {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };
@@ -1395,7 +1396,7 @@ impl DriftWm {
         let active = self.active_output();
 
         // Iterate in z-order (topmost first, matching stage.windows().rev())
-        for window in self.stage.windows().rev() {
+        for window in self.stage.windows().rev().filter_map(|w| w.client()) {
             let Some(wl_surface) = window.wl_surface() else {
                 continue;
             };

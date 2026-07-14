@@ -932,6 +932,7 @@ impl DriftWm {
         let others: Vec<(smithay::desktop::Window, driftwm::layout::snap::SnapRect)> = self
             .stage
             .windows()
+            .filter_map(|w| w.client())
             .filter(|w| *w != window)
             .filter_map(|w| self.snap_rect_for(w).map(|r| (w.clone(), r)))
             .collect();

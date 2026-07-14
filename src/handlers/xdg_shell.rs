@@ -317,7 +317,8 @@ impl XdgShellHandler for DriftWm {
                         .stage
                         .focus_history()
                         .iter()
-                        .find(|w| w != &window)
+                        .filter_map(|w| w.client())
+                        .find(|w| *w != window)
                         .cloned();
                     let target = match (home.as_ref(), mru) {
                         (Some(out), Some(m)) if self.window_intersects_viewport_on(&m, out) => {

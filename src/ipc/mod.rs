@@ -353,6 +353,7 @@ fn window_by_selector(
         Some(WindowSelector::Id(n)) => state
             .stage
             .window_by_id(driftwm::stage::ElementId(*n))
+            .and_then(|w| w.client())
             .cloned()
             .ok_or_else(|| format!("no window with id {n}")),
         Some(WindowSelector::AppId(s)) => {
@@ -360,6 +361,7 @@ fn window_by_selector(
             state
                 .stage
                 .windows()
+                .filter_map(|w| w.client())
                 .find(|w| {
                     !w.is_widget()
                         && w.app_id_or_class()
@@ -551,7 +553,12 @@ fn resolve_screenshot_region(
         }
         ScreenshotTarget::All => {
             let mut acc: Option<Rectangle<i32, Logical>> = None;
-            for w in state.stage.windows().filter(|w| state.is_canvas_window(w)) {
+            for w in state
+                .stage
+                .windows()
+                .filter_map(|w| w.client())
+                .filter(|w| state.is_canvas_window(*w))
+            {
                 let Some(r) = window_visual_rect(state, w) else {
                     continue;
                 };

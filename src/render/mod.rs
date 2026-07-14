@@ -201,7 +201,13 @@ pub(crate) fn compose_capture_elements(
 
     // Collect first: the surface-tree calls borrow `state`, which would conflict
     // with an in-flight `state.stage.windows()` iterator. Windows are Arc-backed.
-    let windows: Vec<smithay::desktop::Window> = state.stage.windows().rev().cloned().collect();
+    let windows: Vec<smithay::desktop::Window> = state
+        .stage
+        .windows()
+        .rev()
+        .filter_map(|w| w.client())
+        .cloned()
+        .collect();
     for window in &windows {
         if isolate.is_some_and(|target| target != window) {
             continue;
@@ -631,7 +637,7 @@ pub fn compose_frame(
     let _windows_span = tracy_client::span!("compose::windows");
     #[cfg(feature = "profile-with-tracy")]
     let (mut visible_windows, mut shadow_elems) = (0u32, 0u32);
-    for window in state.stage.windows().rev() {
+    for window in state.stage.windows().rev().filter_map(|w| w.client()) {
         let Some(loc) = state.stage.position_of(window) else {
             continue;
         };

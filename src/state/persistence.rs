@@ -128,7 +128,7 @@ impl DriftWm {
                 title,
                 position: [rx, ry],
                 size: [size.w, size.h],
-                is_focused: focused.as_ref() == Some(window),
+                is_focused: focused.as_ref().is_some_and(|f| window == f),
                 is_widget: window.is_widget(),
             });
         }

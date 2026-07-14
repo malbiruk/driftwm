@@ -25,7 +25,7 @@ widget = true
 
     // Mapping a widget must neither steal keyboard focus nor enter the MRU.
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&normal)));
-    assert!(!f.state().stage.focus_history().contains(&widget));
+    assert!(!f.state().stage.focus_history().iter().any(|w| w == &widget));
 }
 
 #[test]

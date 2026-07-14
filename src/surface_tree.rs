@@ -1,10 +1,10 @@
 use smithay::{
-    desktop::{PopupManager, Window},
+    desktop::PopupManager,
     reexports::wayland_server::protocol::wl_surface::WlSurface,
     wayland::{compositor::get_parent, seat::WaylandFocus},
 };
 
-pub fn focus_belongs_to_window(surface: &WlSurface, window: &Window) -> bool {
+pub fn focus_belongs_to_window<W: WaylandFocus>(surface: &WlSurface, window: &W) -> bool {
     let Some(root) = window.wl_surface() else {
         return false;
     };

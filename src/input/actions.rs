@@ -102,7 +102,8 @@ impl DriftWm {
                     let closest = self
                         .stage
                         .windows()
-                        .filter(|w| self.is_canvas_window(w))
+                        .filter_map(|w| w.client())
+                        .filter(|w| self.is_canvas_window(*w))
                         .min_by(|a, b| {
                             let dist = |w: &smithay::desktop::Window| {
                                 let c = self.window_visual_center(w).unwrap_or_default();
@@ -166,7 +167,8 @@ impl DriftWm {
                 let windows = self
                     .stage
                     .windows()
-                    .filter(|w| self.is_canvas_window(w))
+                    .filter_map(|w| w.client())
+                    .filter(|w| self.is_canvas_window(*w))
                     .map(|w| {
                         let loc = self.stage.position_of(w).unwrap_or_default();
                         let size = w.geometry().size;
@@ -217,7 +219,13 @@ impl DriftWm {
                 // another output — shown only on its own monitor, never a
                 // target here.
                 let anchor = self.cycle_anchor();
-                let Some(window) = self.stage.cycle_step(*backward, anchor.as_ref()) else {
+                let Some(window) = self
+                    .stage
+                    .cycle_step(*backward, anchor.as_ref())
+                    .as_ref()
+                    .and_then(|w| w.client())
+                    .cloned()
+                else {
                     return;
                 };
                 // Mark the focus change this navigate causes as cycle-initiated so
@@ -326,7 +334,7 @@ impl DriftWm {
                     let windows = self
                         .stage
                         .windows()
-                        .filter(|w| self.is_canvas_window(w))
+                        .filter(|w| self.is_canvas_window(*w))
                         .map(|w| {
                             let loc = self.stage.position_of(w).unwrap_or_default();
                             let size = w.geometry().size;
@@ -360,7 +368,8 @@ impl DriftWm {
                     let members = self
                         .stage
                         .windows()
-                        .filter(|w| cluster.contains(w))
+                        .filter_map(|w| w.client())
+                        .filter(|w| cluster.contains(*w))
                         .map(|w| {
                             let loc = self.stage.position_of(w).unwrap_or_default();
                             let size = w.geometry().size;

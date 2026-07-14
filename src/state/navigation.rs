@@ -289,7 +289,8 @@ impl DriftWm {
         let mut window = self
             .stage
             .windows()
-            .find(|w| focus_belongs_to_window(&focus.0, w))
+            .find(|w| focus_belongs_to_window(&focus.0, *w))
+            .and_then(|w| w.client())
             .cloned()?;
         for _ in 0..10 {
             if !window.is_modal() {
@@ -313,7 +314,7 @@ impl DriftWm {
         driftwm::canvas::dynamic_min_zoom(
             self.stage
                 .windows()
-                .filter(|w| self.is_canvas_window(w))
+                .filter(|w| self.is_canvas_window(*w))
                 .map(|w| {
                     let loc = self.stage.position_of(w).unwrap_or_default();
                     let size = w.geometry().size;
@@ -331,7 +332,7 @@ impl DriftWm {
         let window = self
             .stage
             .windows()
-            .find(|w| focus_belongs_to_window(surface, w))
+            .find(|w| focus_belongs_to_window(surface, *w))
             .cloned();
         if let Some(window) = window {
             // Widgets and pinned (PiP-style) windows stay out of the focus
@@ -422,6 +423,7 @@ impl DriftWm {
     ) -> Option<Window> {
         self.stage
             .windows()
+            .filter_map(|w| w.client())
             .filter(|w| *w != exclude && self.window_intersects_viewport_on(w, output))
             .min_by(|a, b| {
                 let dist = |w: &Window| {
@@ -469,6 +471,7 @@ impl DriftWm {
         self.stage
             .focus_history()
             .iter()
+            .filter_map(|w| w.client())
             .filter(|w| *w != destroyed)
             .find(|w| {
                 cluster.contains(*w)
