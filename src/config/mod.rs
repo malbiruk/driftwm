@@ -125,6 +125,10 @@ fn context_table(context: BindingContext) -> &'static str {
 pub struct Config {
     pub mod_key: ModKey,
     pub focus_follows_mouse: bool,
+    /// When true, a client-initiated close (titlebar X, in-app quit, shell exit)
+    /// leaves a suspended window behind instead of destroying the window.
+    /// Overridable per window rule. Read at close time, so hot-reload applies.
+    pub suspend_on_close: bool,
     /// Multiplier for trackpad scroll and gesture pan deltas. 1.0 = raw trackpad.
     pub trackpad_speed: f64,
     /// Multiplier for mouse drag pan (Mod+LMB or LMB on canvas). 1.0 = direct.
@@ -906,6 +910,7 @@ impl Config {
         let config = Self {
             mod_key,
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
+            suspend_on_close: raw.suspend_on_close.unwrap_or(false),
             trackpad_speed,
             mouse_speed,
             touch_speed,

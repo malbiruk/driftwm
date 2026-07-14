@@ -24,6 +24,7 @@ pub use focus::{FocusIntent, FocusTarget};
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
 pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
+pub use suspended::SuspendMark;
 
 use smithay::{
     desktop::{PopupGrab, PopupManager, PopupUngrabStrategy, Space, Window},
@@ -572,6 +573,25 @@ pub struct DriftWm {
         smithay::reexports::wayland_server::backend::ObjectId,
         driftwm::layout::snap::SnapRect,
     >,
+
+    /// Windows whose close was requested via `suspend-window`: their next
+    /// `toplevel_destroyed` converts into a suspended window. Keyed by surface
+    /// id; each carries the trigger-time identity + geometry and a deadline
+    /// (a refused close lets the mark lapse). Swept on the per-frame tick.
+    pub suspend_marks: HashMap<smithay::reexports::wayland_server::backend::ObjectId, SuspendMark>,
+    /// Windows whose close was requested by the compositor (close-window,
+    /// `msg close`, taskbar close): their destroy stays a real close even when
+    /// `suspend_on_close` is on. Deadline mirrors the suspend marks so a refused
+    /// close can't real-close a crash days later.
+    pub real_close_marks:
+        HashMap<smithay::reexports::wayland_server::backend::ObjectId, std::time::Instant>,
+    /// Resolved desktop-entry database for identity + relaunch. Warmed on a
+    /// background thread at startup (delivered by ping); a suspend before the
+    /// warm lands builds it synchronously. `None` until either populates it.
+    pub desktop_entry_cache: Option<driftwm::desktop_entry::DesktopEntryCache>,
+    /// Monotonic source of per-process suspended-window ids. Durable session
+    /// keys are layered on top later (session restore).
+    pub next_suspended_id: u64,
 
     /// Window-level keyboard-focus intent. The actual keyboard focus is
     /// derived from this plus any higher-priority owner (session lock,
@@ -2245,6 +2265,8 @@ impl DriftWm {
             ("auto_anchor_snapshot", self.auto_anchor_snapshot.len()),
             ("pending_recenter", self.pending_recenter.len()),
             ("stable_snap_rects", self.stable_snap_rects.len()),
+            ("suspend_marks", self.suspend_marks.len()),
+            ("real_close_marks", self.real_close_marks.len()),
             (
                 "idle_inhibiting_surfaces",
                 self.idle_inhibiting_surfaces.len(),

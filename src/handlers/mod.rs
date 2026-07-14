@@ -680,6 +680,10 @@ impl ForeignToplevelHandler for DriftWm {
     fn close(&mut self, wl_surface: WlSurface) {
         let window = self.window_for_surface(&wl_surface);
         if let Some(window) = window {
+            // A taskbar close is explicit user intent to close for real — mark
+            // it so `suspend_on_close` doesn't leave a ghost the taskbar can't
+            // see.
+            self.mark_real_close(&window);
             window.send_close();
         }
     }

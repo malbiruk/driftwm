@@ -135,6 +135,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         event_loop.get_signal(),
     );
 
+    // Scan the desktop-entry database off-thread so the first `suspend-window`
+    // (or `suspend_on_close`) never parses hundreds of files on the input path.
+    data.warm_desktop_entry_cache();
+
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     match backend_name.as_str() {
         "udev" => {
@@ -363,6 +367,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     event_loop.run(None, &mut data, |data| {
         backend::udev::render_if_needed(data);
         data.refresh_and_flush_clients();
+        // Expire suspend / real-close marks a refused close left behind. The
+        // fixture drives this with an injected `now`; production uses the wall
+        // clock here (the only wall-clock read for mark deadlines).
+        data.sweep_marks(std::time::Instant::now());
     })?;
 
     state::remove_state_file();

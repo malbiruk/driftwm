@@ -52,6 +52,7 @@ pub enum Action {
     ExecLauncher,
     Spawn(String),
     CloseWindow,
+    SuspendWindow,
     NudgeWindow(Direction),
     PanViewport(Direction),
     CenterWindow,
@@ -655,6 +656,9 @@ pub struct WindowRule {
     /// above normal windows). When set, `position` is output-relative
     /// (center, Y-up). Combine with `widget = true` to make it immovable.
     pub pinned_to_screen: bool,
+    /// Override the global `suspend_on_close` for matched windows. `None`
+    /// inherits the global setting.
+    pub suspend_on_close: Option<bool>,
     /// `None` means "inherit `[decorations] default_mode`". Explicit
     /// `decoration = "client"` resolves to `Some(Client)` and overrides default.
     pub decoration: Option<DecorationMode>,
@@ -708,6 +712,7 @@ pub struct AppliedWindowRule {
     pub fullscreen: Option<bool>,
     pub widget: bool,
     pub pinned_to_screen: bool,
+    pub suspend_on_close: Option<bool>,
     pub decoration: Option<DecorationMode>,
     pub blur: bool,
     pub opacity: Option<f64>,
@@ -736,6 +741,9 @@ impl AppliedWindowRule {
         }
         if rule.pinned_to_screen {
             self.pinned_to_screen = true;
+        }
+        if let Some(soc) = rule.suspend_on_close {
+            self.suspend_on_close = Some(soc);
         }
         if rule.blur {
             self.blur = true;
@@ -785,6 +793,7 @@ impl From<&WindowRule> for AppliedWindowRule {
         Self {
             widget: rule.widget,
             pinned_to_screen: rule.pinned_to_screen,
+            suspend_on_close: rule.suspend_on_close,
             decoration: rule.decoration.clone(),
             blur: rule.blur,
             opacity: rule.opacity,

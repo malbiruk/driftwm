@@ -250,6 +250,19 @@ impl XdgShellHandler for DriftWm {
         // can't match above; sweep any fullscreen entry it left behind.
         self.reap_dead_fullscreen();
 
+        // A live suspend mark, or an eligible client-initiated close under
+        // `suspend_on_close`, converts the window into a compositor-drawn
+        // stand-in in place instead of destroying it. Runs before the
+        // focus-follow / unmap path below and before `cleanup_surface_state`,
+        // which the conversion relies on to purge the surface-keyed state.
+        if let Some(window) = &window
+            && let Some(conv) = self.resolve_suspend_conversion(&wl_surface, window)
+        {
+            self.convert_to_suspended(window, &wl_surface, conv);
+            self.cleanup_surface_state(&wl_surface);
+            return;
+        }
+
         if let Some(ref window) = window {
             // Pick a window to follow when the destroyed one was focused.
             // Priority: explicit parent (xdg_toplevel.set_parent), then the

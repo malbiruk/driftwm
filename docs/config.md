@@ -23,6 +23,12 @@ Default: `false`
 
 Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus; click empty canvas to unfocus.
 
+### `suspend_on_close`
+
+Default: `false`
+
+Suspend instead of close when a window is closed by the client (titlebar X, in-app quit). close-window bindings, `msg close`, and taskbar closes still close for real. Per-window overridable via a `suspend_on_close` window rule.
+
 ### `window_placement`
 
 Default: `"center"`
@@ -628,6 +634,7 @@ Actions:
 - `exec-launcher` — launch the auto-detected app launcher (see [keybindings] below; override with $LAUNCHER)
 - `spawn <cmd>` — run a command without loading cursor and exiting fullscreen (toggles, OSD, screenshots)
 - `close-window` — close the focused window
+- `suspend-window` — close the focused window but leave a suspended window in its place (Enter/click relaunches; needs a .desktop entry)
 - `nudge-window <dir>` — move focused window by nudge_step px
 - `pan-viewport <dir>` — pan camera by pan_step px
 - `center-window` — center viewport on focused window + reset zoom
@@ -1070,6 +1077,7 @@ Supported fields:
 - `fullscreen` — true: force this window to open in fullscreen mode
 - `widget` — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)
 - `pinned_to_screen` — true: lock the window to the output's screen space — ignores pan/zoom, floats above normal windows (PiP, toolbars). `position` becomes output-relative; movable unless widget = true. Toggle live with `toggle-pin-to-screen` (Mod+T). (default: false)
+- `suspend_on_close` — override the global suspend_on_close for matched windows (true / false). Escape hatch for terminals and scratchpads that should always really close (or always suspend). (default: inherit)
 - `decoration` — overrides [decorations] default_mode for matched windows. Omit to inherit default_mode. Values:
   - "client":  CSD — client's own titlebar
   - "server":  SSD — driftwm's titlebar

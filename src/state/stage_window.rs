@@ -65,9 +65,6 @@ impl std::fmt::Debug for SuspendedWindow {
 }
 
 impl SuspendedWindow {
-    // Constructed by the suspend/relaunch flows (chunks 4-5) and the test hook;
-    // no production caller exists yet in this chunk.
-    #[allow(dead_code)]
     pub fn new(
         id: SuspendedId,
         size: Size<i32, Logical>,

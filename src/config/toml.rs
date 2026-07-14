@@ -7,6 +7,9 @@ use serde::{Deserialize, Serialize};
 pub(super) struct ConfigFile {
     pub mod_key: Option<String>,
     pub focus_follows_mouse: Option<bool>,
+    /// Convert client-initiated closes into suspended windows instead of
+    /// destroying them. Per-window overridable via a `suspend_on_close` rule.
+    pub suspend_on_close: Option<bool>,
     pub input: InputConfig,
     pub cursor: CursorConfig,
     pub navigation: NavigationConfig,
@@ -257,6 +260,10 @@ pub(super) struct WindowRuleFile {
     /// (center, Y-up), not a canvas coordinate.
     #[serde(default)]
     pub pinned_to_screen: bool,
+    /// Override the global `suspend_on_close` for matched windows. Escape hatch
+    /// for terminals / scratchpads that should always really close (or always
+    /// suspend). `None` inherits the global setting.
+    pub suspend_on_close: Option<bool>,
     pub decoration: Option<String>,
     pub blur: Option<bool>,
     pub opacity: Option<f64>,

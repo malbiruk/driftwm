@@ -11,6 +11,7 @@ fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
         fullscreen: None,
         widget: false,
         pinned_to_screen: false,
+        suspend_on_close: None,
         decoration: None,
         blur: false,
         opacity: None,

@@ -113,6 +113,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "exec-terminal" => Ok(Action::ExecTerminal),
         "exec-launcher" => Ok(Action::ExecLauncher),
         "close-window" => Ok(Action::CloseWindow),
+        "suspend-window" => Ok(Action::SuspendWindow),
         "nudge-window" => {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
             Ok(Action::NudgeWindow(dir))

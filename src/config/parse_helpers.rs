@@ -407,6 +407,7 @@ pub(super) fn parse_window_rule(
         fullscreen: r.fullscreen,
         widget: r.widget,
         pinned_to_screen: r.pinned_to_screen,
+        suspend_on_close: r.suspend_on_close,
         decoration,
         blur: r.blur.unwrap_or(false),
         opacity,

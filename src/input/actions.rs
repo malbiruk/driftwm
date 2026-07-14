@@ -42,6 +42,13 @@ impl DriftWm {
             .active_fullscreen_window()
             .or_else(|| self.pre_exited_fullscreen.take());
 
+        // A suspend of a fullscreen window must record the windowed rect, not
+        // the fullscreen buffer the client still reports until it acks the exit
+        // configure the prelude below sends. Capture it before the exit.
+        let suspend_restore_rect = matches!(action, Action::SuspendWindow)
+            .then(|| self.focused_fullscreen_restore_rect())
+            .flatten();
+
         if self.is_fullscreen() && !action.runs_during_fullscreen() {
             self.exit_fullscreen();
         }
@@ -56,10 +63,16 @@ impl DriftWm {
                 crate::state::spawn_command(cmd, &self.config.child_env);
             }
             Action::CloseWindow => {
-                if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
+                if let Some(id) = self.gated_suspended_focus() {
+                    // A focused suspended window has no client to close — the
+                    // close binding dismisses it instead (ratified semantics).
+                    self.dismiss_suspended(id);
+                } else if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
+                    self.mark_real_close(&window);
                     window.send_close();
                 }
             }
+            Action::SuspendWindow => self.suspend_focused_window(suspend_restore_rect),
             Action::NudgeWindow(dir) => {
                 if let Some(window) = self.focused_window().filter(|w| self.is_canvas_window(w))
                     && let Some(loc) = self.stage.position_of(&window)
