@@ -9,9 +9,8 @@
 use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 
-use crate::stage::Stage;
+use crate::stage::{Stage, StageElement};
 use crate::window_ext::WindowExt;
-use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_protocols_wlr;
@@ -90,14 +89,17 @@ impl ForeignToplevelManagerState {
 /// appear on all outputs, so there's no per-output tracking.
 ///
 /// Drives both wlr- and ext-foreign-toplevel-list in lockstep.
-/// Generic over D (the compositor state type) for `create_resource` dispatch.
-pub fn refresh<D>(
+/// Generic over D (the compositor state type) for `create_resource` dispatch
+/// and over the stage element type; surfaceless elements are skipped by the
+/// `wl_surface()` guards.
+pub fn refresh<D, W>(
     ft_state: &mut ForeignToplevelManagerState,
     ext_state: &mut ForeignToplevelListState,
-    stage: &Stage<Window>,
+    stage: &Stage<W>,
     focused_surface: Option<&WlSurface>,
     outputs: &[Output],
 ) where
+    W: StageElement + WaylandFocus,
     D: Dispatch<ZwlrForeignToplevelHandleV1, ()> + 'static,
     D: Dispatch<
             smithay::reexports::wayland_protocols::ext::foreign_toplevel_list::v1::server::ext_foreign_toplevel_handle_v1::ExtForeignToplevelHandleV1,
@@ -135,7 +137,7 @@ pub fn refresh<D>(
             focused_entry = Some(window.clone());
             continue;
         }
-        refresh_toplevel::<D>(ft_state, ext_state, window, &wl_surface, outputs, false);
+        refresh_toplevel::<D, _>(ft_state, ext_state, window, &wl_surface, outputs, false);
     }
 
     // 3. Refresh focused window last (with Activated state)
@@ -143,7 +145,7 @@ pub fn refresh<D>(
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
-        refresh_toplevel::<D>(ft_state, ext_state, &window, &wl_surface, outputs, true);
+        refresh_toplevel::<D, _>(ft_state, ext_state, &window, &wl_surface, outputs, true);
     }
 }
 
@@ -192,10 +194,10 @@ pub fn send_output_leave_all(ft_state: &mut ForeignToplevelManagerState, output:
     }
 }
 
-fn refresh_toplevel<D>(
+fn refresh_toplevel<D, W: WindowExt>(
     protocol_state: &mut ForeignToplevelManagerState,
     ext_state: &mut ForeignToplevelListState,
-    window: &Window,
+    window: &W,
     wl_surface: &WlSurface,
     outputs: &[Output],
     has_focus: bool,
