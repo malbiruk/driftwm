@@ -580,7 +580,7 @@ pub fn init_udev(
     let mut drm_scanner = DrmScanner::new();
     let scan_result = drm_scanner.scan_connectors(&drm)?;
     let mut device_surfaces: HashMap<crtc::Handle, SurfaceData> = HashMap::new();
-    let saved_output_state = crate::state::read_all_per_output_state();
+    let saved_output_state = data.saved_camera_state();
 
     for event in scan_result {
         match event {
@@ -796,7 +796,7 @@ pub fn init_udev(
                                     // after create_surface — the sequence is synchronous
                                     // within this handler, so active_output() never
                                     // observes a gap.
-                                    let saved = crate::state::read_all_per_output_state();
+                                    let saved = data.saved_camera_state();
                                     let dh = data.display_handle.clone();
                                     if let Some(sd) = create_surface(
                                         drm,

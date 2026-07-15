@@ -14,6 +14,7 @@ pub mod persistence;
 mod placement;
 mod reload;
 mod render_cache;
+mod session_store;
 mod stage_window;
 mod suspended;
 mod viewport;
@@ -23,6 +24,7 @@ pub use errors::ErrorSource;
 pub use focus::{FocusIntent, FocusTarget};
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
+pub use session_store::SessionStore;
 pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
 pub use suspended::SuspendMark;
 
@@ -592,6 +594,9 @@ pub struct DriftWm {
     /// Monotonic source of per-process suspended-window ids. Durable session
     /// keys are layered on top later (session restore).
     pub next_suspended_id: u64,
+    /// Durable session store (session restore): the `session.json` path, dirty
+    /// timer, carried-forward entries, and fresh-boot camera seed.
+    pub session_store: SessionStore,
 
     /// Window-level keyboard-focus intent. The actual keyboard focus is
     /// derived from this plus any higher-priority owner (session lock,

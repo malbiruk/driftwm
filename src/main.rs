@@ -39,6 +39,10 @@ struct Cli {
     /// Validate the config and exit
     #[arg(long)]
     check_config: bool,
+    /// Durable session file path. Overrides the default; lets a nested winit
+    /// dev session opt into session restore (it skips it otherwise).
+    #[arg(long, value_name = "PATH")]
+    session_file: Option<std::path::PathBuf>,
     #[command(subcommand)]
     command: Option<Sub>,
 }
@@ -138,6 +142,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Scan the desktop-entry database off-thread so the first `suspend-window`
     // (or `suspend_on_close`) never parses hundreds of files on the input path.
     data.warm_desktop_entry_cache();
+
+    // A nested winit dev session skips persistence unless --session-file
+    // overrides (so it can't clobber the real udev session). Must happen
+    // before backend init so udev's connector scan can seed fresh-boot cameras.
+    data.session_store.path = match &cli.session_file {
+        Some(path) => Some(path.clone()),
+        None if backend_name == "udev" => driftwm::session::default_session_path(),
+        None => None,
+    };
+    data.load_session();
 
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     match backend_name.as_str() {
@@ -372,6 +386,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // clock here (the only wall-clock read for mark deadlines).
         data.sweep_marks(std::time::Instant::now());
     })?;
+
+    // Both Action::Quit and SIGTERM/SIGHUP reach here via event_loop.run()
+    // returning — flush the durable session (fsync'd) before wiping the
+    // runtime state file.
+    data.serialize_session_on_shutdown();
 
     state::remove_state_file();
 

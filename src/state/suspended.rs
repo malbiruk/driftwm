@@ -150,7 +150,8 @@ impl DriftWm {
         // The suspended window may have sat under the cursor; re-target so a
         // click no longer lands in dead space.
         self.refresh_pointer_focus();
-        self.session_store_mark_dirty();
+        // A dismiss is an immediate, user-visible change — write through now.
+        self.session_store_write_now();
     }
 
     /// The pre-fullscreen restore rect (saved location + size) of the focused
@@ -394,11 +395,14 @@ impl DriftWm {
 
         let sid = SuspendedId(self.next_suspended_id);
         self.next_suspended_id += 1;
+        // A live suspend (explicit action or suspend_on_close) is an explicit,
+        // user-visible artifact, so it always returns on restore.
         let suspended = Rc::new(SuspendedWindow::new(
             sid,
             conv.rect.size,
             conv.identity,
             conv.title,
+            driftwm::session::Origin::Explicit,
         ));
         let new_element = StageWindow::Suspended(suspended);
 
@@ -421,7 +425,9 @@ impl DriftWm {
         }
 
         self.refresh_pointer_focus();
-        self.session_store_mark_dirty();
+        // A create is an immediate, user-visible change — write through now
+        // rather than on the debounce timer (move/resize use that).
+        self.session_store_write_now();
     }
 
     /// Drop suspend / real-close marks whose deadline has passed. Takes `now`
@@ -431,11 +437,6 @@ impl DriftWm {
         self.suspend_marks.retain(|_, mark| mark.deadline > now);
         self.real_close_marks.retain(|_, deadline| *deadline > now);
     }
-
-    /// Write-through hook for the durable session store (session restore). A
-    /// no-op until the durable store lands; the suspend / dismiss paths call it
-    /// so wiring the store later is a single edit here.
-    pub fn session_store_mark_dirty(&mut self) {}
 
     /// Kick off the desktop-entry scan on a background thread so the first
     /// suspend never cold-parses hundreds of `.desktop` files on the input
@@ -514,6 +515,7 @@ impl DriftWm {
             size,
             identity,
             display_name.to_string(),
+            driftwm::session::Origin::Explicit,
         ));
         self.map_window(StageWindow::Suspended(s), pos, true);
         sid

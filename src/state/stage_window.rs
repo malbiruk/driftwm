@@ -17,6 +17,7 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::shell::xdg::ToplevelSurface;
 
 use driftwm::desktop_entry::AppIdentity;
+use driftwm::session::Origin;
 use driftwm::stage::StageElement;
 use driftwm::window_ext::WindowExt;
 
@@ -51,6 +52,9 @@ pub struct SuspendedWindow {
     pub identity: AppIdentity,
     /// Kept for IPC inventories only.
     pub last_title: String,
+    /// A live suspend is `Explicit`; one restored from a `Quit` record keeps
+    /// `Quit` across rematerialize→quit cycles. Immutable once set.
+    pub origin: Origin,
     pub chrome: RefCell<SuspendedChrome>,
 }
 
@@ -70,12 +74,14 @@ impl SuspendedWindow {
         size: Size<i32, Logical>,
         identity: AppIdentity,
         last_title: String,
+        origin: Origin,
     ) -> Self {
         Self {
             id,
             size: Cell::new(size),
             identity,
             last_title,
+            origin,
             chrome: RefCell::new(SuspendedChrome::default()),
         }
     }

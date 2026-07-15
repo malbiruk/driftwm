@@ -80,7 +80,10 @@ impl PointerGrab<DriftWm> for SuspendedMoveGrab {
         }
     }
 
-    fn unset(&mut self, _data: &mut DriftWm) {}
+    fn unset(&mut self, data: &mut DriftWm) {
+        // The move settled: persist the new position on the debounce timer.
+        data.session_store_mark_dirty();
+    }
 
     crate::grabs::forward_pointer_grab_methods!();
 }
@@ -171,6 +174,8 @@ impl PointerGrab<DriftWm> for SuspendedResizeGrab {
 
     fn unset(&mut self, data: &mut DriftWm) {
         data.cursor.grab_cursor = false;
+        // The resize settled: persist the new size on the debounce timer.
+        data.session_store_mark_dirty();
     }
 
     crate::grabs::forward_pointer_grab_methods!();
