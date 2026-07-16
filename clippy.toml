@@ -10,8 +10,9 @@ disallowed-methods = [
     { path = "smithay::desktop::space::Space::elements", reason = "Space holds no window elements — read from the stage (stage.windows), see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::elements_for_output", reason = "Space holds no window elements — read from the stage (stage.windows), see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::element_location", reason = "Space holds no window elements — read from the stage (stage.position_of), see dev/docs/caveats.md" },
-    { path = "smithay::desktop::space::Space::element_bbox", reason = "Space holds no window elements — read from the stage (DriftWm::window_bbox), see dev/docs/caveats.md" },
+    { path = "smithay::desktop::space::Space::element_bbox", reason = "Space holds no window elements — read from the stage (DriftWm::window_bbox_with_popups), see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::element_geometry", reason = "Space holds no window elements — read from the stage, see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::element_under", reason = "Space holds no window elements — hit-test through DriftWm::element_under / element_under_raw, see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::outputs_for_element", reason = "Space holds no window elements — derive visibility from stage positions and visible_canvas_rect (zoom-aware) via DriftWm::mark_dirty_for_surface" },
+    { path = "smithay::desktop::wayland::window::Window::bbox", reason = "excludes popups, so overhanging popups get culled, frame-throttled, and missed by hit-tests — use Window::bbox_with_popups / DriftWm::window_bbox_with_popups, see dev/docs/caveats.md" },
 ]

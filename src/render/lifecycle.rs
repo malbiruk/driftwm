@@ -239,7 +239,7 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
     // off-screen like toplevels (unlike the screen-fixed layer surfaces above).
     for cl in &state.canvas_layers {
         let on_screen = cl.position.is_none_or(|pos| {
-            let sb = cl.surface.bbox();
+            let sb = cl.surface.bbox_with_popups();
             let bbox = smithay::utils::Rectangle::new(
                 (pos.x + sb.loc.x, pos.y + sb.loc.y).into(),
                 sb.size,

@@ -200,7 +200,9 @@ pub(super) fn build_canvas_layer_elements(
             }
             // Cull off-viewport widgets: an animated widget parked off-screen
             // would otherwise re-render and re-compose its output at full FPS.
-            let mut canvas_bbox = bbox;
+            // Popups included, so a menu overhanging the widget body still
+            // renders when only the menu is on-screen.
+            let mut canvas_bbox = cl.surface.bbox_with_popups();
             canvas_bbox.loc += pos;
             if !visible_rect.overlaps(canvas_bbox) {
                 continue;

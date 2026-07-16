@@ -1259,7 +1259,7 @@ impl DriftWm {
             .find(|cl| cl.surface.wl_surface() == &root)
             .and_then(|cl| {
                 let pos = cl.position?;
-                let mut bbox = cl.surface.bbox();
+                let mut bbox = cl.surface.bbox_with_popups();
                 bbox.loc += pos;
                 Some(bbox)
             });

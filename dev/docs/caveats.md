@@ -70,8 +70,8 @@ driftwm doesn't embed XWayland directly. X11 apps reach the compositor via [`xwa
 
 Smithay glue code (handlers, delegates) is not worth unit testing — it's framework boilerplate. Pure logic (canvas math, config parsing, gesture/binding resolution) gets unit tests; stage policy gets the proptest harness; the protocol↔policy wiring gets the in-process headless fixture (`src/tests/`), where a real `DriftWm` serves real wayland clients with no display. The full map and the testing rules live in [testing.md](testing.md).
 
-## Smithay Bounding Boxes (Popups and Subsurfaces)
+## Bounding boxes must include popups
 
-When working with `smithay::desktop::Window`, **never** use the inherent `window.bbox()` method for hit-testing, damage tracking, or rendering bounds checks. The inherent method only calculates the bounding box of the main toplevel window and completely ignores any popups or subsurfaces. 
+Smithay's inherent `Window::bbox()` covers the toplevel and its subsurfaces but **not** popups. `Space` always used the popup-inclusive box (`SpaceElement::bbox` is `bbox_with_popups`), and everything that replaced `Space` must too: hit-testing, render culling, frame-callback throttling, and dirty-marking all go through `window.bbox_with_popups()` (or `DriftWm::window_bbox_with_popups`). A popup-less box clips overhanging popups at output boundaries, throttles their frames to the off-screen heartbeat, and drops focus to the window behind when the popup is hovered. `Window::bbox` is banned via the `disallowed-methods` lint in `clippy.toml`.
 
-Always use `window.bbox_with_popups()` (or our internal wrapper `window_bbox_with_popups(window)` in `src/state/mod.rs`). Failing to do so will cause overhanging popups to be clipped at monitor boundaries, suffer from severe frame-throttling, or instantly lose focus when hovered.
+Canvas-layer widgets (`LayerSurface`) split the same way: culling, throttling, and dirty-marking use `bbox_with_popups()`, while initial placement (`handle_canvas_layer_commit`) and persistence deliberately use the popup-less `bbox()` — an open menu must not shift where a widget centers or what size gets saved.

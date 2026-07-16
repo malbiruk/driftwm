@@ -292,6 +292,13 @@ impl Client {
         self.state.create_popup(parent)
     }
 
+    /// Create an xdg popup whose parent is the layer surface backing
+    /// `parent` (`zwlr_layer_surface_v1.get_popup`, per protocol issued on an
+    /// xdg_popup created with a null xdg parent).
+    pub fn create_layer_popup(&mut self, parent: &WlSurface) -> &mut Popup {
+        self.state.create_layer_popup(parent)
+    }
+
     pub fn popup(&mut self, surface: &WlSurface) -> &mut Popup {
         self.state.popup(surface)
     }
@@ -419,6 +426,51 @@ impl State {
         let xdg_surface = xdg_wm_base.get_xdg_surface(&surface, &self.qh, ());
         let xdg_popup = xdg_surface.get_popup(Some(&parent_xdg), &positioner, &self.qh, ());
         positioner.destroy();
+
+        let popup = Popup {
+            qh: self.qh.clone(),
+            spbm: self.spbm.clone().unwrap(),
+            seat,
+
+            surface,
+            xdg_surface,
+            xdg_popup,
+            pending_configure: PopupConfigure::default(),
+            configures_received: Vec::new(),
+            popup_done: false,
+
+            configures_looked_at: 0,
+        };
+
+        self.popups.push(popup);
+        self.popups.last_mut().unwrap()
+    }
+
+    pub fn create_layer_popup(&mut self, parent: &WlSurface) -> &mut Popup {
+        let compositor = self.compositor.as_ref().unwrap();
+        let xdg_wm_base = self.xdg_wm_base.as_ref().unwrap();
+        let seat = self.seat.clone().unwrap();
+
+        let parent_layer = self
+            .layers
+            .iter()
+            .find(|l| l.surface == *parent)
+            .unwrap()
+            .layer_surface
+            .clone();
+
+        // Anchor rect must be non-empty; size drives the popup geometry.
+        let positioner = xdg_wm_base.create_positioner(&self.qh, ());
+        positioner.set_size(200, 100);
+        positioner.set_anchor_rect(0, 0, 1, 1);
+
+        let surface = compositor.create_surface(&self.qh, ());
+        let xdg_surface = xdg_wm_base.get_xdg_surface(&surface, &self.qh, ());
+        // xdg parent must be null: the layer surface assigns itself as parent
+        // via `get_popup` below, before the popup's initial commit.
+        let xdg_popup = xdg_surface.get_popup(None, &positioner, &self.qh, ());
+        positioner.destroy();
+        parent_layer.get_popup(&xdg_popup);
 
         let popup = Popup {
             qh: self.qh.clone(),

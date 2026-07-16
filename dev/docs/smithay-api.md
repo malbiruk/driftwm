@@ -197,6 +197,23 @@ impl PopupManager {
 `render_output()` → `Window::render_elements()` → `PopupManager::popups_for_surface()` →
 `render_elements_from_surface_tree()` per popup. Fully automatic — no compositor render code needed.
 
+### Layer-parented popups double-register in PopupManager
+The protocol flow for a popup on a layer surface is `xdg_surface.get_popup(None, positioner)` then
+`zwlr_layer_surface_v1.get_popup(xdg_popup)`. The first call fires `XdgShellHandler::new_popup` with
+`parent = None` (queued into `unmapped_popups`); the second fires `WlrLayerShellHandler::new_popup`
+after the parent is set, tracking it again; the popup's first commit then drains the stale unmapped
+entry and adds it once more. Duplicates share the same `PopupKind`, so `popups_for_surface`,
+hit-testing, and teardown all still behave — but counting tracked popups over-reports for
+layer-parented ones.
+
+### Bounding boxes: `bbox()` vs `bbox_with_popups()`
+`Window::bbox()` / `LayerSurface::bbox()` cover the toplevel and its subsurfaces but **not** popups;
+the `_with_popups` variants merge in every popup from `PopupManager::popups_for_surface`.
+`SpaceElement::bbox` for `Window` is `bbox_with_popups()` — `Space` never used the popup-less box
+(source: `src/desktop/space/wayland/window.rs`). `Window::send_frame` and `LayerSurface::send_frame`
+both send frame callbacks to popup surface trees too, so throttling decisions keyed on a popup-less
+bbox starve visible popups.
+
 ## Selection / Clipboard
 
 ### Cross-app clipboard
