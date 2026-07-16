@@ -86,8 +86,30 @@ impl DriftWm {
         let pointer = self.seat.get_pointer().unwrap();
 
         if self.pointer_constraint_active() {
-            pointer.set_location(new_pos);
-            return;
+            // A camera warp can slide another surface under a screen-fixed
+            // cursor, stranding input on a stale lock. Reactivates itself once
+            // the cursor returns.
+            let same_surface_under_cursor = pointer.current_focus().is_some_and(|current| {
+                self.focus_under(new_pos)
+                    .is_some_and(|(under, _)| under == current)
+            });
+            if same_surface_under_cursor {
+                pointer.set_location(new_pos);
+                return;
+            }
+            if let Some(focus) = pointer.current_focus() {
+                smithay::wayland::pointer_constraints::with_pointer_constraint(
+                    &focus.0,
+                    &pointer,
+                    |c| {
+                        if let Some(c) = c
+                            && c.is_active()
+                        {
+                            c.deactivate();
+                        }
+                    },
+                );
+            }
         }
 
         if pointer.is_grabbed() {
