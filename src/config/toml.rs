@@ -246,6 +246,7 @@ pub(super) struct WindowRuleFile {
     pub title: Option<String>,
     pub position: Option<[i32; 2]>,
     pub size: Option<[i32; 2]>,
+    pub fullscreen: Option<bool>,
     #[serde(default)]
     pub widget: bool,
     /// Pin the window to one output's screen space: it ignores pan/zoom and

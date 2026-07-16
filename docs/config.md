@@ -1025,6 +1025,7 @@ Effect fields:
 
 - `position` — [x, y] coordinates (window center, Y-up). Canvas coords, or output-relative (origin = output center) when pinned_to_screen.
 - `size` — [width, height] initial window dimensions (one-shot; user/app can resize after)
+- `fullscreen` — true: force this window to open in fullscreen mode
 - `widget` — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)
 - `pinned_to_screen` — true: lock the window to the output's screen space — ignores pan/zoom, floats above normal windows (PiP, toolbars). `position` becomes output-relative; movable unless widget = true. Toggle live with `toggle-pin-to-screen` (Mod+T). (default: false)
 - `decoration` — overrides [decorations] default_mode for matched windows. Omit to inherit default_mode. Values:

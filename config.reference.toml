@@ -609,6 +609,7 @@
 # #   position   — [x, y] coordinates (window center, Y-up). Canvas coords, or
 # #                output-relative (origin = output center) when pinned_to_screen.
 # #   size       — [width, height] initial window dimensions (one-shot; user/app can resize after)
+# #   fullscreen — true: force this window to open in fullscreen mode
 # #   widget     — true: pinned (immovable), below normal windows, excluded from
 # #                navigation and alt-tab (default: false)
 # #   pinned_to_screen — true: lock the window to the output's screen space —
