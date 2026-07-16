@@ -882,7 +882,7 @@ impl DriftWm {
             .rev()
             .filter(|w| !skip(w))
             .filter(|w| {
-                self.window_bbox(w)
+                self.window_bbox_with_popups(w)
                     .is_some_and(|bbox| bbox.to_f64().contains(point))
             })
             .find_map(|w| {

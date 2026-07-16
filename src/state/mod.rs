@@ -1217,7 +1217,7 @@ impl DriftWm {
         let outputs: Vec<Output> = self.space.outputs().cloned().collect();
 
         if let Some(window) = self.window_for_surface(&root)
-            && let Some(win_bbox) = self.window_bbox(&window)
+            && let Some(win_bbox) = self.window_bbox_with_popups(&window)
         {
             // Use zoom-aware visible canvas rect rather than
             // `Space::outputs_for_element`: the latter is built on the cached
@@ -1454,15 +1454,15 @@ impl DriftWm {
         found.or_else(|| self.active_output())
     }
 
-    /// Bounding box of a mapped window in canvas coordinates: `window.bbox()`
+    /// Bounding box of a mapped window in canvas coordinates: `window.bbox_with_popups()`
     /// (which includes popup/subsurface overhang) placed at the stage position.
     /// Mirrors `Space::element_bbox`.
-    pub(crate) fn window_bbox(
+    pub(crate) fn window_bbox_with_popups(
         &self,
         window: &Window,
     ) -> Option<smithay::utils::Rectangle<i32, Logical>> {
         let pos = self.stage.position_of(window)?;
-        let mut bbox = window.bbox();
+        let mut bbox = window.bbox_with_popups();
         bbox.loc += pos - window.geometry().loc;
         Some(bbox)
     }
