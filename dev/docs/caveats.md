@@ -4,7 +4,7 @@ Things to keep in mind as the codebase grows.
 
 ## Never touch `Space` directly — go through the stage
 
-The stage (`src/stage/`) is the source of truth for the window list, z-order, positions, focus history, fullscreen membership, pin-to-screen membership, and fit state. Read window state from it (`stage.windows()`, `stage.position_of`, `DriftWm::element_under` / `window_bbox`); mutate through `DriftWm::map_window` / `raise_window` / `unmap_window` and the stage-backed methods. `Space` holds no window elements at all — it survives only as the output registry (`map_output` / `outputs` / `output_geometry`). A clippy `disallowed-methods` lint (see `clippy.toml`) rejects every `Space` element API (reads *and* writes) and `Space::refresh`, and debug builds run `verify_stage_invariants` every frame in `post_render` — a panic there means a mutation bypassed the wrappers.
+The stage (`src/stage/`) is the source of truth for the window list, z-order, positions, focus history, fullscreen membership, pin-to-screen membership, and fit state. Read window state from it (`stage.windows()`, `stage.position_of`, `DriftWm::element_under` / `window_bbox_with_popups`); mutate through `DriftWm::map_window` / `raise_window` / `unmap_window` and the stage-backed methods. `Space` holds no window elements at all — it survives only as the output registry (`map_output` / `outputs` / `output_geometry`). A clippy `disallowed-methods` lint (see `clippy.toml`) rejects every `Space` element API (reads *and* writes) and `Space::refresh`, and debug builds run `verify_stage_invariants` every frame in `post_render` — a panic there means a mutation bypassed the wrappers.
 
 Per-window output membership (`wl_surface.enter`/`leave`) is driven by `DriftWm::refresh_window_outputs`, not by `Space`: fullscreen windows belong only to their home output, pinned windows only to their pin target, and virtual placeholder outputs (dead `wl_output` global) are never entered. New enter/leave paths must route through it — membership sent from anywhere else reintroduces the multi-output fullscreen leak (a game unfullscreens when another output's camera pans over its parked window).
 
@@ -69,3 +69,9 @@ driftwm doesn't embed XWayland directly. X11 apps reach the compositor via [`xwa
 ## What to test where
 
 Smithay glue code (handlers, delegates) is not worth unit testing — it's framework boilerplate. Pure logic (canvas math, config parsing, gesture/binding resolution) gets unit tests; stage policy gets the proptest harness; the protocol↔policy wiring gets the in-process headless fixture (`src/tests/`), where a real `DriftWm` serves real wayland clients with no display. The full map and the testing rules live in [testing.md](testing.md).
+
+## Smithay Bounding Boxes (Popups and Subsurfaces)
+
+When working with `smithay::desktop::Window`, **never** use the inherent `window.bbox()` method for hit-testing, damage tracking, or rendering bounds checks. The inherent method only calculates the bounding box of the main toplevel window and completely ignores any popups or subsurfaces. 
+
+Always use `window.bbox_with_popups()` (or our internal wrapper `window_bbox_with_popups(window)` in `src/state/mod.rs`). Failing to do so will cause overhanging popups to be clipped at monitor boundaries, suffer from severe frame-throttling, or instantly lose focus when hovered.

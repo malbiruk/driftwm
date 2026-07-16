@@ -255,7 +255,7 @@ pub(crate) fn compose_capture_elements(
                 &state.config.decorations,
             );
 
-        let mut bbox = window.bbox();
+        let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
         if has_ssd {
             let r = driftwm::config::DecorationConfig::SHADOW_RADIUS.ceil() as i32;
@@ -683,7 +683,7 @@ pub fn compose_frame(
                 &state.config.decorations,
             );
 
-        let mut bbox = window.bbox();
+        let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
         if has_ssd {
             let r = driftwm::config::DecorationConfig::SHADOW_RADIUS.ceil() as i32;

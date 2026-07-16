@@ -210,7 +210,7 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
             continue;
         };
         let geom_loc = window.geometry().loc;
-        let mut bbox = window.bbox();
+        let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
         let on_screen = visible_rect.overlaps(bbox);
 
