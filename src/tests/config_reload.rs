@@ -2,7 +2,7 @@
 //! a good edit applies live.
 
 use super::{Fixture, config, map_window};
-use crate::state::ErrorSource;
+use crate::state::{ErrorSource, ModeIntent};
 
 #[test]
 fn bad_toml_keeps_old_config_and_raises_error() {
@@ -54,6 +54,50 @@ fn soft_warnings_surface_without_rejecting() {
 }
 
 #[test]
+fn reload_to_preferred_mode_queues_intent() {
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+
+    // The state layer can't tell whether the current mode already is the
+    // preferred one (no EDID knowledge), so a "preferred" rule always queues;
+    // the backend resolves and skips the modeset when it's a no-op.
+    f.state().reload_config_from_contents(
+        r#"
+[[outputs]]
+name = "HEADLESS-1"
+mode = "preferred"
+"#,
+    );
+
+    assert_eq!(
+        f.state().pending_mode_changes.get("HEADLESS-1"),
+        Some(&ModeIntent::Preferred)
+    );
+
+    // Only the udev render loop drains this queue; the headless fixture has no
+    // backend, so drain it by hand to leave teardown at the leak baseline.
+    f.state().pending_mode_changes.clear();
+}
+
+#[test]
+fn reload_to_matching_explicit_mode_queues_nothing() {
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+
+    // An explicit rule matching the current mode is change-detected in the
+    // state layer, so no intent is queued.
+    f.state().reload_config_from_contents(
+        r#"
+[[outputs]]
+name = "HEADLESS-1"
+mode = "1920x1080"
+"#,
+    );
+
+    assert!(f.state().pending_mode_changes.is_empty());
+}
+
+#[test]
 fn reload_rules_affect_new_windows_not_existing() {
     let mut f = Fixture::with_config(config(""));
     f.add_output(1, (1920, 1080));
@@ -72,6 +116,10 @@ app_id = "later"
 size = [640, 480]
 "#,
     );
+    // Reload queues a preferred-mode intent for the connected output; only the
+    // udev render loop drains that queue, so clear it to keep teardown at
+    // the leak baseline.
+    f.state().pending_mode_changes.clear();
     f.double_roundtrip(id);
 
     // Re-commit the existing surface so even a rule application deferred to

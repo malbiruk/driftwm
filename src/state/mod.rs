@@ -229,7 +229,7 @@ pub struct DndIcon {
 
 /// What mode the user (config or wlr-output-management client) asked for.
 /// Resolved to a concrete `drm::control::Mode` in the udev backend.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ModeIntent {
     /// Index into the connector's EDID-advertised modes list. Sent by
     /// wlr-output-management `SetMode` after the protocol layer chose a
@@ -238,10 +238,9 @@ pub enum ModeIntent {
     /// Custom WxH@refresh_mHz. Tried as an exact EDID match first; if not
     /// found, a CVT modeline is synthesized.
     Custom { w: i32, h: i32, refresh_mhz: i32 },
-    /// "Whatever the connector says is preferred." Reserved for the
-    /// reload-restores-preferred case; deferred in the v1 reload path
-    /// (we don't currently re-modeset when rule reverts to Preferred).
-    #[allow(dead_code)]
+    /// The connector's preferred mode. Queued by config reload when an
+    /// output's rule is (or reverts to) "preferred"; the backend resolves it
+    /// against the connector and skips the modeset when it's already active.
     Preferred,
 }
 

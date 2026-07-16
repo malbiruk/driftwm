@@ -225,16 +225,16 @@ impl DriftWm {
                             refresh_mhz: *hz as i32 * 1000,
                         })
                     }
-                    ConfigOutputMode::Preferred => {
-                        // We don't currently re-modeset when reverting to
-                        // "preferred" — log so users know why their old
-                        // custom mode is still active.
-                        tracing::info!(
-                            "Config reload: output '{name}' rule is 'preferred', \
-                             but reverting from a custom mode isn't supported live — \
-                             restart driftwm or replug to apply"
-                        );
-                        None
+                    // The state layer has no EDID/connector knowledge, so it
+                    // can't tell whether the current mode already is the
+                    // preferred one. Queue unconditionally; the backend skips
+                    // the modeset when the resolved preferred mode is a no-op.
+                    // Not on winit: nothing drains the queue there, and the
+                    // default-rule intent would sit in debug counters forever.
+                    ConfigOutputMode::Preferred
+                        if !matches!(self.backend, Some(crate::backend::Backend::Winit(_))) =>
+                    {
+                        Some(crate::state::ModeIntent::Preferred)
                     }
                     _ => None,
                 };

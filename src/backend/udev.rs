@@ -1558,12 +1558,25 @@ fn apply_pending_mode_changes(
             continue;
         };
 
+        let new_smithay_mode = Mode {
+            size: (mode.size().0 as i32, mode.size().1 as i32).into(),
+            refresh: (mode.vrefresh() * 1000) as i32,
+        };
+
+        // Config reload queues Preferred on every reload, so skip the modeset
+        // when it resolves to the mode already in use. Scoped to Preferred:
+        // reload already change-detects Size/SizeRefresh, and explicit
+        // EdidIndex/Custom requests are one-shot user actions worth honoring
+        // even when nominally identical to the current mode.
+        if intent == crate::state::ModeIntent::Preferred
+            && surface.output.current_mode() == Some(new_smithay_mode)
+        {
+            tracing::debug!("Mode change for '{name}': already at preferred mode, skipping");
+            continue;
+        }
+
         match surface.compositor.use_mode(mode) {
             Ok(_) => {
-                let new_smithay_mode = Mode {
-                    size: (mode.size().0 as i32, mode.size().1 as i32).into(),
-                    refresh: (mode.vrefresh() * 1000) as i32,
-                };
                 surface
                     .output
                     .change_current_state(Some(new_smithay_mode), None, None, None);
