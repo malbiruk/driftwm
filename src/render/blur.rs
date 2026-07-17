@@ -514,6 +514,26 @@ pub(crate) fn process_blur_requests(
 
     // ── First pass: create/resize caches, update dirty flags, decide who recomputes ──
     let pad = blur_pad(blur_strength, blur_passes);
+
+    // behind_starts alone is a z-order test: side-by-side windows all read as
+    // "stacked" and lose the shared slice. Fall through only when an element
+    // below this window (padded by the blur reach) actually intersects it.
+    let elem_scale = smithay::utils::Scale::from(output_scale);
+    let occluded_by_lower: Vec<bool> = blur_requests
+        .iter()
+        .enumerate()
+        .map(|(i, req)| {
+            let mut probe = req.screen_rect;
+            probe.loc.x -= pad;
+            probe.loc.y -= pad;
+            probe.size.w += 2 * pad;
+            probe.size.h += 2 * pad;
+            let start = behind_starts[i].min(background_start);
+            all_elements[start..background_start]
+                .iter()
+                .any(|e| e.geometry(elem_scale).overlaps(probe))
+        })
+        .collect();
     let mut needs_recompute: Vec<bool> = Vec::with_capacity(blur_requests.len());
     let mut mask_forced: Vec<bool> = Vec::with_capacity(blur_requests.len());
     for (i, req) in blur_requests.iter().enumerate() {
@@ -589,14 +609,14 @@ pub(crate) fn process_blur_requests(
         };
 
         // The shared slice is only exact when nothing but scene background
-        // lies beneath this window; a window stacked over other windows
-        // falls through to the per-window path (throttled by the same
+        // lies beneath this window; a window that actually overlaps a lower
+        // one falls through to the per-window path (throttled by the same
         // shared_refreshed cadence), so lower windows show in its frost.
         // Missing shared textures (GL alloc failure) also fall through —
         // skipping would insert this window's never-rendered texture as an
         // invisible blur.
         if animated_bg
-            && behind_starts[i] >= background_start
+            && !occluded_by_lower[i]
             && let Some(shared) = state.render.shared_blur.get(&output_name)
         {
             // Slice this window's rect out of the shared blurred background.
