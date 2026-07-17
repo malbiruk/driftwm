@@ -1668,6 +1668,9 @@ impl DriftWm {
                     .blur_camera_generation
                     .entry(output.name())
                     .or_insert(0) += 1;
+                self.render
+                    .blur_camera_moved_at
+                    .insert(output.name(), std::time::Instant::now());
             }
             self.space.map_output(&output, cam);
         }

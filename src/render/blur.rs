@@ -462,8 +462,11 @@ pub(crate) fn process_blur_requests(
                 (Some(bg_t), Some(blur_t)) => *bg_t > blur_t,
                 _ => true,
             };
-            let due = time_due && bg_ticked_since_refresh;
-            if due || camera_moved {
+            // Camera moves force a refresh but stay inside the throttle: at
+            // frame rate a pan would run a full scene render + full-output
+            // blur per frame, which is most of the pan heat.
+            let due = time_due && (bg_ticked_since_refresh || camera_moved);
+            if due {
                 let mut rendered = false;
                 if let Ok(mut target) = renderer.bind(&mut shared.tex_a) {
                     let mut dt =
@@ -573,6 +576,22 @@ pub(crate) fn process_blur_requests(
             req.layer,
             BlurLayer::Overlay | BlurLayer::Top | BlurLayer::Pinned
         ) && cache.last_camera_generation != camera_gen;
+
+        // Hold occluded windows while a pan is in flight: their recompute is
+        // a scene re-render, and the moving screen rect churns the background
+        // hash every frame. Markers stay unconsumed so the pending change
+        // fires once on settle. Canvas windows pan together with their
+        // backdrop, so the held frost stays visually correct meanwhile.
+        let pan_in_flight = state
+            .render
+            .blur_camera_moved_at
+            .get(&output_name)
+            .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(150));
+        if animated_bg && occluded_by_lower[i] && pan_in_flight && cache.force_dirty_frames == 0 {
+            mask_forced.push(false);
+            needs_recompute.push(false);
+            continue;
+        }
 
         // Occluded windows are excluded from the animated cadence: their
         // frost re-renders the scene behind them, so refreshing N stacked

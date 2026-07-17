@@ -37,6 +37,9 @@ pub struct RenderCache {
     /// output's pan force every other output's blur to refresh (bypassing the
     /// animate_blur_fps throttle) even though their cameras never moved.
     pub blur_camera_generation: HashMap<String, u64>,
+    /// When the camera last moved, per output. Occluded windows hold their
+    /// blur recomputes while a pan is in flight and catch up on settle.
+    pub blur_camera_moved_at: HashMap<String, std::time::Instant>,
     /// Shared full-output blurred background for `animate_blur`: ping-pong
     /// pair, blurred once per refresh and sliced per window, so cost stops
     /// scaling with the number of blurred windows. Keyed by output name —
@@ -86,6 +89,7 @@ impl RenderCache {
             blur_bg_fbo: None,
             blur_geometry_generation: 0,
             blur_camera_generation: HashMap::new(),
+            blur_camera_moved_at: HashMap::new(),
             shared_blur: HashMap::new(),
             background_last_animate: HashMap::new(),
             background_tick_armed: false,
@@ -134,6 +138,7 @@ impl RenderCache {
         self.shared_blur.remove(output_name);
         self.blur_cache.retain(|(out, _), _| out != output_name);
         self.blur_camera_generation.remove(output_name);
+        self.blur_camera_moved_at.remove(output_name);
         self.background_last_animate.remove(output_name);
         self.cached_error_bar.remove(output_name);
         self.remove_background_chunks(output_name);
