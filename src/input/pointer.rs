@@ -201,6 +201,37 @@ impl DriftWm {
                 if button_state == ButtonState::Pressed {
                     let layer = pointer.current_focus().map(|f| f.0);
                     self.focus_layer_if_on_demand(layer, serial);
+
+                    if let Some(target) = pointer.current_focus() {
+                        let canvas_pos_0 = pointer.current_location();
+                        let screen_pos_0 = driftwm::canvas::canvas_to_screen(
+                            driftwm::canvas::CanvasPos(canvas_pos_0),
+                            self.camera(),
+                            self.zoom(),
+                        )
+                        .0;
+                        if let Some((focus, adjusted_0)) =
+                            self.pointer_focus_under(screen_pos_0, canvas_pos_0)
+                            && focus == target
+                        {
+                            let screen_loc = adjusted_0 - (canvas_pos_0 - screen_pos_0);
+                            let start_data = GrabStartData {
+                                focus: Some((focus, adjusted_0)),
+                                button,
+                                location: canvas_pos_0,
+                            };
+                            let grab = crate::grabs::LayerClickGrab {
+                                start_data,
+                                screen_loc,
+                            };
+                            pointer.set_grab(
+                                self,
+                                grab,
+                                serial,
+                                smithay::input::pointer::Focus::Keep,
+                            );
+                        }
+                    }
                 }
                 pointer.button(
                     self,

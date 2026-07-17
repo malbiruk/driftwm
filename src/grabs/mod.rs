@@ -112,6 +112,7 @@ macro_rules! forward_pointer_grab_methods {
 }
 pub(crate) use forward_pointer_grab_methods;
 
+pub mod layer_click;
 mod move_grab;
 mod navigate_grab;
 mod pan_grab;
@@ -119,6 +120,7 @@ mod resize_grab;
 mod touch_gesture_grab;
 mod touch_recognizer;
 
+pub use layer_click::LayerClickGrab;
 pub use move_grab::MoveSurfaceGrab;
 pub use navigate_grab::NavigateGrab;
 pub use pan_grab::PanGrab;
