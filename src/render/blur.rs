@@ -574,7 +574,15 @@ pub(crate) fn process_blur_requests(
             BlurLayer::Overlay | BlurLayer::Top | BlurLayer::Pinned
         ) && cache.last_camera_generation != camera_gen;
 
-        if background_changed || geom_changed || camera_dirty || (animated_bg && shared_refreshed) {
+        // Occluded windows are excluded from the animated cadence: their
+        // frost re-renders the scene behind them, so refreshing N stacked
+        // windows costs N scene renders per tick and heat scales with window
+        // count. Their frost stays static between camera/geometry changes.
+        if background_changed
+            || geom_changed
+            || camera_dirty
+            || (animated_bg && shared_refreshed && !occluded_by_lower[i])
+        {
             cache.dirty = true;
         }
         mask_forced.push(cache.force_dirty_frames > 0);
