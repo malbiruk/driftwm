@@ -645,6 +645,7 @@ pub struct WindowRule {
     // ── One-time placement effects ────────────────────────────────────
     pub position: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
+    pub fullscreen: Option<bool>,
     /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
     /// and always stacked below normal windows.
     pub widget: bool,
@@ -702,6 +703,7 @@ impl WindowRule {
 /// are sticky-on).
 #[derive(Clone, Debug)]
 pub struct AppliedWindowRule {
+    pub fullscreen: Option<bool>,
     pub widget: bool,
     pub pinned_to_screen: bool,
     pub decoration: Option<DecorationMode>,
@@ -749,6 +751,9 @@ impl AppliedWindowRule {
         if let Some(sz) = rule.size {
             self.size = Some(sz);
         }
+        if let Some(fs) = rule.fullscreen {
+            self.fullscreen = Some(fs);
+        }
         if let Some(bw) = rule.border_width {
             self.border_width = Some(bw);
         }
@@ -784,6 +789,7 @@ impl From<&WindowRule> for AppliedWindowRule {
             pass_keys: rule.pass_keys.clone(),
             position: rule.position,
             size: rule.size,
+            fullscreen: rule.fullscreen,
             border_width: rule.border_width,
             border_color: rule.border_color,
             border_color_focused: rule.border_color_focused,

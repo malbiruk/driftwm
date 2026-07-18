@@ -8,6 +8,7 @@ fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
         title: title.map(|s| Pattern::Glob(s.to_string())),
         position: None,
         size: None,
+        fullscreen: None,
         widget: false,
         pinned_to_screen: false,
         decoration: None,

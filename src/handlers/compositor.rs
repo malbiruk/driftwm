@@ -532,6 +532,9 @@ impl CompositorHandler for DriftWm {
                             );
                             self.decorations.insert(root.id(), deco);
                         }
+                        if applied.as_ref().is_some_and(|a| a.fullscreen == Some(true)) {
+                            self.pending_fullscreen.entry(root.clone()).or_insert(None);
+                        }
 
                         let is_widget = applied.as_ref().is_some_and(|a| a.widget);
                         // Deferred fit/fullscreen will override camera/zoom/raise

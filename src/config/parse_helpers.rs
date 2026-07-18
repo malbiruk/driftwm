@@ -402,6 +402,7 @@ pub(super) fn parse_window_rule(
         title,
         position: r.position.map(|[x, y]| (x, y)),
         size,
+        fullscreen: r.fullscreen,
         widget: r.widget,
         pinned_to_screen: r.pinned_to_screen,
         decoration,
