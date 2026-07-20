@@ -87,17 +87,27 @@ impl DriftWm {
         let camera = Point::from((-(logical.w as f64) / 2.0, -(logical.h as f64) / 2.0));
         init_output_state(output, camera, self.config.drift, position);
 
-        // Restore per-output camera/zoom from the state file if available.
+        // Restore per-output camera/zoom from the state file if available. A
+        // seed outside sane bounds (a hand-edit / corruption reaching here via
+        // the runtime file, which has no validation of its own) is ignored so
+        // the output keeps its default camera instead of an inf/NaN viewport.
         if let Some(&(saved_cam, saved_zoom)) = saved.get(&output.name()) {
-            let mut os = output_state(output);
-            os.camera = saved_cam;
-            os.zoom = saved_zoom;
-            tracing::info!(
-                "output {}: restored camera ({:.1}, {:.1}) zoom {saved_zoom:.2}",
-                output.name(),
-                saved_cam.x,
-                saved_cam.y,
-            );
+            if super::session_store::valid_camera_seed(saved_cam, saved_zoom) {
+                let mut os = output_state(output);
+                os.camera = saved_cam;
+                os.zoom = saved_zoom;
+                tracing::info!(
+                    "output {}: restored camera ({:.1}, {:.1}) zoom {saved_zoom:.2}",
+                    output.name(),
+                    saved_cam.x,
+                    saved_cam.y,
+                );
+            } else {
+                tracing::warn!(
+                    "output {}: ignoring out-of-range saved camera/zoom (zoom {saved_zoom})",
+                    output.name()
+                );
+            }
         }
 
         // The first output created takes focus and the pointer.

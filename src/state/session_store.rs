@@ -60,6 +60,7 @@ impl DriftWm {
         self.session_store.durable_cameras = envelope
             .outputs
             .iter()
+            .filter(|(_, o)| valid_camera_seed(Point::from((o.camera[0], o.camera[1])), o.zoom))
             .map(|(name, o)| {
                 (
                     name.clone(),
@@ -67,8 +68,17 @@ impl DriftWm {
                 )
             })
             .collect();
+        // Drop entries with out-of-range geometry entirely — neither
+        // materialized nor carried forward, so a hand-edit or a flipped byte
+        // that would panic `Size::from` (debug) or overflow `rule_to_internal`
+        // self-heals on the next write instead of crashing every startup.
+        let entries: Vec<SessionEntry> = envelope
+            .entries
+            .into_iter()
+            .filter(valid_entry_geometry)
+            .collect();
         let (materialize, carried) =
-            session::partition_for_restore(envelope.entries, self.config.restore_session);
+            session::partition_for_restore(entries, self.config.restore_session);
         self.session_store.carried_forward = carried;
         for entry in materialize {
             self.materialize_entry(entry);
@@ -316,9 +326,95 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// Whether a saved window's geometry is safe to feed the stage: size components
+/// in `1..=32767` (smithay's `Size::from` debug-asserts non-negative; the upper
+/// bound keeps render buffers sane) and positions within a range that can't
+/// overflow `rule_to_internal`'s `i32` math.
+fn valid_entry_geometry(entry: &SessionEntry) -> bool {
+    const POSITION_LIMIT: i32 = 16_000_000;
+    let [w, h] = entry.size;
+    let [x, y] = entry.position;
+    let ok = (1..=32767).contains(&w)
+        && (1..=32767).contains(&h)
+        && (-POSITION_LIMIT..=POSITION_LIMIT).contains(&x)
+        && (-POSITION_LIMIT..=POSITION_LIMIT).contains(&y);
+    if !ok {
+        tracing::warn!(
+            "session store: dropping '{}' with out-of-range geometry (size {w}x{h}, pos {x},{y})",
+            entry.app_id
+        );
+    }
+    ok
+}
+
+/// Whether a durable/runtime camera seed is safe to apply: finite components
+/// within a sane canvas range and a zoom inside the real zoom bounds. An
+/// invalid seed (`zoom: 0.0`, non-finite, corruption) is skipped so it can't
+/// warp the pointer to infinity or divide every canvas conversion by zero.
+pub(crate) fn valid_camera_seed(camera: Point<f64, Logical>, zoom: f64) -> bool {
+    const CAMERA_LIMIT: f64 = 1e9;
+    camera.x.is_finite()
+        && camera.y.is_finite()
+        && camera.x.abs() <= CAMERA_LIMIT
+        && camera.y.abs() <= CAMERA_LIMIT
+        && zoom.is_finite()
+        && (driftwm::canvas::MIN_ZOOM_FLOOR..=driftwm::canvas::MAX_ZOOM).contains(&zoom)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn geom_entry(size: [i32; 2], position: [i32; 2]) -> SessionEntry {
+        SessionEntry {
+            id: 1,
+            app_id: "app".into(),
+            desktop_id: "app.desktop".into(),
+            display_name: "App".into(),
+            title: "t".into(),
+            position,
+            size,
+            origin: Origin::Explicit,
+        }
+    }
+
+    #[test]
+    fn entry_geometry_rejects_out_of_range() {
+        assert!(valid_entry_geometry(&geom_entry([400, 300], [100, 200])));
+        assert!(
+            !valid_entry_geometry(&geom_entry([-1, 300], [0, 0])),
+            "negative size rejected (would panic Size::from in debug)"
+        );
+        assert!(
+            !valid_entry_geometry(&geom_entry([0, 300], [0, 0])),
+            "zero size"
+        );
+        assert!(
+            !valid_entry_geometry(&geom_entry([40000, 300], [0, 0])),
+            "oversize"
+        );
+        assert!(
+            !valid_entry_geometry(&geom_entry([400, 300], [20_000_000, 0])),
+            "extreme position that would overflow rule_to_internal"
+        );
+        assert!(!valid_entry_geometry(&geom_entry(
+            [400, 300],
+            [0, i32::MIN]
+        )));
+    }
+
+    #[test]
+    fn camera_seed_rejects_bad_zoom_and_nonfinite() {
+        let cam = Point::from((-960.0, -540.0));
+        assert!(valid_camera_seed(cam, 1.0));
+        assert!(!valid_camera_seed(cam, 0.0), "zero zoom breaks canvas math");
+        assert!(!valid_camera_seed(cam, -1.0));
+        assert!(!valid_camera_seed(cam, f64::INFINITY));
+        assert!(!valid_camera_seed(cam, f64::NAN));
+        assert!(!valid_camera_seed(cam, 1000.0), "beyond MAX_ZOOM");
+        assert!(!valid_camera_seed(Point::from((f64::NAN, 0.0)), 1.0));
+        assert!(!valid_camera_seed(Point::from((1e12, 0.0)), 1.0));
+    }
 
     #[test]
     fn runtime_camera_wins_over_durable_seed() {

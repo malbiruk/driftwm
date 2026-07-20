@@ -181,7 +181,9 @@ fn durable_camera_seeds_fresh_boot() {
         "HEADLESS-1".to_string(),
         SessionOutput {
             camera: [-1234.0, -5678.0],
-            zoom: 1.75,
+            // A real zoom-out value: the compositor caps zoom at MAX_ZOOM (1.0),
+            // and out-of-bounds seeds are now rejected on load.
+            zoom: 0.75,
         },
     );
     let envelope = SessionEnvelope {
@@ -205,7 +207,107 @@ fn durable_camera_seeds_fresh_boot() {
         (os.camera, os.zoom)
     };
     assert_eq!(camera, Point::from((-1234.0, -5678.0)));
-    assert_eq!(zoom, 1.75);
+    assert_eq!(zoom, 0.75);
+}
+
+/// A parseable entry with out-of-range geometry (a hand-edit / flipped byte)
+/// is dropped at load — never materialized (no `Size::from` panic) and never
+/// carried forward, so it's gone from the next serialize.
+#[test]
+fn out_of_range_entry_is_dropped_and_not_carried() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut bad = entry(1, "bad", Origin::Explicit);
+    bad.size = [-1, 300];
+    let good = entry(2, "good", Origin::Explicit);
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        saved_at: 0,
+        entries: vec![bad, good],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    // No panic on load; only the valid entry materializes.
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1, "the negative-size entry was dropped");
+    assert_eq!(restored[0].0.identity.app_id, "good");
+
+    // The bad entry is gone from the next serialize too (not carried forward).
+    f.state().serialize_session_on_shutdown();
+    let after = session::read(&path);
+    assert!(
+        after.entries.iter().all(|e| e.app_id != "bad"),
+        "the dropped entry does not reappear"
+    );
+    for (s, _) in restored {
+        f.state().dismiss_suspended(s.id);
+    }
+}
+
+/// A `zoom: 0.0` durable seed (hand-edit / corruption) is filtered at load, so
+/// the output connects with its default camera/zoom — no inf/NaN viewport — and
+/// the next serialize writes the live sane value, self-healing across restarts.
+#[test]
+fn invalid_zoom_seed_is_ignored_and_reserializes_sane() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut outputs = BTreeMap::new();
+    outputs.insert(
+        "HEADLESS-1".to_string(),
+        SessionOutput {
+            camera: [-960.0, -540.0],
+            zoom: 0.0,
+        },
+    );
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        saved_at: 0,
+        entries: Vec::new(),
+        outputs,
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f = Fixture::with_config(config_restore(false));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    // The invalid seed was dropped from the durable cameras entirely.
+    assert!(
+        !f.state()
+            .session_store
+            .durable_cameras
+            .contains_key("HEADLESS-1"),
+        "zoom 0.0 seed filtered out"
+    );
+
+    // The output connects with the default centered camera/zoom.
+    let seed = f.state().session_store.durable_cameras.clone();
+    let (output, _global) =
+        super::headless::add_output_with_saved(f.state(), 1, (1920, 1080), &seed);
+    let (camera, zoom) = {
+        let os = crate::state::output_state(&output);
+        (os.camera, os.zoom)
+    };
+    assert_eq!(zoom, 1.0, "default zoom, not 0.0");
+    assert_eq!(camera, Point::from((-960.0, -540.0)));
+
+    // The next serialize records the live sane zoom, not the corrupt 0.0.
+    f.state().session_store.path = Some(path.clone());
+    f.state().serialize_session_on_shutdown();
+    let after = session::read(&path);
+    assert_eq!(
+        after.outputs.get("HEADLESS-1").map(|o| o.zoom),
+        Some(1.0),
+        "the corrupt zoom self-healed on the next write"
+    );
 }
 
 /// A create writes the durable file immediately; a dismiss rewrites it. Drives

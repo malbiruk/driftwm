@@ -83,18 +83,30 @@ pub fn default_session_path() -> Option<PathBuf> {
     Some(state_home.join("driftwm").join("session.json"))
 }
 
-/// Read and parse the session file. An unreadable or unparseable file (or a
-/// version mismatch) is quarantined to `session.json.corrupt.<unix-ts>` and an
-/// empty envelope is returned — a corrupt file never crashes startup and never
-/// silently overwrites a file a human might want to recover.
+/// Read and parse the session file. An unparseable file (or a version
+/// mismatch) is quarantined to `session.json.corrupt.<unix-ts>`, an unreadable
+/// one to `session.json.unreadable.<unix-ts>`; both return an empty envelope —
+/// a bad file never crashes startup and never silently overwrites a file a
+/// human might want to recover. A missing file is the normal fresh start.
 pub fn read(path: &Path) -> SessionEnvelope {
-    let Ok(content) = std::fs::read_to_string(path) else {
-        return SessionEnvelope::empty();
+    let content = match std::fs::read_to_string(path) {
+        Ok(content) => content,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
+            return SessionEnvelope::empty();
+        }
+        // Permissions, is-a-directory, IO — anything but "missing" must not
+        // read as an empty session, or the next durable write renames a fresh
+        // envelope over data that was never read.
+        Err(err) => {
+            tracing::warn!("session store unreadable ({err}); quarantining");
+            quarantine(path, "unreadable");
+            return SessionEnvelope::empty();
+        }
     };
     match serde_json::from_str::<SessionEnvelope>(&content) {
         Ok(envelope) if envelope.version == VERSION => envelope,
         _ => {
-            quarantine(path);
+            quarantine(path, "corrupt");
             SessionEnvelope::empty()
         }
     }
@@ -136,15 +148,16 @@ pub fn partition_for_restore(
         .partition(|e| restore_session || e.origin == Origin::Explicit)
 }
 
-/// Rename a bad file aside so startup can continue from empty. Best-effort: a
-/// failed rename just means the next write overwrites it.
-fn quarantine(path: &Path) {
+/// Rename a bad file aside (`.<label>.<unix-ts>`) so startup can continue from
+/// empty. Best-effort: a failed rename just means the directory isn't writable,
+/// so the next write's tmp+rename can't clobber anything either.
+fn quarantine(path: &Path, label: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
     let mut aside = path.as_os_str().to_owned();
-    aside.push(format!(".corrupt.{ts}"));
+    aside.push(format!(".{label}.{ts}"));
     let _ = std::fs::rename(path, PathBuf::from(aside));
 }
 
@@ -266,6 +279,32 @@ mod tests {
         let path = tmp.path.join("does-not-exist.json");
         let envelope = read(&path);
         assert!(envelope.entries.is_empty());
+    }
+
+    #[test]
+    fn unreadable_file_is_quarantined_and_reads_empty() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("session.json");
+        // A directory where the file should be makes `read_to_string` fail
+        // with a non-`NotFound` error on every platform.
+        std::fs::create_dir(&path).unwrap();
+
+        let envelope = read(&path);
+        assert!(envelope.entries.is_empty());
+
+        // The unreadable path was renamed aside, not left in place — so the
+        // next durable write can't clobber it.
+        assert!(!path.exists());
+        let quarantined: Vec<_> = std::fs::read_dir(&tmp.path)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .contains("session.json.unreadable.")
+            })
+            .collect();
+        assert_eq!(quarantined.len(), 1, "exactly one quarantined copy");
     }
 
     #[test]
