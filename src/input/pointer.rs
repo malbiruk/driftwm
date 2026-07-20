@@ -476,6 +476,13 @@ impl DriftWm {
                             self.element_under(pos).map(|(w, l)| (w.clone(), l))
                         {
                             self.raise_and_focus(&window, serial);
+                        } else if let Some((DecoTarget::Suspended(s), _)) =
+                            self.decoration_under(pos)
+                        {
+                            // Occlusion-aware `element_under` returns nothing over
+                            // a stand-in; raise the stand-in itself instead of a
+                            // client hidden beneath it.
+                            self.focus_and_raise_suspended(s.id);
                         }
                         self.execute_action(action);
                         return;

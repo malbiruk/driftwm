@@ -498,7 +498,13 @@ impl DriftWm {
             // Suspended windows are opaque: a tap focuses + raises, the label
             // relaunches, the close button dismisses. Touch move/resize of a
             // suspended window is not wired in pass 1 — those taps focus + raise.
-            Some((DecoTarget::Suspended(s), hit)) => {
+            // But an Overlay/Top layer or pinned window renders above the
+            // stand-in; dispatch its tap only when the stand-in is the real
+            // cascade winner (`pointer_focus_under` returns None over it),
+            // matching the pointer path's layers > pinned > suspended ordering.
+            Some((DecoTarget::Suspended(s), hit))
+                if self.pointer_focus_under(screen_pos, canvas_pos).is_none() =>
+            {
                 let id = s.id;
                 match hit {
                     DecorationHit::CloseButton => self.dismiss_suspended(id),

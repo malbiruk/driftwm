@@ -95,6 +95,60 @@ fn suspended_body_does_not_leak_to_window_beneath() {
     f.state().dismiss_suspended(sid);
 }
 
+/// Occlusion for the gesture/action paths: `element_under` / `element_under_raw`
+/// (which back the swipe and touch move/resize gestures) find no client through
+/// an opaque stand-in, and `FocusCenter` centers the stand-in itself, not the
+/// hidden client beneath it.
+#[test]
+fn suspended_body_occludes_gesture_hit_tests_and_focus_center() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "beneath", (400, 300));
+    let client = window_by_app_id(&mut f, "beneath").unwrap();
+    origin_view(&mut f);
+    let cpos = f.state().stage.position_of(&client).unwrap();
+
+    // A stand-in overlapping the client but offset, raised on top.
+    let spos = Point::from((cpos.x + 100, cpos.y + 50));
+    let sid = f
+        .state()
+        .insert_suspended_for_test(1, spos, Size::from((400, 300)), "sus", "Sus");
+
+    // A point inside the stand-in body that also lies within the client's bbox.
+    let over = pt(spos.x as f64 + 150.0, spos.y as f64 + 150.0);
+    assert!(
+        f.state().surface_under(over, None).is_some(),
+        "the client beneath is genuinely hittable there"
+    );
+    // But the client-only hit-tests (gesture move/resize) find nothing — the
+    // opaque stand-in occludes it.
+    assert!(
+        f.state().element_under(over).is_none(),
+        "element_under does not reach the client through the stand-in"
+    );
+    assert!(
+        f.state().element_under_raw(over).is_none(),
+        "element_under_raw (touch gestures) does not either"
+    );
+
+    // FocusCenter over the stand-in centers the stand-in: the focus intent lands
+    // on it and the client beneath takes no seat focus.
+    f.state().warp_pointer(over);
+    f.state()
+        .execute_action(&driftwm::config::Action::FocusCenter);
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+        "FocusCenter acted on the stand-in, not the client"
+    );
+    assert!(
+        keyboard_focus_none(&mut f),
+        "the client beneath did not take focus"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
 /// Focusing a suspended window's body raises it and records a `Suspended`
 /// intent while leaving seat keyboard focus empty (THE GATE precondition).
 #[test]

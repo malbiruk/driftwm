@@ -142,6 +142,12 @@ impl DriftWm {
                     if !self.is_pinned(&window) {
                         self.navigate_to_window(&window, true);
                     }
+                } else if let Some((crate::input::DecoTarget::Suspended(s), _)) =
+                    self.decoration_under(pos)
+                {
+                    // A stand-in occludes any client beneath it — center the
+                    // stand-in by its visual frame, not the hidden client.
+                    self.navigate_to_suspended(s.id);
                 }
             }
             Action::CenterNearest(dir) => {

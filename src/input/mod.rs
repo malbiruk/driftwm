@@ -348,6 +348,13 @@ impl DriftWm {
         }
     }
 
+    /// Whether any suspended stand-in is on the stage — a cheap variant check
+    /// that short-circuits, gating the per-motion suspended hit-tests
+    /// (`decoration_under` scans) so a canvas with no stand-ins pays nothing.
+    fn any_suspended(&self) -> bool {
+        self.stage.windows().any(|w| w.suspended().is_some())
+    }
+
     /// Hit-test the pointer against all surface layers in z-order. Sets
     /// `self.pointer_over_layer` and `self.pointer_over_screen_space` as side
     /// effects. The caller is responsible for issuing `pointer.motion()` /
@@ -391,10 +398,12 @@ impl DriftWm {
         // cascade: it owns no surface (no pointer focus), and nothing beneath —
         // wallpaper, canvas layer, widget, or window — is reachable. Its clicks
         // are routed through the decoration channel, not surface focus.
-        if matches!(
-            self.decoration_under(canvas_pos),
-            Some((DecoTarget::Suspended(_), _))
-        ) {
+        if self.any_suspended()
+            && matches!(
+                self.decoration_under(canvas_pos),
+                Some((DecoTarget::Suspended(_), _))
+            )
+        {
             self.pointer_over_layer = false;
             self.pointer_over_screen_space = false;
             return None;
@@ -483,7 +492,9 @@ impl DriftWm {
 
         // A suspended window is above normal canvas windows: hovering one sets
         // the focus intent (it holds no seat keyboard focus).
-        if let Some((DecoTarget::Suspended(s), _)) = self.decoration_under(canvas_pos) {
+        if self.any_suspended()
+            && let Some((DecoTarget::Suspended(s), _)) = self.decoration_under(canvas_pos)
+        {
             let id = s.id;
             let already = matches!(
                 self.window_focus,
@@ -1029,26 +1040,43 @@ impl DriftWm {
     }
 
     /// Stage-side `Space::element_under` (bbox filter, render_location, input
-    /// region), minus the windows `skip` rejects.
+    /// region), minus the windows `skip` rejects. Occlusion-aware: an opaque
+    /// suspended stand-in above a client terminates the scan, so no client is
+    /// ever reached through a stand-in's frame. Callers that want the stand-in
+    /// itself (raise, center) consult `decoration_under` explicitly.
     fn element_under_skipping(
         &self,
         point: Point<f64, Logical>,
         mut skip: impl FnMut(&Window) -> bool,
     ) -> Option<(&Window, Point<i32, Logical>)> {
-        self.stage
-            .windows()
-            .rev()
-            .filter_map(|w| w.client())
-            .filter(|w| !skip(w))
-            .filter(|w| {
-                self.window_bbox_with_popups(w)
-                    .is_some_and(|bbox| bbox.to_f64().contains(point))
-            })
-            .find_map(|w| {
-                let render_location = self.stage.position_of(w)? - w.geometry().loc;
-                w.is_in_input_region(&(point - render_location.to_f64()))
-                    .then_some((w, render_location))
-            })
+        for element in self.stage.windows().rev() {
+            match element {
+                StageWindow::Suspended(s) => {
+                    if self.suspended_decoration_hit(s, point).is_some() {
+                        return None;
+                    }
+                }
+                StageWindow::Client(w) => {
+                    if skip(w) {
+                        continue;
+                    }
+                    if !self
+                        .window_bbox_with_popups(w)
+                        .is_some_and(|bbox| bbox.to_f64().contains(point))
+                    {
+                        continue;
+                    }
+                    let Some(pos) = self.stage.position_of(w) else {
+                        continue;
+                    };
+                    let render_location = pos - w.geometry().loc;
+                    if w.is_in_input_region(&(point - render_location.to_f64())) {
+                        return Some((w, render_location));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Isolation-aware hit-test: skips a window fullscreen on an output other
