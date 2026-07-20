@@ -81,6 +81,7 @@ fn window_list_changed(a: &[WindowInfo], b: &[WindowInfo]) -> bool {
                 || x.size != y.size
                 || x.is_focused != y.is_focused
                 || x.is_widget != y.is_widget
+                || x.suspended != y.suspended
         })
 }
 
@@ -611,5 +612,16 @@ mod tests {
         let a = vec![win(1, "one"), win(2, "two")];
         let b = vec![win(1, "one"), win(2, "two")];
         assert!(!window_titles_changed(&a, &b));
+    }
+
+    #[test]
+    fn list_changed_detects_suspend_transition() {
+        // A suspend conversion is in-place: same id/app_id/rect/focus — only
+        // `suspended` flips. Without it in the closure, subscribers and the
+        // state file never see the transition.
+        let a = vec![win(1, "one")];
+        let mut b = a.clone();
+        b[0].suspended = true;
+        assert!(window_list_changed(&a, &b));
     }
 }
