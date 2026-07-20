@@ -26,7 +26,7 @@ use smithay::wayland::compositor::RegionAttributes;
 
 use crate::decorations::DecorationHit;
 use crate::state::{DriftWm, FocusTarget};
-use driftwm::canvas::{ScreenPos, screen_to_canvas};
+use driftwm::canvas::{CanvasPos, ScreenPos, screen_space_focus_loc, screen_to_canvas};
 use driftwm::protocols::output_power::OutputPowerHandler;
 
 /// Constant-speed edge-pan velocity for the bare cursor: a steady glide
@@ -243,10 +243,11 @@ impl DriftWm {
     }
 
     /// Hit-test the pointer against all surface layers in z-order. Sets
-    /// `self.pointer_over_layer` as a side effect. The caller is responsible
-    /// for issuing `pointer.motion()` / `pointer.relative_motion()` /
-    /// `pointer.frame()` and calling `update_decoration_cursor()` so that
-    /// absolute and relative motion events agree on the same target surface.
+    /// `self.pointer_over_layer` and `self.pointer_over_screen_space` as side
+    /// effects. The caller is responsible for issuing `pointer.motion()` /
+    /// `pointer.relative_motion()` / `pointer.frame()` and calling
+    /// `update_decoration_cursor()` so that absolute and relative motion events
+    /// agree on the same target surface.
     fn pointer_focus_under(
         &mut self,
         screen_pos: Point<f64, smithay::utils::Logical>,
@@ -268,30 +269,35 @@ impl DriftWm {
         };
         if let Some(hit) = self.layer_surface_under(screen_pos, canvas_pos, above) {
             self.pointer_over_layer = true;
+            self.pointer_over_screen_space = true;
             return Some(hit);
         }
 
         // Screen-pinned windows: above normal canvas windows, below Top/Overlay.
         if let Some(hit) = self.pinned_window_under(screen_pos, canvas_pos) {
             self.pointer_over_layer = false;
+            self.pointer_over_screen_space = true;
             return Some(hit);
         }
 
         // Non-widget canvas windows (visually above canvas layers)
         if let Some(hit) = self.surface_under(canvas_pos, Some(false)) {
             self.pointer_over_layer = false;
+            self.pointer_over_screen_space = false;
             return Some(hit);
         }
 
         // Canvas-positioned layer surfaces
         if let Some(hit) = self.canvas_layer_under(canvas_pos) {
             self.pointer_over_layer = false;
+            self.pointer_over_screen_space = false;
             return Some(hit);
         }
 
         // Widget canvas windows (visually below canvas layers)
         if let Some(hit) = self.surface_under(canvas_pos, Some(true)) {
             self.pointer_over_layer = false;
+            self.pointer_over_screen_space = false;
             return Some(hit);
         }
 
@@ -304,10 +310,12 @@ impl DriftWm {
             )
         {
             self.pointer_over_layer = true;
+            self.pointer_over_screen_space = true;
             return Some(hit);
         }
 
         self.pointer_over_layer = false;
+        self.pointer_over_screen_space = false;
         None
     }
 
@@ -1054,7 +1062,11 @@ impl DriftWm {
                 window.surface_under(screen_pos - surface_origin.to_f64(), WindowSurfaceType::ALL)
             {
                 let screen_loc = (surface_loc + surface_origin).to_f64();
-                let adjusted = screen_loc + (canvas_pos - screen_pos);
+                let adjusted = screen_space_focus_loc(
+                    ScreenPos(screen_loc),
+                    CanvasPos(canvas_pos),
+                    ScreenPos(screen_pos),
+                );
                 return Some((FocusTarget(surface), adjusted));
             }
 
@@ -1079,7 +1091,11 @@ impl DriftWm {
                 )
                 .is_some()
                 {
-                    let adjusted = p.screen_pos.to_f64() + (canvas_pos - screen_pos);
+                    let adjusted = screen_space_focus_loc(
+                        ScreenPos(p.screen_pos.to_f64()),
+                        CanvasPos(canvas_pos),
+                        ScreenPos(screen_pos),
+                    );
                     return Some((FocusTarget((*wl_surface).clone()), adjusted));
                 }
             } else {
@@ -1095,7 +1111,11 @@ impl DriftWm {
                     )
                     .is_some()
                 {
-                    let adjusted = p.screen_pos.to_f64() + (canvas_pos - screen_pos);
+                    let adjusted = screen_space_focus_loc(
+                        ScreenPos(p.screen_pos.to_f64()),
+                        CanvasPos(canvas_pos),
+                        ScreenPos(screen_pos),
+                    );
                     return Some((FocusTarget((*wl_surface).clone()), adjusted));
                 }
             }
@@ -1388,8 +1408,11 @@ impl DriftWm {
                     surface.surface_under(surface_local, WindowSurfaceType::ALL)
                 {
                     let screen_loc = (sub_loc + geo.loc).to_f64();
-                    // Adjust so: canvas_pos - adjusted = screen_pos - screen_loc
-                    let adjusted = screen_loc + (canvas_pos - screen_pos);
+                    let adjusted = screen_space_focus_loc(
+                        ScreenPos(screen_loc),
+                        CanvasPos(canvas_pos),
+                        ScreenPos(screen_pos),
+                    );
                     return Some((FocusTarget(wl_surface), adjusted));
                 }
             }

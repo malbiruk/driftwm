@@ -103,6 +103,14 @@ fn edge_from_origin(
 /// forwarding and the escalation replay.
 type SlotFocus = Option<(FocusTarget, Point<f64, Logical>)>;
 
+/// Per-slot state captured at touch-down.
+struct SlotDown {
+    focus: SlotFocus,
+    /// (canvas - screen) at down, `Some` only for screen-space targets whose
+    /// frozen focus offset makes smithay expect screen-basis locations.
+    screen_delta: Option<Point<f64, Logical>>,
+}
+
 /// Touch grab that owns the whole multi-finger canvas-gesture lifecycle. The
 /// classification — which action each recognized gesture drives — lives in the
 /// clock-free, compositor-free [`TouchRecognizer`]; this adapter converts
@@ -118,9 +126,9 @@ pub struct TouchGestureGrab {
     start_data: TouchGrabStartData<DriftWm>,
     output: Output,
     /// Keyed by slot; the recognizer owns geometry (screen positions), so this
-    /// holds only what `SlotFocus` needs for app forwarding and the escalation
-    /// replay.
-    focus: HashMap<TouchSlot, SlotFocus>,
+    /// holds only the per-slot [`SlotDown`] state for app forwarding and the
+    /// escalation replay.
+    focus: HashMap<TouchSlot, SlotDown>,
     core: TouchRecognizer,
 }
 
@@ -481,7 +489,18 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         }
         let (camera, zoom) = self.camera_zoom();
         let screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
-        self.focus.insert(event.slot, focus.clone());
+        // The hit-test that produced `focus` ran in this same dispatch, so the
+        // flag still reflects this touch's target. Capture (canvas - screen) now
+        // to rewrite later motion into the screen basis smithay freezes at down.
+        let screen_delta =
+            (focus.is_some() && data.pointer_over_screen_space).then(|| event.location - screen);
+        self.focus.insert(
+            event.slot,
+            SlotDown {
+                focus: focus.clone(),
+                screen_delta,
+            },
+        );
 
         let input = TouchInput {
             time_ms: event.time,
@@ -520,11 +539,15 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
                     let replays: Vec<(TouchSlot, Point<f64, Logical>)> = self
                         .focus
                         .iter()
-                        .filter(|(slot, foc)| **slot != event.slot && foc.is_some())
-                        .filter_map(|(slot, _)| {
-                            self.core
-                                .screen_pos(*slot)
-                                .map(|sp| (*slot, screen_to_canvas(ScreenPos(sp), camera, zoom).0))
+                        .filter(|(slot, state)| **slot != event.slot && state.focus.is_some())
+                        .filter_map(|(slot, state)| {
+                            self.core.screen_pos(*slot).map(|sp| {
+                                let location = match state.screen_delta {
+                                    Some(delta) => sp + delta,
+                                    None => screen_to_canvas(ScreenPos(sp), camera, zoom).0,
+                                };
+                                (*slot, location)
+                            })
                         })
                         .collect();
                     for (slot, location) in replays {
@@ -616,7 +639,9 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
         }
         let (camera, zoom) = self.camera_zoom();
         let screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
-        let stored_focus = self.focus.get(&event.slot).cloned().flatten();
+        let slot_down = self.focus.get(&event.slot);
+        let stored_focus = slot_down.and_then(|s| s.focus.clone());
+        let screen_delta = slot_down.and_then(|s| s.screen_delta);
 
         let input = TouchInput {
             time_ms: event.time,
@@ -631,13 +656,28 @@ impl TouchGrab<DriftWm> for TouchGestureGrab {
             data.touch_state.holdback.is_some(),
         );
 
+        // smithay froze this slot's focus offset at down and ignores the focus
+        // passed to motion, so a screen-space target only gets correct coords if
+        // the delivered location is shifted into that same screen basis.
+        let forward_location = match screen_delta {
+            Some(delta) => screen + delta,
+            None => event.location,
+        };
+
         for decision in decisions {
             match decision {
-                Decision::Forward => handle.motion(data, stored_focus.clone(), event, seq),
+                Decision::Forward => {
+                    let ev = MotionEvent {
+                        slot: event.slot,
+                        location: forward_location,
+                        time: event.time,
+                    };
+                    handle.motion(data, stored_focus.clone(), &ev, seq);
+                }
                 Decision::Consume => handle.motion(data, None, event, seq),
                 Decision::Hold => data.hold_touch_event(HeldTouchEvent::Motion {
                     slot: event.slot,
-                    location: event.location,
+                    location: forward_location,
                     time: event.time,
                 }),
                 Decision::Pan(delta) => self.apply_pan(data, delta, event.time),

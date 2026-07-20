@@ -330,6 +330,7 @@ impl DriftWm {
             session_lock: SessionLock::Unlocked,
             lock_surfaces: HashMap::new(),
             pointer_over_layer: false,
+            pointer_over_screen_space: false,
             canvas_layers: Vec::new(),
             config,
             pending_center: HashSet::new(),

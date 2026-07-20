@@ -1,5 +1,5 @@
 use crate::DriftWm;
-use driftwm::canvas::{CanvasPos, canvas_to_screen};
+use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_space_focus_loc};
 use smithay::{
     input::pointer::{ButtonEvent, GrabStartData, MotionEvent, PointerGrab, PointerInnerHandle},
     utils::{Logical, Point},
@@ -24,9 +24,10 @@ impl PointerGrab<DriftWm> for LayerClickGrab {
         let canvas_pos = event.location;
         let camera = data.camera();
         let zoom = data.zoom();
-        let screen_pos = canvas_to_screen(CanvasPos(canvas_pos), camera, zoom).0;
+        let screen = canvas_to_screen(CanvasPos(canvas_pos), camera, zoom);
 
-        let new_loc = self.screen_loc + (canvas_pos - screen_pos);
+        let new_loc =
+            screen_space_focus_loc(ScreenPos(self.screen_loc), CanvasPos(canvas_pos), screen);
         let focus = self
             .start_data
             .focus

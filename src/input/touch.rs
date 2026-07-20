@@ -417,6 +417,9 @@ impl DriftWm {
                 return;
             };
             let focus = FocusTarget(ls.wl_surface().clone());
+            // No hit-test runs on this path; clear the stale flag so a live
+            // gesture grab can't capture a bogus screen delta for this slot.
+            self.pointer_over_screen_space = false;
             let touch = self.seat.get_touch().unwrap();
             touch.down(
                 self,

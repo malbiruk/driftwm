@@ -511,6 +511,9 @@ pub struct DriftWm {
     pub lock_surfaces: HashMap<Output, LockSurface>,
 
     pub pointer_over_layer: bool,
+    /// Last pointer hit-test landed on a screen-space target — a wlr layer or a
+    /// screen-pinned window (both live in screen coords, unlike canvas windows).
+    pub pointer_over_screen_space: bool,
     pub canvas_layers: Vec<CanvasLayer>,
 
     pub config: Config,

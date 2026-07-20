@@ -36,6 +36,30 @@ pub fn canvas_to_screen(canvas: CanvasPos, camera: Point<f64, Logical>, zoom: f6
     )))
 }
 
+/// Focus location for a screen-space surface (wlr layer, screen-pinned window):
+/// smithay derives surface-local coords as `location - focus_loc` with the
+/// pointer/touch location in canvas coords, so the surface's screen origin is
+/// shifted by (canvas - screen) to make the subtraction come out in screen space.
+#[inline]
+pub fn screen_space_focus_loc(
+    origin: ScreenPos,
+    canvas: CanvasPos,
+    screen: ScreenPos,
+) -> Point<f64, Logical> {
+    origin.0 + (canvas.0 - screen.0)
+}
+
+/// Inverse of [`screen_space_focus_loc`]: recover the surface's screen origin
+/// from an adjusted focus location.
+#[inline]
+pub fn screen_space_origin(
+    focus_loc: Point<f64, Logical>,
+    canvas: CanvasPos,
+    screen: ScreenPos,
+) -> ScreenPos {
+    ScreenPos(focus_loc - (canvas.0 - screen.0))
+}
+
 /// Convert internal canvas coords (top-left origin, Y-down) to the user-facing
 /// window-rule convention (center, Y-up) used by config rules, the state file, and IPC.
 #[inline]

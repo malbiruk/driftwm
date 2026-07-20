@@ -202,7 +202,13 @@ impl DriftWm {
                     let layer = pointer.current_focus().map(|f| f.0);
                     self.focus_layer_if_on_demand(layer, serial);
 
-                    if let Some(target) = pointer.current_focus() {
+                    // A live grab (e.g. a layer's own popup grab) must keep
+                    // routing this click: set_grab would replace it, and a
+                    // popup grab's unset only releases its keyboard half, so
+                    // the popup would linger with no dismiss-on-click-outside.
+                    if !pointer.is_grabbed()
+                        && let Some(target) = pointer.current_focus()
+                    {
                         let canvas_pos_0 = pointer.current_location();
                         let screen_pos_0 = driftwm::canvas::canvas_to_screen(
                             driftwm::canvas::CanvasPos(canvas_pos_0),
@@ -214,7 +220,12 @@ impl DriftWm {
                             self.pointer_focus_under(screen_pos_0, canvas_pos_0)
                             && focus == target
                         {
-                            let screen_loc = adjusted_0 - (canvas_pos_0 - screen_pos_0);
+                            let screen_loc = driftwm::canvas::screen_space_origin(
+                                adjusted_0,
+                                driftwm::canvas::CanvasPos(canvas_pos_0),
+                                driftwm::canvas::ScreenPos(screen_pos_0),
+                            )
+                            .0;
                             let start_data = GrabStartData {
                                 focus: Some((focus, adjusted_0)),
                                 button,
