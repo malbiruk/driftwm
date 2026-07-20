@@ -657,10 +657,14 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
         let origin = Point::<i32, smithay::utils::Logical>::from((-geo.loc.x, -geo.loc.y))
             .to_physical_precise_round(scale);
 
+        let opacity = driftwm::config::applied_rule(surface)
+            .and_then(|r| r.opacity)
+            .unwrap_or(1.0) as f32;
+
         let surface_elems = render_elements_from_surface_tree::<
             _,
             WaylandSurfaceRenderElement<GlesRenderer>,
-        >(renderer, surface, origin, scale, 1.0, Kind::Unspecified);
+        >(renderer, surface, origin, scale, opacity, Kind::Unspecified);
 
         // Walk popups attached to this surface (xdg dropdown menus,
         // tooltips, autocomplete). They aren't part of the toplevel's
@@ -685,7 +689,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 popup.wl_surface(),
                 popup_origin,
                 scale,
-                1.0,
+                opacity,
                 Kind::Unspecified,
             ));
         }
