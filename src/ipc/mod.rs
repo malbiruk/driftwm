@@ -618,6 +618,11 @@ fn cmd_suspend(sel: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
     if window.parent_surface().is_some() || window.is_modal() {
         return Err("cannot suspend a dialog".to_string());
     }
+    // `raise_and_focus` would redirect focus to an open modal child, and the
+    // action would then silently refuse it; reply honestly instead.
+    if state.topmost_modal_child(&window).is_some() {
+        return Err("window has an open modal dialog".to_string());
+    }
     if state.focused_window().as_ref() != Some(&window) {
         state.raise_and_focus(&window, SERIAL_COUNTER.next_serial());
     }
@@ -862,8 +867,10 @@ fn window_visual_rect(
 fn snap_rect_to_rect(r: driftwm::layout::snap::SnapRect) -> Rectangle<i32, Logical> {
     let x = r.x_low.floor() as i32;
     let y = r.y_low.floor() as i32;
-    let w = (r.x_high - r.x_low).ceil().max(1.0) as i32;
-    let h = (r.y_high - r.y_low).ceil().max(1.0) as i32;
+    // Anchor and extent round outward independently so fractional bounds stay
+    // covered (ceil of the difference can end short of x_high).
+    let w = (r.x_high.ceil() as i32 - x).max(1);
+    let h = (r.y_high.ceil() as i32 - y).max(1);
     Rectangle::new((x, y).into(), (w, h).into())
 }
 
