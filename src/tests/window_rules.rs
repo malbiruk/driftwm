@@ -53,6 +53,86 @@ size = [320, 240]
     assert_eq!(site.screen_pos, smithay::utils::Point::from((800, 420)));
 }
 
+/// A screen-pinned window reports its `position`/`size` in the `state` reply in
+/// rule coordinates — the same numbers the rule set, so users copy them straight
+/// back into a `pinned_to_screen` rule.
+#[test]
+fn pinned_inventory_reports_rule_coords() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+position = [200, -150]
+size = [320, 240]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "pin", (320, 240));
+
+    let (_fullscreen, pinned) = f.state().screen_space_inventory();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].output, "HEADLESS-1");
+    assert_eq!(pinned[0].position, [200, -150]);
+    assert_eq!(pinned[0].size, [320, 240]);
+}
+
+/// A `pinned_to_screen` rule with an `output` pins to that display initially,
+/// not the active output; the rule `position` resolves against the chosen one.
+#[test]
+fn pinned_rule_output_chooses_display() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+output = "HEADLESS-2"
+size = [320, 240]
+"#,
+    ));
+    // HEADLESS-1 (first-added) is the active output; the rule targets HEADLESS-2.
+    let _out1 = f.add_output(1, (1920, 1080));
+    let _out2 = f.add_output(2, (1280, 720));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "pin", (320, 240));
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+
+    let (_fullscreen, pinned) = f.state().screen_space_inventory();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].output, "HEADLESS-2");
+    // Center resolves against the chosen 1280×720 output, not the 1920×1080
+    // active one: (1280/2 - 320/2, 720/2 - 240/2).
+    let site = f.state().stage.pin_of(&window).cloned().unwrap();
+    assert_eq!(site.screen_pos, smithay::utils::Point::from((480, 240)));
+}
+
+/// A `pinned_to_screen` rule naming a disconnected output falls back to the
+/// active output.
+#[test]
+fn pinned_rule_unknown_output_falls_back_to_active() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+output = "DOES-NOT-EXIST"
+size = [320, 240]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let _out2 = f.add_output(2, (1280, 720));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "pin", (320, 240));
+
+    let (_fullscreen, pinned) = f.state().screen_space_inventory();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].output, "HEADLESS-1");
+}
+
 #[test]
 fn multiple_matching_rules_merge() {
     let mut f = Fixture::with_config(config(

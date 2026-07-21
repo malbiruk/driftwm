@@ -38,8 +38,9 @@ pub enum Request {
     /// implementation detail, not a compatibility surface.
     DebugCounters,
     /// Switches the connection to push mode: after the `Ok` reply the server
-    /// writes one [`Event`] line immediately and another on every state change
-    /// (throttled with the state file, ~10/sec).
+    /// writes one [`Event`] line immediately and another on every rendered frame
+    /// while state keeps changing. The ~10 Hz throttle governs only the state
+    /// file, not these events.
     Subscribe,
     /// Focus a window when `Some` (by [`WindowSelector`]); read the focused
     /// window's `app_id` when `None`.
@@ -218,8 +219,9 @@ pub struct OutputFullscreen {
     pub title: String,
 }
 
-/// A screen-pinned window in the IPC `state` reply. `position` is the
-/// output-relative top-left in screen pixels (Y-down); `size` in pixels.
+/// A screen-pinned window in the IPC `state` reply. `position` is the window
+/// center in rule coordinates (output-center origin, Y-up) — the numbers a
+/// `pinned_to_screen` rule's `position` takes; `size` in pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OutputPinned {
     pub id: u64,

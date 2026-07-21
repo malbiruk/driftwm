@@ -7,7 +7,7 @@
 //! `Config::from_toml("")`.
 
 use driftwm::config::Config;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const REFERENCE: &str = include_str!("../config.reference.toml");
 
@@ -175,4 +175,169 @@ fn reference_example_blocks_parse() {
             "example block produced warnings:\n{warnings:#?}\n\n{block}"
         );
     }
+}
+
+/// The reference text from a `# ## <heading>` doc heading up to the next
+/// same-level heading (or EOF). The heading is matched only at the start of a
+/// line, so a heading string can't accidentally hit a substring inside prose.
+fn reference_section(heading: &str) -> &'static str {
+    let start = REFERENCE
+        .match_indices(heading)
+        .map(|(i, _)| i)
+        .find(|&i| i == 0 || REFERENCE.as_bytes()[i - 1] == b'\n')
+        .unwrap_or_else(|| panic!("config.reference.toml is missing heading {heading:?}"));
+    let body = &REFERENCE[start..];
+    let end = body[heading.len()..]
+        .find("\n# ## ")
+        .map_or(body.len(), |i| heading.len() + i);
+    &body[..end]
+}
+
+/// The field names documented under every `# # Supported fields:` block in
+/// `section`. A block runs from its marker line to the next blank comment line
+/// (`# #`), doc heading, or non-comment line. At the block's shallowest indent,
+/// a line reading `name — …` contributes `name`; deeper continuation lines and
+/// sub-bullets are skipped. Multiple markers in a section are unioned.
+fn documented_fields(section: &str) -> BTreeSet<String> {
+    let lines: Vec<&str> = section.lines().collect();
+    let mut names = BTreeSet::new();
+    let mut i = 0;
+    while i < lines.len() {
+        let is_marker = lines[i]
+            .strip_prefix("# #")
+            .is_some_and(|rest| rest.trim() == "Supported fields:");
+        if !is_marker {
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let mut block: Vec<&str> = Vec::new();
+        while i < lines.len() {
+            let Some(body) = lines[i].strip_prefix("# #") else {
+                break;
+            };
+            if body.trim().is_empty() || body.starts_with('#') {
+                break;
+            }
+            block.push(body);
+            i += 1;
+        }
+        let base = block
+            .iter()
+            .map(|b| b.len() - b.trim_start().len())
+            .min()
+            .unwrap_or(0);
+        for body in block {
+            if body.len() - body.trim_start().len() != base {
+                continue;
+            }
+            if let Some((name, _)) = body.trim_start().split_once('\u{2014}') {
+                let name = name.trim();
+                if !name.is_empty() && !name.contains(char::is_whitespace) {
+                    names.insert(name.to_string());
+                }
+            }
+        }
+    }
+    names
+}
+
+/// The field names serde lists after "expected one of" in a `deny_unknown_fields`
+/// rejection — the backtick-quoted tokens.
+fn expected_fields(err: &str) -> Vec<String> {
+    let (_, tail) = err
+        .split_once("expected one of")
+        .unwrap_or_else(|| panic!("not a deny_unknown_fields error:\n{err}"));
+    tail.split('`')
+        .skip(1)
+        .step_by(2)
+        .map(str::to_string)
+        .collect()
+}
+
+/// Assert the fields documented under `Supported fields:` and the fields serde
+/// accepts are the same set, both ways — the only check keeping the two in
+/// lockstep. A field added in code but missing an entry fails the forward
+/// direction; an entry for a field that no longer exists fails the reverse.
+fn assert_fields_match(bogus_toml: &str, heading: &str) {
+    let err = Config::from_toml_collect(bogus_toml)
+        .expect_err("an unknown field must be rejected by deny_unknown_fields")
+        .to_string();
+    let code: BTreeSet<String> = expected_fields(&err).into_iter().collect();
+    assert!(!code.is_empty(), "no field names parsed from:\n{err}");
+    let documented = documented_fields(reference_section(heading));
+
+    let missing: Vec<&str> = code.difference(&documented).map(String::as_str).collect();
+    assert!(
+        missing.is_empty(),
+        "fields exist in code but have no entry under `Supported fields:` in the \
+         {heading:?} section of config.reference.toml: {missing:?}"
+    );
+    let extra: Vec<&str> = documented.difference(&code).map(String::as_str).collect();
+    assert!(
+        extra.is_empty(),
+        "entries are documented under `Supported fields:` in the {heading:?} section \
+         of config.reference.toml but do not exist in code: {extra:?}"
+    );
+}
+
+#[test]
+fn window_rule_fields_are_all_documented() {
+    assert_fields_match(
+        "[[window_rules]]\napp_id = \"x\"\nbogus_field_zz = 1\n",
+        "# ## Window rules",
+    );
+}
+
+#[test]
+fn output_fields_are_all_documented() {
+    assert_fields_match(
+        "[[outputs]]\nname = \"eDP-1\"\nbogus_field_zz = 1\n",
+        "# ## Outputs",
+    );
+}
+
+/// The body of every ```` ```toml ```` fence in a markdown document.
+fn toml_fences(md: &str) -> Vec<String> {
+    let mut fences = Vec::new();
+    let mut current: Option<String> = None;
+    for line in md.lines() {
+        match &mut current {
+            Some(buf) if line.trim_start().starts_with("```") => {
+                fences.push(std::mem::take(buf));
+                current = None;
+            }
+            Some(buf) => {
+                buf.push_str(line);
+                buf.push('\n');
+            }
+            None if line.trim() == "```toml" => current = Some(String::new()),
+            None => {}
+        }
+    }
+    fences
+}
+
+/// Every window-rule recipe in `docs/window-rules.md` must be valid, warning-free
+/// config, so a hand-written recipe can't drift into broken TOML unnoticed.
+#[test]
+fn window_rules_doc_snippets_parse() {
+    const DOC: &str = include_str!("../docs/window-rules.md");
+    let mut checked = 0;
+    for fence in toml_fences(DOC) {
+        if !fence.contains("[[window_rules]]") {
+            continue;
+        }
+        let (_, warnings) = Config::from_toml_collect(&fence)
+            .unwrap_or_else(|e| panic!("window-rules.md snippet failed to parse: {e}\n\n{fence}"));
+        assert!(
+            warnings.is_empty(),
+            "window-rules.md snippet produced warnings:\n{warnings:#?}\n\n{fence}"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked > 0,
+        "found no [[window_rules]] snippets in docs/window-rules.md"
+    );
 }

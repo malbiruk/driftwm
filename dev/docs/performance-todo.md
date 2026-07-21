@@ -36,7 +36,7 @@ or key on (quantized position, behind-element commits).
 **Edge-fade artifact.** Behind-content is cropped to exactly `win_size`, so the
 Kawase kernel clamps at window edges and the blur tapers inward. Fix: blur a
 radius-padded region and crop back — same surface as B5/S1. Cost caveat is at the
-`blur` field in `docs/window-rules.md`.
+`blur` field in `config.reference.toml` (rendered in `docs/config.md#window-rules`).
 
 **Fullscreen occlusion-cull.** `compose_frame` does not short-circuit for a
 fullscreen output — it runs the full window loop (`src/render/mod.rs:585`, only

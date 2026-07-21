@@ -1,0 +1,50 @@
+name: Deploy docs site
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MDBOOK_VERSION: v0.5.4
+
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install mdBook
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          url="https://github.com/rust-lang/mdBook/releases/download/${MDBOOK_VERSION}/mdbook-${MDBOOK_VERSION}-x86_64-unknown-linux-gnu.tar.gz"
+          if curl -sSfL "$url" | tar xz -C "$HOME/.local/bin"; then
+            echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          else
+            echo "Prebuilt mdBook unavailable, falling back to cargo install"
+            cargo install --locked --version "${MDBOOK_VERSION#v}" mdbook
+          fi
+
+      - name: Build docs site
+        run: dev/scripts/build-docs-site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: target/docs-site/book
+
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4

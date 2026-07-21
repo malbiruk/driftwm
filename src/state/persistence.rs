@@ -13,11 +13,13 @@
 //! `windows=` is canvas-space only. Screen-space windows are reported under
 //! their owning output instead: `outputs.{name}.fullscreen` is a JSON
 //! `{id, app_id, title}` object, and `outputs.{name}.pinned` a JSON array of
-//! `{id, app_id, title, position, size}` (position = output-relative top-left,
-//! in screen pixels, Y-down).
+//! `{id, app_id, title, position, size}`. Like `windows=`, a pinned entry's
+//! `position` is the window **center** in the rule convention (Y-up), but
+//! relative to the **output center** rather than the canvas origin, so the
+//! numbers paste straight into a `pinned_to_screen` rule's `position`.
 
 use serde::Serialize;
-use smithay::utils::{Logical, Point};
+use smithay::utils::{Logical, Point, Size};
 use smithay::wayland::seat::WaylandFocus;
 use std::collections::HashMap;
 use std::time::Instant;
@@ -26,7 +28,7 @@ use driftwm::window_ext::WindowExt;
 
 use crate::ipc::protocol::{CanvasLayerInfo, OutputFullscreen, OutputPinned, WindowInfo};
 
-use super::{DriftWm, output_state};
+use super::{DriftWm, output_logical_size, output_state};
 
 /// A fullscreen window in the state file's per-output section.
 #[derive(Serialize)]
@@ -37,7 +39,8 @@ struct FullscreenInfo {
 }
 
 /// A screen-pinned window in the state file's per-output section. `position` is
-/// the output-relative top-left in screen pixels (Y-down); `size` in pixels.
+/// the window center in rule coordinates (output-center origin, Y-up) — the
+/// numbers a `pinned_to_screen` rule's `position` takes; `size` in pixels.
 #[derive(Serialize)]
 struct PinnedInfo {
     id: u64,
@@ -211,6 +214,9 @@ impl DriftWm {
                 continue;
             }
             let size = window.geometry().size;
+            let Some((rx, ry)) = self.pinned_rule_coords(p, size) else {
+                continue;
+            };
             pinned.push(OutputPinned {
                 id: self
                     .stage
@@ -220,13 +226,31 @@ impl DriftWm {
                 output: p.output.clone(),
                 app_id,
                 title,
-                position: [p.screen_pos.x, p.screen_pos.y],
+                position: [rx, ry],
                 size: [size.w, size.h],
             });
         }
         pinned.sort_by(|a, b| (&a.output, a.position).cmp(&(&b.output, b.position)));
 
         (fullscreen, pinned)
+    }
+
+    /// A pin's rule coordinates (window center, output-center origin, Y-up) —
+    /// the numbers a `pinned_to_screen` rule's `position` takes. `None` when the
+    /// pin's output is disconnected: it can't be expressed relative to a monitor
+    /// that's gone (and pins get reassigned off dead outputs anyway).
+    fn pinned_rule_coords(
+        &self,
+        pin: &driftwm::stage::PinnedSite,
+        size: Size<i32, Logical>,
+    ) -> Option<(i32, i32)> {
+        let output = self.output_by_name(&pin.output)?;
+        let out_size = output_logical_size(&output);
+        Some(driftwm::canvas::screen_top_left_to_rule(
+            pin.screen_pos,
+            size,
+            out_size,
+        ))
     }
 
     /// Write viewport center + zoom to `$XDG_RUNTIME_DIR/driftwm/state` if changed.
@@ -274,6 +298,9 @@ impl DriftWm {
                 continue;
             }
             let size = window.geometry().size;
+            let Some((rx, ry)) = self.pinned_rule_coords(p, size) else {
+                continue;
+            };
             let id = self
                 .stage
                 .id_of(window)
@@ -286,7 +313,7 @@ impl DriftWm {
                     id,
                     app_id,
                     title,
-                    position: [p.screen_pos.x, p.screen_pos.y],
+                    position: [rx, ry],
                     size: [size.w, size.h],
                 });
         }

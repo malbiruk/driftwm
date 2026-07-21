@@ -21,6 +21,7 @@ For that to work the file follows a small, strict grammar. This is the contract.
 | `# ## <text>` / `# ### <text>`            | **Doc heading** — a markdown heading in the generated page. TOML- and test-invisible (it's `# #` prose). |
 | `# # Example:` / `# # Example: <label>`   | Start of an **example** block.                                                                           |
 | `# # …` after a marker                    | Example **body** — rendered verbatim, never TOML-parsed.                                                 |
+| `# # Supported fields:`                   | Start of a **field-reference** block; the exhaustiveness tests key on it (see rule 7).                    |
 | blank line (no `#`)                       | Hard separator between units.                                                                            |
 | `# #` (empty)                             | Soft separator inside a comment block.                                                                   |
 
@@ -61,6 +62,19 @@ For that to work the file follows a small, strict grammar. This is the contract.
    header-less doc blocks; a real `[[outputs]]` / `[[window_rules]]` header can't
    serve that role because an empty one would spawn a phantom output/rule when
    the file is copied.
+
+7. **`Supported fields:` blocks.** A `# # Supported fields:` line opens a field
+   reference. Each entry is a `# #   name — description` line, with `name` at the
+   block's shallowest indent and wrapped continuation lines indented deeper (they
+   align under the description). The block ends at a blank comment line (`# #`), a
+   doc heading, or a non-comment line. The marker text doubles as the visible
+   heading in the generated page — it renders as ordinary prose, so the doc
+   generator needs no special case. The config-reference exhaustiveness tests key
+   on this marker to cross-check the documented field names against serde's
+   accepted set in both directions. By convention an array-of-tables section
+   (`[[window_rules]]`, `[[outputs]]`) has one such block listing every field, but
+   multiple blocks are valid — the tests union the entries across every marker in
+   the section.
 
 ## Invariants
 

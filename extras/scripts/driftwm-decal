@@ -13,7 +13,13 @@ Usage:
 Each invocation is one decal window. Match it with a `widget = true` window
 rule by `--title`, then launch from `autostart` in config.toml:
 
-    # config.toml
+    # config.toml (autostart is a top-level key — keep it above the
+    # [[window_rules]] tables, or TOML parses it into the last rule)
+    autostart = [
+        "driftwm-decal ~/decals/shortcuts.svg --title shortcuts",
+        "driftwm-decal ~/decals/logo.png      --title logo",
+    ]
+
     [[window_rules]]
     title      = "shortcuts"
     widget     = true          # pin to canvas, below windows, off alt-tab
@@ -27,11 +33,6 @@ rule by `--title`, then launch from `autostart` in config.toml:
     decoration = "none"
     position   = [-800, 600]
     size       = [256, 256]
-
-    autostart = [
-        "driftwm-decal ~/decals/shortcuts.svg --title shortcuts",
-        "driftwm-decal ~/decals/logo.png      --title logo",
-    ]
 
 The transparent parts of the image show the dot grid (or your shader
 wallpaper) through. GtkPicture handles both PNG and SVG.

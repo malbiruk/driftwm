@@ -329,22 +329,26 @@ impl CompositorHandler for DriftWm {
                     } else if applied.as_ref().is_some_and(|a| a.pinned_to_screen)
                         && has_size
                         && !is_fullscreen
-                        && let Some(output) = self.active_output()
+                        && let Some(output) = applied
+                            .as_ref()
+                            .and_then(|a| a.output.as_deref())
+                            .and_then(|name| self.output_by_name(name))
+                            .or_else(|| self.active_output())
                     {
-                        // Screen-pinned: live in the active output's screen
-                        // space, not the canvas. `position` (if any) is the
-                        // output-relative center, Y-up (output center = origin).
+                        // Screen-pinned: live in the chosen output's screen
+                        // space, not the canvas. A rule `output` picks the
+                        // display (else the active one); `position` (if any) is
+                        // that output's center, Y-up (output center = origin).
                         let (rx, ry) = applied.as_ref().and_then(|a| a.position).unwrap_or((0, 0));
                         let out_size = crate::state::output_logical_size(&output);
-                        let internal = driftwm::canvas::rule_to_internal(rx, ry, geo.size);
                         // Clamp the top-left into the output so an off-screen rule
                         // `position` (e.g. [1000, 1000] on a 1080p monitor) still
                         // lands fully visible. Mirrors `reassign_orphaned_pinned`.
+                        let top_left =
+                            driftwm::canvas::rule_to_screen_top_left(rx, ry, geo.size, out_size);
                         let screen_pos: Point<i32, Logical> = (
-                            (out_size.w / 2 + internal.x)
-                                .clamp(0, (out_size.w - geo.size.w).max(0)),
-                            (out_size.h / 2 + internal.y)
-                                .clamp(0, (out_size.h - geo.size.h).max(0)),
+                            top_left.x.clamp(0, (out_size.w - geo.size.w).max(0)),
+                            top_left.y.clamp(0, (out_size.h - geo.size.h).max(0)),
                         )
                             .into();
                         // Seed the Space loc to the canvas point this screen

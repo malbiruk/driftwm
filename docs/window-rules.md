@@ -3,6 +3,15 @@
 Window rules let you apply per-window overrides based on a window's identity.
 Rules are declared as `[[window_rules]]` sections in your config file.
 
+Most rule effects — position, size, opacity, decoration, borders, widget,
+pinned, output, … — are resolved **once, when a window maps**: reloading your
+config only affects windows opened afterwards, and a window that changes its
+title after mapping is **not** re-checked against `title` rules. Two things
+re-resolve live against the current config instead: `pass_keys` is evaluated per
+keypress (so a config reload — and a title change — takes effect immediately),
+and layer-surface chrome is evaluated per frame (so a config reload takes effect
+immediately).
+
 ## How matching works
 
 **All matching rules are applied, not just the first one.** Rules are processed
@@ -66,45 +75,17 @@ Multiple `*` wildcards are allowed in glob patterns: `"*terminal*"`.
 
 Regex patterns use the `regex` crate (RE2-compatible, no backreferences).
 
-## Effect fields
+## Field reference
 
-The table below describes how each field behaves on rules matching regular
-windows (xdg-toplevels). Layer-shell surfaces interpret chrome fields
-differently — see [Layer-shell surfaces](#layer-shell-surfaces) below.
+Every rule field — its type, default, accepted values, and per-field caveats
+(which fields `decoration = "none"` ignores, the blur GPU/VRAM cost, the one-shot
+`size`, how layer-shell surfaces opt into chrome) — is documented in the generated
+[config reference](config.md#window-rules), whose canonical source is
+[`config.reference.toml`](../config.reference.toml). This page is the recipe and
+semantics guide; the reference is the field dictionary.
 
-| Field                  | Type                     | Default   | Description                                                                                                                                  |
-| ---------------------- | ------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `position`             | `[x, y]`                 | —         | Place window at canvas coordinates (window center, Y-up). Output-relative (origin = output center) when `pinned_to_screen` is set.           |
-| `size`                 | `[w, h]`                 | —         | Initial window dimensions in pixels (one-shot: the user/app can resize freely afterwards; pair with `widget = true` to keep the size locked) |
-| `widget`               | `bool`                   | `false`   | Pin window: immovable, below normal windows, excluded from navigation/alt-tab                                                                |
-| `pinned_to_screen`     | `bool`                   | `false`   | Pin to one output's screen space — see [Screen-pinned windows](#screen-pinned-windows)                                                       |
-| `decoration`           | string                   | inherited | Override decoration mode (see below)                                                                                                         |
-| `blur`                 | `bool`                   | `false`   | Blur compositor background behind this window                                                                                                |
-| `opacity`              | `0.0`–`1.0`              | `1.0`     | Window transparency (1.0 = fully opaque)                                                                                                     |
-| `border_width`         | px                       | inherited | Border width override. Set to `0` to disable the border even when global width is `> 0`. Ignored for `decoration = "none"`.                  |
-| `border_color`         | `"#rrggbb[aa]"`          | inherited | Per-window unfocused border color                                                                                                            |
-| `border_color_focused` | `"#rrggbb[aa]"`          | inherited | Per-window focused border color                                                                                                              |
-| `corner_radius`        | px                       | inherited | Per-window corner radius override. Affects content clip, border shape, and shadow. Ignored for `decoration = "none"`.                        |
-| `shadow`               | `bool`                   | inherited | Per-window shadow toggle. Overrides `[decorations] shadow`. Ignored for `decoration = "none"`.                                               |
-| `output`               | string                   | —         | Output name (e.g. `"DP-1"`) this window fullscreens onto — see [Fullscreen output](#fullscreen-output)                                       |
-| `pass_keys`            | `bool` or `["combo", …]` | `false`   | Forward keys to the app — see below                                                                                                          |
-
-> [!WARNING]
-> Blur has real GPU/VRAM cost. Results are cached and only recomputed when
-> the content behind a window changes, but the cost does **not** scale down with
-> zoom — a blurred window is processed at full resolution no matter how far you
-> zoom out. Many blurred windows, or a few at extreme zoom-out, can stutter and
-> consume significant VRAM. Prefer enabling `blur` on a handful of windows over
-> applying it globally. There's room to improve this further.
-
-### `decoration` values
-
-| Value       | Description                                                                                              |
-| ----------- | -------------------------------------------------------------------------------------------------------- |
-| `"client"`  | CSD — client draws its own titlebar (default)                                                            |
-| `"server"`  | SSD — driftwm draws a titlebar with the window title and a close button                                  |
-| `"minimal"` | SSD — no titlebar; shadow, corner clip, and border still apply per `[decorations]` / per-window rules    |
-| `"none"`    | Bare client surface — compositor adds zero chrome; per-window border/corner/shadow rules are ignored too |
+Layer-shell surfaces interpret chrome fields differently — see
+[Layer-shell surfaces](#layer-shell-surfaces) below.
 
 ### Screen-pinned windows
 
@@ -133,21 +114,19 @@ floating overlay.
 
 #### Finding a pinned window's position and size
 
-`position`/`size` are screen-space. The easiest way is to pin the window live,
-drag it where you want, then read the numbers back to bake into a rule:
+`driftwm msg state` already reports a pinned window's `position`/`size` in rule
+coordinates, so the flow is: pin the window live, place it, and copy the numbers
+straight into a rule:
 
 1. Open the window (e.g. start Picture-in-Picture), click it to focus, and press
    `Mod+T` to pin it. It's now in screen space — drag it anywhere with the mouse
    and resize to taste.
-2. Once it sits where you want, press `Mod+A` (home) to bring the viewport to the
-   canvas origin at zoom 1.0. The pinned window stays put on screen.
-3. Press `Mod+T` again to unpin. At home the window drops back onto the canvas at
-   the same on-screen spot, and one canvas unit is one screen pixel, so its
-   canvas coords now equal its screen position.
-4. Run `driftwm msg state` and copy the window's `app_id`, `title`, `position`,
-   and `size`.
-5. Write the rule with those values plus `pinned_to_screen = true` (and
-   `decoration = "none"` for a chrome-free PiP surface).
+2. Run `driftwm msg state` and read the `pinned` section: each entry lists its
+   output, `app_id`, `title`, `position`, and `size`. Those `position`/`size`
+   values are already output-relative rule coordinates.
+3. Write the rule with those `position`/`size` values plus
+   `pinned_to_screen = true` (and `decoration = "none"` for a chrome-free PiP
+   surface).
 
 ```toml
 [[window_rules]]
@@ -158,17 +137,17 @@ size             = [570, 320]
 decoration       = "none"
 ```
 
-You have to unpin before reading (step 3): pinned windows live in screen space,
-not on the canvas, so — like layer-shell panels — they're deliberately absent
-from `driftwm msg state` and canvas screenshots. If you run top/bottom bars,
-`Mod+A` centers the _usable_ area rather than the raw output, so the result can
-sit a little off — nudge `position` to taste.
+Pinned windows stay absent from the canvas `windows=` inventory and from canvas
+screenshots (`driftwm msg screenshot`) — like layer-shell panels, they live in
+screen space, not on the canvas. They appear in their own per-output `pinned`
+section of `driftwm msg state` instead, which is where the copy-ready numbers
+come from.
 
-### Fullscreen output
+### Output selection
 
-On a multi-monitor setup, `output` chooses which monitor a window fullscreens
-onto, by output name (e.g. `"DP-1"` — find names under `outputs.*` in
-`driftwm msg state`):
+On a multi-monitor setup, `output` names a monitor by its output name (e.g.
+`"DP-1"` — find names under `outputs.*` in `driftwm msg state`). It governs two
+placements:
 
 ```toml
 [[window_rules]]
@@ -176,11 +155,17 @@ app_id = "steam_app_*"
 output = "DP-1"
 ```
 
-Precedence when a window goes fullscreen: the rule's `output` wins; otherwise the
-output the client itself requested; otherwise the active output (where the
-pointer is). An unknown or disconnected output name falls through to the next
-choice. `output` only affects fullscreen — it does not move a windowed or
-screen-pinned window.
+- **Fullscreen** — which monitor a window fullscreens onto. Precedence: the
+  rule's `output` wins; otherwise the output the client itself requested;
+  otherwise the active output (where the pointer is).
+- **Screen-pinned** — which monitor a `pinned_to_screen` window *initially* pins
+  to. Precedence: the rule's `output` wins; otherwise the active output. The
+  rule's `position` is then resolved against that monitor. Afterwards, dragging
+  the window across monitors — or `send-to-output` — reassigns it, so `output`
+  only seeds the starting display.
+
+An unknown or disconnected output name falls through to the next choice.
+`output` does not move a plain windowed (non-fullscreen, non-pinned) window.
 
 ### Layer-shell surfaces
 
@@ -235,6 +220,37 @@ app_id     = "my-widget"
 position   = [0, 0]
 widget     = true
 decoration = "none"
+```
+
+### Pictures and text on the canvas (decals)
+
+To pin arbitrary images to canvas spots — hand-drawn shortcut sheets, logos,
+region labels — render a transparent PNG/SVG as a borderless window with
+[`extras/scripts/driftwm-decal`](../extras/scripts/driftwm-decal) (deps:
+python-gobject + gtk4), then pin each one with a `widget` rule. The transparent
+parts show the dot grid (or your shader wallpaper) through; decals sit below
+normal windows and stay off alt-tab. Each invocation is one decal window,
+matched by `--title`:
+
+```toml
+autostart = [
+    "driftwm-decal ~/decals/shortcuts.svg --title shortcuts",
+    "driftwm-decal ~/decals/logo.png      --title logo",
+]
+
+[[window_rules]]
+title      = "shortcuts"
+widget     = true          # pin to canvas, below windows, off alt-tab
+decoration = "none"
+position   = [1200, -400]  # canvas coords, Y-up, image center
+size       = [420, 130]
+
+[[window_rules]]
+title      = "logo"
+widget     = true
+decoration = "none"
+position   = [-800, 600]
+size       = [256, 256]
 ```
 
 ### Transparent blurred terminal
@@ -337,6 +353,18 @@ app_id but have a generic title:
 [[window_rules]]
 title  = "winit window"
 widget = true
+```
+
+### On-screen keyboard above other overlays
+
+Overlay layer-shell clients that share a wlr-layer (an on-screen keyboard, a touch
+visualizer) otherwise stack by launch order; a higher `layer_order` keeps this one
+on top (see [Layer-shell surfaces](#layer-shell-surfaces)):
+
+```toml
+[[window_rules]]
+app_id      = "wvkbd"
+layer_order = 10
 ```
 
 ## Debugging

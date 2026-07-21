@@ -3,7 +3,7 @@
 <p align="center">
     <a href="https://github.com/malbiruk/driftwm/blob/main/LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
     <a href="https://github.com/malbiruk/driftwm/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/malbiruk/driftwm?logo=github"></a>
-    <a href="https://repology.org/project/driftwm/versions"><img alt="Packaging status" src="https://repology.org/badge/tiny-repos/driftwm.svg"></a>
+    <a href="https://repology.org/project/driftwm/versions"><img alt="Packaging status" src="https://img.shields.io/repology/repositories/driftwm"></a>
 </p>
 <p align="center"><sub>Primary repository: <a href="https://github.com/malbiruk/driftwm">GitHub</a> · Mirror: <a href="https://codeberg.org/malbiruk/driftwm">Codeberg</a></sub></p>
 
@@ -228,7 +228,7 @@ window-search script that lets you search and jump to any open window.
 - Session lock (swaylock), idle notify (swayidle/hypridle)
 - Screen capture: screencasting (OBS, Firefox, Discord) and screenshots, incl. built-in [canvas/DPI capture](docs/ipc.md#screenshots)
 - 40+ Wayland protocols
-- [IPC control](docs/ipc.md): script the compositor over a Unix socket with `driftwm msg`
+- [IPC control](docs/ipc.md): script the compositor over a Unix socket with `driftwm msg` (full command/flag reference: [docs/cli.md](docs/cli.md))
 
 ## Install
 

@@ -75,6 +75,9 @@ decoration_fit_snapped = true
 "alt+3-finger-swipe" = "resize-window-snapped"
 "alt+shift+3-finger-swipe" = "resize-window"
 
+[mouse.on-window]
+"alt+middle" = "fill-window"
+
 [[outputs]]
 name = "HDMI-A-1"
 transform = "90"

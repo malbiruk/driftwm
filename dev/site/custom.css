@@ -1,0 +1,88 @@
+/* Monochrome overrides for the two auto-selected themes: `light` (default)
+ * and `coal` (dark preference). Only theme variables change — highlight.js
+ * palettes are untouched, so code blocks keep full syntax colors. Loaded
+ * after variables.css, so equal-specificity overrides win by order. */
+
+.light,
+html:not(.js) {
+    --sidebar-bg: #fff;
+    --sidebar-active: #000;
+    --links: #000;
+    --inline-code-color: #000;
+    --quote-bg: hsl(0, 0%, 96%);
+    --quote-border: hsl(0, 0%, 88%);
+    --warning-border: #888;
+    --searchresults-li-bg: #eee;
+    --search-mark-bg: #ccc;
+    --sidebar-header-border-color: transparent;
+    --footnote-highlight: #ccc;
+    --copy-button-filter-hover: invert(0%);
+}
+
+.coal {
+    --bg: #000;
+    --fg: #f2f2f2;
+
+    --sidebar-bg: #0a0a0a;
+    --sidebar-fg: #f2f2f2;
+    --sidebar-non-existant: #666;
+    --sidebar-active: #fff;
+    --sidebar-spacer: #222;
+
+    --scrollbar: #555;
+
+    --icons: #888;
+    --icons-hover: #fff;
+
+    --links: #fff;
+
+    --inline-code-color: #f2f2f2;
+
+    --theme-popup-bg: #111;
+    --theme-popup-border: #444;
+    --theme-hover: #1a1a1a;
+
+    --quote-bg: hsl(0, 0%, 8%);
+    --quote-border: hsl(0, 0%, 20%);
+
+    --warning-border: #888;
+
+    --table-border-color: hsl(0, 0%, 15%);
+    --table-header-bg: hsl(0, 0%, 20%);
+    --table-alternate-bg: hsl(0, 0%, 6%);
+
+    --searchbar-border-color: #555;
+    --searchbar-bg: #111;
+    --searchbar-fg: #fff;
+    --searchbar-shadow-color: #333;
+    --searchresults-header-fg: #999;
+    --searchresults-border-color: #555;
+    --searchresults-li-bg: #1a1a1a;
+    --search-mark-bg: #555;
+
+    --color-scheme: dark;
+
+    --copy-button-filter: invert(60%);
+    --copy-button-filter-hover: invert(100%);
+    --sidebar-header-border-color: transparent;
+    --footnote-highlight: #444;
+}
+
+/* mdBook 0.5.4: toc.js builds the themed sidebar inline but never hides the
+ * no-JS fallback iframe, whose document is hardcoded class="light" and overlays
+ * it (absolute, full-size) — so the sidebar ignores the page theme. Hide the
+ * fallback when JS runs; no-JS visitors still get the iframe. */
+html.js .sidebar-iframe-outer {
+    display: none;
+}
+
+/* Monochrome links need a non-color affordance: bold + underline. `:not(.header)`
+ * keeps heading self-anchors looking like headings, not links. */
+.content a:not(.header) {
+    text-decoration: underline;
+    font-weight: bold;
+}
+.chapter li a.active {
+    text-decoration: underline;
+    font-weight: bold;
+}
