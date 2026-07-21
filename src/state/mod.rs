@@ -713,10 +713,8 @@ pub struct ClientState {
     /// True for clients connected via a security-context listener; denied
     /// privileged protocols (screencopy, foreign-toplevel, virtual keyboard).
     pub is_restricted: bool,
-    /// Resolved lazily from the client's PID: whether this is the compositor's
-    /// own xwayland-satellite. Satellite receives one sticky output per window
-    /// (see `state::membership`); every other client keeps full-overlap
-    /// membership.
+    /// Whether this is the compositor's own xwayland-satellite, resolved
+    /// lazily from the client's PID (see `client_is_satellite`).
     pub is_satellite: std::sync::OnceLock<bool>,
 }
 

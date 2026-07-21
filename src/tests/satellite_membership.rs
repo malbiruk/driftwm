@@ -1,15 +1,13 @@
-//! Wire-level output membership for xwayland-satellite windows. The pure policy
-//! lives in `state::membership`; here a real satellite-flagged client connects
-//! over a socket and we assert the `wl_surface.enter`/`leave` it actually
-//! receives: a single sticky output, migrating only when the window's center
-//! genuinely changes output — never when a second viewport merely pans over it.
-//! A normal client with the same geometry is the control that enters both.
+//! Wire-level output membership for xwayland-satellite windows. The policy
+//! lives in `state::membership`; here a satellite-flagged client connects over
+//! a socket and we assert the actual `wl_surface.enter`/`leave` sequence. A
+//! normal client with the same geometry is the control proving the behavior
+//! is satellite-scoped.
 //!
-//! Two 400×400 outputs sit on the canvas. Each output's camera is set
-//! explicitly so its viewport is a known canvas rect (zoom stays 1, so
-//! `output_geometry.loc == camera`); windows are placed at known canvas
-//! positions. HEADLESS-1 is always the center's home; HEADLESS-2 is the
-//! second viewport that must never steal a satellite window.
+//! Two 400×400 outputs sit on the canvas with cameras set directly so each
+//! viewport is a known canvas rect (zoom stays 1, so `output_geometry.loc ==
+//! camera`). HEADLESS-1 is always the center's home; HEADLESS-2 is the second
+//! viewport that must never steal a satellite window.
 
 use smithay::desktop::Window;
 use smithay::output::Output;

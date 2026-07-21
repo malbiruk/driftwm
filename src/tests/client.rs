@@ -77,8 +77,7 @@ pub struct State {
     pub activation_token: Option<String>,
 
     /// Ordered `wl_surface.enter`/`leave` log per surface, each tagged with the
-    /// entered output's advertised name. Lets a scenario assert exactly which
-    /// outputs a window was entered on and in what order.
+    /// entered output's advertised name.
     pub surface_output_events: HashMap<WlSurface, Vec<OutputEvent>>,
 }
 
