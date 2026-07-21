@@ -818,7 +818,7 @@ scale above which pinch-out fires (1.0 = no pinch)
 
 Gesture bindings: `"Modifier+N-finger-<type>" = "action"` Context-aware: on-window, on-canvas, anywhere. Unbound gestures are forwarded to the focused app. "none" unbinds (prevents anywhere fallback, still forwards).
 
-Gesture types:
+Gesture types (2–5 fingers):
 
 - `N-finger-swipe` — continuous OR threshold (action determines behavior)
 - `N-finger-swipe-up/down/left/right` — threshold only, checked before swipe fallback

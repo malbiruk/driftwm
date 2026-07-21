@@ -434,7 +434,7 @@
 # # Unbound gestures are forwarded to the focused app.
 # # "none" unbinds (prevents anywhere fallback, still forwards).
 # #
-# # Gesture types:
+# # Gesture types (2–5 fingers):
 # #   N-finger-swipe            — continuous OR threshold (action determines behavior)
 # #   N-finger-swipe-up/down/left/right — threshold only, checked before swipe fallback
 # #   3-finger-doubletap-swipe  — continuous OR threshold (3-finger tap then swipe)
