@@ -45,6 +45,7 @@ SITE_PAGES = {
     "index.md",
     "config.md",
     "window-rules.md",
+    "session.md",
     "ipc.md",
     "cli.md",
     "shaders.md",
