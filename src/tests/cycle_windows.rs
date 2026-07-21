@@ -36,7 +36,8 @@ fn cycle_forward(f: &mut Fixture) {
 /// Stands in for a real held modifier the fixture can't inject.
 fn held_cycle_step(f: &mut Fixture) {
     let anchor = f.state().cycle_anchor();
-    if let Some(window) = f.state().stage.cycle_step(false, anchor.as_ref()) {
+    if let Some(target) = f.state().stage.cycle_step(false, anchor.as_ref()) {
+        let window = target.client().expect("cycle target is a client").clone();
         f.state().cycle_navigating = true;
         f.state().navigate_to_window(&window, false);
         f.state().cycle_navigating = false;
@@ -48,7 +49,10 @@ fn open_two_step_session(f: &mut Fixture) -> Window {
     held_cycle_step(f);
     held_cycle_step(f);
     let idx = f.state().stage.cycle_state().expect("mid-cycle");
-    f.state().stage.focus_history()[idx].clone()
+    f.state().stage.focus_history()[idx]
+        .client()
+        .expect("cycle selection is a client")
+        .clone()
 }
 
 #[test]
@@ -64,7 +68,11 @@ fn modifier_less_fires_commit_each_step() {
     cycle_forward(&mut f);
     assert_eq!(f.state().stage.cycle_state(), None, "no lingering session");
     assert_eq!(
-        f.state().stage.focus_history().first(),
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
         Some(&win_b),
         "first fire commits the previous window"
     );
@@ -72,7 +80,11 @@ fn modifier_less_fires_commit_each_step() {
     cycle_forward(&mut f);
     assert_eq!(f.state().stage.cycle_state(), None, "still no session");
     assert_eq!(
-        f.state().stage.focus_history().first(),
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
         Some(&win_c),
         "second fire toggles back"
     );
@@ -114,7 +126,11 @@ fn non_cycle_action_commits_the_selection() {
 
     assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
     assert_eq!(
-        f.state().stage.focus_history().first(),
+        f.state()
+            .stage
+            .focus_history()
+            .first()
+            .and_then(|w| w.client()),
         Some(&selected),
         "the selected window is committed to the MRU head"
     );
@@ -140,9 +156,13 @@ fn click_focus_during_cycle_commits_then_promotes() {
 
     assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
     let history = f.state().stage.focus_history();
-    assert_eq!(history.first(), Some(&clicked), "clicked window on top");
     assert_eq!(
-        history.get(1),
+        history.first().and_then(|w| w.client()),
+        Some(&clicked),
+        "clicked window on top"
+    );
+    assert_eq!(
+        history.get(1).and_then(|w| w.client()),
         Some(&selected),
         "the selection committed just under the clicked window, not lost"
     );
@@ -162,9 +182,13 @@ fn mapping_a_window_during_cycle_commits_the_selection() {
 
     assert_eq!(f.state().stage.cycle_state(), None, "the session ended");
     let history = f.state().stage.focus_history();
-    assert_eq!(history.first(), Some(&mapped), "the new window is on top");
     assert_eq!(
-        history.get(1),
+        history.first().and_then(|w| w.client()),
+        Some(&mapped),
+        "the new window is on top"
+    );
+    assert_eq!(
+        history.get(1).and_then(|w| w.client()),
         Some(&selected),
         "the selection committed just under the new window, not lost"
     );
