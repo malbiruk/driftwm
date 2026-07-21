@@ -5,7 +5,7 @@
     <a href="https://github.com/malbiruk/driftwm/releases"><img alt="GitHub Release" src="https://img.shields.io/github/v/release/malbiruk/driftwm?logo=github"></a>
     <a href="https://repology.org/project/driftwm/versions"><img alt="Packaging status" src="https://repology.org/badge/tiny-repos/driftwm.svg"></a>
 </p>
-<p align="center"><sub>Primary repository: <a href="https://github.com/malbiruk/driftwm">GitHub</a> · Mirror: <a href="https://codeberg.org/malbiruk/driftwm">Codeberg</a></sub></p>
+<p align="center"><sub>Primary repository: <a href="https://github.com/malbiruk/driftwm">GitHub</a> · Mirror: <a href="https://codeberg.org/malbiruk/driftwm">Codeberg</a> · Docs: <a href="https://malbiruk.github.io/driftwm">Website</a></sub></p>
 
 https://github.com/user-attachments/assets/155511a6-0a6e-4681-9061-21be1e93e02a
 

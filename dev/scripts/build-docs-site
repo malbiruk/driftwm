@@ -1,0 +1,174 @@
+#!/usr/bin/env python3
+"""Build the driftwm documentation website with mdBook.
+
+One-command local build / preview:
+
+    dev/scripts/build-docs-site            # build to target/docs-site/book
+    dev/scripts/build-docs-site --serve    # build + live preview at http://localhost:3000
+
+The site is assembled from the repo's user-facing docs — README.md becomes the
+landing page and every page under docs/ is carried over. dev/docs/ (internal
+notes) is deliberately excluded. docs/config.md and docs/cli.md are generated and
+CI-gated elsewhere; the site just consumes them.
+
+Only book.toml and src/SUMMARY.md (under dev/site/) are tracked. This script
+stages a full mdBook source tree under target/docs-site/ — never tracked — and
+runs `mdbook build` against it.
+
+Transforms applied while staging (mdBook passes inline HTML through):
+
+  - README bare github user-attachments video URLs (one per line) become
+    <video controls src="…"> so they play in the browser instead of linking out.
+  - Markdown links into docs/… collapse to same-directory site links.
+  - Repo-relative links with no site page (config.reference.toml, CONTRIBUTING.md,
+    extras/…, dev/…, LICENSE, …) become absolute GitHub blob URLs.
+  - <img src="assets/…"> images referenced by the pages are copied alongside them.
+"""
+
+import argparse
+import re
+import shutil
+import subprocess
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SITE_DIR = REPO_ROOT / "dev" / "site"
+DOCS_DIR = REPO_ROOT / "docs"
+README = REPO_ROOT / "README.md"
+STAGE = REPO_ROOT / "target" / "docs-site"
+
+BLOB_BASE = "https://github.com/malbiruk/driftwm/blob/main/"
+
+# Pages that exist as their own site page: links to these stay same-directory.
+SITE_PAGES = {
+    "index.md",
+    "config.md",
+    "window-rules.md",
+    "ipc.md",
+    "cli.md",
+    "shaders.md",
+    "gigapixel-wallpapers.md",
+}
+
+MD_LINK = re.compile(r"\]\(([^)]+)\)")
+VIDEO_LINE = re.compile(
+    r"^https://github\.com/user-attachments/assets/[0-9a-fA-F-]+$"
+)
+# Local asset references only — src="assets/…" or ](assets/…), never the
+# assets/<uuid> tail of a github user-attachments URL.
+ASSET_REF = re.compile(r"""(?:src=["']|\]\()(assets/[^\s"')]+)""")
+
+
+def rewrite_target(target: str) -> str:
+    """Rewrite a single markdown link target for the site."""
+    parts = target.split(None, 1)
+    url = parts[0]
+    title = f" {parts[1]}" if len(parts) > 1 else ""
+
+    if url.startswith(("http://", "https://", "mailto:", "#")):
+        return target
+
+    if "#" in url:
+        path, frag = url.split("#", 1)
+        anchor = f"#{frag}"
+    else:
+        path, anchor = url, ""
+
+    if path.startswith("docs/"):
+        rel = path[len("docs/") :]
+        if rel in SITE_PAGES:
+            return f"{rel}{anchor}{title}"
+        return f"{BLOB_BASE}{path}{anchor}{title}"
+
+    if path.startswith("../"):
+        while path.startswith("../"):
+            path = path[3:]
+        return f"{BLOB_BASE}{path}{anchor}{title}"
+
+    if path in SITE_PAGES:
+        return target
+
+    return f"{BLOB_BASE}{path}{anchor}{title}"
+
+
+def rewrite_links(text: str) -> str:
+    return MD_LINK.sub(lambda m: f"]({rewrite_target(m.group(1))})", text)
+
+
+def transform_readme(text: str) -> str:
+    """README → landing page: turn bare video URLs into <video>, rewrite links."""
+    out = []
+    for line in text.splitlines():
+        if VIDEO_LINE.match(line.strip()):
+            url = line.strip()
+            out.append(f'<video controls src="{url}"></video>')
+        else:
+            out.append(line)
+    return rewrite_links("\n".join(out) + "\n")
+
+
+def copy_referenced_assets(pages_text: str, src_dir: Path) -> None:
+    for ref in sorted({m.group(1) for m in ASSET_REF.finditer(pages_text)}):
+        source = REPO_ROOT / ref
+        if not source.is_file():
+            print(f"  warning: referenced asset missing: {ref}", file=sys.stderr)
+            continue
+        dest = src_dir / ref
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, dest)
+
+
+def stage() -> Path:
+    if STAGE.exists():
+        shutil.rmtree(STAGE)
+    src_dir = STAGE / "src"
+    src_dir.mkdir(parents=True)
+
+    shutil.copy2(SITE_DIR / "book.toml", STAGE / "book.toml")
+    shutil.copy2(SITE_DIR / "src" / "SUMMARY.md", src_dir / "SUMMARY.md")
+
+    all_text = []
+
+    index = transform_readme(README.read_text())
+    (src_dir / "index.md").write_text(index)
+    all_text.append(index)
+
+    for page in sorted(DOCS_DIR.glob("*.md")):
+        content = rewrite_links(page.read_text())
+        (src_dir / page.name).write_text(content)
+        all_text.append(content)
+
+    copy_referenced_assets("\n".join(all_text), src_dir)
+    return STAGE
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--serve",
+        action="store_true",
+        help="serve with live preview instead of a one-shot build",
+    )
+    args = parser.parse_args()
+
+    mdbook = shutil.which("mdbook")
+    if not mdbook:
+        print(
+            "mdbook not found on PATH. Install it with:\n"
+            "  cargo install --locked mdbook\n"
+            "or grab a prebuilt binary from "
+            "https://github.com/rust-lang/mdBook/releases",
+            file=sys.stderr,
+        )
+        return 1
+
+    root = stage()
+    cmd = [mdbook, "serve" if args.serve else "build", str(root)]
+    print(f"Staged site at {root}")
+    print(f"Running: {' '.join(cmd)}")
+    return subprocess.call(cmd)
+
+
+if __name__ == "__main__":
+    sys.exit(main())

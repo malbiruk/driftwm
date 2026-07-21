@@ -1,0 +1,11 @@
+[book]
+title = "driftwm"
+description = "A trackpad-first infinite canvas Wayland compositor."
+authors = ["malbiruk"]
+language = "en"
+src = "src"
+
+[output.html]
+default-theme = "navy"
+preferred-dark-theme = "navy"
+git-repository-url = "https://github.com/malbiruk/driftwm"
