@@ -222,6 +222,37 @@ widget     = true
 decoration = "none"
 ```
 
+### Pictures and text on the canvas (decals)
+
+To pin arbitrary images to canvas spots — hand-drawn shortcut sheets, logos,
+region labels — render a transparent PNG/SVG as a borderless window with
+[`extras/scripts/driftwm-decal`](../extras/scripts/driftwm-decal) (deps:
+python-gobject + gtk4), then pin each one with a `widget` rule. The transparent
+parts show the dot grid (or your shader wallpaper) through; decals sit below
+normal windows and stay off alt-tab. Each invocation is one decal window,
+matched by `--title`:
+
+```toml
+autostart = [
+    "driftwm-decal ~/decals/shortcuts.svg --title shortcuts",
+    "driftwm-decal ~/decals/logo.png      --title logo",
+]
+
+[[window_rules]]
+title      = "shortcuts"
+widget     = true          # pin to canvas, below windows, off alt-tab
+decoration = "none"
+position   = [1200, -400]  # canvas coords, Y-up, image center
+size       = [420, 130]
+
+[[window_rules]]
+title      = "logo"
+widget     = true
+decoration = "none"
+position   = [-800, 600]
+size       = [256, 256]
+```
+
 ### Transparent blurred terminal
 
 ```toml
