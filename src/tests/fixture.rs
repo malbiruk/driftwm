@@ -155,8 +155,22 @@ impl Fixture {
     }
 
     pub fn add_client(&mut self) -> ClientId {
+        self.add_client_inner(false)
+    }
+
+    /// Add a client the compositor treats as its own xwayland-satellite: its
+    /// windows get a single sticky output membership instead of full overlap.
+    pub fn add_satellite_client(&mut self) -> ClientId {
+        self.add_client_inner(true)
+    }
+
+    fn add_client_inner(&mut self, satellite: bool) -> ClientId {
         let (sock1, sock2) = UnixStream::pair().unwrap();
-        self.state.server.insert_client(sock1);
+        if satellite {
+            self.state.server.insert_satellite_client(sock1);
+        } else {
+            self.state.server.insert_client(sock1);
+        }
 
         let client = Client::new(sock2);
         let id = client.id;

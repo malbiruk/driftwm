@@ -27,6 +27,7 @@ mod hotplug;
 mod opacity;
 mod popups;
 mod real_clients;
+mod satellite_membership;
 mod send_to_output;
 mod soak;
 mod window_opening;

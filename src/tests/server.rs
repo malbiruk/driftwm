@@ -80,4 +80,21 @@ impl Server {
             .insert_client(stream, Arc::new(ClientState::default()))
             .unwrap();
     }
+
+    /// Insert a client the compositor treats as its own xwayland-satellite.
+    /// Pre-seeds `is_satellite`, standing in for the PID-credential resolution
+    /// that runs against a real satellite process, so membership takes the
+    /// single-sticky-output path without one.
+    pub fn insert_satellite_client(&mut self, stream: UnixStream) {
+        let is_satellite = std::sync::OnceLock::new();
+        is_satellite.set(true).unwrap();
+        let data = ClientState {
+            is_satellite,
+            ..Default::default()
+        };
+        self.state
+            .display_handle
+            .insert_client(stream, Arc::new(data))
+            .unwrap();
+    }
 }

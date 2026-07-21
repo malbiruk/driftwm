@@ -75,6 +75,19 @@ pub struct State {
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
+
+    /// Ordered `wl_surface.enter`/`leave` log per surface, each tagged with the
+    /// entered output's advertised name. Lets a scenario assert exactly which
+    /// outputs a window was entered on and in what order.
+    pub surface_output_events: HashMap<WlSurface, Vec<OutputEvent>>,
+}
+
+/// A recorded `wl_surface.enter`/`leave` transition, tagged with the output's
+/// advertised name (mapped from the event's `wl_output` proxy).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum OutputEvent {
+    Enter(String),
+    Leave(String),
 }
 
 pub struct Window {
@@ -237,6 +250,7 @@ impl Client {
             layers: Vec::new(),
             popups: Vec::new(),
             activation_token: None,
+            surface_output_events: HashMap::new(),
         };
 
         Self {
@@ -324,6 +338,32 @@ impl Client {
             .unwrap()
             .0
             .clone()
+    }
+
+    /// Ordered `wl_surface.enter`/`leave` log the compositor sent for `surface`.
+    pub fn surface_output_events(&self, surface: &WlSurface) -> Vec<OutputEvent> {
+        self.state
+            .surface_output_events
+            .get(surface)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Outputs `surface` is currently entered on (an enter with no later leave),
+    /// in the order they were first entered.
+    pub fn surface_outputs(&self, surface: &WlSurface) -> Vec<String> {
+        let mut current: Vec<String> = Vec::new();
+        for event in self.surface_output_events(surface) {
+            match event {
+                OutputEvent::Enter(name) => {
+                    if !current.contains(&name) {
+                        current.push(name);
+                    }
+                }
+                OutputEvent::Leave(name) => current.retain(|n| n != &name),
+            }
+        }
+        current
     }
 }
 
@@ -869,16 +909,26 @@ impl Dispatch<ZwlrLayerShellV1, ()> for State {
 
 impl Dispatch<WlSurface, ()> for State {
     fn event(
-        _state: &mut Self,
-        _proxy: &WlSurface,
+        state: &mut Self,
+        surface: &WlSurface,
         event: <WlSurface as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
     ) {
+        // `wl_output.name` arrives during the initial roundtrip, well before any
+        // window maps, so the lookup is populated by the time enter/leave fire.
+        let record = |state: &mut Self, output: &WlOutput, make: fn(String) -> OutputEvent| {
+            let name = state.outputs.get(output).cloned().unwrap_or_default();
+            state
+                .surface_output_events
+                .entry(surface.clone())
+                .or_default()
+                .push(make(name));
+        };
         match event {
-            wl_surface::Event::Enter { .. } => (),
-            wl_surface::Event::Leave { .. } => (),
+            wl_surface::Event::Enter { output } => record(state, &output, OutputEvent::Enter),
+            wl_surface::Event::Leave { output } => record(state, &output, OutputEvent::Leave),
             wl_surface::Event::PreferredBufferScale { .. } => (),
             wl_surface::Event::PreferredBufferTransform { .. } => (),
             _ => unreachable!(),
