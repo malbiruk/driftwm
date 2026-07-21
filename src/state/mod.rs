@@ -751,9 +751,16 @@ impl DriftWm {
             let Some(satellite_pid) = self.satellite.as_ref().map(|s| s.pid()) else {
                 return false;
             };
-            client
+            let matched = client
                 .get_credentials(&self.display_handle)
-                .is_ok_and(|creds| creds.pid as u32 == satellite_pid)
+                .is_ok_and(|creds| creds.pid as u32 == satellite_pid);
+            if matched {
+                tracing::debug!(
+                    pid = satellite_pid,
+                    "client classified as xwayland-satellite"
+                );
+            }
+            matched
         })
     }
 

@@ -172,10 +172,12 @@ fn center_crossing_enters_new_output_before_leaving_old() {
     let events = f.client(id).surface_output_events(&surface);
     let enter_b = events
         .iter()
-        .position(|e| e == &OutputEvent::Enter("HEADLESS-2".to_string()));
+        .position(|e| e == &OutputEvent::Enter("HEADLESS-2".to_string()))
+        .expect("enter(HEADLESS-2) must be recorded");
     let leave_a = events
         .iter()
-        .position(|e| e == &OutputEvent::Leave("HEADLESS-1".to_string()));
+        .position(|e| e == &OutputEvent::Leave("HEADLESS-1".to_string()))
+        .expect("leave(HEADLESS-1) must be recorded");
     assert!(
         enter_b < leave_a,
         "enter(HEADLESS-2) must precede leave(HEADLESS-1), got: {events:?}"

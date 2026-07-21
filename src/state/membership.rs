@@ -36,13 +36,19 @@ fn desired_memberships(
         .iter()
         .enumerate()
         .filter(|(_, (name, _))| allowed.is_none_or(|a| a == name.as_str()))
-        .filter_map(|(i, (_, geo))| {
-            geo.intersection(bbox).map(|mut overlap| {
-                overlap.loc -= bbox.loc;
-                (i, overlap)
-            })
-        })
+        .filter_map(|(i, (_, geo))| overlap_in(bbox, *geo).map(|overlap| (i, overlap)))
         .collect()
+}
+
+/// Intersection of `geo` with `bbox`, rebased to the bbox origin.
+fn overlap_in(
+    bbox: Rectangle<i32, Logical>,
+    geo: Rectangle<i32, Logical>,
+) -> Option<Rectangle<i32, Logical>> {
+    geo.intersection(bbox).map(|mut overlap| {
+        overlap.loc -= bbox.loc;
+        overlap
+    })
 }
 
 /// Single sticky output for xwayland-satellite's windows: the association
@@ -57,12 +63,7 @@ fn desired_satellite_membership(
     outputs: &[(String, Rectangle<i32, Logical>)],
     current: Option<(&str, Rectangle<i32, Logical>)>,
 ) -> Vec<(usize, Rectangle<i32, Logical>)> {
-    let overlap = |geo: Rectangle<i32, Logical>| {
-        geo.intersection(bbox).map(|mut o| {
-            o.loc -= bbox.loc;
-            o
-        })
-    };
+    let overlap = |geo: Rectangle<i32, Logical>| overlap_in(bbox, geo);
 
     let current_live = current.and_then(|(name, tracked)| {
         outputs
@@ -163,11 +164,13 @@ impl DriftWm {
             let desired: Vec<(Output, Rectangle<i32, Logical>)> = if use_satellite {
                 let geo = window.geometry();
                 let center = pos + Point::from((geo.size.w / 2, geo.size.h / 2));
-                // First live tracked output is the current association (windows
-                // hold at most one; a transient several converges to one here).
+                // The largest-rect live tracked output is the current association
+                // (windows hold at most one; a transient several converges here,
+                // deterministically rather than by hash order).
                 let current = map
                     .iter()
-                    .find(|(o, _)| named.iter().any(|(n, _)| n == &o.name()))
+                    .filter(|(o, _)| named.iter().any(|(n, _)| n == &o.name()))
+                    .max_by_key(|(_, r)| i64::from(r.size.w) * i64::from(r.size.h))
                     .map(|(o, r)| (o.name(), *r));
                 let current = current.as_ref().map(|(n, r)| (n.as_str(), *r));
                 desired_satellite_membership(bbox, center, &named, current)
