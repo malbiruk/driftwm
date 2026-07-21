@@ -185,36 +185,47 @@ impl DriftWm {
     /// origin; live windows are appended as `Quit` records when `include_live`.
     /// Carried-forward entries lead so freshly-active windows restore on top.
     fn build_session_envelope(&mut self, include_live: bool) -> SessionEnvelope {
-        // With restore on (live windows serialized below), the live canvas is
-        // authoritative for quit-origin windows, so a carried-forward quit
-        // record — held only to survive flag-off sessions — would duplicate a
-        // relaunched live window and materialize a second stand-in next boot.
-        // Explicit-origin carries always survive independently.
-        let mut entries: Vec<SessionEntry> = if include_live {
-            self.session_store
-                .carried_forward
-                .iter()
-                .filter(|e| e.origin == Origin::Explicit)
-                .cloned()
-                .collect()
-        } else {
-            self.session_store.carried_forward.clone()
-        };
         // The record id is informational (materialization assigns fresh
         // in-process ids); numbering live windows past the suspended ids just
         // keeps them distinct within this write.
         let mut next_live_id = self.next_suspended_id;
         let windows: Vec<StageWindow> = self.stage.windows().cloned().collect();
+        // Z-ordered tail: suspended stand-ins + (with restore on) live windows.
+        // Tally live windows per app so carried quit records can be deduped
+        // against the apps that actually came back.
+        let mut tail: Vec<SessionEntry> = Vec::new();
+        let mut live_counts: HashMap<String, usize> = HashMap::new();
         for window in &windows {
             if let Some(s) = window.suspended() {
                 let loc = self.stage.position_of(window).unwrap_or_default();
-                entries.push(suspended_entry(s, loc));
+                tail.push(suspended_entry(s, loc));
             } else if include_live
                 && let Some(entry) = self.live_window_entry(window, &mut next_live_id)
             {
-                entries.push(entry);
+                *live_counts.entry(entry.app_id.clone()).or_default() += 1;
+                tail.push(entry);
             }
         }
+
+        // Carried-forward entries lead so freshly-active windows restore on top.
+        // With restore on, a relaunched app is serialized live above, so drop one
+        // carried quit record per live window of the same app (count-matched):
+        // the live canvas is authoritative only for the apps it actually holds.
+        // Unmatched carries — and every explicit carry — survive to the next boot.
+        let mut entries: Vec<SessionEntry> = Vec::new();
+        for carried in &self.session_store.carried_forward {
+            if include_live
+                && carried.origin == Origin::Quit
+                && let Some(remaining) = live_counts.get_mut(&carried.app_id)
+                && *remaining > 0
+            {
+                *remaining -= 1;
+                continue;
+            }
+            entries.push(carried.clone());
+        }
+        entries.extend(tail);
+
         SessionEnvelope {
             version: session::VERSION,
             saved_at: now_unix(),

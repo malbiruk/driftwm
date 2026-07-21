@@ -220,6 +220,60 @@ fn restore_flip_on_drops_carried_quit_for_relaunched_app() {
     );
 }
 
+/// Count-matched dedup: flipping restore on drops a carried quit record only for
+/// an app that actually came back. An app carried but not relaunched survives to
+/// the next boot — flipping the flag mustn't destroy it (that's what flipping it
+/// while the compositor was off would have preserved and materialized).
+#[test]
+fn restore_flip_on_preserves_unrelaunched_carried_quit() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    // A prior session left quit entries for two apps, A and B.
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        saved_at: 0,
+        entries: vec![
+            entry(1, "appa", Origin::Quit),
+            entry(2, "appb", Origin::Quit),
+        ],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    // Boot with restore off: both quit entries carry, neither materializes.
+    let mut f = Fixture::with_config(config_restore(false));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["appa", "appb"]);
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    // The user relaunches only A.
+    let id = f.add_client();
+    map_at(&mut f, id, "appa", (400, 300), (300, 300));
+
+    // Flip restore on, then quit.
+    f.state().config.restore_session = true;
+    f.state().serialize_session_on_shutdown();
+
+    let after = session::read(&path);
+    // A's carried quit was deduped against the live window — a single entry.
+    assert_eq!(
+        after.entries.iter().filter(|e| e.app_id == "appa").count(),
+        1,
+        "the relaunched app is serialized once"
+    );
+    // B never came back, so its carried quit survives to the next boot.
+    assert!(
+        after
+            .entries
+            .iter()
+            .any(|e| e.app_id == "appb" && e.origin == Origin::Quit),
+        "the un-relaunched carried quit entry is preserved, not destroyed"
+    );
+}
+
 /// A durable per-output camera seeds a freshly connected output on fresh boot
 /// (no runtime entry). Runtime-wins is exercised by the `merge_saved_cameras`
 /// unit test.
