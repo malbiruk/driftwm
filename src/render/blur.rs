@@ -559,7 +559,8 @@ pub(crate) fn process_blur_requests(
             }
         }
         let cache = state.render.blur_cache.get_mut(&key).unwrap();
-        if cache.size != win_size || cache.pad_size != pad_size {
+        let resized = cache.size != win_size || cache.pad_size != pad_size;
+        if resized {
             cache.resize(renderer, win_size, pad_size);
         }
 
@@ -587,7 +588,13 @@ pub(crate) fn process_blur_requests(
             .blur_camera_moved_at
             .get(&output_name)
             .is_some_and(|t| t.elapsed() < std::time::Duration::from_millis(150));
-        if animated_bg && occluded_by_lower[i] && pan_in_flight && cache.force_dirty_frames == 0 {
+        if animated_bg
+            && occluded_by_lower[i]
+            && pan_in_flight
+            && !resized
+            && !camera_dirty
+            && cache.force_dirty_frames == 0
+        {
             mask_forced.push(false);
             needs_recompute.push(false);
             continue;
