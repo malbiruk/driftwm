@@ -20,6 +20,7 @@ With no subcommand, starts the compositor, auto-detecting the backend (udev on a
 - `--backend <udev|winit>` — Backend to use [default: udev on a TTY, winit if nested]
 - `--config <PATH>` — Use an alternate config file
 - `--check-config` — Validate the config and exit
+- `--session-file <PATH>` — Durable session file path. Overrides the default; lets a nested winit dev session opt into session restore (it skips it otherwise)
 
 ### `driftwm msg`
 
@@ -162,6 +163,34 @@ Targets the focused window by default, or a window by `app_id` substring (case-i
 Reply: `{"Ok":"Ok"}`.
 
 - `--id <ID>` — Close the window with this stable id (from `state`)
+
+#### `driftwm msg suspend`
+
+```
+driftwm msg suspend [OPTIONS] [APP_ID]
+```
+
+Suspend the focused window, or a window by app_id substring or `--id`.
+
+The same conversion as the `suspend-window` action, but addressable: it leaves a compositor-drawn stand-in in the window's place (relaunch it with `relaunch`, `Enter`, or a click) instead of asking the client to close. Targets the focused window by default, or a window by `app_id` substring (case-insensitive) or `--id <n>` (from `state`). When a live client and a stand-in share an `app_id`, the substring resolves to the live client — target the stand-in by `--id`.
+
+Reply: `{"Ok":"Ok"}`.
+
+- `--id <ID>` — Suspend the window with this stable id (from `state`)
+
+#### `driftwm msg relaunch`
+
+```
+driftwm msg relaunch [OPTIONS] [APP_ID]
+```
+
+Relaunch a suspended window: the focused stand-in, or one by app_id substring or `--id`.
+
+Spawns the suspended window's app from its `.desktop` entry and adopts the new window into the stand-in's slot on its first sized commit. Acts only on suspended stand-ins, so an `app_id` substring resolves straight to the matching stand-in (never a live client). Errors when nothing matches.
+
+Reply: `{"Ok":"Ok"}`.
+
+- `--id <ID>` — Relaunch the suspended window with this stable id (from `state`)
 
 #### `driftwm msg action`
 
