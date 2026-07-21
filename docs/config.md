@@ -1070,9 +1070,9 @@ Supported fields:
 
 Pattern syntax (applies to all match fields):
 
-- `Plain string` — exact match: "kitty"
-- `Glob` — * wildcard:  "steam_app_*"
-- `Regex` — wrap in /…/: "/^steam_app_\\d+$/"
+- Plain string `"kitty"` — exact match
+- Glob `"steam_app_*"` — `*` wildcard
+- Regex `"/^steam_app_\\d+$/"` — wrap in `/…/`
 
 To find a window's identifiers, run while the window is open:
 
