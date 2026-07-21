@@ -131,7 +131,10 @@ impl DriftWm {
         ));
         let mut os = crate::state::output_state(&output);
         os.momentum.stop();
-        os.zoom_animation_center = Some(center);
+        os.zoom_animation_anchor = Some(crate::state::ZoomAnimationAnchor {
+            canvas: center,
+            screen: vc,
+        });
         os.camera_target = Some(target);
         os.zoom_target = Some(zoom);
     }
