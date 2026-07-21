@@ -399,6 +399,7 @@ impl SecurityContextHandler for DriftWm {
                 let data = std::sync::Arc::new(crate::state::ClientState {
                     compositor_state: Default::default(),
                     is_restricted: true,
+                    is_satellite: Default::default(),
                 });
                 if let Err(err) = state.display_handle.insert_client(client, data) {
                     tracing::warn!("failed to insert restricted client: {err}");

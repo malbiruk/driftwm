@@ -713,6 +713,11 @@ pub struct ClientState {
     /// True for clients connected via a security-context listener; denied
     /// privileged protocols (screencopy, foreign-toplevel, virtual keyboard).
     pub is_restricted: bool,
+    /// Resolved lazily from the client's PID: whether this is the compositor's
+    /// own xwayland-satellite. Satellite receives one sticky output per window
+    /// (see `state::membership`); every other client keeps full-overlap
+    /// membership.
+    pub is_satellite: std::sync::OnceLock<bool>,
 }
 
 impl ClientData for ClientState {
@@ -731,6 +736,26 @@ impl DriftWm {
     const EDGE_RIGHT: u8 = 1 << 1;
     const EDGE_TOP: u8 = 1 << 2;
     const EDGE_BOTTOM: u8 = 1 << 3;
+
+    /// Whether `client` is the compositor's own xwayland-satellite, matched by
+    /// PID and cached for the client's lifetime. False when no satellite runs
+    /// or the credentials lookup fails.
+    pub(crate) fn client_is_satellite(
+        &self,
+        client: &smithay::reexports::wayland_server::Client,
+    ) -> bool {
+        let Some(data) = client.get_data::<ClientState>() else {
+            return false;
+        };
+        *data.is_satellite.get_or_init(|| {
+            let Some(satellite_pid) = self.satellite.as_ref().map(|s| s.pid()) else {
+                return false;
+            };
+            client
+                .get_credentials(&self.display_handle)
+                .is_ok_and(|creds| creds.pid as u32 == satellite_pid)
+        })
+    }
 
     /// Arm edge-pan from a screen-local pointer position. The animation tick
     /// applies monitor-boundary latency; callers only describe pointer intent.

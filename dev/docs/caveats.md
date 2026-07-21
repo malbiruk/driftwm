@@ -64,6 +64,7 @@ driftwm doesn't embed XWayland directly. X11 apps reach the compositor via [`xwa
 - **Override-redirect popups arrive as xdg-popups.** The compositor's existing popup positioning handles them; no special render path.
 - **Apps that pin windows to absolute screen coordinates** (older notification daemons, some game launchers) won't behave correctly. Run them in a nested compositor like `labwc` if needed.
 - **Clipboard works through standard Wayland data-device protocol.** xwayland-satellite owns selections as a normal Wayland client; the compositor doesn't bridge clipboards manually.
+- **Single sticky output per window.** driftwm reports exactly one `wl_output` to satellite's client (all other clients get every output their window overlaps). Satellite keeps a single output association per X11 window and derives that window's fake X11 root coordinates from it (see its [`ARCHITECTURE.md`](https://github.com/Supreeeme/xwayland-satellite/blob/master/ARCHITECTURE.md)). On the infinite canvas two viewports routinely co-observe the same window, so full-overlap membership makes the enter/leave for the second viewport strand that association, and X11 context menus then land offset until the window fully leaves and re-enters an output. The sticky policy lives in `state/membership.rs::desired_satellite_membership` and migrates the output only when the window's own center genuinely leaves it.
 - **No respawn-on-crash.** If satellite dies mid-session (rare), X11 stays dead until driftwm restart. Future enhancement.
 
 ## What to test where

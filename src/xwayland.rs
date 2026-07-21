@@ -27,8 +27,13 @@ const MAX_DISPLAY: u32 = 50;
 pub struct Satellite {
     /// Held for the satellite's lifetime; satellite exits when its Wayland
     /// connection closes on drop. SIGCHLD is SIG_IGN so the kernel auto-reaps.
-    #[allow(dead_code)]
     child: Child,
+}
+
+impl Satellite {
+    pub(crate) fn pid(&self) -> u32 {
+        self.child.id()
+    }
 }
 
 /// Spawn `xwayland-satellite :N` eagerly, export `DISPLAY=:N`. Fails soft:

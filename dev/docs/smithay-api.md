@@ -274,6 +274,7 @@ So it never races an in-flight page flip — the kernel serializes atomic commit
 - **`ToplevelSurface::send_configure()`** must be called in `new_toplevel` — clients won't render until they receive an initial configure.
 - **`PopupSurface::send_configure()`** must be called in `new_popup` — same as toplevels. Also set geometry from positioner: `surface.with_pending_state(|s| s.geometry = positioner.get_geometry())`.
 - **Cross-app clipboard requires `set_data_device_focus` + `set_primary_focus`** in `SeatHandler::focus_changed()`. Without this, newly focused clients don't receive `wl_data_device.selection` events and can't paste from other apps. Extract client via `dh.get_client(surface.id()).ok()`.
+- **Client PID via `Client::get_credentials(&DisplayHandle)`** returns `Result<wayland_backend::server::Credentials, InvalidId>`; `Credentials { pid, uid, gid }` where `pid` is `rustix::process::RawPid` (= `i32`, SO_PEERCRED). Spoofable — fine for matching our own spawned children (e.g. xwayland-satellite by `Child::id()`), not for security decisions.
 
 ### Backend
 
