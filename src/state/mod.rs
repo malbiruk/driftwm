@@ -616,6 +616,10 @@ pub struct DriftWm {
     /// Durable session store (session restore): the `session.json` path, dirty
     /// timer, carried-forward entries, and fresh-boot camera seed.
     pub session_store: SessionStore,
+    /// The bookmark registry: named canvas points (Y-up, window-center
+    /// convention). Seeded from `[navigation.bookmarks]` at startup, then the
+    /// live source of truth — set-bookmark, IPC, and reload mutate it.
+    pub bookmarks: BTreeMap<String, [f64; 2]>,
 
     /// Window-level keyboard-focus intent. The actual keyboard focus is
     /// derived from this plus any higher-priority owner (session lock,

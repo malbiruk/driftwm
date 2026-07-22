@@ -75,6 +75,12 @@ Default: `false`
 
 Restore each output's camera position and zoom from the saved session on the next launch. Off by default, so a fresh start centers every output. Read at launch: a mid-session change applies on the next launch.
 
+### `restore_bookmarks`
+
+Default: `false`
+
+Restore the bookmark registry from the saved session on the next launch, overlaying saved bookmarks on the [navigation.bookmarks] config seeds. Off by default, so runtime set-bookmark / `msg bookmark` edits don't survive a restart. Read at launch: a mid-session change applies on the next launch.
+
 ## `[env]`
 
 Environment variables set before any clients launch. Child processes (autostart, exec bindings) inherit these. These override the compositor's built-in toolkit defaults (MOZ_ENABLE_WAYLAND, QT_QPA_PLATFORM, SDL_VIDEODRIVER, GDK_BACKEND, ELECTRON_OZONE_PLATFORM_HINT).
@@ -316,15 +322,26 @@ px per pan-viewport action (mod-ctrl-arrow by default)
 
 ### `anchors`
 
-Default: `[[0, 0]]`
+Default: `[]`
 
-Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow) even when no window is there. Uses Y-up coordinate system.
+Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow) even when no window is there. Uses Y-up coordinate system. Empty by default; the origin anchor below is now example-only.
 
-**Example: 4 corners**
+**Example: origin + 4 corners**
 
 ```toml
 anchors = [[0, 0], [-1750, 1750], [1750, 1750], [1750, -1750], [-1750, -1750]]
 ```
+
+## `[navigation.bookmarks]`
+
+Named canvas points for the go-to-bookmark / set-bookmark / move-to-bookmark actions and `driftwm msg bookmark`. Uses Y-up coordinates (window-center convention, same as go-to and window rules). This table only SEEDS the runtime registry at startup — set-bookmark and the IPC verb update it live. An explicitly empty table (just the header, no keys) disables the default seeds. Runtime edits persist across restarts only with the [session] restore_bookmarks flag. Bookmarks store a position only, never zoom.
+
+| Binding | Action | Notes |
+| --- | --- | --- |
+| `"1"` | `[-1750, 1750]` |  |
+| `"2"` | `[1750, 1750]` |  |
+| `"3"` | `[1750, -1750]` |  |
+| `"4"` | `[-1750, -1750]` |  |
 
 ## `[navigation.edge_pan]`
 
@@ -664,7 +681,10 @@ Actions:
 - `zoom-in` — step zoom in
 - `zoom-out` — step zoom out
 - `zoom-reset` — zoom to 1.0
-- `go-to <x> <y>` — jump camera to canvas position (bookmarks, Y-up)
+- `go-to <x> <y>` — jump camera to canvas position (deprecated, use go-to-bookmark)
+- `go-to-bookmark <name>` — jump the camera to a saved bookmark (position only, zoom untouched)
+- `set-bookmark <name>` — save the current camera center as a bookmark (create or overwrite)
+- `move-to-bookmark <name>` — move the focused window's center to a bookmark point
 - `zoom-to-fit` — fit all windows in viewport
 - `zoom-to-fit-snapped` — fit only the focused window's snap cluster
 - `toggle-fullscreen` — toggle focused window fullscreen
@@ -715,10 +735,14 @@ Directions: up, down, left, right, up-left, up-right, down-left, down-right
 | `"mod+z"` | `zoom-reset` |  |
 | `"mod+w"` | `zoom-to-fit` |  |
 | `"mod+shift+w"` | `zoom-to-fit-snapped` |  |
-| `"mod+1"` | `go-to -1750 1750` | top-left bookmark |
-| `"mod+2"` | `go-to 1750 1750` | top-right bookmark |
-| `"mod+3"` | `go-to 1750 -1750` | bottom-right bookmark |
-| `"mod+4"` | `go-to -1750 -1750` | bottom-left bookmark |
+| `"mod+1"` | `go-to-bookmark 1` | jump to bookmark 1 (top-left corner by default) |
+| `"mod+2"` | `go-to-bookmark 2` | jump to bookmark 2 (top-right corner) |
+| `"mod+3"` | `go-to-bookmark 3` | jump to bookmark 3 (bottom-right corner) |
+| `"mod+4"` | `go-to-bookmark 4` | jump to bookmark 4 (bottom-left corner) |
+| `"mod+shift+1"` | `set-bookmark 1` | overwrite bookmark 1 at the current view |
+| `"mod+shift+2"` | `set-bookmark 2` |  |
+| `"mod+shift+3"` | `set-bookmark 3` |  |
+| `"mod+shift+4"` | `set-bookmark 4` |  |
 | `"mod+alt+up"` | `send-to-output up` | move window to output above |
 | `"mod+alt+down"` | `send-to-output down` |  |
 | `"mod+alt+left"` | `send-to-output left` |  |

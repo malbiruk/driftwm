@@ -132,6 +132,10 @@ pub(super) struct NavigationConfig {
     /// instead of failing the whole parse via `deny_unknown_fields`.
     pub friction: Option<f64>,
     pub anchors: Option<Vec<[f64; 2]>>,
+    /// Named canvas points (Y-up, window-center convention) that seed the
+    /// runtime bookmark registry. Absent → the compiled corner defaults;
+    /// present-but-empty → no seeds (explicit-empty escape hatch).
+    pub bookmarks: Option<HashMap<String, [f64; 2]>>,
     pub edge_pan: EdgePanConfig,
 }
 
@@ -165,6 +169,10 @@ pub(super) struct SessionFileConfig {
     /// launch. Off by default, so the default config starts every output at its
     /// centered camera.
     pub restore_camera: Option<bool>,
+    /// Restore the bookmark registry from the durable session on the next
+    /// launch, overlaying saved bookmarks on top of the config seeds. Off by
+    /// default, so runtime bookmark edits don't persist across restarts.
+    pub restore_bookmarks: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

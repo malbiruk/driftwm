@@ -84,6 +84,16 @@ fn reference_defaults_match_code_defaults() {
     );
 }
 
+/// Drop the one-per-load `go-to` deprecation notice: it's the expected warning
+/// for a binding of the deprecated-but-still-valid `go-to` action, so tests that
+/// exercise every action sample must ignore it while catching all others.
+fn without_go_to_deprecation(warnings: &[String]) -> Vec<&String> {
+    warnings
+        .iter()
+        .filter(|w| !w.contains("go-to is deprecated"))
+        .collect()
+}
+
 /// True for a `"combo" = "action"` line, distinguishing real bindings from
 /// prose that merely opens with a quoted word.
 fn is_binding_line(body: &str) -> bool {
@@ -354,6 +364,9 @@ fn keybinding_actions_are_all_documented() {
     }
     let (_, warnings) = Config::from_toml_collect(&toml)
         .unwrap_or_else(|e| panic!("sample action bindings failed to parse: {e}\n\n{toml}"));
+    // `go-to` is deprecated but still a documented, parseable action, so binding
+    // its sample warns once; every other sample must parse clean.
+    let warnings = without_go_to_deprecation(&warnings);
     assert!(
         warnings.is_empty(),
         "sample action bindings produced warnings:\n{warnings:#?}\n\n{toml}"
@@ -403,6 +416,9 @@ fn threshold_gestures_accept_every_action() {
             let (_, warnings) = Config::from_toml_collect(&toml).unwrap_or_else(|e| {
                 panic!("{name} on {trigger} in [{section}] failed to parse: {e}")
             });
+            // `go-to` is deprecated but still a valid threshold action; its
+            // sample warns. Every other action must parse clean.
+            let warnings = without_go_to_deprecation(&warnings);
             assert!(
                 warnings.is_empty(),
                 "`{sample}` should be a valid threshold action on {trigger} [{section}]: {warnings:?}"

@@ -13,7 +13,7 @@ pub use parse::{
 pub use toml::config_path;
 pub use types::*;
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::hash::Hash;
 
 use smithay::backend::input::AxisSource;
@@ -41,6 +41,36 @@ const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
     ("GDK_BACKEND", "wayland,x11"),
     ("ELECTRON_OZONE_PLATFORM_HINT", "wayland"),
 ];
+
+/// Seed bookmarks when `[navigation.bookmarks]` is absent: the four canvas
+/// corners, matching the default `go-to-bookmark 1..4` keybindings. Y-up.
+const DEFAULT_BOOKMARKS: &[(&str, [f64; 2])] = &[
+    ("1", [-1750.0, 1750.0]),
+    ("2", [1750.0, 1750.0]),
+    ("3", [1750.0, -1750.0]),
+    ("4", [-1750.0, -1750.0]),
+];
+
+/// True if any user binding value across every binding table names the
+/// deprecated `go-to` action, so the deprecation warning fires once per load.
+fn any_binding_is_go_to(raw: &ConfigFile) -> bool {
+    let is_go_to = |v: &String| v.split_whitespace().next() == Some("go-to");
+    let ctx_maps: [&Option<HashMap<String, String>>; 9] = [
+        &raw.mouse.on_window,
+        &raw.mouse.on_canvas,
+        &raw.mouse.anywhere,
+        &raw.gestures.on_window,
+        &raw.gestures.on_canvas,
+        &raw.gestures.anywhere,
+        &raw.touch.on_window,
+        &raw.touch.on_canvas,
+        &raw.touch.anywhere,
+    ];
+    raw.keybindings.iter().flatten().any(|(_, v)| is_go_to(v))
+        || ctx_maps
+            .into_iter()
+            .any(|m| m.iter().flatten().any(|(_, v)| is_go_to(v)))
+}
 
 /// The finger count of a per-direction swipe trigger
 /// (`swipe-up/down/left/right`), or `None` for any other trigger.
@@ -136,6 +166,10 @@ pub struct SessionConfig {
     /// session on the next launch. Read at load time, so a mid-session flip
     /// takes effect on the next launch, not immediately.
     pub restore_camera: bool,
+    /// When true, the saved bookmark registry is overlaid on top of the config
+    /// seeds at launch, so runtime bookmark edits survive across restarts.
+    /// Read at load time.
+    pub restore_bookmarks: bool,
 }
 
 #[derive(Debug, PartialEq)]
@@ -225,6 +259,10 @@ pub struct Config {
     pub decorations: DecorationConfig,
     pub output_outline: OutputOutlineSettings,
     pub nav_anchors: Vec<Point<f64, Logical>>,
+    /// The bookmark registry seed: named canvas points (Y-up, window-center
+    /// convention) that populate `DriftWm::bookmarks` at startup. This is a
+    /// seed only — the live registry is the source of truth once running.
+    pub navigation_bookmarks: BTreeMap<String, [f64; 2]>,
     pub backend: BackendConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
@@ -444,6 +482,12 @@ impl Config {
             ($fmt:literal $(, $arg:expr)* $(,)?) => {
                 collect_warn(&mut errors, format!($fmt $(, $arg)*))
             };
+        }
+
+        // One warning per load, not per binding, when any binding still uses the
+        // deprecated `go-to` action. `go-to` still parses and works.
+        if any_binding_is_go_to(&raw) {
+            warn_and_collect!("go-to is deprecated; use bookmarks (go-to-bookmark) instead");
         }
 
         let mod_key = match raw.mod_key.as_deref() {
@@ -929,6 +973,7 @@ impl Config {
                 suspend_on_close: raw.session.suspend_on_close.unwrap_or(false),
                 restore_windows: raw.session.restore_windows.unwrap_or(false),
                 restore_camera: raw.session.restore_camera.unwrap_or(false),
+                restore_bookmarks: raw.session.restore_bookmarks.unwrap_or(false),
             },
             trackpad_speed,
             mouse_speed,
@@ -1048,10 +1093,22 @@ impl Config {
             nav_anchors: raw
                 .navigation
                 .anchors
-                .unwrap_or_else(|| vec![[0.0, 0.0]])
+                .unwrap_or_default()
                 .into_iter()
                 .map(|[x, y]| Point::from((x, -y)))
                 .collect(),
+            // Y-up values kept as-is (unlike anchors); conversion happens at use
+            // sites. Absent section → corner defaults; explicit-empty → no seeds.
+            navigation_bookmarks: raw
+                .navigation
+                .bookmarks
+                .map(|m| m.into_iter().collect())
+                .unwrap_or_else(|| {
+                    DEFAULT_BOOKMARKS
+                        .iter()
+                        .map(|(k, v)| (k.to_string(), *v))
+                        .collect()
+                }),
             autostart: raw.autostart.unwrap_or_default(),
             env: raw.env,
             child_env,
@@ -1394,6 +1451,87 @@ mod tests {
         let (config, warnings) = Config::from_toml_collect(toml_str).unwrap();
         assert_eq!(config.animation_speed, 0.3);
         assert!(warnings.iter().any(|w| w.contains("animation_speed")));
+    }
+
+    #[test]
+    fn bookmarks_table_parses_y_up_and_spaces_in_names() {
+        let toml_str = r#"
+            [navigation.bookmarks]
+            "home" = [0, 0]
+            "my desk" = [100, -200]
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        // Y-up values are kept verbatim (not negated like anchors).
+        assert_eq!(config.navigation_bookmarks["home"], [0.0, 0.0]);
+        assert_eq!(config.navigation_bookmarks["my desk"], [100.0, -200.0]);
+    }
+
+    #[test]
+    fn bookmarks_absent_section_seeds_four_corners() {
+        let config = Config::from_toml("").unwrap();
+        assert_eq!(config.navigation_bookmarks.len(), 4);
+        assert_eq!(config.navigation_bookmarks["1"], [-1750.0, 1750.0]);
+        assert_eq!(config.navigation_bookmarks["2"], [1750.0, 1750.0]);
+        assert_eq!(config.navigation_bookmarks["3"], [1750.0, -1750.0]);
+        assert_eq!(config.navigation_bookmarks["4"], [-1750.0, -1750.0]);
+    }
+
+    #[test]
+    fn bookmarks_empty_section_disables_seeds() {
+        // A present-but-empty table is the explicit-empty escape hatch.
+        let config = Config::from_toml("[navigation.bookmarks]\n").unwrap();
+        assert!(config.navigation_bookmarks.is_empty());
+    }
+
+    #[test]
+    fn anchors_default_is_empty() {
+        let config = Config::from_toml("").unwrap();
+        assert!(config.nav_anchors.is_empty());
+    }
+
+    #[test]
+    fn go_to_deprecation_warns_once_and_still_parses() {
+        let toml_str = r#"
+            [keybindings]
+            "mod+5" = "go-to 100 200"
+            "mod+6" = "go-to 300 400"
+        "#;
+        let (_config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        let count = warnings
+            .iter()
+            .filter(|w| w.contains("go-to is deprecated"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "one warning per load, not per binding: {warnings:?}"
+        );
+        // go-to still parses and binds despite the deprecation.
+        assert_eq!(
+            parse_action("go-to 100 200"),
+            Ok(Action::GoToPosition(100.0, 200.0))
+        );
+    }
+
+    #[test]
+    fn go_to_deprecation_fires_for_gesture_bindings_too() {
+        let toml_str = r#"
+            [gestures.anywhere]
+            "4-finger-swipe-up" = "go-to 0 0"
+        "#;
+        let (_config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        assert!(
+            warnings.iter().any(|w| w.contains("go-to is deprecated")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn no_go_to_binding_does_not_warn() {
+        let (_config, warnings) = Config::from_toml_collect("").unwrap();
+        assert!(
+            !warnings.iter().any(|w| w.contains("go-to is deprecated")),
+            "got: {warnings:?}"
+        );
     }
 
     #[test]

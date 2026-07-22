@@ -122,28 +122,56 @@ pub(super) fn default_bindings(mod_key: ModKey) -> HashMap<KeyCombo, Action> {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_1),
             },
-            Action::GoToPosition(-1750.0, 1750.0),
+            Action::GoToBookmark("1".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_2),
             },
-            Action::GoToPosition(1750.0, 1750.0),
+            Action::GoToBookmark("2".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_3),
             },
-            Action::GoToPosition(1750.0, -1750.0),
+            Action::GoToBookmark("3".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_4),
             },
-            Action::GoToPosition(-1750.0, -1750.0),
+            Action::GoToBookmark("4".into()),
+        ),
+        (
+            KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_1),
+            },
+            Action::SetBookmark("1".into()),
+        ),
+        (
+            KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_2),
+            },
+            Action::SetBookmark("2".into()),
+        ),
+        (
+            KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_3),
+            },
+            Action::SetBookmark("3".into()),
+        ),
+        (
+            KeyCombo {
+                modifiers: m_shift.clone(),
+                sym: Keysym::from(keysyms::KEY_4),
+            },
+            Action::SetBookmark("4".into()),
         ),
         (
             KeyCombo {

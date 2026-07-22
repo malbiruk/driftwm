@@ -343,12 +343,52 @@ impl DriftWm {
                     }
                 }
             }
-            Action::GoToPosition(x, y) => {
+            Action::GoToPosition(x, y) => self.go_to_canvas_point(*x, *y),
+            Action::GoToBookmark(name) => match self.bookmarks.get(name) {
+                Some(&[x, y]) => self.go_to_canvas_point(x, y),
+                None => {
+                    tracing::info!("no bookmark named '{name}' — set it with set-bookmark")
+                }
+            },
+            Action::SetBookmark(name) => {
                 let vc = self.usable_center_screen();
                 let zoom = self.zoom();
-                let target_camera = Point::from((x - vc.x / zoom, -y - vc.y / zoom));
-                self.set_overview_return(None);
-                self.set_camera_target(Some(target_camera));
+                // Capture the destination of an in-flight animation, not a
+                // mid-flight frame, so set→go-to round-trips exactly. This is
+                // the exact inverse of `go_to_canvas_point`'s camera math.
+                let cam = self.camera_target().unwrap_or_else(|| self.camera());
+                let x = cam.x + vc.x / zoom;
+                let y = -(cam.y + vc.y / zoom);
+                self.bookmarks.insert(name.clone(), [x, y]);
+                self.session_store_mark_dirty();
+            }
+            Action::MoveToBookmark(name) => {
+                let Some(&[x, y]) = self.bookmarks.get(name) else {
+                    tracing::info!("no bookmark named '{name}' — set it with set-bookmark");
+                    return;
+                };
+                let (rx, ry) = (x.round() as i32, y.round() as i32);
+                if let Some(window) = self.focused_window().filter(|w| !w.is_widget()) {
+                    // Pinned/fullscreen windows live in screen space — no canvas
+                    // position to move (same rule as `msg move`).
+                    if !self.is_canvas_window(&window) {
+                        tracing::info!("cannot move a pinned or fullscreen window to a bookmark");
+                        return;
+                    }
+                    let size = window.geometry().size;
+                    let loc = canvas::rule_to_internal(rx, ry, size);
+                    self.stage.clear_fill(&window);
+                    self.map_window(window.clone(), loc, true);
+                } else if let Some(id) = self.gated_suspended_focus()
+                    && let Some(s) = self.find_suspended(id)
+                {
+                    // No live client — move the focused suspended stand-in in
+                    // place, the durable path `msg move` uses for a stand-in.
+                    let element = StageWindow::Suspended(s.clone());
+                    let loc = canvas::rule_to_internal(rx, ry, s.size.get());
+                    self.stage.set_position(&element, loc);
+                    self.session_store_mark_dirty();
+                }
             }
             Action::ZoomIn => {
                 let new_zoom = (self.zoom() * self.config.zoom_step).min(canvas::MAX_ZOOM);
@@ -589,6 +629,18 @@ impl DriftWm {
                 self.loop_signal.stop();
             }
         }
+    }
+
+    /// Jump the camera so the viewport centers on canvas point `(x, y)` (Y-up),
+    /// panel-aware (`usable_center_screen`). Shared by `GoToPosition` and
+    /// `GoToBookmark` so their camera math can never diverge; `SetBookmark`
+    /// captures the exact inverse. Zoom is untouched.
+    fn go_to_canvas_point(&mut self, x: f64, y: f64) {
+        let vc = self.usable_center_screen();
+        let zoom = self.zoom();
+        let target_camera = Point::from((x - vc.x / zoom, -y - vc.y / zoom));
+        self.set_overview_return(None);
+        self.set_camera_target(Some(target_camera));
     }
 
     /// Toggle screen-pinning of the focused window. Pin/unpin keeps the window

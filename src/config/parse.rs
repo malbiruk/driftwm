@@ -153,6 +153,24 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
                 .map_err(|_| format!("invalid y coordinate: {}", parts[1]))?;
             Ok(Action::GoToPosition(x, y))
         }
+        "go-to-bookmark" => {
+            let name = arg
+                .filter(|a| !a.is_empty())
+                .ok_or("go-to-bookmark requires a bookmark name")?;
+            Ok(Action::GoToBookmark(name.to_string()))
+        }
+        "set-bookmark" => {
+            let name = arg
+                .filter(|a| !a.is_empty())
+                .ok_or("set-bookmark requires a bookmark name")?;
+            Ok(Action::SetBookmark(name.to_string()))
+        }
+        "move-to-bookmark" => {
+            let name = arg
+                .filter(|a| !a.is_empty())
+                .ok_or("move-to-bookmark requires a bookmark name")?;
+            Ok(Action::MoveToBookmark(name.to_string()))
+        }
         "zoom-in" => Ok(Action::ZoomIn),
         "zoom-out" => Ok(Action::ZoomOut),
         "zoom-reset" => Ok(Action::ZoomReset),
@@ -208,13 +226,16 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("fit-window-snapped", "fit-window-snapped"),
     ("focus-center", "focus-center"),
     ("go-to", "go-to 0 0"),
+    ("go-to-bookmark", "go-to-bookmark 1"),
     ("home-toggle", "home-toggle"),
+    ("move-to-bookmark", "move-to-bookmark 1"),
     ("nudge-window", "nudge-window up"),
     ("pan-viewport", "pan-viewport up"),
     ("quit", "quit"),
     ("reload-config", "reload-config"),
     ("send-cursor-to-output", "send-cursor-to-output up"),
     ("send-to-output", "send-to-output up"),
+    ("set-bookmark", "set-bookmark 1"),
     ("spawn", "spawn foo"),
     ("suspend-window", "suspend-window"),
     ("switch-layout", "switch-layout next"),
@@ -568,6 +589,9 @@ mod tests {
             Action::CycleWindows { .. } => "cycle-windows",
             Action::HomeToggle => "home-toggle",
             Action::GoToPosition(..) => "go-to",
+            Action::GoToBookmark(_) => "go-to-bookmark",
+            Action::SetBookmark(_) => "set-bookmark",
+            Action::MoveToBookmark(_) => "move-to-bookmark",
             Action::ZoomIn => "zoom-in",
             Action::ZoomOut => "zoom-out",
             Action::ZoomReset => "zoom-reset",
@@ -586,6 +610,32 @@ mod tests {
             Action::ToggleCursorPan => "toggle-cursor-pan",
             Action::Quit => "quit",
         }
+    }
+
+    #[test]
+    fn bookmark_actions_parse_with_name() {
+        assert_eq!(
+            parse_action("go-to-bookmark 1"),
+            Ok(Action::GoToBookmark("1".into()))
+        );
+        assert_eq!(
+            parse_action("set-bookmark home"),
+            Ok(Action::SetBookmark("home".into()))
+        );
+        // The whole trimmed remainder is the name, so spaces are allowed in it.
+        assert_eq!(
+            parse_action("move-to-bookmark my desk"),
+            Ok(Action::MoveToBookmark("my desk".into()))
+        );
+    }
+
+    #[test]
+    fn bookmark_actions_reject_missing_name() {
+        assert!(parse_action("go-to-bookmark").is_err());
+        assert!(parse_action("set-bookmark").is_err());
+        assert!(parse_action("move-to-bookmark").is_err());
+        // Whitespace-only argument is empty after trimming.
+        assert!(parse_action("go-to-bookmark   ").is_err());
     }
 
     #[test]

@@ -262,6 +262,7 @@ impl DriftWm {
 
         let autostart = config.autostart.clone();
         let edge_pan_cursor = config.edge_pan_cursor;
+        let bookmarks = config.navigation_bookmarks.clone();
         Self {
             start_time: Instant::now(),
             display_handle: dh,
@@ -348,6 +349,7 @@ impl DriftWm {
             pending_relaunches: BTreeMap::new(),
             pending_adoptions: HashMap::new(),
             session_store: super::SessionStore::default(),
+            bookmarks,
             window_focus: None,
             on_demand_layer: None,
             popup_grab: None,
