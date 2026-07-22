@@ -72,7 +72,16 @@ impl DriftWm {
                     window.send_close();
                 }
             }
-            Action::SuspendWindow => self.suspend_focused_window(suspend_restore_rect),
+            Action::SuspendWindow => {
+                if let Some(id) = self.gated_suspended_focus() {
+                    // Repeating the put-away gesture escalates: the second
+                    // press dismisses the stand-in, mirroring a second click
+                    // on its close button.
+                    self.dismiss_suspended(id);
+                } else {
+                    self.suspend_focused_window(suspend_restore_rect);
+                }
+            }
             Action::NudgeWindow(dir) => {
                 if let Some(window) = self.focused_window().filter(|w| self.is_canvas_window(w))
                     && let Some(loc) = self.stage.position_of(&window)

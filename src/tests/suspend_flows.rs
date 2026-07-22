@@ -149,6 +149,38 @@ fn explicit_suspend_converts_in_place() {
     close_client(&mut f, id2);
 }
 
+/// Firing `suspend-window` again on a focused suspended window dismisses the
+/// stand-in — the put-away gesture escalates, like a second close-button click.
+#[test]
+fn explicit_suspend_repeated_dismisses_the_stand_in() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(config_with(""));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    let id = f.add_client();
+    let (surface, target) = map_at(&mut f, id, "myapp", (400, 300), (500, 500));
+    origin_view(&mut f);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&target, serial);
+
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, id, &surface);
+    let sid = suspended_id(&mut f).expect("a suspended stand-in replaced the client");
+    assert_eq!(f.state().gated_suspended_focus(), Some(sid));
+
+    f.state().execute_action(&Action::SuspendWindow);
+    assert!(
+        f.state().find_suspended(sid).is_none(),
+        "the second press dismissed the stand-in"
+    );
+    assert_eq!(f.state().stage.windows().count(), 0);
+    assert_eq!(
+        f.state().debug_counters()["suspend_marks"],
+        0,
+        "no new mark planted by the dismissing press"
+    );
+}
+
 /// Tidy a leftover client so the fixture's baseline check passes.
 fn close_client(f: &mut Fixture, id: super::client::ClientId) {
     let surface = f.client(id).state.windows[0].surface.clone();
@@ -745,10 +777,11 @@ fn close_binding_and_msg_close_dismiss_suspended() {
     }
 }
 
-/// The `suspend-window` action on a focused suspended window is a no-op — a
-/// stand-in has no client to close and can't be re-suspended.
+/// The `suspend-window` action on a focused suspended window dismisses it —
+/// including a materialized (restored) stand-in that never had a live client
+/// this session.
 #[test]
-fn suspend_action_on_suspended_focus_is_noop() {
+fn suspend_action_on_suspended_focus_dismisses() {
     let mut f = Fixture::with_config(config_with(""));
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
@@ -761,16 +794,13 @@ fn suspend_action_on_suspended_focus_is_noop() {
     );
     f.state().focus_and_raise_suspended(sid);
 
-    let before = f.state().stage.windows().count();
     f.state().execute_action(&Action::SuspendWindow);
-    assert_eq!(f.state().stage.windows().count(), before, "no new stand-in");
-    assert_eq!(f.state().debug_counters()["suspend_marks"], 0);
     assert!(
-        f.state().find_suspended(sid).is_some(),
-        "the stand-in survives"
+        f.state().find_suspended(sid).is_none(),
+        "the put-away press dismissed the stand-in"
     );
-
-    f.state().dismiss_suspended(sid);
+    assert_eq!(f.state().stage.windows().count(), 0);
+    assert_eq!(f.state().debug_counters()["suspend_marks"], 0);
 }
 
 /// `fill-window` on a focused suspended window is a no-op: the action targets

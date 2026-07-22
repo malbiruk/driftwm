@@ -14,7 +14,9 @@ background color, with the app's name centered in it. It's draggable,
 resizable, closable, raisable, and focusable like any window. Pressing
 `Enter` while it's focused, or clicking/tapping the centered name, relaunches
 the app; the new window takes over the stand-in's exact geometry and
-z-order slot.
+z-order slot. Firing `suspend-window` again on a focused suspended window
+dismisses it — the put-away gesture, repeated, escalates to "gone", the same
+as clicking its close button.
 
 It's a regular action — bind it in `[keybindings]`, `[mouse]`, `[gestures]`,
 or `[touch]` like any other. There's no default binding:

@@ -287,7 +287,7 @@
 # #   exec-launcher           — launch the auto-detected app launcher (see [keybindings] below; override with $LAUNCHER)
 # #   spawn <cmd>             — run a command without loading cursor and exiting fullscreen (toggles, OSD, screenshots)
 # #   close-window            — close the focused window
-# #   suspend-window          — close the focused window but leave a suspended window in its place (Enter/click relaunches; needs a .desktop entry)
+# #   suspend-window          — close the focused window but leave a suspended window in its place (Enter/click relaunches; needs a .desktop entry); on an already-suspended window, dismisses it
 # #   nudge-window <dir>      — move focused window by nudge_step px
 # #   pan-viewport <dir>      — pan camera by pan_step px
 # #   center-window           — center viewport on focused window + reset zoom
