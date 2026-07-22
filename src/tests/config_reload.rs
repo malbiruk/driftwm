@@ -65,28 +65,31 @@ fn reload_invalidates_suspended_label_cache() {
         "s",
         "S",
     );
-    // Simulate a prior render having cached a label raster for this size/scale.
-    f.state()
-        .find_suspended(sid)
-        .unwrap()
-        .chrome
-        .borrow_mut()
-        .label_key = Some((300, 200, 1, false, true));
+    // Simulate a prior render having cached a label and body raster for this
+    // size/scale — both bake decorations config (colors/radius) into pixels.
+    {
+        let s = f.state().find_suspended(sid).unwrap();
+        let mut chrome = s.chrome.borrow_mut();
+        chrome.label_key = Some((300, 200, 1, false, true));
+        chrome.body_key = Some((300, 200, 1, false));
+    }
 
-    // A decorations-affecting reload resets the cached key so the centered label
-    // re-rasters, like every other decoration.
+    // A decorations-affecting reload resets both cached keys so the centered
+    // label and the rounded body fill re-raster, like every other decoration.
     f.state()
         .reload_config_from_contents("[decorations]\ndefault_mode = \"server\"\nfont_size = 16\n");
-    assert!(
-        f.state()
-            .find_suspended(sid)
-            .unwrap()
-            .chrome
-            .borrow()
-            .label_key
-            .is_none(),
-        "reload reset the suspended label cache"
-    );
+    {
+        let s = f.state().find_suspended(sid).unwrap();
+        let chrome = s.chrome.borrow();
+        assert!(
+            chrome.label_key.is_none(),
+            "reload reset the suspended label cache"
+        );
+        assert!(
+            chrome.body_key.is_none(),
+            "reload reset the suspended body cache"
+        );
+    }
 
     // The headless fixture has no backend to drain a queued mode intent.
     f.state().pending_mode_changes.clear();

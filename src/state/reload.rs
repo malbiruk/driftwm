@@ -175,13 +175,16 @@ impl DriftWm {
             deco.width = -1;
         }
 
-        // A suspended stand-in's centered label lives on its `Rc`, outside the
-        // decoration map, and caches on size/scale/launching only — reset the
-        // key so a font/size/weight/color edit re-rasters it like every other
+        // A suspended stand-in's centered label and rounded body fill live on
+        // its `Rc`, outside the decoration map, and cache on size/scale — reset
+        // both keys so a font/size/weight/color edit (label) or a
+        // bg_color/corner_radius edit (body) re-rasters them like every other
         // decoration.
         for element in self.stage.windows() {
             if let Some(s) = element.suspended() {
-                s.chrome.borrow_mut().label_key = None;
+                let mut chrome = s.chrome.borrow_mut();
+                chrome.label_key = None;
+                chrome.body_key = None;
             }
         }
 
