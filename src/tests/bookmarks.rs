@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use driftwm::config::Action;
+use driftwm::config::{Action, parse_action};
 use driftwm::session::{self, SessionEnvelope};
 
 use super::real::TempDir;
@@ -55,6 +55,84 @@ fn set_bookmark_then_go_to_round_trips_the_camera() {
 }
 
 #[test]
+fn set_bookmark_then_go_to_round_trips_at_nondefault_zoom() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.state().set_zoom(2.5);
+
+    f.state()
+        .execute_action(&Action::GoToPosition(500.0, -300.0));
+    let dest = f
+        .state()
+        .camera_target()
+        .expect("go-to sets a camera target");
+
+    f.state().execute_action(&Action::SetBookmark("z".into()));
+    // The captured canvas point does not depend on zoom.
+    assert_eq!(f.state().bookmarks["z"], [500.0, -300.0]);
+
+    f.state()
+        .execute_action(&Action::GoToPosition(-2000.0, 1000.0));
+    f.state().execute_action(&Action::GoToBookmark("z".into()));
+
+    let restored = f
+        .state()
+        .camera_target()
+        .expect("go-to-bookmark sets a target");
+    assert!((restored.x - dest.x).abs() < 1e-6);
+    assert!((restored.y - dest.y).abs() < 1e-6);
+    // The round trip never touches zoom.
+    assert_eq!(f.state().zoom(), 2.5);
+}
+
+#[test]
+fn set_bookmark_captures_pending_target_not_a_stale_camera() {
+    use smithay::utils::Point;
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    // Simulate a camera still mid-flight from an earlier jump: the per-tick
+    // camera sits far from a freshly requested destination.
+    f.state().set_camera(Point::from((10.0, 10.0)));
+    f.state()
+        .execute_action(&Action::GoToPosition(500.0, -300.0));
+    assert_ne!(
+        f.state().camera(),
+        f.state().camera_target().unwrap(),
+        "the destination and the per-tick camera must differ for this test to be meaningful"
+    );
+
+    f.state().execute_action(&Action::SetBookmark("mid".into()));
+    // The bookmark captures the animation's destination, not the stale
+    // mid-flight camera.
+    assert_eq!(f.state().bookmarks["mid"], [500.0, -300.0]);
+}
+
+#[test]
+fn bookmark_names_containing_spaces_work_through_parse_and_registry() {
+    // Config binding values are the whole trimmed remainder, so a bookmark
+    // name may contain spaces.
+    assert_eq!(
+        parse_action("go-to-bookmark my spot"),
+        Ok(Action::GoToBookmark("my spot".into()))
+    );
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    f.state().execute_action(&Action::GoToPosition(80.0, -40.0));
+    let expected = f.state().camera_target().unwrap();
+
+    f.state().bookmarks.insert("my spot".into(), [80.0, -40.0]);
+    f.state().execute_action(&Action::GoToPosition(0.0, 0.0));
+    f.state()
+        .execute_action(&Action::GoToBookmark("my spot".into()));
+
+    assert_eq!(f.state().camera_target(), Some(expected));
+}
+
+#[test]
 fn go_to_bookmark_unset_name_is_a_no_op() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
@@ -100,6 +178,21 @@ fn move_to_bookmark_refuses_a_pinned_window() {
         .execute_action(&Action::MoveToBookmark("b".into()));
     // The pinned window is left in screen space, not re-mapped onto the canvas.
     assert!(f.state().is_pinned(&window));
+}
+
+#[test]
+fn move_to_bookmark_unset_name_is_a_no_op() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+
+    let before = f.state().stage.position_of(&window).unwrap();
+    f.state()
+        .execute_action(&Action::MoveToBookmark("nope".into()));
+    let after = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(before, after);
 }
 
 #[test]
@@ -270,5 +363,46 @@ fn reload_preserves_runtime_bookmark_reasserts_changed_and_drops_removed() {
     assert_eq!(f.state().bookmarks["2"], [1750.0, 1750.0]);
 
     // Reload queues a headless-output mode intent the fixture never drains.
+    f.state().pending_mode_changes.clear();
+}
+
+#[test]
+fn reload_with_unrelated_config_change_preserves_runtime_bookmarks() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    // Override a seeded corner and add a brand-new runtime-only bookmark.
+    f.state().bookmarks.insert("1".into(), [111.0, 222.0]);
+    f.state().bookmarks.insert("custom".into(), [7.0, 8.0]);
+
+    // Reload with an edit that never touches [navigation.bookmarks]: the old
+    // and new config both compile to the same corner-default table, so the
+    // diff is empty and every runtime value rides through untouched.
+    f.state()
+        .reload_config_from_contents("[navigation]\ndrift = 0.5\n");
+
+    assert_eq!(f.state().bookmarks["1"], [111.0, 222.0]);
+    assert_eq!(f.state().bookmarks["custom"], [7.0, 8.0]);
+
+    f.state().pending_mode_changes.clear();
+}
+
+#[test]
+fn reload_removing_bookmarks_section_resets_untouched_names_to_corner_defaults() {
+    let mut f = Fixture::with_config(config(
+        "[navigation.bookmarks]\n\"1\" = [111, 222]\n\"3\" = [333, 444]\n",
+    ));
+    f.add_output(1, (1920, 1080));
+
+    // Reload to a config with the whole section gone: the new table is the
+    // compiled corner defaults, diffed against the old (custom, partial) one.
+    f.state().reload_config_from_contents("");
+
+    assert_eq!(f.state().bookmarks["1"], [-1750.0, 1750.0]);
+    assert_eq!(f.state().bookmarks["3"], [1750.0, -1750.0]);
+    // Names the old config never had also appear, filled with their defaults.
+    assert_eq!(f.state().bookmarks["2"], [1750.0, 1750.0]);
+    assert_eq!(f.state().bookmarks["4"], [-1750.0, -1750.0]);
+
     f.state().pending_mode_changes.clear();
 }

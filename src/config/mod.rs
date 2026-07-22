@@ -1526,6 +1526,29 @@ mod tests {
     }
 
     #[test]
+    fn go_to_deprecation_warns_once_across_multiple_sections() {
+        let toml_str = r#"
+            [keybindings]
+            "mod+5" = "go-to 100 200"
+
+            [gestures.anywhere]
+            "4-finger-swipe-up" = "go-to 0 0"
+
+            [mouse.on-canvas]
+            "middle" = "go-to 50 50"
+        "#;
+        let (_config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        let count = warnings
+            .iter()
+            .filter(|w| w.contains("go-to is deprecated"))
+            .count();
+        assert_eq!(
+            count, 1,
+            "one warning per load, not one per section: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn no_go_to_binding_does_not_warn() {
         let (_config, warnings) = Config::from_toml_collect("").unwrap();
         assert!(
