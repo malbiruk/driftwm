@@ -7,7 +7,7 @@ use smithay::utils::{Point, Size};
 
 use crate::state::StageWindow;
 
-use super::{Fixture, window_by_app_id};
+use super::{Fixture, adopt_last_configure, window_by_app_id};
 
 /// Map one toplevel with a buffer at `size`, settle, and drain the configure
 /// cursor so tests only see what happens next.
@@ -563,5 +563,91 @@ fn fill_records_settled_footprint() {
         f.state().stage.position_of(&a),
         Some(filled_loc),
         "a redraw commit after clear_fill must not translate the filled window"
+    );
+}
+
+/// The plain fullscreen round-trip (no straggler, no neighbor) must restore the
+/// exact pre-fullscreen position — the reflow settle-guard must not disturb it.
+#[test]
+fn fullscreen_round_trip_restores_position() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "fs", (800, 600));
+    let window = window_by_app_id(&mut f, "fs").unwrap();
+    let pre_pos = f.state().stage.position_of(&window).unwrap();
+
+    // Fullscreen, then adopt the fullscreen size as a real client would.
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    // Exit and settle at the restored size.
+    let cw = f.client(id).window(&surface);
+    cw.unset_fullscreen();
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    assert!(!f.state().stage.is_fullscreen(&window));
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(pre_pos),
+        "fullscreen round-trip must restore the exact pre-fullscreen position"
+    );
+}
+
+/// A client exiting fullscreen keeps committing viewport-sized frames until it
+/// acks the restore configure; those synchronous-exit stragglers read as "grown
+/// past settled" against the stale pre-fullscreen rect. A gap-adjacent neighbor
+/// must not get shoved aside by that reflow misread.
+#[test]
+fn fullscreen_exit_straggler_keeps_position() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Park A settled and gap-adjacent to B in canvas space: the settled
+    // adjacency is the reflow's anchor precondition.
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(a.clone()));
+    f.state()
+        .map_window(b.clone(), Point::from((1200 + gap, 300)), false);
+    let pre_pos = f.state().stage.position_of(&a).unwrap();
+
+    // Client-initiated fullscreen, then adopt the fullscreen size.
+    let window = f.client(id).window(&a_surface);
+    window.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    // Exit runs synchronously server-side; the client has not acked yet.
+    let window = f.client(id).window(&a_surface);
+    window.unset_fullscreen();
+    f.double_roundtrip(id);
+
+    // Straggler: a still-fullscreen-sized frame lands before the restore
+    // configure is acked.
+    let window = f.client(id).window(&a_surface);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+
+    // The client finally acks and settles at the restored size.
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(pre_pos),
+        "a straggler fullscreen-sized commit must not relocate the exiting window"
     );
 }

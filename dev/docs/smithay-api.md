@@ -93,6 +93,18 @@ toplevel.with_pending_state(|state| {
 toplevel.send_pending_configure();
 ```
 
+### Detecting an unacked configure
+`XdgToplevelSurfaceRoleAttributes::pending_configures() -> &[ToplevelConfigure]`
+is public, reached via `with_states(surface, |s| s.data_map.get::<XdgToplevelSurfaceData>())`
+(`XdgToplevelSurfaceData = Mutex<XdgToplevelSurfaceRoleAttributes>`, so
+`.lock().unwrap().pending_configures()`). Entries are pruned in `ack_configure`
+with `retain(|c| c.serial > serial)`, so non-empty ⇔ the latest configure is not
+yet acked. Treat a missing data entry as "no pending" (`unwrap_or(false)`).
+Non-empty does **not** imply a pending *resize*: a compositor queues size-less
+(`state.size == None`/`(0,0)`, "client picks") configures too, so to detect an
+owed resize inspect each `ToplevelConfigure`'s `state.size` for a real
+(non-zero) size differing from the committed geometry, not just list length.
+
 ### Keyboard modifier state
 ```rust
 let modifiers = self.seat.get_keyboard().unwrap().modifier_state();

@@ -72,6 +72,29 @@ fn map_window(
     surface
 }
 
+/// Adopt the size the compositor most recently configured: set it client-side,
+/// attach a buffer, ack, and settle — the buffer-commit ritual a real client
+/// runs to acknowledge a configure.
+fn adopt_last_configure(
+    f: &mut Fixture,
+    id: client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+) {
+    let (w, h) = f
+        .client(id)
+        .window(surface)
+        .configures_received
+        .last()
+        .unwrap()
+        .1
+        .size;
+    let window = f.client(id).window(surface);
+    window.set_size(w as u16, h as u16);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+}
+
 /// Create an xdg popup on the toplevel backing `parent`, map it (attach a
 /// buffer and ack), and settle. Returns the client-side popup surface.
 fn map_popup(
