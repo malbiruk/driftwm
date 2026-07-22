@@ -132,6 +132,21 @@ The flag is read at launch, so flipping it mid-session takes effect on the next
 launch, not immediately. (Cameras are always saved regardless, so turning it on
 later restores what your session had.)
 
+## `restore_bookmarks`
+
+```toml
+[session]
+restore_bookmarks = true
+```
+
+Bookmarks (named canvas points — see `[navigation.bookmarks]` and the
+`go-to-bookmark` / `set-bookmark` / `move-to-bookmark` actions) are a runtime
+registry seeded from config. With this off (the default), the registry resets to
+the config seeds on every launch, so a `set-bookmark` or `driftwm msg bookmark`
+edit lasts only for the session. Turn it on to overlay the saved registry on top
+of the config seeds at launch, so a restored bookmark wins per name and config
+seeds fill the names the save lacks. Like the camera flag, it's read at launch.
+
 The session lives at `~/.local/state/driftwm/session.json` (respects
 `XDG_STATE_HOME`). It's written through immediately on anything you'd notice
 (suspending, dismissing, relaunching) and debounced (~1s) for continuous

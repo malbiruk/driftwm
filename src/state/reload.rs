@@ -167,6 +167,37 @@ impl DriftWm {
             new_config.child_env.insert("DISPLAY".into(), display);
         }
 
+        // Reconcile the live bookmark registry with the config seed diff. Config
+        // is a seed, so a name added or changed in config re-asserts into the
+        // registry, a name removed from config drops from it, and names config
+        // didn't touch keep any runtime set-bookmark value. Comparing the two
+        // defaults-applied tables handles a whole section being added/removed.
+        let bookmark_ops: Vec<(String, Option<[f64; 2]>)> = {
+            let old = &self.config.navigation_bookmarks;
+            let new = &new_config.navigation_bookmarks;
+            let mut ops = Vec::new();
+            for (name, value) in new {
+                if old.get(name) != Some(value) {
+                    ops.push((name.clone(), Some(*value)));
+                }
+            }
+            for name in old.keys() {
+                if !new.contains_key(name) {
+                    ops.push((name.clone(), None));
+                }
+            }
+            ops
+        };
+        if !bookmark_ops.is_empty() {
+            for (name, value) in bookmark_ops {
+                match value {
+                    Some(v) => self.bookmarks.insert(name, v),
+                    None => self.bookmarks.remove(&name),
+                };
+            }
+            self.session_store_mark_dirty();
+        }
+
         self.config = new_config;
 
         // Invalidate every SSD title bar's cached width so `update()`

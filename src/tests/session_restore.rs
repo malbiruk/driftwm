@@ -145,6 +145,7 @@ fn restored_stand_in_has_clickable_label() {
     let path = tmp.path().join("session.json");
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: vec![entry(1, "myapp", Origin::Explicit)],
         outputs: BTreeMap::new(),
@@ -211,6 +212,7 @@ fn flag_off_materializes_explicit_and_carries_quit() {
     // A prior session saved one explicit + one quit entry.
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: vec![
             entry(1, "keepme", Origin::Explicit),
@@ -250,6 +252,7 @@ fn restore_flip_on_drops_carried_quit_for_relaunched_app() {
     // A prior session left a quit entry for "onlyquit".
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: vec![entry(2, "onlyquit", Origin::Quit)],
         outputs: BTreeMap::new(),
@@ -302,6 +305,7 @@ fn restore_flip_on_preserves_unrelaunched_carried_quit() {
     // A prior session left quit entries for two apps, A and B.
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: vec![
             entry(1, "appa", Origin::Quit),
@@ -363,6 +367,7 @@ fn durable_camera_seeds_fresh_boot() {
     );
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: Vec::new(),
         outputs,
@@ -399,6 +404,7 @@ fn out_of_range_entry_is_dropped_and_not_carried() {
     let good = entry(2, "good", Origin::Explicit);
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: vec![bad, good],
         outputs: BTreeMap::new(),
@@ -445,6 +451,7 @@ fn invalid_zoom_seed_is_ignored_and_reserializes_sane() {
     );
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: Vec::new(),
         outputs,
@@ -505,6 +512,7 @@ fn restore_camera_off_skips_seed_but_materializes_windows() {
     );
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         // An Explicit entry materializes regardless of restore_windows, so this
         // isolates the camera flag.
@@ -582,6 +590,7 @@ fn restore_camera_off_preserves_disconnected_output_camera() {
     );
     let envelope = SessionEnvelope {
         version: session::VERSION,
+        bookmarks: BTreeMap::new(),
         saved_at: 0,
         entries: Vec::new(),
         outputs,

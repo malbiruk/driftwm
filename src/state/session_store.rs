@@ -89,6 +89,15 @@ impl DriftWm {
         for entry in materialize {
             self.materialize_entry(entry);
         }
+        // Bookmarks always ride the file, but overlay them on the config seeds
+        // only when restore_bookmarks is on (a restored value wins per name;
+        // config seeds fill the names the file lacks). Off keeps the fresh
+        // config seeds, so runtime edits don't survive a restart.
+        if self.config.session.restore_bookmarks {
+            for (name, value) in envelope.bookmarks {
+                self.bookmarks.insert(name, value);
+            }
+        }
     }
 
     /// Recreate one saved window as a dormant suspended stand-in at its canvas
@@ -243,6 +252,7 @@ impl DriftWm {
             saved_at: now_unix(),
             entries,
             outputs: self.per_output_cameras(),
+            bookmarks: self.bookmarks.clone(),
         }
     }
 

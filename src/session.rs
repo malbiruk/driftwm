@@ -66,6 +66,10 @@ pub struct SessionEnvelope {
     pub saved_at: u64,
     pub entries: Vec<SessionEntry>,
     pub outputs: std::collections::BTreeMap<String, SessionOutput>,
+    /// The bookmark registry, name → [x, y] (Y-up rule coords). Additive: a
+    /// file predating this field defaults to empty.
+    #[serde(default)]
+    pub bookmarks: std::collections::BTreeMap<String, [f64; 2]>,
 }
 
 impl SessionEnvelope {
@@ -76,6 +80,7 @@ impl SessionEnvelope {
             saved_at: 0,
             entries: Vec::new(),
             outputs: std::collections::BTreeMap::new(),
+            bookmarks: std::collections::BTreeMap::new(),
         }
     }
 }
@@ -229,6 +234,7 @@ mod tests {
             saved_at: 123,
             entries: vec![entry(1, Origin::Explicit), entry(2, Origin::Quit)],
             outputs,
+            bookmarks: BTreeMap::new(),
         };
 
         write(&path, &envelope, false).unwrap();
@@ -252,6 +258,7 @@ mod tests {
             saved_at: 0,
             entries: vec![csd, entry(2, Origin::Explicit)],
             outputs: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
         };
         write(&path, &envelope, false).unwrap();
         let read_back = read(&path);
@@ -387,6 +394,7 @@ mod tests {
             saved_at: 1,
             entries: vec![entry(1, Origin::Explicit), entry(2, Origin::Quit)],
             outputs: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
         };
         write(&path, &original, false).unwrap();
 
@@ -400,6 +408,7 @@ mod tests {
             saved_at: 2,
             entries: carried,
             outputs: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
         };
         write(&path, &rewritten, false).unwrap();
 
