@@ -2,7 +2,9 @@
 //! engine has its own unit suite; these drive a real client through the
 //! commit path and assert the applied effect server-side or configure-side.
 
-use super::{Fixture, config, keyboard_focus, map_window, server_surface, window_by_app_id};
+use super::{
+    Fixture, config, is_activated, keyboard_focus, map_window, server_surface, window_by_app_id,
+};
 
 #[test]
 fn widget_rule_does_not_take_focus() {
@@ -207,6 +209,119 @@ output = "HEADLESS-2"
         configures.contains("size: 1280 × 720") && configures.contains("Fullscreen"),
         "expected a HEADLESS-2-sized fullscreen configure, got:\n{configures}"
     );
+}
+
+#[test]
+fn focus_on_open_false_maps_without_focus_or_navigation() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "nofocus"
+focus_on_open = false
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "normal", (400, 300));
+    let normal = window_by_app_id(&mut f, "normal").unwrap();
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&normal)));
+    assert!(
+        f.state().camera_target().is_some(),
+        "the default map-time behavior navigates the camera"
+    );
+    f.state().with_output_state(|os| os.camera_target = None);
+
+    map_window(&mut f, id, "nofocus", (200, 100));
+    let nofocus = window_by_app_id(&mut f, "nofocus").unwrap();
+
+    // Mapping the suppressed window must neither steal keyboard focus nor
+    // move the camera.
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&normal)));
+    assert!(f.state().camera_target().is_none());
+
+    // ...and it must not steal the xdg Activated chrome either: the window that
+    // keeps keyboard focus stays activated, the suppressed one is not.
+    assert!(is_activated(&normal));
+    assert!(!is_activated(&nofocus));
+
+    // A normal focus path (here: the same raise_and_focus click-to-focus and
+    // hover-focus funnel into) still reaches it afterwards.
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&nofocus, serial);
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&nofocus)));
+}
+
+/// The very first window mapped is suppressed: there is no prior focus holder
+/// for the activation correction to fall back to, so it must clear its own
+/// Activated state rather than panic or leave the map-sequence configure
+/// advertising a stale Activated.
+#[test]
+fn focus_on_open_false_as_first_window_takes_no_focus_or_activation() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "nofocus"
+focus_on_open = false
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "nofocus", (200, 100));
+    let nofocus = window_by_app_id(&mut f, "nofocus").unwrap();
+
+    assert_eq!(keyboard_focus(&mut f), None);
+    assert!(!is_activated(&nofocus));
+}
+
+#[test]
+fn focus_on_open_true_focuses_and_navigates_like_default() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "explicit"
+focus_on_open = true
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "explicit", (400, 300));
+    let window = window_by_app_id(&mut f, "explicit").unwrap();
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&window)));
+    assert!(f.state().camera_target().is_some());
+    assert!(is_activated(&window));
+}
+
+#[test]
+fn focus_on_open_false_with_pinned_to_screen_does_not_steal_focus() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "hud"
+pinned_to_screen = true
+focus_on_open = false
+size = [320, 240]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "normal", (400, 300));
+    let normal = window_by_app_id(&mut f, "normal").unwrap();
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&normal)));
+
+    map_window(&mut f, id, "hud", (320, 240));
+    let hud = window_by_app_id(&mut f, "hud").unwrap();
+
+    // The pinned overlay maps and pins successfully, but keeps the existing
+    // window focused — and does not steal the xdg Activated chrome from it.
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&normal)));
+    assert!(f.state().stage.pin_of(&hud).is_some());
+    assert!(is_activated(&normal));
+    assert!(!is_activated(&hud));
 }
 
 #[test]

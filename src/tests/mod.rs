@@ -152,3 +152,13 @@ fn window_by_app_id(f: &mut Fixture, app_id: &str) -> Option<Window> {
 fn server_surface(window: &Window) -> WlSurface {
     window.wl_surface().unwrap().into_owned()
 }
+
+/// Whether `window`'s toplevel currently carries the xdg `Activated` state
+/// (the "focused window" chrome hint the compositor sets exclusively).
+fn is_activated(window: &Window) -> bool {
+    use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+    window
+        .toplevel()
+        .expect("toplevel")
+        .with_pending_state(|s| s.states.contains(xdg_toplevel::State::Activated))
+}
