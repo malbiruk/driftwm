@@ -1102,6 +1102,7 @@ Supported fields:
 - `widget` — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)
 - `pinned_to_screen` — true: lock the window to the output's screen space — ignores pan/zoom, floats above normal windows (PiP, toolbars). `position` becomes output-relative; movable unless widget = true. Toggle live with `toggle-pin-to-screen` (Mod+T). (default: false)
 - `suspend_on_close` — override [session].suspend_on_close for matched windows (true / false). Escape hatch for terminals and scratchpads that should always really close (or always suspend). (default: inherit)
+- `preserve_aspect_ratio` — true: keep the window's aspect ratio during interactive resizes; the ratio is taken at the start of each resize. (default: false)
 - `decoration` — overrides [decorations] default_mode for matched windows. Omit to inherit default_mode. Values:
   - "client":  CSD — client's own titlebar
   - "server":  SSD — driftwm's titlebar

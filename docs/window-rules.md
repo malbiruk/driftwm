@@ -345,6 +345,22 @@ app_id = "firefox"
 shadow = false
 ```
 
+### Picture-in-Picture that keeps its aspect ratio
+
+```toml
+[[window_rules]]
+title                 = "Picture-in-Picture"
+pinned_to_screen      = true
+preserve_aspect_ratio = true
+decoration            = "none"
+```
+
+`preserve_aspect_ratio = true` locks the window's proportions during interactive
+resizes (mouse-border drag, resize gestures, touch) — the ratio is captured at
+the start of each resize, so a video overlay or image viewer won't distort when
+you drag a corner. It affects interactive resizes only; the `size` rule,
+fit/fullscreen, and client-driven sizes are left alone.
+
 ### Suppress iced/libcosmic utility popups
 
 Some apps (cosmic-term, etc.) open small utility windows that share the main

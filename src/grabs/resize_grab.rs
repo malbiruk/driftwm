@@ -72,6 +72,56 @@ impl SizeConstraints {
     }
 }
 
+/// Bend a freshly computed resize target back onto a locked aspect `ratio`
+/// (width / height). The driving axis follows the active edges: a pure
+/// horizontal edge drives width, a pure vertical edge drives height, and a
+/// corner drives whichever axis moved farther from `initial` relative to the
+/// ratio. The other axis is derived from the ratio. Client min/max clamping
+/// happens afterwards and may bend the ratio at those bounds.
+pub fn constrain_to_ratio(
+    target: Size<i32, Logical>,
+    initial: Size<i32, Logical>,
+    ratio: f64,
+    edges: xdg_toplevel::ResizeEdge,
+) -> Size<i32, Logical> {
+    let horizontal = has_left(edges) || has_right(edges);
+    let vertical = has_top(edges) || has_bottom(edges);
+    let width_drives = match (horizontal, vertical) {
+        (true, false) => true,
+        (false, true) => false,
+        // Corner: pick the axis whose ratio-normalized delta is larger so the
+        // driver stays fixed as the cursor crosses the ratio ray. Comparing raw
+        // |dw| vs |dh| flips the driver off the ray and jumps the derived axis.
+        _ => {
+            let dw = (target.w - initial.w).abs() as i64;
+            let dh = (target.h - initial.h).abs() as i64;
+            dw * initial.h as i64 >= dh * initial.w as i64
+        }
+    };
+    if width_drives {
+        let h = (target.w as f64 / ratio).round() as i32;
+        Size::from((target.w, h.max(1)))
+    } else {
+        let w = (target.h as f64 * ratio).round() as i32;
+        Size::from((w.max(1), target.h))
+    }
+}
+
+/// Locked aspect ratio (width / height) for a resize of `window`, or `None`.
+/// `Some` when the window carries the `preserve_aspect_ratio` rule; taken from
+/// its size at grab start.
+pub fn locked_ratio_for(window: &Window, initial_window_size: Size<i32, Logical>) -> Option<f64> {
+    let surface = window.wl_surface()?;
+    if initial_window_size.w > 0
+        && initial_window_size.h > 0
+        && driftwm::config::applied_rule(&surface).is_some_and(|r| r.preserve_aspect_ratio)
+    {
+        Some(initial_window_size.w as f64 / initial_window_size.h as f64)
+    } else {
+        None
+    }
+}
+
 /// Tracks the resize lifecycle for a window. Stored in the surface data map
 /// (wrapped in `RefCell`) so that `compositor::commit()` can reposition
 /// top/left-edge resizes.
@@ -128,6 +178,10 @@ pub struct ResizeSurfaceGrab {
     /// Fingers down for a touch resize; the grab unsets when this reaches zero,
     /// so a stray finger doesn't leak out of grab routing.
     pub touch_slots: usize,
+    /// `Some(w/h)` ⟹ the window carries `preserve_aspect_ratio`: the resize
+    /// derives its non-driving axis from this ratio and skips edge snapping.
+    /// Snapshotted from the window's size at grab start.
+    pub locked_ratio: Option<f64>,
 }
 
 /// Check if `edges` includes a horizontal/vertical component via raw bit values.
@@ -278,6 +332,7 @@ impl ResizeSurfaceGrab {
         cluster_resize: ClusterResizeSnapshot,
         pinned_initial_screen_pos: Option<Point<i32, Logical>>,
     ) -> Self {
+        let locked_ratio = locked_ratio_for(&window, initial_window_size);
         Self {
             start_data: GrabStartData {
                 focus: None,
@@ -297,6 +352,7 @@ impl ResizeSurfaceGrab {
             pinned_initial_screen_pos,
             touch_start: Some(touch_start),
             touch_slots: slots,
+            locked_ratio,
         }
     }
 
@@ -335,6 +391,7 @@ impl ResizeSurfaceGrab {
         } else if has_bottom(self.edges) {
             new_h += delta.y as i32;
         }
+        (new_w, new_h) = self.bend_to_locked_ratio(new_w, new_h);
         let (new_w, new_h) = self.constraints.clamp(new_w, new_h);
         let new_size = Size::from((new_w, new_h));
         if new_size != self.last_window_size {
@@ -348,6 +405,22 @@ impl ResizeSurfaceGrab {
             }
         }
         self.last_clamped_location
+    }
+
+    /// Bend `(w, h)` onto the locked aspect ratio if the window carries one,
+    /// returning the adjusted size (a no-op otherwise). Applied before clamp and
+    /// snap so the ratio-derived axis stays consistent with the clamped size.
+    fn bend_to_locked_ratio(&self, w: i32, h: i32) -> (i32, i32) {
+        let Some(ratio) = self.locked_ratio else {
+            return (w, h);
+        };
+        let s = constrain_to_ratio(
+            Size::from((w, h)),
+            self.initial_window_size,
+            ratio,
+            self.edges,
+        );
+        (s.w, s.h)
     }
 
     /// Apply a resize for canvas (non-pinned) windows from a canvas-space
@@ -370,6 +443,8 @@ impl ResizeSurfaceGrab {
             new_h += delta.y as i32;
         }
 
+        (new_w, new_h) = self.bend_to_locked_ratio(new_w, new_h);
+
         // Clamp to client-declared min/max (also enforces a 1×1 floor).
         // Applied before snap and cluster propagation so both see the
         // same clamped new_w/new_h — otherwise width_delta would keep
@@ -380,8 +455,12 @@ impl ResizeSurfaceGrab {
         new_w = nw;
         new_h = nh;
 
-        // Snap active resize edges to nearby windows
-        if data.config.snap_enabled && self.window.wl_surface().is_some() {
+        // Snap active resize edges to nearby windows. Skipped under a locked
+        // ratio: snapping one axis would fight the ratio-derived axis.
+        if data.config.snap_enabled
+            && self.locked_ratio.is_none()
+            && self.window.wl_surface().is_some()
+        {
             let zoom = output_state(&self.output).zoom;
             #[allow(clippy::mutable_key_type)]
             let excludes = self.cluster_resize.exclude_set(&data.stage);
@@ -409,14 +488,20 @@ impl ResizeSurfaceGrab {
             );
         }
 
-        self.cluster_resize.apply_member_shifts(
-            &mut data.stage,
-            &StageWindow::Client(self.window.clone()),
-            self.initial_window_size,
-            new_w,
-            new_h,
-            data.config.snap_gap,
-        );
+        // A locked ratio drives the non-dragged axis geometrically; the cluster
+        // snapshot only classified members against the dragged edges, so
+        // propagating shifts would grow that derived axis into unclassified
+        // neighbors. Treat a ratio-locked resize as single-window.
+        if self.locked_ratio.is_none() {
+            self.cluster_resize.apply_member_shifts(
+                &mut data.stage,
+                &StageWindow::Client(self.window.clone()),
+                self.initial_window_size,
+                new_w,
+                new_h,
+                data.config.snap_gap,
+            );
+        }
 
         let new_size = Size::from((new_w, new_h));
 
@@ -539,5 +624,65 @@ impl TouchGrab<DriftWm> for ResizeSurfaceGrab {
         // reset `cursor_status` — that field is client-owned and clobbering it
         // would lose the app's shape when the pointer next reappears.
         self.finalize(data);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Initial 200×100 → locked ratio 2.0 (width / height).
+    fn constrained(target: (i32, i32), edges: xdg_toplevel::ResizeEdge) -> (i32, i32) {
+        let s = constrain_to_ratio(Size::from(target), Size::from((200, 100)), 2.0, edges);
+        (s.w, s.h)
+    }
+
+    #[test]
+    fn horizontal_edge_drives_width() {
+        assert_eq!(
+            constrained((300, 100), xdg_toplevel::ResizeEdge::Right),
+            (300, 150)
+        );
+        assert_eq!(
+            constrained((80, 100), xdg_toplevel::ResizeEdge::Left),
+            (80, 40)
+        );
+    }
+
+    #[test]
+    fn vertical_edge_drives_height() {
+        assert_eq!(
+            constrained((200, 300), xdg_toplevel::ResizeEdge::Bottom),
+            (600, 300)
+        );
+        assert_eq!(
+            constrained((200, 40), xdg_toplevel::ResizeEdge::Top),
+            (80, 40)
+        );
+    }
+
+    #[test]
+    fn corner_drives_axis_with_larger_delta() {
+        // Height moved farther (200 vs 60) → height drives.
+        assert_eq!(
+            constrained((260, 300), xdg_toplevel::ResizeEdge::BottomRight),
+            (600, 300)
+        );
+        // Width moved farther (200 vs 20) → width drives.
+        assert_eq!(
+            constrained((400, 120), xdg_toplevel::ResizeEdge::BottomRight),
+            (400, 200)
+        );
+    }
+
+    #[test]
+    fn corner_drag_stays_continuous_across_the_ratio_ray() {
+        // BottomRight drag on the 2:1 window: crossing the ratio ray flips the
+        // driving axis, but the derived width must move a few px, not jump ~100px.
+        let below = constrained((300, 199), xdg_toplevel::ResizeEdge::BottomRight);
+        let above = constrained((300, 201), xdg_toplevel::ResizeEdge::BottomRight);
+        assert_eq!(below, (398, 199));
+        assert_eq!(above, (402, 201));
+        assert!((above.0 - below.0).abs() <= 8);
     }
 }

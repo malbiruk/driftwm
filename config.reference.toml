@@ -690,6 +690,9 @@
 # #   suspend_on_close — override [session].suspend_on_close for matched windows
 # #                (true / false). Escape hatch for terminals and scratchpads that
 # #                should always really close (or always suspend). (default: inherit)
+# #   preserve_aspect_ratio — true: keep the window's aspect ratio during
+# #                interactive resizes; the ratio is taken at the start of each
+# #                resize. (default: false)
 # #   decoration — overrides [decorations] default_mode for matched windows.
 # #                Omit to inherit default_mode. Values:
 # #                "client":  CSD — client's own titlebar

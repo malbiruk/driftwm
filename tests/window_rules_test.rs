@@ -12,6 +12,7 @@ fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
         widget: false,
         pinned_to_screen: false,
         suspend_on_close: None,
+        preserve_aspect_ratio: false,
         decoration: None,
         blur: false,
         opacity: None,
@@ -538,6 +539,42 @@ fn pinned_to_screen_sticky_across_two_toml_rules() {
     let config = Config::from_toml(toml).unwrap();
     let applied = config.resolve_window_rules("myapp", "title").unwrap();
     assert!(applied.pinned_to_screen);
+}
+
+// ── preserve_aspect_ratio ─────────────────────────────────────────────────────
+
+#[test]
+fn preserve_aspect_ratio_defaults_to_false() {
+    let rule = bare_rule(Some("foot"), None);
+    assert!(!rule.preserve_aspect_ratio);
+    assert!(!AppliedWindowRule::from(&rule).preserve_aspect_ratio);
+}
+
+#[test]
+fn preserve_aspect_ratio_parses_from_toml() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "mpv"
+        preserve_aspect_ratio = true
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    let applied = config.resolve_window_rules("mpv", "title").unwrap();
+    assert!(applied.preserve_aspect_ratio);
+}
+
+#[test]
+fn preserve_aspect_ratio_is_sticky_on_in_merge_from() {
+    let rule_on = WindowRule {
+        preserve_aspect_ratio: true,
+        ..bare_rule(Some("x"), None)
+    };
+    let rule_off = WindowRule {
+        preserve_aspect_ratio: false,
+        ..bare_rule(Some("x"), None)
+    };
+    let mut applied = AppliedWindowRule::from(&rule_on);
+    applied.merge_from(&rule_off);
+    assert!(applied.preserve_aspect_ratio);
 }
 
 #[test]

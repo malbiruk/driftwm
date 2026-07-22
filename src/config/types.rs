@@ -659,6 +659,9 @@ pub struct WindowRule {
     /// Override the global `suspend_on_close` for matched windows. `None`
     /// inherits the global setting.
     pub suspend_on_close: Option<bool>,
+    /// Preserve the window's aspect ratio during interactive resizes. The
+    /// locked ratio is snapshotted from the window's size at each resize start.
+    pub preserve_aspect_ratio: bool,
     /// `None` means "inherit `[decorations] default_mode`". Explicit
     /// `decoration = "client"` resolves to `Some(Client)` and overrides default.
     pub decoration: Option<DecorationMode>,
@@ -713,6 +716,7 @@ pub struct AppliedWindowRule {
     pub widget: bool,
     pub pinned_to_screen: bool,
     pub suspend_on_close: Option<bool>,
+    pub preserve_aspect_ratio: bool,
     pub decoration: Option<DecorationMode>,
     pub blur: bool,
     pub opacity: Option<f64>,
@@ -744,6 +748,9 @@ impl AppliedWindowRule {
         }
         if let Some(soc) = rule.suspend_on_close {
             self.suspend_on_close = Some(soc);
+        }
+        if rule.preserve_aspect_ratio {
+            self.preserve_aspect_ratio = true;
         }
         if rule.blur {
             self.blur = true;
@@ -794,6 +801,7 @@ impl From<&WindowRule> for AppliedWindowRule {
             widget: rule.widget,
             pinned_to_screen: rule.pinned_to_screen,
             suspend_on_close: rule.suspend_on_close,
+            preserve_aspect_ratio: rule.preserve_aspect_ratio,
             decoration: rule.decoration.clone(),
             blur: rule.blur,
             opacity: rule.opacity,

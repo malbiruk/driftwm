@@ -550,6 +550,7 @@ impl XdgShellHandler for DriftWm {
                 crate::state::ClusterResizeSnapshot::empty()
             };
         let constraints = crate::grabs::SizeConstraints::for_window(&window);
+        let locked_ratio = crate::grabs::locked_ratio_for(&window, initial_window_size);
         let grab = ResizeSurfaceGrab {
             start_data,
             window,
@@ -565,6 +566,7 @@ impl XdgShellHandler for DriftWm {
             pinned_initial_screen_pos,
             touch_start: None,
             touch_slots: 0,
+            locked_ratio,
         };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }

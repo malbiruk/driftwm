@@ -277,6 +277,10 @@ pub(super) struct WindowRuleFile {
     /// for terminals / scratchpads that should always really close (or always
     /// suspend). `None` inherits the global setting.
     pub suspend_on_close: Option<bool>,
+    /// Keep the window's aspect ratio during interactive resizes; the ratio is
+    /// taken at the start of each resize.
+    #[serde(default)]
+    pub preserve_aspect_ratio: bool,
     pub decoration: Option<String>,
     pub blur: Option<bool>,
     pub opacity: Option<f64>,

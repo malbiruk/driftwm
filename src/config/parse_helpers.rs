@@ -408,6 +408,7 @@ pub(super) fn parse_window_rule(
         widget: r.widget,
         pinned_to_screen: r.pinned_to_screen,
         suspend_on_close: r.suspend_on_close,
+        preserve_aspect_ratio: r.preserve_aspect_ratio,
         decoration,
         blur: r.blur.unwrap_or(false),
         opacity,

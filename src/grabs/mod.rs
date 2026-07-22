@@ -126,6 +126,7 @@ pub use navigate_grab::NavigateGrab;
 pub use pan_grab::PanGrab;
 pub use resize_grab::{
     ResizeState, ResizeSurfaceGrab, SizeConstraints, has_bottom, has_left, has_right, has_top,
+    locked_ratio_for,
 };
 pub use screen_space_click::ScreenSpaceClickGrab;
 pub use suspended_grab::{SuspendedMoveGrab, SuspendedResizeGrab};
