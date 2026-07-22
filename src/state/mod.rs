@@ -18,7 +18,7 @@ mod session_store;
 mod stage_window;
 mod suspended;
 mod viewport;
-pub use cluster_snapshot::ClusterResizeSnapshot;
+pub use cluster_snapshot::{ClusterMember, ClusterResizeSnapshot};
 pub use cursor::{CursorFrames, CursorState};
 pub use errors::ErrorSource;
 pub use focus::{FocusIntent, FocusTarget};
@@ -2182,6 +2182,15 @@ impl DriftWm {
         let mode =
             driftwm::config::effective_decoration_mode(None, &self.config.decorations.default_mode);
         driftwm::config::effective_border_width(None, mode, &self.config.decorations)
+    }
+
+    /// Border width for any stage element: the per-rule width for a client, the
+    /// global default for a surfaceless stand-in.
+    pub fn element_border_width(&self, w: &StageWindow) -> i32 {
+        match w {
+            StageWindow::Client(c) => c.wl_surface().map_or(0, |s| self.window_border_width(&s)),
+            StageWindow::Suspended(_) => self.default_border_width(),
+        }
     }
 
     /// Recompute `decoration_scale` from current outputs. Call after output

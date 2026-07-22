@@ -1,12 +1,11 @@
 use std::any::Any;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::time::Duration;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab, TouchGestureGrab};
 use crate::input::DecoTarget;
-use crate::state::{DriftWm, FocusTarget, SessionLock, output_state};
+use crate::state::{DriftWm, FocusTarget, SessionLock, StageWindow, output_state};
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
 use driftwm::window_ext::WindowExt;
 use smithay::{
@@ -364,7 +363,7 @@ impl DriftWm {
 
         // Pinned resize is screen-space and single-window — no snap or cluster.
         let cluster_resize = if snapped && pinned_site.is_none() {
-            self.cluster_snapshot_for_resize(window, edges)
+            self.cluster_snapshot_for_resize(&StageWindow::Client(window.clone()), edges)
         } else {
             crate::state::ClusterResizeSnapshot::empty()
         };
@@ -643,15 +642,8 @@ impl DriftWm {
         };
         // One finger down (the titlebar press); the grab intercepts its motion
         // and up directly, so no `down` forward is needed.
-        let grab = MoveSurfaceGrab::new_touch(
-            start,
-            window.clone(),
-            initial,
-            output,
-            1,
-            Vec::new(),
-            HashSet::new(),
-        );
+        let grab =
+            MoveSurfaceGrab::new_touch(start, window.clone(), initial, output, 1, Vec::new());
         self.seat.get_touch().unwrap().set_grab(self, grab, serial);
     }
 

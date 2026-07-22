@@ -5,7 +5,6 @@
 //! only reached through swipe and DoubletapSwipe begin paths.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
 
 use smithay::{
     backend::input::{
@@ -30,7 +29,7 @@ use driftwm::layout::snap::SnapState;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
 use crate::input::pointer::{edges_from_position, resize_cursor};
-use crate::state::{DriftWm, FocusTarget};
+use crate::state::{DriftWm, FocusTarget, StageWindow};
 
 use super::{GestureState, direction_from_vector};
 
@@ -452,10 +451,13 @@ impl DriftWm {
         }
 
         let initial_window_location = self.stage.position_of(&window).unwrap_or_default();
-        let (members, surfaces) = if cluster {
-            self.cluster_snapshot_for_drag(&window, initial_window_location)
+        let members = if cluster {
+            self.cluster_snapshot_for_drag(
+                &StageWindow::Client(window.clone()),
+                initial_window_location,
+            )
         } else {
-            (Vec::new(), HashSet::new())
+            Vec::new()
         };
         let pointer = self.seat.get_pointer().unwrap();
         let Some(output) = self.active_output() else {
@@ -477,7 +479,6 @@ impl DriftWm {
             initial_window_location,
             output,
             members,
-            surfaces,
         );
         pointer.set_grab(self, grab, serial, Focus::Clear);
 
@@ -557,7 +558,7 @@ impl DriftWm {
         // variant snapshots the cluster. Plain gesture resize builds an
         // empty snapshot and behaves as single-window.
         let cluster_resize = if want_cluster {
-            self.cluster_snapshot_for_resize(&window, edges)
+            self.cluster_snapshot_for_resize(&StageWindow::Client(window.clone()), edges)
         } else {
             crate::state::ClusterResizeSnapshot::empty()
         };

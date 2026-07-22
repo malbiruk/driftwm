@@ -18,7 +18,7 @@ use smithay::{
 
 use smithay::input::pointer::CursorImageStatus;
 
-use crate::state::{ClusterResizeSnapshot, DriftWm, output_state};
+use crate::state::{ClusterResizeSnapshot, DriftWm, StageWindow, output_state};
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
@@ -257,8 +257,8 @@ impl ResizeSurfaceGrab {
         }
 
         for member in &self.cluster_resize.members {
-            if smithay::utils::IsAlive::alive(&member.window) {
-                data.refresh_stable_snap_rect(&member.window);
+            if let Some(element) = member.window.resolve(&data.stage) {
+                data.refresh_stable_snap_rect(&element);
             }
         }
     }
@@ -381,12 +381,12 @@ impl ResizeSurfaceGrab {
         new_h = nh;
 
         // Snap active resize edges to nearby windows
-        if data.config.snap_enabled
-            && let Some(self_surface) = self.window.wl_surface().map(|s| s.into_owned())
-        {
+        if data.config.snap_enabled && self.window.wl_surface().is_some() {
             let zoom = output_state(&self.output).zoom;
+            #[allow(clippy::mutable_key_type)]
+            let excludes = self.cluster_resize.exclude_set(&data.stage);
             let (others, self_bar, self_bw) =
-                data.snap_targets(&self_surface, &self.cluster_resize.exclude);
+                data.snap_targets(&StageWindow::Client(self.window.clone()), &excludes);
 
             snap_resize_edges(
                 &mut self.snap,
@@ -411,7 +411,7 @@ impl ResizeSurfaceGrab {
 
         self.cluster_resize.apply_member_shifts(
             &mut data.stage,
-            &self.window,
+            &StageWindow::Client(self.window.clone()),
             self.initial_window_size,
             new_w,
             new_h,

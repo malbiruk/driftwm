@@ -1,8 +1,7 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 
 use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::{DriftWm, FocusTarget, PopupGrabState, output_state};
+use crate::state::{DriftWm, FocusTarget, PopupGrabState, StageWindow, output_state};
 use crate::surface_tree::focus_belongs_to_toplevel;
 use driftwm::window_ext::WindowExt;
 use smithay::{
@@ -430,7 +429,6 @@ impl XdgShellHandler for DriftWm {
                 initial_window_location,
                 output,
                 Vec::new(),
-                HashSet::new(),
             );
             pointer.set_grab(self, grab, serial, Focus::Clear);
             return;
@@ -477,7 +475,6 @@ impl XdgShellHandler for DriftWm {
                 output,
                 1,
                 Vec::new(),
-                HashSet::new(),
             );
             touch.set_grab(self, grab, serial);
         }
@@ -552,7 +549,7 @@ impl XdgShellHandler for DriftWm {
         // edge-drag propagation behaves identically for SSD and CSD windows.
         let cluster_resize =
             if self.config.decoration_resize_snapped && pinned_initial_screen_pos.is_none() {
-                self.cluster_snapshot_for_resize(&window, edges)
+                self.cluster_snapshot_for_resize(&StageWindow::Client(window.clone()), edges)
             } else {
                 crate::state::ClusterResizeSnapshot::empty()
             };

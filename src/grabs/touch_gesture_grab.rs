@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::time::Duration;
 
 use smithay::{
@@ -21,7 +21,7 @@ use driftwm::config::ContinuousAction;
 use driftwm::window_ext::WindowExt;
 
 use crate::input::touch::HeldTouchEvent;
-use crate::state::{DriftWm, FocusTarget, output_state};
+use crate::state::{DriftWm, FocusTarget, StageWindow, output_state};
 
 use super::MoveSurfaceGrab;
 use super::touch_recognizer::{Decision, TapOutcome, TouchInput, TouchKind, TouchRecognizer};
@@ -228,10 +228,10 @@ impl TouchGestureGrab {
         // Moving re-anchors the window, invalidating any fill restore point.
         data.stage.clear_fill(&window);
         let initial = data.stage.position_of(&window).unwrap_or(loc);
-        let (members, surfaces) = if cluster {
-            data.cluster_snapshot_for_drag(&window, initial)
+        let members = if cluster {
+            data.cluster_snapshot_for_drag(&StageWindow::Client(window.clone()), initial)
         } else {
-            (Vec::new(), HashSet::new())
+            Vec::new()
         };
         // Members ride along with the primary, so their fill restore points go
         // stale too.
@@ -246,15 +246,8 @@ impl TouchGestureGrab {
         // All current fingers are already down; seed the count so the move grab
         // stays alive until every one of them lifts.
         let slots = self.core.finger_count();
-        let grab = MoveSurfaceGrab::new_touch(
-            start,
-            window,
-            initial,
-            self.output.clone(),
-            slots,
-            members,
-            surfaces,
-        );
+        let grab =
+            MoveSurfaceGrab::new_touch(start, window, initial, self.output.clone(), slots, members);
         handle.set_grab(self, data, seq, grab);
         true
     }

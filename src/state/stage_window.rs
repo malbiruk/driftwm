@@ -6,6 +6,7 @@
 //! thing.
 
 use std::cell::{Cell, RefCell};
+use std::hash::{Hash, Hasher};
 use std::rc::Rc;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
@@ -111,6 +112,27 @@ impl PartialEq for StageWindow {
             (Self::Client(a), Self::Client(b)) => a == b,
             (Self::Suspended(a), Self::Suspended(b)) => Rc::ptr_eq(a, b),
             _ => false,
+        }
+    }
+}
+
+impl Eq for StageWindow {}
+
+// Hash mirrors the pointer-identity `PartialEq`: a client hashes on its
+// `Window` (Arc pointer identity), a stand-in on its `Rc` pointer, with an arm
+// discriminant so the two never collide. Lets `StageWindow` key the snap /
+// cluster `HashSet`s the same way `Window` did.
+impl Hash for StageWindow {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Self::Client(w) => {
+                0u8.hash(state);
+                w.hash(state);
+            }
+            Self::Suspended(s) => {
+                1u8.hash(state);
+                (Rc::as_ptr(s) as usize).hash(state);
+            }
         }
     }
 }

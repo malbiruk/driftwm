@@ -14,7 +14,7 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, PendingClickNavigate, ZoomAnimationAnchor, output_state};
+use super::{DriftWm, PendingClickNavigate, StageWindow, ZoomAnimationAnchor, output_state};
 
 /// Max pointer travel (screen px) between press and release for a click to
 /// still count as a click rather than a drag. Beyond it, no auto-navigate — a
@@ -504,10 +504,12 @@ impl DriftWm {
     /// user last saw as the cluster.
     #[allow(clippy::mutable_key_type)]
     pub fn first_spatially_related_in_history(&self, destroyed: &Window) -> Option<Window> {
+        let destroyed_elem = StageWindow::Client(destroyed.clone());
         let cached_destroyed_rect = destroyed
             .wl_surface()
             .and_then(|s| self.stable_snap_rects.get(&s.id()).copied());
-        let destroyed_rect = cached_destroyed_rect.or_else(|| self.snap_rect_for(destroyed))?;
+        let destroyed_rect =
+            cached_destroyed_rect.or_else(|| self.snap_rect_for(&destroyed_elem))?;
 
         let mut rects = self.all_windows_with_snap_rects();
         if cached_destroyed_rect.is_some() {
@@ -517,7 +519,10 @@ impl DriftWm {
                 }
             }
         }
-        let cluster = driftwm::layout::cluster::cluster_of(destroyed, &rects, self.config.snap_gap);
+        // Members may traverse through a suspended stand-in, so a client on the
+        // far side of a stand-in it was snapped to still resolves as related.
+        let cluster =
+            driftwm::layout::cluster::cluster_of(&destroyed_elem, &rects, self.config.snap_gap);
 
         self.stage
             .focus_history()
@@ -525,9 +530,10 @@ impl DriftWm {
             .filter_map(|w| w.client())
             .filter(|w| *w != destroyed)
             .find(|w| {
-                cluster.contains(*w)
+                let elem = StageWindow::Client((*w).clone());
+                cluster.contains(&elem)
                     || self
-                        .snap_rect_for(w)
+                        .snap_rect_for(&elem)
                         .is_some_and(|r| destroyed_rect.overlaps(&r))
             })
             .cloned()

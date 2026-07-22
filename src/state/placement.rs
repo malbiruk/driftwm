@@ -4,18 +4,12 @@ use smithay::desktop::Window;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::seat::WaylandFocus;
 
-use driftwm::window_ext::WindowExt;
-
 use super::{AUTO_PLACE_CLUSTER_THRESHOLD, DriftWm, StageWindow};
 
 /// Border width for an obstacle: the per-rule width for a client, the global
 /// default for a suspended window (no surface to resolve a rule against).
 fn suspended_or_surface_border(state: &DriftWm, w: &StageWindow) -> i32 {
-    if w.is_suspended() {
-        state.default_border_width()
-    } else {
-        w.wl_surface().map_or(0, |s| state.window_border_width(&s))
-    }
+    state.element_border_width(w)
 }
 
 impl DriftWm {

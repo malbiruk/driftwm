@@ -1,5 +1,4 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::time::Duration;
 
 use smithay::{
@@ -338,7 +337,6 @@ impl DriftWm {
                                     initial_window_location,
                                     output,
                                     Vec::new(),
-                                    HashSet::new(),
                                 );
                                 pointer.set_grab(self, grab, serial, Focus::Clear);
                                 return;
@@ -395,10 +393,13 @@ impl DriftWm {
                             };
                             // Only MoveSnappedWindows captures the cluster;
                             // plain MoveWindow stays strictly single-window.
-                            let (cluster_members, cluster_member_surfaces) = if want_cluster {
-                                self.cluster_snapshot_for_drag(&window, initial_window_location)
+                            let cluster_members = if want_cluster {
+                                self.cluster_snapshot_for_drag(
+                                    &StageWindow::Client(window.clone()),
+                                    initial_window_location,
+                                )
                             } else {
-                                (Vec::new(), HashSet::new())
+                                Vec::new()
                             };
                             // Re-anchoring invalidates any fill restore point —
                             // for the primary and every member dragged along.
@@ -412,7 +413,6 @@ impl DriftWm {
                                 initial_window_location,
                                 output,
                                 cluster_members,
-                                cluster_member_surfaces,
                             );
                             pointer.set_grab(self, grab, serial, Focus::Clear);
                             return;
@@ -662,12 +662,15 @@ impl DriftWm {
         let Some(origin) = self.stage.position_of(&StageWindow::Suspended(s.clone())) else {
             return;
         };
+        let Some(output) = self.active_output() else {
+            return;
+        };
         let start_data = GrabStartData {
             focus: None,
             button,
             location: pos,
         };
-        let grab = SuspendedMoveGrab::new(start_data, s.id, origin, pos);
+        let grab = SuspendedMoveGrab::new(start_data, s.id, output, origin, pos);
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
@@ -680,7 +683,11 @@ impl DriftWm {
         serial: smithay::utils::Serial,
         explicit_edge: Option<xdg_toplevel::ResizeEdge>,
     ) {
-        let Some(origin) = self.stage.position_of(&StageWindow::Suspended(s.clone())) else {
+        let element = StageWindow::Suspended(s.clone());
+        let Some(origin) = self.stage.position_of(&element) else {
+            return;
+        };
+        let Some(output) = self.active_output() else {
             return;
         };
         let size = s.size.get();
@@ -692,7 +699,23 @@ impl DriftWm {
             button,
             location: pos,
         };
-        let grab = SuspendedResizeGrab::new(start_data, s.id, edges, origin, size, pos);
+        // Edge-drag on the resize border follows the same config flag a client's
+        // SSD-border resize does: cluster when set, single-window otherwise.
+        let cluster_resize = if self.config.decoration_resize_snapped {
+            self.cluster_snapshot_for_resize(&element, edges)
+        } else {
+            ClusterResizeSnapshot::empty()
+        };
+        let grab = SuspendedResizeGrab::new(
+            start_data,
+            s.id,
+            edges,
+            origin,
+            size,
+            pos,
+            output,
+            cluster_resize,
+        );
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
@@ -974,7 +997,7 @@ impl DriftWm {
         // the motion-time cascade and `snap_targets` sees no exclusions —
         // exactly the pre-slice-2 behavior.
         let cluster_resize = if want_cluster && pinned_initial_screen_pos.is_none() {
-            self.cluster_snapshot_for_resize(window, edges)
+            self.cluster_snapshot_for_resize(&StageWindow::Client(window.clone()), edges)
         } else {
             ClusterResizeSnapshot::empty()
         };

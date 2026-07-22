@@ -397,18 +397,19 @@ impl DriftWm {
                     self.focused_window().filter(|w| self.is_canvas_window(w))
                 {
                     let rects = self.all_windows_with_snap_rects();
-                    // Window's Hash/Eq are Arc pointer identity — stable despite
+                    // StageWindow's Hash/Eq are pointer identity — stable despite
                     // interior mutability. Same allow as cluster_snapshot.rs.
                     #[allow(clippy::mutable_key_type)]
                     let cluster = driftwm::layout::cluster::cluster_of(
-                        &focused,
+                        &StageWindow::Client(focused.clone()),
                         &rects,
                         self.config.snap_gap,
                     );
+                    // Suspended stand-ins in the cluster are fit alongside the
+                    // live members.
                     let members = self
                         .stage
                         .windows()
-                        .filter_map(|w| w.client())
                         .filter(|w| cluster.contains(*w))
                         .map(|w| {
                             let loc = self.stage.position_of(w).unwrap_or_default();

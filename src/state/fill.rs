@@ -5,7 +5,7 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, PendingRecenter, output_state};
+use super::{DriftWm, PendingRecenter, StageWindow, output_state};
 use crate::grabs::SizeConstraints;
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 use driftwm::config;
@@ -53,7 +53,8 @@ impl DriftWm {
             y_high: bottom_right.y,
         };
 
-        let current = self.snap_rect_for(window)?;
+        let current = self.snap_rect_for(&StageWindow::Client(window.clone()))?;
+        #[allow(clippy::mutable_key_type)]
         let obstacles: Vec<SnapRect> = self
             .all_windows_with_snap_rects()
             .into_iter()
@@ -183,7 +184,7 @@ impl DriftWm {
             // commit with a changed size will arrive to trigger the recenter —
             // restore the position immediately instead.
             self.map_window(window.clone(), saved_pos, false);
-            self.refresh_stable_snap_rect(window);
+            self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
         } else {
             self.pending_recenter.insert(
                 wl_surface.id(),

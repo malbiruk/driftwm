@@ -294,6 +294,11 @@ impl DriftWm {
         let suspended = StageWindow::Suspended(s.clone());
         let pos = self.stage.position_of(&suspended).unwrap_or_default();
         let body_size = s.size.get();
+        // The stand-in was a full snap/cluster citizen; capture its rect so the
+        // adopted window inherits it as a stable snap rect (below) and keeps its
+        // cluster membership across the adopt, ahead of the body-size configure
+        // the client hasn't acked yet.
+        let standin_rect = self.snap_rect_for(&suspended);
 
         // Inherit the suspended window's focus if it held it (a relaunch the
         // user is waiting on ends up focused); focus that already moved on is
@@ -314,6 +319,13 @@ impl DriftWm {
         self.stage.set_position(window, pos);
         // The adopted window restores (fit/fullscreen round-trips) to the body.
         self.stage.set_restore_size_if_missing(window, body_size);
+        // Seed the stable snap rect from the stand-in's so the window is a
+        // cluster member from the instant it adopts the slot, not only after its
+        // first settle (the first-commit path skips adopted windows because
+        // their live geometry is still pre-configure).
+        if let Some(rect) = standin_rect {
+            self.stable_snap_rects.insert(root.id(), rect);
+        }
 
         // Fill the suspended body rect. The caller decides when the configure
         // is sent (first-commit path folds it into the initial configure).

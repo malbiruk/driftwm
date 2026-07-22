@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use crate::decorations::DecorationKey;
 use crate::grabs::{ResizeState, has_left, has_top};
 use crate::handlers::layer_shell::LayerDestroyedMarker;
-use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter};
+use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, StageWindow};
 use driftwm::window_ext::WindowExt;
 use smithay::desktop::layer_map_for_output;
 use smithay::utils::{Logical, Point, Rectangle};
@@ -623,7 +623,7 @@ impl CompositorHandler for DriftWm {
                             // Skipped for an adopted window: its settled rect is
                             // the body size the client hasn't acked yet, so it
                             // establishes a stable rect on its next settle.
-                            self.refresh_stable_snap_rect(&window);
+                            self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
 
                             if let Some(client_output) = self.pending_fullscreen.remove(&root) {
                                 let target = self.resolve_fullscreen_output(&root, client_output);
@@ -656,7 +656,7 @@ impl CompositorHandler for DriftWm {
                             (target_center.y - total_h as f64 / 2.0) as i32 + bar,
                         ));
                         self.map_window(window.clone(), new_loc, false);
-                        self.refresh_stable_snap_rect(&window);
+                        self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
                         self.pending_recenter.remove(&root.id());
                     }
                 }
@@ -917,7 +917,7 @@ impl DriftWm {
                     .get_or_insert(|| RefCell::new(ResizeState::Idle))
                     .replace(ResizeState::Idle);
             });
-            self.refresh_stable_snap_rect(window);
+            self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
         }
     }
 
@@ -960,7 +960,7 @@ impl DriftWm {
         };
         // `snap_rect_for` returns `None` for widgets / pinned / fullscreen, so
         // this also filters those out.
-        let Some(current) = self.snap_rect_for(window) else {
+        let Some(current) = self.snap_rect_for(&StageWindow::Client(window.clone())) else {
             return;
         };
 
@@ -974,12 +974,18 @@ impl DriftWm {
         }
 
         let gap = self.config.snap_gap;
+        // Reflow anchors to a client neighbor (place_adjacent_to needs one), so
+        // keep this client-only even though stand-ins are snap targets elsewhere.
         let others: Vec<(smithay::desktop::Window, driftwm::layout::snap::SnapRect)> = self
             .stage
             .windows()
-            .filter_map(|w| w.client())
-            .filter(|w| *w != window)
-            .filter_map(|w| self.snap_rect_for(w).map(|r| (w.clone(), r)))
+            .filter_map(|w| {
+                let c = w.client()?;
+                if c == window {
+                    return None;
+                }
+                Some((c.clone(), self.snap_rect_for(w)?))
+            })
             .collect();
 
         // Gate on "was snapped", measured from the pre-grow (stable) rect: the
@@ -1009,7 +1015,7 @@ impl DriftWm {
             return;
         }
         self.map_window(window.clone(), new_loc, false);
-        self.refresh_stable_snap_rect(window);
+        self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
 
         // Recenter only when the reflow pushed the focused window (partly) out
         // of view — a large jump (the game landing beside its neighbor) follows
