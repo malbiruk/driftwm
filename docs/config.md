@@ -324,7 +324,7 @@ px per pan-viewport action (mod-ctrl-arrow by default)
 
 Default: `[]`
 
-Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow) even when no window is there. Uses Y-up coordinate system. Empty by default; the origin anchor below is now example-only.
+Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow) even when no window is there. Uses Y-up coordinate system. Empty by default.
 
 **Example: origin + 4 corners**
 

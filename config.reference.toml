@@ -133,8 +133,7 @@
 # nudge_step = 20             # px per nudge-window action (mod-shift-arrow by default)
 # pan_step = 100.0            # px per pan-viewport action (mod-ctrl-arrow by default)
 # # Anchors: canvas points discoverable by center-nearest (4-finger swipe / Mod+Arrow)
-# # even when no window is there. Uses Y-up coordinate system. Empty by default;
-# # the origin anchor below is now example-only.
+# # even when no window is there. Uses Y-up coordinate system. Empty by default.
 # anchors = []
 # # Example: origin + 4 corners
 # # anchors = [[0, 0], [-1750, 1750], [1750, 1750], [1750, -1750], [-1750, -1750]]
