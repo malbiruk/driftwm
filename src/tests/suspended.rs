@@ -596,6 +596,137 @@ fn barless_stand_in_has_no_bar_hits() {
     f.state().dismiss_suspended(sid);
 }
 
+/// A barless (CSD-origin) stand-in's whole body is drag-to-move: a plain-LMB
+/// Body press starts a move grab. A barred (SSD-origin) stand-in keeps Body =
+/// focus-only — its bar is the move surface. The centered Label still wins over
+/// the barless body-drag and relaunches.
+#[test]
+fn barless_stand_in_body_drags_to_move() {
+    let body = pt(500.0 + 200.0, 500.0 + 150.0);
+
+    // Barless: a plain body press starts a move grab.
+    {
+        let mut f = Fixture::with_config(config_ssd());
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let sid = f.state().insert_suspended_barless_for_test(
+            1,
+            Point::from((500, 500)),
+            Size::from((400, 300)),
+            "s",
+            "S",
+        );
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        let consumed = f.state().try_suspended_button(
+            &pointer,
+            body,
+            BTN_LEFT,
+            serial,
+            ModifiersState::default(),
+        );
+        assert!(consumed);
+        assert!(
+            f.state().seat.get_pointer().unwrap().is_grabbed(),
+            "a barless body press starts a move grab"
+        );
+        assert!(
+            matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+            "the press also focused the stand-in"
+        );
+        // The grab holds only the id; dismissing degrades it to a no-op.
+        f.state().dismiss_suspended(sid);
+    }
+
+    // Barred: a plain body press only focuses — the bar drags, not the body.
+    {
+        let mut f = Fixture::with_config(config_ssd());
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let sid = f.state().insert_suspended_for_test(
+            1,
+            Point::from((500, 500)),
+            Size::from((400, 300)),
+            "s",
+            "S",
+        );
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        let consumed = f.state().try_suspended_button(
+            &pointer,
+            body,
+            BTN_LEFT,
+            serial,
+            ModifiersState::default(),
+        );
+        assert!(consumed);
+        assert!(
+            !f.state().seat.get_pointer().unwrap().is_grabbed(),
+            "a barred body press does not start a move"
+        );
+        assert!(
+            matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+            "the barred body press focused the stand-in"
+        );
+        f.state().dismiss_suspended(sid);
+    }
+
+    // The centered Label still relaunches on a barless stand-in — it is not
+    // swallowed by the body-drag.
+    {
+        let tmp = super::real::TempDir::new();
+        std::fs::write(
+            tmp.path().join("s.desktop"),
+            "[Desktop Entry]\nType=Application\nName=S\nExec=s\n",
+        )
+        .unwrap();
+        let mut f = Fixture::with_config(config_ssd());
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        f.state().desktop_entry_cache = Some(driftwm::desktop_entry::DesktopEntryCache::new(vec![
+            tmp.path().to_path_buf(),
+        ]));
+        let sid = f.state().insert_suspended_barless_for_test(
+            1,
+            Point::from((500, 500)),
+            Size::from((400, 300)),
+            "s",
+            "S",
+        );
+        // Simulate a rendered label centered in the body (render doesn't run in
+        // the headless fixture).
+        f.state()
+            .find_suspended(sid)
+            .unwrap()
+            .chrome
+            .borrow_mut()
+            .label_rect = Some(Rectangle::new(
+            Point::from((150, 130)),
+            Size::from((100, 40)),
+        ));
+
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        let consumed = f.state().try_suspended_button(
+            &pointer,
+            body,
+            BTN_LEFT,
+            serial,
+            ModifiersState::default(),
+        );
+        assert!(consumed);
+        assert!(
+            !f.state().seat.get_pointer().unwrap().is_grabbed(),
+            "a Label press relaunches — it does not start the body move"
+        );
+        assert!(
+            f.state().is_suspended_launching(sid),
+            "the Label press fired the relaunch"
+        );
+        f.state().dismiss_suspended(sid);
+    }
+}
+
 /// Auto-placement treats a suspended window as an obstacle, including its title
 /// bar strip above the content rect.
 #[test]
@@ -1017,6 +1148,230 @@ fn group_move_carries_stand_in_without_membership_leak() {
     assert!(!f.state().is_pinned(&standin), "no pin leak");
 
     f.state().dismiss_suspended(sid);
+}
+
+/// A `move-snapped-windows` binding initiated ON a stand-in group-moves its
+/// cluster — the stand-in is the primary and a client partner rides along —
+/// instead of dragging the stand-in out of its cluster (plain `move-window`
+/// stays single-window). Drives the grab entry points: press then one motion.
+#[test]
+fn group_move_on_stand_in_carries_cluster_partner() {
+    use smithay::input::pointer::MotionEvent;
+
+    let config = Config::from_toml(
+        r#"
+        [decorations]
+        default_mode = "server"
+        [mouse.anywhere]
+        "super+left" = "move-snapped-windows"
+    "#,
+    )
+    .unwrap();
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let gap = f.state().config.snap_gap as i32;
+
+    // A stand-in with a client partner adjacent on its right → one cluster.
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let idc = f.add_client();
+    map_window(&mut f, idc, "c", (400, 300));
+    let client = window_by_app_id(&mut f, "c").unwrap();
+    f.state().map_window(
+        StageWindow::Client(client.clone()),
+        Point::from((800 + gap, 300)),
+        true,
+    );
+
+    // Held-modifier group-move press over the stand-in body starts the grab.
+    let pointer = f.state().seat.get_pointer().unwrap();
+    let held = ModifiersState {
+        logo: true,
+        ..Default::default()
+    };
+    let serial = SERIAL_COUNTER.next_serial();
+    let consumed =
+        f.state()
+            .try_suspended_button(&pointer, pt(500.0, 450.0), BTN_LEFT, serial, held);
+    assert!(consumed);
+    assert!(
+        f.state().seat.get_pointer().unwrap().is_grabbed(),
+        "a group-move binding on the stand-in started a grab"
+    );
+
+    let before = f
+        .state()
+        .stage
+        .position_of(&StageWindow::Client(client.clone()))
+        .unwrap();
+
+    // Drag by (+100, +50); the client partner rides the same delta.
+    let event = MotionEvent {
+        location: pt(600.0, 500.0),
+        serial: SERIAL_COUNTER.next_serial(),
+        time: 0,
+    };
+    pointer.motion(f.state(), None, &event);
+
+    let after = f
+        .state()
+        .stage
+        .position_of(&StageWindow::Client(client.clone()))
+        .unwrap();
+    assert_eq!(
+        after - before,
+        Point::from((100, 50)),
+        "the client partner moved with the group, not left behind"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// A suspended resize derives cluster participation from the BINDING variant,
+/// like a client's — not from the SSD-border config flag. `resize-window-snapped`
+/// cascades a snapped neighbor even with `decoration_resize_snapped = false`, and
+/// plain `resize-window` leaves it alone even with the flag on.
+#[test]
+fn suspended_resize_cluster_follows_binding_variant() {
+    use smithay::input::pointer::MotionEvent;
+
+    // Snapped variant + flag OFF → the neighbor still cascades.
+    {
+        let config = Config::from_toml(
+            r#"
+            [decorations]
+            default_mode = "server"
+            [mouse]
+            decoration_resize_snapped = false
+            [mouse.anywhere]
+            "super+left" = "resize-window-snapped"
+        "#,
+        )
+        .unwrap();
+        let mut f = Fixture::with_config(config);
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let gap = f.state().config.snap_gap as i32;
+
+        let sid = f.state().insert_suspended_for_test(
+            1,
+            Point::from((400, 300)),
+            Size::from((400, 300)),
+            "s",
+            "S",
+        );
+        let idc = f.add_client();
+        map_window(&mut f, idc, "c", (400, 300));
+        let client = window_by_app_id(&mut f, "c").unwrap();
+        f.state().map_window(
+            StageWindow::Client(client.clone()),
+            Point::from((800 + gap, 300)),
+            true,
+        );
+
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let held = ModifiersState {
+            logo: true,
+            ..Default::default()
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        // Right third of the stand-in → a right-edge resize.
+        f.state()
+            .try_suspended_button(&pointer, pt(700.0, 450.0), BTN_LEFT, serial, held);
+        let before = f
+            .state()
+            .stage
+            .position_of(&StageWindow::Client(client.clone()))
+            .unwrap();
+        let event = MotionEvent {
+            location: pt(800.0, 450.0),
+            serial: SERIAL_COUNTER.next_serial(),
+            time: 0,
+        };
+        pointer.motion(f.state(), None, &event);
+        let after = f
+            .state()
+            .stage
+            .position_of(&StageWindow::Client(client.clone()))
+            .unwrap();
+        assert_eq!(
+            after.x - before.x,
+            100,
+            "the snapped variant cascaded the neighbor despite the flag being off"
+        );
+        f.state().dismiss_suspended(sid);
+    }
+
+    // Plain variant + flag ON → the neighbor stays put.
+    {
+        let config = Config::from_toml(
+            r#"
+            [decorations]
+            default_mode = "server"
+            [mouse]
+            decoration_resize_snapped = true
+            [mouse.anywhere]
+            "super+left" = "resize-window"
+        "#,
+        )
+        .unwrap();
+        let mut f = Fixture::with_config(config);
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let gap = f.state().config.snap_gap as i32;
+
+        let sid = f.state().insert_suspended_for_test(
+            1,
+            Point::from((400, 300)),
+            Size::from((400, 300)),
+            "s",
+            "S",
+        );
+        let idc = f.add_client();
+        map_window(&mut f, idc, "c", (400, 300));
+        let client = window_by_app_id(&mut f, "c").unwrap();
+        f.state().map_window(
+            StageWindow::Client(client.clone()),
+            Point::from((800 + gap, 300)),
+            true,
+        );
+
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let held = ModifiersState {
+            logo: true,
+            ..Default::default()
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        f.state()
+            .try_suspended_button(&pointer, pt(700.0, 450.0), BTN_LEFT, serial, held);
+        let before = f
+            .state()
+            .stage
+            .position_of(&StageWindow::Client(client.clone()))
+            .unwrap();
+        let event = MotionEvent {
+            location: pt(800.0, 450.0),
+            serial: SERIAL_COUNTER.next_serial(),
+            time: 0,
+        };
+        pointer.motion(f.state(), None, &event);
+        let after = f
+            .state()
+            .stage
+            .position_of(&StageWindow::Client(client.clone()))
+            .unwrap();
+        assert_eq!(
+            after, before,
+            "plain resize left the neighbor put despite the flag being on"
+        );
+        f.state().dismiss_suspended(sid);
+    }
 }
 
 /// Two adjacent restored stand-ins (all a session materialize produces) form a

@@ -609,16 +609,24 @@ impl DriftWm {
         let (binding, modifier_binding) =
             self.modifier_button_binding(&mods, button, BindingContext::OnWindow);
         match binding {
-            Some(MouseAction::MoveWindow | MouseAction::MoveSnappedWindows) if modifier_binding => {
-                self.focus_and_raise_suspended(id);
-                self.start_suspended_move(pointer, &s, pos, button, serial);
-                return true;
-            }
-            Some(MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped)
+            Some(action @ (MouseAction::MoveWindow | MouseAction::MoveSnappedWindows))
                 if modifier_binding =>
             {
+                // Only `MoveSnappedWindows` carries the cluster; plain
+                // `MoveWindow` stays single-window — same as the client path.
+                let want_cluster = matches!(action, MouseAction::MoveSnappedWindows);
                 self.focus_and_raise_suspended(id);
-                self.start_suspended_resize(pointer, &s, pos, button, serial, None);
+                self.start_suspended_move(pointer, &s, pos, button, serial, want_cluster);
+                return true;
+            }
+            Some(action @ (MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped))
+                if modifier_binding =>
+            {
+                // Derive cluster participation from the binding variant, like a
+                // client's modifier resize — not from the SSD-border config flag.
+                let want_cluster = matches!(action, MouseAction::ResizeWindowSnapped);
+                self.focus_and_raise_suspended(id);
+                self.start_suspended_resize(pointer, &s, pos, button, serial, None, want_cluster);
                 return true;
             }
             Some(_) if modifier_binding => return false,
@@ -634,13 +642,32 @@ impl DriftWm {
                 }
                 DecorationHit::TitleBar => {
                     self.focus_and_raise_suspended(id);
-                    self.start_suspended_move(pointer, &s, pos, button, serial);
+                    self.start_suspended_move(pointer, &s, pos, button, serial, false);
                 }
                 DecorationHit::ResizeBorder(edge) => {
                     self.focus_and_raise_suspended(id);
-                    self.start_suspended_resize(pointer, &s, pos, button, serial, Some(edge));
+                    // A border drag has no modifier context, so it follows the
+                    // config flag — same as a client's SSD-border resize.
+                    let want_cluster = self.config.decoration_resize_snapped;
+                    self.start_suspended_resize(
+                        pointer,
+                        &s,
+                        pos,
+                        button,
+                        serial,
+                        Some(edge),
+                        want_cluster,
+                    );
                 }
-                DecorationHit::Body => self.focus_and_raise_suspended(id),
+                DecorationHit::Body => {
+                    self.focus_and_raise_suspended(id);
+                    // A barless (CSD-origin) stand-in has no bar to grab, so the
+                    // whole body is its move surface (the ratified hit contract).
+                    // A barred stand-in keeps body = focus-only — its bar drags.
+                    if !s.has_bar {
+                        self.start_suspended_move(pointer, &s, pos, button, serial, false);
+                    }
+                }
             }
             return true;
         }
@@ -658,22 +685,39 @@ impl DriftWm {
         pos: Point<f64, smithay::utils::Logical>,
         button: u32,
         serial: smithay::utils::Serial,
+        want_cluster: bool,
     ) {
-        let Some(origin) = self.stage.position_of(&StageWindow::Suspended(s.clone())) else {
+        let element = StageWindow::Suspended(s.clone());
+        let Some(origin) = self.stage.position_of(&element) else {
             return;
         };
         let Some(output) = self.active_output() else {
             return;
         };
+        // Only a cluster-move binding (`MoveSnappedWindows`) carries the
+        // cluster; a plain move / title-bar / body drag stays single-window,
+        // mirroring the client move dispatch.
+        let cluster_members = if want_cluster {
+            self.cluster_snapshot_for_drag(&element, origin)
+        } else {
+            Vec::new()
+        };
+        // Re-anchoring the primary and every member invalidates their fill
+        // restore points.
+        self.stage.clear_fill(&element);
+        for (member, _) in &cluster_members {
+            self.stage.clear_fill(member);
+        }
         let start_data = GrabStartData {
             focus: None,
             button,
             location: pos,
         };
-        let grab = SuspendedMoveGrab::new(start_data, s.id, output, origin, pos);
+        let grab = SuspendedMoveGrab::new(start_data, s.id, output, origin, pos, cluster_members);
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn start_suspended_resize(
         &mut self,
         pointer: &smithay::input::pointer::PointerHandle<DriftWm>,
@@ -682,6 +726,7 @@ impl DriftWm {
         button: u32,
         serial: smithay::utils::Serial,
         explicit_edge: Option<xdg_toplevel::ResizeEdge>,
+        want_cluster: bool,
     ) {
         let element = StageWindow::Suspended(s.clone());
         let Some(origin) = self.stage.position_of(&element) else {
@@ -699,9 +744,10 @@ impl DriftWm {
             button,
             location: pos,
         };
-        // Edge-drag on the resize border follows the same config flag a client's
-        // SSD-border resize does: cluster when set, single-window otherwise.
-        let cluster_resize = if self.config.decoration_resize_snapped {
+        // Snapshot the cluster only when the caller opted in — the binding
+        // variant (`ResizeWindowSnapped`) for a modifier resize, the config flag
+        // for an SSD-border drag — mirroring the client resize path.
+        let cluster_resize = if want_cluster {
             self.cluster_snapshot_for_resize(&element, edges)
         } else {
             ClusterResizeSnapshot::empty()

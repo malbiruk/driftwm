@@ -27,8 +27,12 @@ use smithay::{
     utils::{Logical, Point, Size},
 };
 
+use std::collections::HashSet;
+
 use crate::grabs::{has_bottom, has_left, has_right, has_top};
-use crate::state::{ClusterResizeSnapshot, DriftWm, StageWindow, SuspendedId, output_state};
+use crate::state::{
+    ClusterMember, ClusterResizeSnapshot, DriftWm, StageWindow, SuspendedId, output_state,
+};
 use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
 /// Smallest a suspended window may be dragged to — keeps the chrome usable.
@@ -44,6 +48,11 @@ pub struct SuspendedMoveGrab {
     /// Grab-start cursor position in canvas space — source of the drag delta.
     start_canvas: Point<f64, Logical>,
     snap: SnapState,
+    /// Cluster members carried by a group move (`MoveSnappedWindows`), each with
+    /// its canvas offset from the stand-in captured at grab start. Empty for a
+    /// plain single-window drag. Members may be clients or other stand-ins;
+    /// each is resolved live per tick (a member that leaves the stage drops out).
+    cluster_members: Vec<(ClusterMember, Point<i32, Logical>)>,
 }
 
 impl SuspendedMoveGrab {
@@ -53,6 +62,7 @@ impl SuspendedMoveGrab {
         output: Output,
         origin: Point<i32, Logical>,
         grab_point: Point<f64, Logical>,
+        cluster_members: Vec<(StageWindow, Point<i32, Logical>)>,
     ) -> Self {
         Self {
             start_data,
@@ -61,7 +71,20 @@ impl SuspendedMoveGrab {
             initial_loc: origin,
             start_canvas: grab_point,
             snap: SnapState::default(),
+            cluster_members: cluster_members
+                .into_iter()
+                .map(|(w, offset)| (ClusterMember::from_element(&w), offset))
+                .collect(),
         }
+    }
+
+    /// Live `(StageWindow, offset)` pairs for members that still resolve —
+    /// members closed mid-drag drop out.
+    fn resolved_members(&self, data: &DriftWm) -> Vec<(StageWindow, Point<i32, Logical>)> {
+        self.cluster_members
+            .iter()
+            .filter_map(|(m, off)| m.resolve(&data.stage).map(|sw| (sw, *off)))
+            .collect()
     }
 
     fn apply(&mut self, data: &mut DriftWm, cursor: Point<f64, Logical>) {
@@ -74,21 +97,27 @@ impl SuspendedMoveGrab {
             self.initial_loc.x as f64 + delta.x,
             self.initial_loc.y as f64 + delta.y,
         ));
-        // Single-window drag, so an empty cluster-exclude set — mirrors a
-        // client's plain title-bar drag.
+        // Resolve members once and exclude them from the primary's snap targets
+        // so the stand-in doesn't snap onto its own cluster — like a client drag.
+        let members = self.resolved_members(data);
         let snapped = if data.config.snap_enabled {
             let zoom = output_state(&self.output).zoom;
-            data.snap_move_location(
-                &element,
-                zoom,
-                natural,
-                &mut self.snap,
-                &std::collections::HashSet::new(),
-            )
+            #[allow(clippy::mutable_key_type)]
+            let excludes: HashSet<StageWindow> = members.iter().map(|(w, _)| w.clone()).collect();
+            data.snap_move_location(&element, zoom, natural, &mut self.snap, &excludes)
         } else {
             natural
         };
-        data.map_window(element, snapped.to_i32_round(), false);
+        // Truncate, not round, to match the client move grab exactly — the two
+        // share `snap_move_location`, so their placement must land on the same
+        // integer pixel.
+        let new_loc = Point::from((snapped.x as i32, snapped.y as i32));
+        // Map members first so the primary's `map_window` lands last and stays
+        // on top of its own cluster (smithay re-inserts at the z-bucket end).
+        for (member, offset) in members {
+            data.map_window(member, new_loc + offset, false);
+        }
+        data.map_window(element, new_loc, false);
     }
 }
 
@@ -113,6 +142,11 @@ impl PointerGrab<DriftWm> for SuspendedMoveGrab {
     ) {
         handle.button(data, event);
         if handle.current_pressed().is_empty() {
+            // Members shifted by the group move get their stable rect refreshed
+            // so a later close can still reconstruct the cluster.
+            for (member, _) in self.resolved_members(data) {
+                data.refresh_stable_snap_rect(&member);
+            }
             handle.unset_grab(self, data, event.serial, event.time, true);
         }
     }
