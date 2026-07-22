@@ -3,8 +3,8 @@ use smithay::{
         element::{
             Element, Id, Kind, RenderElement, UnderlyingStorage,
             memory::MemoryRenderBufferRenderElement, render_elements,
-            solid::SolidColorRenderElement, surface::WaylandSurfaceRenderElement,
-            texture::TextureRenderElement, utils::RescaleRenderElement,
+            surface::WaylandSurfaceRenderElement, texture::TextureRenderElement,
+            utils::RescaleRenderElement,
         },
         gles::{
             GlesError, GlesFrame, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformValue,
@@ -346,7 +346,6 @@ render_elements! {
     TileBgChunk=PixelSnapRescaleElement<TileShaderElement>,
     WallpaperBg=TileShaderElement,
     Decoration=PixelSnapRescaleElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
-    SuspendedBody=PixelSnapRescaleElement<SolidColorRenderElement>,
     Window=PixelSnapRescaleElement<WaylandSurfaceRenderElement<GlesRenderer>>,
     CsdWindow=PixelSnapRescaleElement<RoundedCornerElement>,
     Layer=WaylandSurfaceRenderElement<GlesRenderer>,

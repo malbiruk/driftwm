@@ -2155,10 +2155,15 @@ impl DriftWm {
     }
 
     pub fn window_ssd_bar<W: WaylandFocus + WindowExt>(&self, window: &W) -> i32 {
-        // Suspended windows always draw SSD chrome — they have no surface to
-        // resolve a `decorations` entry against, so key off the element kind.
+        // A suspended window has no surface to resolve a `decorations` entry
+        // against, so key off the element: an SSD-origin stand-in keeps its
+        // bar, a CSD-origin one is body-only.
         if window.is_suspended() {
-            return self.config.decorations.title_bar_height;
+            return if window.suspended_has_bar() {
+                self.config.decorations.title_bar_height
+            } else {
+                0
+            };
         }
         window
             .wl_surface()

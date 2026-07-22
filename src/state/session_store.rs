@@ -105,6 +105,7 @@ impl DriftWm {
             identity,
             entry.title,
             entry.origin,
+            entry.has_bar,
         ));
         self.map_window(StageWindow::Suspended(s), loc, false);
     }
@@ -248,6 +249,8 @@ impl DriftWm {
         let app_id = window.app_id_or_class().unwrap_or_default();
         let identity = self.resolve_identity(&app_id)?;
         let title = window.window_title().unwrap_or_default();
+        // Restore the stand-in with a bar iff the live window is SSD.
+        let has_bar = self.window_ssd_bar(window) > 0;
         let (loc, size) = self.live_window_rect(&client);
         let (x, y) = internal_to_rule(loc, size);
         let id = *next_id;
@@ -261,6 +264,7 @@ impl DriftWm {
             position: [x, y],
             size: [size.w, size.h],
             origin: Origin::Quit,
+            has_bar,
         })
     }
 
@@ -329,6 +333,7 @@ fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>) -> SessionEntr
         position: [x, y],
         size: [size.w, size.h],
         origin: s.origin,
+        has_bar: s.has_bar,
     }
 }
 
@@ -398,6 +403,7 @@ mod tests {
             position,
             size,
             origin: Origin::Explicit,
+            has_bar: true,
         }
     }
 

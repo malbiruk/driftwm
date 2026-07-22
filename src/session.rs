@@ -40,6 +40,15 @@ pub struct SessionEntry {
     pub position: [i32; 2],
     pub size: [i32; 2],
     pub origin: Origin,
+    /// Whether the stand-in draws a compositor title bar (SSD-origin) or is
+    /// body-only (CSD-origin). Additive: files written before it default to the
+    /// old always-bar behavior.
+    #[serde(default = "default_true")]
+    pub has_bar: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// A per-output camera/zoom, mirroring the runtime state file's shape.
@@ -201,6 +210,7 @@ mod tests {
             position: [id as i32 * 10, -(id as i32) * 5],
             size: [400, 300],
             origin,
+            has_bar: true,
         }
     }
 
@@ -231,6 +241,43 @@ mod tests {
         let read_back = read(&path);
         assert_eq!(read_back, envelope);
         assert_eq!(read_back.version, VERSION);
+    }
+
+    #[test]
+    fn has_bar_round_trips_and_defaults_true_for_old_files() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("session.json");
+        let mut barless = entry(1, Origin::Explicit);
+        barless.has_bar = false;
+        let envelope = SessionEnvelope {
+            version: VERSION,
+            saved_at: 0,
+            entries: vec![barless, entry(2, Origin::Explicit)],
+            outputs: BTreeMap::new(),
+        };
+        write(&path, &envelope, false).unwrap();
+        let read_back = read(&path);
+        assert!(
+            !read_back.entries[0].has_bar,
+            "barless flag survives the write"
+        );
+        assert!(read_back.entries[1].has_bar);
+
+        // A file written before the field existed omits it entirely; the entry
+        // reads back with the old always-bar behavior.
+        std::fs::write(
+            &path,
+            r#"{"version":1,"saved_at":0,"outputs":{},"entries":[
+                {"id":1,"app_id":"a","desktop_id":"a","display_name":"A","title":"t",
+                 "position":[0,0],"size":[400,300],"origin":"explicit"}]}"#,
+        )
+        .unwrap();
+        let legacy = read(&path);
+        assert_eq!(legacy.entries.len(), 1);
+        assert!(
+            legacy.entries[0].has_bar,
+            "a pre-field file defaults to a barred stand-in"
+        );
     }
 
     #[test]

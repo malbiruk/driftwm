@@ -540,6 +540,61 @@ fn dismiss_runs_focus_follow() {
     );
 }
 
+/// A barless (CSD-origin) stand-in has no bar: no CloseButton or TitleBar hit
+/// anywhere, the whole frame is Body/Label (+ resize border), and its visual
+/// frame carries no bar strip above the body.
+#[test]
+fn barless_stand_in_has_no_bar_hits() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let sid = f.state().insert_suspended_barless_for_test(
+        1,
+        Point::from((500, 500)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+
+    // No bar in the geometry model.
+    let elem = StageWindow::Suspended(f.state().find_suspended(sid).unwrap());
+    assert_eq!(f.state().window_ssd_bar(&elem), 0);
+    let frame = f.state().visual_frame_rect(&elem).unwrap();
+    let bw = f.state().default_border_width() as f64;
+    assert_eq!(
+        frame.y_low,
+        500.0 - bw,
+        "frame top is body top minus border"
+    );
+
+    // Where a barred stand-in's close button / bar band would sit (just above
+    // the body top) is not a title-bar or close hit.
+    for x in [500.0 + 20.0, 500.0 + 200.0, 500.0 + 400.0 - 20.0] {
+        let hit = f.state().decoration_under(pt(x, 500.0 - 12.0));
+        assert!(
+            !matches!(
+                hit,
+                Some((DecoTarget::Suspended(_), DecorationHit::TitleBar))
+                    | Some((DecoTarget::Suspended(_), DecorationHit::CloseButton))
+            ),
+            "no bar/close hit above a barless body at x={x}"
+        );
+    }
+
+    // The body itself is a plain Body hit (no bar anywhere on the frame).
+    assert!(matches!(
+        f.state().decoration_under(pt(500.0 + 200.0, 500.0 + 150.0)),
+        Some((DecoTarget::Suspended(_), DecorationHit::Body))
+    ));
+    // The top-left content corner is Body too (not a phantom title bar).
+    assert!(matches!(
+        f.state().decoration_under(pt(500.0 + 2.0, 500.0 + 2.0)),
+        Some((DecoTarget::Suspended(_), DecorationHit::Body))
+    ));
+
+    f.state().dismiss_suspended(sid);
+}
+
 /// Auto-placement treats a suspended window as an obstacle, including its title
 /// bar strip above the content rect.
 #[test]
@@ -590,6 +645,85 @@ fn auto_placement_obstacle_includes_bar_strip() {
             && frame.y_low < (y + 200) as f64;
         assert!(!overlaps, "auto-placement avoided the suspended obstacle");
     }
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// Navigation parity: with no focused window, `center-window` (the nearest
+/// fallback) considers stand-ins, so it lands on the nearest one and sets the
+/// suspended focus intent — Enter then relaunches it.
+#[test]
+fn center_window_fallback_lands_on_stand_in() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "far", (200, 200));
+    origin_view(&mut f);
+    let far = window_by_app_id(&mut f, "far").unwrap();
+    // Park the live window far from the viewport center.
+    f.state()
+        .map_window(StageWindow::Client(far), Point::from((5000, 5000)), true);
+
+    // A stand-in straddling the viewport center.
+    let vc = f.state().viewport_center_canvas();
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((vc.x as i32 - 100, vc.y as i32 - 100)),
+        Size::from((200, 200)),
+        "s",
+        "S",
+    );
+
+    // Clear focus so center-window takes the nearest-fallback path.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().set_window_focus(None, serial);
+
+    f.state()
+        .execute_action(&driftwm::config::Action::CenterWindow);
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+        "center-window landed on the stand-in and set the suspended intent"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// Directional `center-nearest` also treats a stand-in as a candidate: with a
+/// stand-in to the right of the origin (and a live window far the other way), a
+/// rightward swipe lands on the stand-in with the suspended intent set.
+#[test]
+fn center_nearest_reaches_a_stand_in() {
+    use driftwm::config::{Action, Direction};
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "left", (200, 200));
+    origin_view(&mut f);
+    let left = window_by_app_id(&mut f, "left").unwrap();
+    let vc = f.state().viewport_center_canvas();
+    // A live window far to the left of the origin, a stand-in to the right.
+    f.state().map_window(
+        StageWindow::Client(left),
+        Point::from((vc.x as i32 - 2000, vc.y as i32)),
+        true,
+    );
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((vc.x as i32 + 400, vc.y as i32 - 100)),
+        Size::from((200, 200)),
+        "s",
+        "S",
+    );
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().set_window_focus(None, serial);
+
+    f.state()
+        .execute_action(&Action::CenterNearest(Direction::Right));
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+        "center-nearest to the right reached the stand-in"
+    );
 
     f.state().dismiss_suspended(sid);
 }

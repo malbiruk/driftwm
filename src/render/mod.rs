@@ -36,6 +36,9 @@ pub use shaders::{
 };
 pub use tile_chunks::BgChunkCache;
 
+#[cfg(test)]
+pub(crate) use suspended::{ensure_body, ensure_label};
+
 use blur::{BlurLayer, BlurRequestData, process_blur_requests};
 use layers::{build_canvas_layer_elements, build_layer_elements};
 use shaders::{push_border_element, push_shadow_element};

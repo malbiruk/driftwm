@@ -580,11 +580,18 @@ impl DriftWm {
         {
             return None;
         }
+        // Read while the surface is still live (before `cleanup_surface_state`):
+        // an SSD window has a decoration entry, a CSD one doesn't. The stand-in
+        // keeps the same footprint — bar + body, or body only.
+        let has_bar = self
+            .decorations
+            .contains_key(&DecorationKey::Surface(surface.id()));
         if let Some(mark) = suspend_mark {
             return Some(SuspendConversion {
                 identity: mark.identity,
                 rect: mark.rect,
                 title: mark.title,
+                has_bar,
             });
         }
 
@@ -607,6 +614,7 @@ impl DriftWm {
             identity,
             rect,
             title,
+            has_bar,
         })
     }
 
@@ -670,6 +678,7 @@ impl DriftWm {
             conv.identity,
             conv.title,
             driftwm::session::Origin::Explicit,
+            conv.has_bar,
         ));
         let new_element = StageWindow::Suspended(suspended);
 
@@ -756,6 +765,9 @@ pub struct SuspendConversion {
     pub identity: AppIdentity,
     pub rect: Rectangle<i32, Logical>,
     pub title: String,
+    /// Whether the dying window was SSD (compositor bar) — the stand-in keeps a
+    /// bar to match, or is body-only for a CSD window.
+    pub has_bar: bool,
 }
 
 /// Build the `sh -c` command line and child environment for a relaunch. The
@@ -829,6 +841,35 @@ impl DriftWm {
             identity,
             display_name.to_string(),
             driftwm::session::Origin::Explicit,
+            true,
+        ));
+        self.map_window(StageWindow::Suspended(s), pos, true);
+        sid
+    }
+
+    /// As [`Self::insert_suspended_for_test`], but body-only (a CSD-origin
+    /// stand-in): no compositor title bar, footprint == the body rect.
+    pub fn insert_suspended_barless_for_test(
+        &mut self,
+        id: u64,
+        pos: smithay::utils::Point<i32, smithay::utils::Logical>,
+        size: smithay::utils::Size<i32, smithay::utils::Logical>,
+        app_id: &str,
+        display_name: &str,
+    ) -> SuspendedId {
+        let sid = SuspendedId(id);
+        let identity = driftwm::desktop_entry::AppIdentity {
+            app_id: app_id.to_string(),
+            desktop_id: app_id.to_string(),
+            display_name: display_name.to_string(),
+        };
+        let s = Rc::new(SuspendedWindow::new(
+            sid,
+            size,
+            identity,
+            display_name.to_string(),
+            driftwm::session::Origin::Explicit,
+            false,
         ));
         self.map_window(StageWindow::Suspended(s), pos, true);
         sid
@@ -854,6 +895,36 @@ impl DriftWm {
     /// Drain the relaunch spawns recorded on this thread since the last drain.
     pub fn take_relaunch_spawns_for_test(&self) -> Vec<(String, HashMap<String, String>)> {
         TEST_SPAWNS.with(|spawns| std::mem::take(&mut *spawns.borrow_mut()))
+    }
+
+    /// Build a stand-in's body + label chrome the way the render pass does, but
+    /// with an explicit `fonts_ready` (the render thread reads the global font
+    /// state). Returns the label's cache key, so a test can assert the label
+    /// re-rasters once fonts arrive. The buffers need no GL renderer.
+    pub fn build_suspended_chrome_for_test(
+        &self,
+        id: SuspendedId,
+        launching: bool,
+        fonts_ready: bool,
+    ) -> Option<(i32, i32, i32, bool, bool)> {
+        let s = self.find_suspended(id)?;
+        let size = s.size.get();
+        crate::render::ensure_body(
+            &s,
+            size,
+            self.decoration_scale,
+            !s.has_bar,
+            &self.config.decorations,
+        );
+        crate::render::ensure_label(
+            &s,
+            size,
+            self.decoration_scale,
+            launching,
+            fonts_ready,
+            &self.config.decorations,
+        );
+        s.chrome.borrow().label_key
     }
 }
 

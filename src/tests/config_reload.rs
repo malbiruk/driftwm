@@ -71,7 +71,7 @@ fn reload_invalidates_suspended_label_cache() {
         .unwrap()
         .chrome
         .borrow_mut()
-        .label_key = Some((300, 200, 1, false));
+        .label_key = Some((300, 200, 1, false, true));
 
     // A decorations-affecting reload resets the cached key so the centered label
     // re-rasters, like every other decoration.

@@ -149,6 +149,91 @@ fn explicit_suspend_converts_in_place() {
     close_client(&mut f, id2);
 }
 
+/// An SSD-origin window (a per-app `decoration = "server"` rule) suspends to a
+/// barred stand-in — the bar it had stays, so the footprint is unchanged.
+#[test]
+fn ssd_suspend_keeps_the_bar() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(
+        Config::from_toml("[[window_rules]]\napp_id = \"myapp\"\ndecoration = \"server\"\n")
+            .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    let id = f.add_client();
+    let (surface, target) = map_at(&mut f, id, "myapp", (400, 300), (500, 500));
+    origin_view(&mut f);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&target, serial);
+    // Precondition: the live window carries a compositor bar.
+    assert_eq!(
+        f.state()
+            .window_ssd_bar(&StageWindow::Client(target.clone())),
+        25
+    );
+
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, id, &surface);
+
+    let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
+    let s = f.state().find_suspended(sid).unwrap();
+    assert!(s.has_bar, "an SSD window suspends to a barred stand-in");
+    let elem = StageWindow::Suspended(s.clone());
+    assert_eq!(f.state().window_ssd_bar(&elem), 25);
+    // The visual frame includes the bar strip above the content.
+    let frame = f.state().visual_frame_rect(&elem).unwrap();
+    let bw = f.state().default_border_width() as f64;
+    assert_eq!(frame.y_low, 500.0 - 25.0 - bw, "frame top includes the bar");
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// A CSD-origin window suspends to a body-only stand-in: no compositor bar, so
+/// the footprint stays at the pre-close rect (no upward growth) and its visual
+/// frame carries no bar strip — matching the live CSD window it replaced.
+#[test]
+fn csd_suspend_yields_barless_stand_in() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(
+        Config::from_toml("[decorations]\ndefault_mode = \"client\"\n").unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    let id = f.add_client();
+    let (surface, target) = map_at(&mut f, id, "myapp", (400, 300), (500, 500));
+    origin_view(&mut f);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&target, serial);
+    // Precondition: the live CSD window has no compositor bar.
+    assert_eq!(
+        f.state()
+            .window_ssd_bar(&StageWindow::Client(target.clone())),
+        0
+    );
+
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, id, &surface);
+
+    let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
+    let s = f.state().find_suspended(sid).unwrap();
+    assert!(!s.has_bar, "a CSD-origin stand-in is body-only");
+    let elem = StageWindow::Suspended(s.clone());
+    assert_eq!(f.state().window_ssd_bar(&elem), 0, "no bar height");
+    // No upward growth: footprint stays at the exact pre-close body rect.
+    assert_eq!(
+        f.state().stage.position_of(&elem),
+        Some(Point::from((500, 500)))
+    );
+    assert_eq!(s.size.get(), Size::from((400, 300)));
+    // The visual frame's top is the content top minus the border only — no bar
+    // strip.
+    let frame = f.state().visual_frame_rect(&elem).unwrap();
+    let bw = f.state().default_border_width() as f64;
+    assert_eq!(frame.y_low, 500.0 - bw, "frame top has no bar strip");
+
+    f.state().dismiss_suspended(sid);
+}
+
 /// Firing `suspend-window` again on a focused suspended window dismisses the
 /// stand-in — the put-away gesture escalates, like a second close-button click.
 #[test]

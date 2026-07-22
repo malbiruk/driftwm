@@ -12,7 +12,6 @@ use smithay::backend::renderer::element::Kind;
 use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
-use smithay::backend::renderer::element::solid::{SolidColorBuffer, SolidColorRenderElement};
 use smithay::backend::renderer::gles::{GlesPixelProgram, GlesRenderer};
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform};
 
@@ -29,34 +28,27 @@ const PT_TO_PX: f32 = 4.0 / 3.0;
 /// Horizontal padding inside the body before the label ellipsizes.
 const LABEL_SIDE_PAD: i32 = 24;
 
-/// Straight-alpha `[u8; 4]` (RGBA) → premultiplied `Color32F`.
-fn premul(color: [u8; 4]) -> [f32; 4] {
-    let a = color[3] as f32 / 255.0;
-    [
-        color[0] as f32 / 255.0 * a,
-        color[1] as f32 / 255.0 * a,
-        color[2] as f32 / 255.0 * a,
-        a,
-    ]
-}
-
 /// Rebuild the label buffer (and record its body-local rect) for the current
-/// body size / scale / launching state. Returns nothing — writes into the
-/// element's `chrome` cell.
-fn ensure_label(
+/// body size / scale / launching / font-readiness state. Returns nothing —
+/// writes into the element's `chrome` cell. `fonts_ready` is part of the key so
+/// a label first built before the background font scan lands (session restore
+/// at startup) re-rasters with text once it does — without it, a restored
+/// stand-in would keep the empty label it was first built with.
+pub(crate) fn ensure_label(
     s: &SuspendedWindow,
     body: Size<i32, Logical>,
     scale: i32,
     launching: bool,
+    fonts_ready: bool,
     config: &DecorationConfig,
 ) {
-    let key = (body.w, body.h, scale, launching);
+    let key = (body.w, body.h, scale, launching, fonts_ready);
     if s.chrome.borrow().label_key == Some(key) {
         return;
     }
 
     let text = if launching {
-        "launching…".to_string()
+        format!("{} — launching…", s.identity.display_name)
     } else {
         s.identity.display_name.clone()
     };
@@ -105,6 +97,26 @@ fn ensure_label(
     chrome.label_key = Some(key);
 }
 
+/// Rebuild the rounded body buffer for the current size / scale / top-rounding
+/// state. `round_top` is true only for a barless stand-in (no bar over the top
+/// corners). Writes into the element's `chrome` cell.
+pub(crate) fn ensure_body(
+    s: &SuspendedWindow,
+    body: Size<i32, Logical>,
+    scale: i32,
+    round_top: bool,
+    config: &DecorationConfig,
+) {
+    let key = (body.w, body.h, scale, round_top);
+    if s.chrome.borrow().body_key == Some(key) {
+        return;
+    }
+    let buf = crate::decorations::render_body_fill(body.w, body.h, scale, round_top, config);
+    let mut chrome = s.chrome.borrow_mut();
+    chrome.body = Some(buf);
+    chrome.body_key = Some(key);
+}
+
 /// Emit the render elements for a suspended window into `target` (the
 /// non-widget canvas bucket). Takes the chrome caches as disjoint borrows so
 /// the caller can keep the stage iterator alive.
@@ -129,7 +141,13 @@ pub(super) fn push_suspended_element(
 ) {
     let key = DecorationKey::Suspended(s.id);
     let size = s.size.get();
-    let bar_height = config.title_bar_height;
+    // A CSD-origin stand-in is body-only, so its footprint matches the live
+    // window it replaced; an SSD-origin one keeps its bar.
+    let bar_height = if s.has_bar {
+        config.title_bar_height
+    } else {
+        0
+    };
 
     // Pre-zoom, output-relative logical origin (geometry loc is 0 for a
     // suspended window, and they're never pinned/fullscreen).
@@ -143,7 +161,14 @@ pub(super) fn push_suspended_element(
     // Centered app-name label. Pushed BEFORE the body fill: earlier in the
     // vec is topmost in smithay z-order, so the opaque body must sit below the
     // label or it occludes it.
-    ensure_label(s, size, decoration_scale, launching, config);
+    ensure_label(
+        s,
+        size,
+        decoration_scale,
+        launching,
+        driftwm::text::fonts_ready(),
+        config,
+    );
     {
         let chrome = s.chrome.borrow();
         if let (Some(buf), Some(rect)) = (chrome.label.as_ref(), chrome.label_rect) {
@@ -171,57 +196,61 @@ pub(super) fn push_suspended_element(
         }
     }
 
-    // Body fill in the SSD title-bar background color, below the label.
+    // Rounded body fill in the SSD background color, below the label. The top
+    // corners round only when there's no bar covering them.
+    ensure_body(s, size, decoration_scale, !s.has_bar, config);
     {
-        let mut chrome = s.chrome.borrow_mut();
-        let color = premul(config.bg_color);
-        match chrome.body.as_mut() {
-            Some(buf) => buf.update(size, color),
-            None => chrome.body = Some(SolidColorBuffer::new(size, color)),
-        }
+        let chrome = s.chrome.borrow();
         if let Some(buf) = chrome.body.as_ref() {
-            let body_elem =
-                SolidColorRenderElement::from_buffer(buf, loc_phys, scale, 1.0, Kind::Unspecified);
-            target.push(OutputRenderElements::SuspendedBody(
+            let body_phys: Point<f64, Physical> =
+                Point::from((loc_phys.x as f64, loc_phys.y as f64));
+            if let Ok(body_elem) = MemoryRenderBufferRenderElement::from_buffer(
+                renderer,
+                body_phys,
+                buf,
+                None,
+                None,
+                None,
+                Kind::Unspecified,
+            ) {
+                target.push(OutputRenderElements::Decoration(
+                    PixelSnapRescaleElement::from_element(
+                        body_elem,
+                        Point::<i32, Physical>::from((0, 0)),
+                        zoom,
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Title bar via the reused windowless rasterizer — only for an SSD-origin
+    // stand-in. Rendered textless (the centered label already names the app);
+    // the close button and its hover highlight stay.
+    if s.has_bar {
+        let deco = decorations
+            .entry(key.clone())
+            .or_insert_with(|| WindowDecoration::new(size.w, focused, config));
+        deco.update(size.w, focused, false, decoration_scale, "", config);
+        let bar_physical: Point<f64, Physical> =
+            Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
+        if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
+            renderer,
+            bar_physical,
+            &deco.title_bar,
+            None,
+            None,
+            None,
+            Kind::Unspecified,
+        ) {
+            target.push(OutputRenderElements::Decoration(
                 PixelSnapRescaleElement::from_element(
-                    body_elem,
+                    bar_elem,
                     Point::<i32, Physical>::from((0, 0)),
                     zoom,
                 ),
             ));
         }
-    }
-
-    // Title bar via the reused windowless rasterizer (pinned = false).
-    let deco = decorations
-        .entry(key.clone())
-        .or_insert_with(|| WindowDecoration::new(size.w, focused, config));
-    deco.update(
-        size.w,
-        focused,
-        false,
-        decoration_scale,
-        &s.identity.display_name,
-        config,
-    );
-    let bar_physical: Point<f64, Physical> =
-        Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
-    if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
-        renderer,
-        bar_physical,
-        &deco.title_bar,
-        None,
-        None,
-        None,
-        Kind::Unspecified,
-    ) {
-        target.push(OutputRenderElements::Decoration(
-            PixelSnapRescaleElement::from_element(
-                bar_elem,
-                Point::<i32, Physical>::from((0, 0)),
-                zoom,
-            ),
-        ));
     }
 
     // Border + shadow around title bar + body, keyed by the suspended id.

@@ -322,6 +322,84 @@ pub fn render_title_bar(
     )
 }
 
+/// CPU-render a suspended window's body fill: the SSD background color with
+/// rounded corners so it tucks inside the border arc instead of poking past it.
+/// The bottom pair is always rounded; the top pair only when `round_top` (a
+/// barless CSD stand-in, whose top isn't covered by a title bar). `scale`
+/// supersamples like `render_title_bar`; the fill is premultiplied.
+pub fn render_body_fill(
+    width: i32,
+    height: i32,
+    scale: i32,
+    round_top: bool,
+    config: &DecorationConfig,
+) -> MemoryRenderBuffer {
+    let s = scale.max(1);
+    let w = width.max(1) * s;
+    let h = height.max(1) * s;
+    let bg = config.bg_color;
+    let ba = bg[3] as f64 / 255.0;
+    let cr = ((config.corner_radius * s) as f64)
+        .min(w as f64 / 2.0)
+        .min(h as f64 / 2.0);
+
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let idx = ((y * w + x) * 4) as usize;
+            let a = body_corner_alpha_at(x, y, w, h, cr, round_top) * ba;
+            pixels[idx] = (bg[0] as f64 * a) as u8;
+            pixels[idx + 1] = (bg[1] as f64 * a) as u8;
+            pixels[idx + 2] = (bg[2] as f64 * a) as u8;
+            pixels[idx + 3] = (255.0 * a) as u8;
+        }
+    }
+
+    MemoryRenderBuffer::from_slice(
+        &pixels,
+        Fourcc::Abgr8888,
+        (w, h),
+        s,
+        Transform::Normal,
+        None,
+    )
+}
+
+/// Anti-aliased coverage (1 inside → 0 outside) for a body pixel, rounding the
+/// bottom corners always and the top corners only when `round_top`. Mirrors
+/// `corner_alpha_at`'s smoothstep falloff.
+fn body_corner_alpha_at(x: i32, y: i32, w: i32, h: i32, r: f64, round_top: bool) -> f64 {
+    if r <= 0.0 {
+        return 1.0;
+    }
+    let px = x as f64 + 0.5;
+    let py = y as f64 + 0.5;
+
+    let cx = if px < r {
+        r
+    } else if px > w as f64 - r {
+        w as f64 - r
+    } else {
+        return 1.0;
+    };
+    let cy = if py < r {
+        if !round_top {
+            return 1.0;
+        }
+        r
+    } else if py > h as f64 - r {
+        h as f64 - r
+    } else {
+        return 1.0;
+    };
+
+    let dx = px - cx;
+    let dy = py - cy;
+    let dist = (dx * dx + dy * dy).sqrt();
+    let t = (dist - r + 0.5).clamp(0.0, 1.0);
+    1.0 - t * t * (3.0 - 2.0 * t)
+}
+
 /// Anti-aliased alpha for top-left and top-right corner rounding.
 fn corner_alpha_at(x: i32, y: i32, w: i32, r: f64) -> f64 {
     if r <= 0.0 {

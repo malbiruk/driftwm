@@ -11,8 +11,10 @@ use std::rc::Rc;
 use driftwm::config::Config;
 use driftwm::desktop_entry::DesktopEntryCache;
 use driftwm::session::{self, Origin, SessionEntry, SessionEnvelope, SessionOutput};
-use smithay::utils::{Point, Size};
+use smithay::utils::{Point, Rectangle, Size};
 
+use crate::decorations::DecorationHit;
+use crate::input::DecoTarget;
 use crate::state::{StageWindow, SuspendedWindow};
 
 use super::real::TempDir;
@@ -75,6 +77,7 @@ fn entry(id: u64, app: &str, origin: Origin) -> SessionEntry {
         position: [100, 200],
         size: [400, 300],
         origin,
+        has_bar: true,
     }
 }
 
@@ -128,6 +131,73 @@ fn quit_serialize_round_trip() {
     for (s, _) in restored {
         f.state().dismiss_suspended(s.id);
     }
+}
+
+/// Regression: a restored stand-in renders the same centered clickable name as
+/// a conversion-born one. Its display name survives the round-trip (the label's
+/// text source), and the label cache tracks font-readiness — a label first
+/// built before the startup font scan lands re-rasters with text once it does,
+/// where before a restored stand-in kept an empty, unclickable label.
+#[test]
+fn restored_stand_in_has_clickable_label() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        saved_at: 0,
+        entries: vec![entry(1, "myapp", Origin::Explicit)],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    let (s, pos) = (restored[0].0.clone(), restored[0].1);
+    let sid = s.id;
+    // The label's text source survived restore.
+    assert!(
+        !s.identity.display_name.is_empty(),
+        "restored display name is non-empty"
+    );
+
+    // Build the label as the render pass does, with the font scan not yet
+    // landed: the key records fonts_ready = false.
+    let cold = f
+        .state()
+        .build_suspended_chrome_for_test(sid, false, false)
+        .unwrap();
+    assert!(!cold.4, "cold key marks fonts-not-ready");
+    // Once the scan lands, the same size/scale re-rasters — a different key
+    // means the empty cold label is rebuilt, not kept forever.
+    let warm = f
+        .state()
+        .build_suspended_chrome_for_test(sid, false, true)
+        .unwrap();
+    assert!(warm.4, "warm key marks fonts-ready");
+    assert_ne!(cold, warm, "font readiness invalidates the label cache");
+
+    // With a rendered label present (simulated — the headless fixture rasters no
+    // text), the restored stand-in's body center is a Label (relaunch) hit: the
+    // mouse relaunch target it previously lacked.
+    s.chrome.borrow_mut().label_rect = Some(Rectangle::new(
+        Point::from((150, 130)),
+        Size::from((100, 40)),
+    ));
+    let body_center = Point::from((pos.x as f64 + 200.0, pos.y as f64 + 150.0));
+    assert!(
+        matches!(
+            f.state().decoration_under(body_center),
+            Some((DecoTarget::Suspended(_), DecorationHit::Label))
+        ),
+        "the restored stand-in's centered name is clickable"
+    );
+
+    f.state().dismiss_suspended(sid);
 }
 
 /// With `restore_session` off, an explicit entry materializes but a quit entry
@@ -458,6 +528,64 @@ fn create_and_dismiss_write_immediately() {
         after_dismiss.entries.is_empty(),
         "dismiss wrote through at once"
     );
+}
+
+/// The barless flag round-trips through session.json: a CSD window suspends to
+/// a body-only stand-in, the durable write records it, and a fresh compositor
+/// materializes it body-only regardless of its own decoration default.
+#[test]
+fn barless_flag_round_trips_through_session() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    {
+        let mut f = Fixture::with_config(
+            Config::from_toml("[decorations]\ndefault_mode = \"client\"\n").unwrap(),
+        );
+        f.add_output(1, (1920, 1080));
+        inject_cache(&mut f, &cache, &["myapp"]);
+        f.state().session_store.path = Some(path.clone());
+        let id = f.add_client();
+        map_at(&mut f, id, "myapp", (400, 300), (300, 300));
+        let window = window_by_app_id(&mut f, "myapp").unwrap();
+        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+        f.state().raise_and_focus(&window, serial);
+        let surface = f.client(id).state.windows[0].surface.clone();
+        f.state()
+            .execute_action(&driftwm::config::Action::SuspendWindow);
+        f.client(id).window(&surface).destroy();
+        f.roundtrip(id);
+        f.dispatch();
+
+        // Tear the stand-in down cleanly for the fixture baseline, but keep the
+        // durable file (clear the path so the dismiss doesn't rewrite it empty).
+        let sid = suspended_in_order(&mut f)[0].0.id;
+        f.state().session_store.path = None;
+        f.state().dismiss_suspended(sid);
+    }
+
+    let saved = session::read(&path);
+    assert_eq!(saved.entries.len(), 1);
+    assert!(
+        !saved.entries[0].has_bar,
+        "the file records the CSD stand-in body-only"
+    );
+
+    // A fresh compositor (whose own default is SSD) materializes it body-only:
+    // the flag rides on the entry, not the restoring config.
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    assert!(
+        !restored[0].0.has_bar,
+        "the restored stand-in stays body-only"
+    );
+
+    f.state().dismiss_suspended(restored[0].0.id);
 }
 
 /// A winit dev session skips persistence entirely unless overridden, and a

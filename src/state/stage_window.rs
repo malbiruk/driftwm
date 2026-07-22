@@ -9,7 +9,6 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
-use smithay::backend::renderer::element::solid::SolidColorBuffer;
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{IsAlive, Logical, Rectangle, Size};
@@ -33,12 +32,18 @@ pub struct SuspendedId(pub u64);
 /// borrow while the stage iterator is live.
 #[derive(Debug, Default)]
 pub struct SuspendedChrome {
-    /// Solid body fill; resized in place (only bumps its commit on change).
-    pub body: Option<SolidColorBuffer>,
+    /// Body fill in the SSD background color with rounded corners (bottom pair
+    /// always; top pair too on a barless stand-in), rasterized like the title
+    /// bar so the fill tucks inside the border arc instead of poking past it.
+    pub body: Option<MemoryRenderBuffer>,
+    /// `(body_w, body_h, scale, round_top)` the body buffer was built for.
+    pub body_key: Option<(i32, i32, i32, bool)>,
     /// Centered app-name label (transparent background, foreground text).
     pub label: Option<MemoryRenderBuffer>,
-    /// `(body_w, body_h, scale, launching)` the label buffer was built for.
-    pub label_key: Option<(i32, i32, i32, bool)>,
+    /// `(body_w, body_h, scale, launching, fonts_ready)` the label buffer was
+    /// built for. `fonts_ready` is tracked so a label first built before the
+    /// background font scan lands re-rasters with text once it does.
+    pub label_key: Option<(i32, i32, i32, bool, bool)>,
     /// Label rect in body-local logical coords, for the `Label` hit region.
     pub label_rect: Option<Rectangle<i32, Logical>>,
 }
@@ -55,6 +60,11 @@ pub struct SuspendedWindow {
     /// A live suspend is `Explicit`; one restored from a `Quit` record keeps
     /// `Quit` across rematerialize→quit cycles. Immutable once set.
     pub origin: Origin,
+    /// Whether the stand-in draws a compositor title bar above its body. True
+    /// for an SSD-origin window (matches the live bar it replaced); false for a
+    /// CSD-origin one, whose footprint is body-only at the exact original
+    /// geometry.
+    pub has_bar: bool,
     pub chrome: RefCell<SuspendedChrome>,
 }
 
@@ -75,6 +85,7 @@ impl SuspendedWindow {
         identity: AppIdentity,
         last_title: String,
         origin: Origin,
+        has_bar: bool,
     ) -> Self {
         Self {
             id,
@@ -82,6 +93,7 @@ impl SuspendedWindow {
             identity,
             last_title,
             origin,
+            has_bar,
             chrome: RefCell::new(SuspendedChrome::default()),
         }
     }
@@ -248,6 +260,13 @@ impl WindowExt for StageWindow {
 
     fn is_suspended(&self) -> bool {
         matches!(self, Self::Suspended(_))
+    }
+
+    fn suspended_has_bar(&self) -> bool {
+        match self {
+            Self::Client(_) => true,
+            Self::Suspended(s) => s.has_bar,
+        }
     }
 }
 

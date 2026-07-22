@@ -8,15 +8,23 @@ your whole canvas after a restart.
 ## Suspended windows
 
 `suspend-window` closes the target window but leaves a **suspended window** —
-a compositor-drawn stand-in — at its exact canvas position and size: a normal
-SSD title bar (title = the app's name) and a body filled with the title bar's
-background color, with the app's name centered in it. It's draggable,
-resizable, closable, raisable, and focusable like any window. Pressing
+a compositor-drawn stand-in — at its exact canvas position and size: a body
+filled with the title bar's background color, with the app's name centered in
+it, and rounded corners that follow the border. The chrome matches what the
+live window had, so the footprint doesn't shift:
+
+- A **server-decorated** window keeps a title bar (with a close button, but no
+  text — the centered name already labels it).
+- A **client-decorated** window is body-only, at its exact original geometry.
+  It has no compositor close button; dismiss it with `close-window`, a second
+  `suspend-window` press, or `msg close`.
+
+It's draggable, resizable, raisable, and focusable like any window. Pressing
 `Enter` while it's focused, or clicking/tapping the centered name, relaunches
-the app; the new window takes over the stand-in's exact geometry and
-z-order slot. Firing `suspend-window` again on a focused suspended window
-dismisses it — the put-away gesture, repeated, escalates to "gone", the same
-as clicking its close button.
+the app; while the relaunch is pending the name reads `<app> — launching…`. The
+new window takes over the stand-in's exact geometry and z-order slot. Firing
+`suspend-window` again on a focused suspended window dismisses it — the put-away
+gesture, repeated, escalates to "gone".
 
 It's a regular action — bind it in `[keybindings]`, `[mouse]`, `[gestures]`,
 or `[touch]` like any other. There's no default binding:

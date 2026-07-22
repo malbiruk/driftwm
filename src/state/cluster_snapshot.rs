@@ -273,7 +273,7 @@ impl DriftWm {
             crate::state::StageWindow::Suspended(s) => {
                 let loc = self.stage.position_of(w)?;
                 let size = s.size.get();
-                let bar = self.config.decorations.title_bar_height as f64;
+                let bar = self.window_ssd_bar(w) as f64;
                 let bw = self.default_border_width() as f64;
                 Some(driftwm::layout::snap::SnapRect {
                     x_low: loc.x as f64 - bw,
