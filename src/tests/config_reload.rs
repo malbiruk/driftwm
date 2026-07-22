@@ -71,7 +71,7 @@ fn reload_invalidates_suspended_label_cache() {
         let s = f.state().find_suspended(sid).unwrap();
         let mut chrome = s.chrome.borrow_mut();
         chrome.label_key = Some((300, 200, 1, false, true));
-        chrome.body_key = Some((300, 200, 1, false));
+        chrome.body_key = Some((300, 200, 1));
     }
 
     // A decorations-affecting reload resets both cached keys so the centered

@@ -134,13 +134,15 @@ fn explicit_suspend_converts_in_place() {
         Some(eid),
         "ElementId preserved"
     );
-    // Same rect.
+    // Same footprint: the CSD body shrinks under the bar (position drops by the
+    // bar, height loses it), so the outer bar+body still spans the (500,500)
+    // 400x300 rect the live window had.
     let s = f.state().find_suspended(sid).unwrap();
     assert_eq!(
         f.state().stage.position_of(&elem),
-        Some(Point::from((500, 500)))
+        Some(Point::from((500, 525)))
     );
-    assert_eq!(s.size.get(), Size::from((400, 300)));
+    assert_eq!(s.size.get(), Size::from((400, 275)));
     // Focus intent moved onto the stand-in; the mark was consumed.
     assert_eq!(f.state().gated_suspended_focus(), Some(sid));
     assert_eq!(f.state().debug_counters()["suspend_marks"], 0);
@@ -177,9 +179,15 @@ fn ssd_suspend_keeps_the_bar() {
 
     let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
     let s = f.state().find_suspended(sid).unwrap();
-    assert!(s.has_bar, "an SSD window suspends to a barred stand-in");
+    assert!(!s.csd, "an SSD window suspends to an SSD-origin stand-in");
     let elem = StageWindow::Suspended(s.clone());
     assert_eq!(f.state().window_ssd_bar(&elem), 25);
+    // An SSD origin keeps its content rect; the bar sits above it, unshrunk.
+    assert_eq!(
+        f.state().stage.position_of(&elem),
+        Some(Point::from((500, 500)))
+    );
+    assert_eq!(s.size.get(), Size::from((400, 300)));
     // The visual frame includes the bar strip above the content.
     let frame = f.state().visual_frame_rect(&elem).unwrap();
     let bw = f.state().default_border_width() as f64;
@@ -188,11 +196,11 @@ fn ssd_suspend_keeps_the_bar() {
     f.state().dismiss_suspended(sid);
 }
 
-/// A CSD-origin window suspends to a body-only stand-in: no compositor bar, so
-/// the footprint stays at the pre-close rect (no upward growth) and its visual
-/// frame carries no bar strip — matching the live CSD window it replaced.
+/// A CSD-origin window suspends to a barred stand-in whose body is shrunk under
+/// the bar, so the outer footprint stays exactly where the live CSD window was
+/// (no upward growth) even though the stand-in now carries a compositor bar.
 #[test]
-fn csd_suspend_yields_barless_stand_in() {
+fn csd_suspend_yields_barred_stand_in_preserving_footprint() {
     let tmp = TempDir::new();
     let mut f = Fixture::with_config(
         Config::from_toml("[decorations]\ndefault_mode = \"client\"\n").unwrap(),
@@ -216,21 +224,54 @@ fn csd_suspend_yields_barless_stand_in() {
 
     let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
     let s = f.state().find_suspended(sid).unwrap();
-    assert!(!s.has_bar, "a CSD-origin stand-in is body-only");
+    assert!(s.csd, "a CSD-origin stand-in records its origin");
     let elem = StageWindow::Suspended(s.clone());
-    assert_eq!(f.state().window_ssd_bar(&elem), 0, "no bar height");
-    // No upward growth: footprint stays at the exact pre-close body rect.
+    assert_eq!(f.state().window_ssd_bar(&elem), 25, "it is barred like any");
+    // The body shrank under the bar: position drops by the bar, height loses it.
     assert_eq!(
         f.state().stage.position_of(&elem),
-        Some(Point::from((500, 500)))
+        Some(Point::from((500, 525)))
     );
-    assert_eq!(s.size.get(), Size::from((400, 300)));
-    // The visual frame's top is the content top minus the border only — no bar
-    // strip.
+    assert_eq!(s.size.get(), Size::from((400, 275)));
+    // The outer footprint (bar + body) is exactly the original window rect.
     let frame = f.state().visual_frame_rect(&elem).unwrap();
     let bw = f.state().default_border_width() as f64;
-    assert_eq!(frame.y_low, 500.0 - bw, "frame top has no bar strip");
+    assert_eq!(frame.y_low, 500.0 - bw, "footprint top unchanged");
+    assert_eq!(frame.y_high, 800.0 + bw, "footprint bottom unchanged");
 
+    f.state().dismiss_suspended(sid);
+}
+
+/// A CSD window shorter than the bar clamps its stand-in body to 1px rather than
+/// shrinking to zero/negative; the outer footprint then grows by the shortfall.
+#[test]
+fn csd_suspend_clamps_body_shorter_than_the_bar() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(
+        Config::from_toml("[decorations]\ndefault_mode = \"client\"\n").unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    let id = f.add_client();
+    let bar = f.state().config.decorations.title_bar_height;
+    // A window shorter than the bar.
+    let (surface, target) = map_at(&mut f, id, "myapp", (400, (bar - 5) as u16), (100, 100));
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&target, serial);
+
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, id, &surface);
+
+    let sid = suspended_id(&mut f).expect("a stand-in replaced the client");
+    let s = f.state().find_suspended(sid).unwrap();
+    assert!(s.csd);
+    assert_eq!(s.size.get().h, 1, "body clamps to 1px, not zero/negative");
+    let elem = StageWindow::Suspended(s);
+    assert_eq!(
+        f.state().stage.position_of(&elem),
+        Some(Point::from((100, 100 + bar))),
+        "the body still sits a full bar below the original top"
+    );
     f.state().dismiss_suspended(sid);
 }
 
@@ -301,8 +342,9 @@ fn explicit_suspend_of_fullscreen_uses_windowed_rect() {
     let sid = suspended_id(&mut f).expect("fullscreen window suspended");
     assert_eq!(
         f.state().find_suspended(sid).unwrap().size.get(),
-        Size::from((400, 300)),
-        "the stand-in is the windowed size, not the fullscreen buffer"
+        Size::from((400, 275)),
+        "the stand-in body is the windowed size shrunk under the bar, not the \
+         fullscreen buffer"
     );
     assert!(
         !f.state().stage.has_fullscreen(),
@@ -340,16 +382,18 @@ fn suspend_on_close_of_fullscreen_uses_windowed_rect() {
 
     let sid = suspended_id(&mut f).expect("fullscreen self-close converted under the flag");
     let s = f.state().find_suspended(sid).unwrap();
+    // CSD body shrunk under the bar; the outer footprint is the pre-fullscreen
+    // (200,200) 400x300 rect, not the fullscreen buffer parked at the origin.
     assert_eq!(
         s.size.get(),
-        Size::from((400, 300)),
-        "the stand-in is the windowed size, not the fullscreen buffer"
+        Size::from((400, 275)),
+        "the stand-in body is the windowed size shrunk under the bar"
     );
     let elem = StageWindow::Suspended(s);
     assert_eq!(
         f.state().stage.position_of(&elem),
-        Some(Point::from((200, 200))),
-        "the stand-in is at the pre-fullscreen position, not the camera park"
+        Some(Point::from((200, 225))),
+        "the stand-in body sits below the pre-fullscreen top by the bar"
     );
     assert!(
         !f.state().stage.has_fullscreen(),
@@ -767,8 +811,9 @@ fn suspend_on_close_geometry_prefers_stable_when_live_shrinks() {
         let sid = suspended_id(&mut f).unwrap();
         assert_eq!(
             f.state().find_suspended(sid).unwrap().size.get(),
-            Size::from((900, 700)),
-            "a live shrink (800x600 < 900x700) falls back to the stable rect"
+            Size::from((900, 675)),
+            "a live shrink (800x600 < 900x700) falls back to the stable rect \
+             (900x700), then the CSD body shrinks under the bar"
         );
         f.state().dismiss_suspended(sid);
     }
@@ -786,8 +831,9 @@ fn suspend_on_close_geometry_prefers_stable_when_live_shrinks() {
         let sid = suspended_id(&mut f).unwrap();
         assert_eq!(
             f.state().find_suspended(sid).unwrap().size.get(),
-            Size::from((800, 600)),
-            "live is trusted when it is not smaller than the stable rect"
+            Size::from((800, 575)),
+            "live (800x600) is trusted when not smaller than the stable rect, \
+             then the CSD body shrinks under the bar"
         );
         f.state().dismiss_suspended(sid);
     }
@@ -1273,8 +1319,8 @@ fn client_unmap(
 
 /// `suspend_on_close` converts a client that unmaps its toplevel before
 /// destroying it (a null-buffer commit that resets the xdg role, wiping
-/// app_id / geometry). An SSD-origin window keeps its bar; a CSD one is
-/// body-only — the footprint the pre-unmap snapshot captured is preserved.
+/// app_id / geometry). The pre-unmap snapshot carries the origin decoration
+/// mode, so the stand-in reassembles with the right geometry either way.
 #[test]
 fn suspend_on_close_converts_on_unmap_before_destroy() {
     // SSD origin: the stand-in carries a bar.
@@ -1297,7 +1343,7 @@ fn suspend_on_close_converts_on_unmap_before_destroy() {
 
         let sid = suspended_id(&mut f).expect("unmap-then-destroy converted under the flag");
         let s = f.state().find_suspended(sid).unwrap();
-        assert!(s.has_bar, "an SSD-origin stand-in keeps its bar");
+        assert!(!s.csd, "an SSD-origin stand-in records its origin");
         let elem = StageWindow::Suspended(s.clone());
         assert_eq!(
             f.state().stage.position_of(&elem),
@@ -1311,7 +1357,7 @@ fn suspend_on_close_converts_on_unmap_before_destroy() {
         );
         f.state().dismiss_suspended(sid);
     }
-    // CSD origin: the stand-in is body-only.
+    // CSD origin: the stand-in records its origin (still barred, body shrunk).
     {
         let tmp = TempDir::new();
         let mut f = Fixture::with_config(
@@ -1331,7 +1377,7 @@ fn suspend_on_close_converts_on_unmap_before_destroy() {
 
         let sid = suspended_id(&mut f).expect("unmap-then-destroy converted under the flag");
         let s = f.state().find_suspended(sid).unwrap();
-        assert!(!s.has_bar, "a CSD-origin stand-in is body-only");
+        assert!(s.csd, "a CSD-origin stand-in records its origin");
         f.state().dismiss_suspended(sid);
     }
 }
@@ -1412,12 +1458,14 @@ fn suspend_on_close_converts_on_client_crash() {
     let s = f.state().find_suspended(sid).unwrap();
     assert_eq!(s.identity.app_id, "myapp");
     let elem = StageWindow::Suspended(s.clone());
+    // CSD body shrinks under the bar; the outer footprint is the crashed
+    // window's (200,200) 400x300 rect.
     assert_eq!(
         f.state().stage.position_of(&elem),
-        Some(Point::from((200, 200))),
+        Some(Point::from((200, 225))),
         "the stand-in sits at the crashed window's rect"
     );
-    assert_eq!(s.size.get(), Size::from((400, 300)));
+    assert_eq!(s.size.get(), Size::from((400, 275)));
     f.state().dismiss_suspended(sid);
 }
 
@@ -1448,12 +1496,18 @@ fn suspend_mark_wins_over_unmap_before_destroy() {
     let sid = suspended_id(&mut f).expect("the suspend mark converted the unmap-then-destroy");
     let s = f.state().find_suspended(sid).unwrap();
     let elem = StageWindow::Suspended(s.clone());
+    // The mark's (200,200) 400x300 rect drives the footprint; the CSD body then
+    // shrinks under the bar (not a snapshot fallback).
     assert_eq!(
         f.state().stage.position_of(&elem),
-        Some(Point::from((200, 200))),
+        Some(Point::from((200, 225))),
         "the stand-in sits at the mark's rect, not a snapshot fallback"
     );
-    assert_eq!(s.size.get(), Size::from((400, 300)), "the mark's body size");
+    assert_eq!(
+        s.size.get(),
+        Size::from((400, 275)),
+        "the mark's body, shrunk"
+    );
     f.state().dismiss_suspended(sid);
 }
 

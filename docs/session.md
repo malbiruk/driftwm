@@ -10,14 +10,15 @@ your whole canvas after a restart.
 `suspend-window` closes the target window but leaves a **suspended window** —
 a compositor-drawn stand-in — at its exact canvas position and size: a body
 filled with the title bar's background color, with the app's name centered in
-it, and rounded corners that follow the border. The chrome matches what the
-live window had, so the footprint doesn't shift:
+it, and rounded corners that follow the border.
 
-- A **server-decorated** window keeps a title bar (with a close button, but no
-  text — the centered name already labels it).
-- A **client-decorated** window is body-only, at its exact original geometry.
-  It has no compositor close button; dismiss it with `close-window`, a second
-  `suspend-window` press, or `msg close`.
+Every stand-in wears the same chrome: a textless title bar (the centered name
+already labels it) carrying a close button. A **server-decorated** window's
+stand-in reuses the bar it already had; a **client-decorated** window's
+stand-in keeps its exact original footprint by shrinking the body under the
+bar, and is handed the full size back when it relaunches. The close button
+dismisses the stand-in — as do `close-window`, a second `suspend-window`
+press, and `msg close`.
 
 It's draggable, resizable, raisable, and focusable like any window. Pressing
 `Enter` while it's focused, or clicking/tapping the centered name, relaunches

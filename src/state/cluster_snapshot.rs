@@ -362,9 +362,8 @@ impl DriftWm {
     /// camera origin), so they have no canvas snap rect — this excludes them
     /// from snapping, clustering, and all the viewport-relation queries built
     /// on top of it. A suspended stand-in's rect mirrors its live window's:
-    /// body rect + `window_ssd_bar` strip (0 for a barless CSD-origin
-    /// stand-in) + the global-default border, so other windows snap to it
-    /// exactly as they would to the window it replaced.
+    /// body rect + `window_ssd_bar` strip + the global-default border, so other
+    /// windows snap to it exactly as they would to the window it replaced.
     pub fn snap_rect_for(&self, w: &StageWindow) -> Option<driftwm::layout::snap::SnapRect> {
         if self.is_pinned(w) || self.is_window_fullscreen(w) {
             return None;

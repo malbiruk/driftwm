@@ -203,6 +203,54 @@ fn token_adopt_pre_first_commit_preserves_slot_id_and_geometry() {
     client_close(&mut f, bg, &bg_surface);
 }
 
+/// Adopting a relaunched window into a CSD-origin stand-in reassembles the full
+/// window: the stand-in shrank its body under the bar at conversion, so adopt
+/// hands the app back the body height + bar, positioned a bar above the body.
+/// An SSD-origin adopt (the tests above) keeps the body rect verbatim.
+#[test]
+fn token_adopt_of_csd_stand_in_reassembles_full_geometry() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    let bar = f.state().config.decorations.title_bar_height;
+    // A CSD-origin stand-in: body (600,400) at (500,500).
+    let sid = f.state().insert_suspended_csd_for_test(
+        1,
+        Point::from((500, 500)),
+        Size::from((600, 400)),
+        "myapp",
+        "myapp",
+    );
+
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+    let cid = f.add_client();
+    let surface = begin_window(&mut f, cid, "myapp");
+    present_token(&mut f, cid, &surface, token);
+    finish_window(&mut f, cid, &surface, (300, 200));
+
+    let adopted = window_by_app_id(&mut f, "myapp").expect("relaunched window adopted the slot");
+    // Positioned a bar above the body; sized to the full window (body + bar).
+    assert_eq!(
+        f.state().stage.position_of(&adopted),
+        Some(Point::from((500, 500 - bar))),
+        "adopt seats the CSD window a bar above the stand-in body"
+    );
+    assert!(
+        f.client(cid)
+            .window(&surface)
+            .configures_received
+            .iter()
+            .any(|(_, c)| c.size == (600, 400 + bar)),
+        "configured to the reassembled full size (body + bar)"
+    );
+
+    client_close(&mut f, cid, &surface);
+}
+
 /// Adopting a relaunched window back into a clustered stand-in keeps the
 /// cluster: the adopted window seats at the stand-in's slot/rect, so it stays
 /// snap-adjacent to the neighbor, and it inherits the stand-in's snap rect as a

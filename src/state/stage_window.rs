@@ -33,12 +33,12 @@ pub struct SuspendedId(pub u64);
 /// borrow while the stage iterator is live.
 #[derive(Debug, Default)]
 pub struct SuspendedChrome {
-    /// Body fill in the SSD background color with rounded corners (bottom pair
-    /// always; top pair too on a barless stand-in), rasterized like the title
-    /// bar so the fill tucks inside the border arc instead of poking past it.
+    /// Body fill in the SSD background color with rounded bottom corners (the
+    /// title bar covers the top pair), rasterized like the title bar so the
+    /// fill tucks inside the border arc instead of poking past it.
     pub body: Option<MemoryRenderBuffer>,
-    /// `(body_w, body_h, scale, round_top)` the body buffer was built for.
-    pub body_key: Option<(i32, i32, i32, bool)>,
+    /// `(body_w, body_h, scale)` the body buffer was built for.
+    pub body_key: Option<(i32, i32, i32)>,
     /// Centered app-name label (transparent background, foreground text).
     pub label: Option<MemoryRenderBuffer>,
     /// `(body_w, body_h, scale, launching, fonts_ready)` the label buffer was
@@ -61,11 +61,11 @@ pub struct SuspendedWindow {
     /// A live suspend is `Explicit`; one restored from a `Quit` record keeps
     /// `Quit` across rematerialize→quit cycles. Immutable once set.
     pub origin: Origin,
-    /// Whether the stand-in draws a compositor title bar above its body. True
-    /// for an SSD-origin window (matches the live bar it replaced); false for a
-    /// CSD-origin one, whose footprint is body-only at the exact original
-    /// geometry.
-    pub has_bar: bool,
+    /// Records the origin decoration mode, for geometry reassembly on adopt:
+    /// `true` for a CSD-origin stand-in (whose body was shrunk under the bar so
+    /// the outer footprint still matches the original window), `false` for
+    /// SSD-origin. Every stand-in draws the same textless bar regardless.
+    pub csd: bool,
     pub chrome: RefCell<SuspendedChrome>,
 }
 
@@ -86,7 +86,7 @@ impl SuspendedWindow {
         identity: AppIdentity,
         last_title: String,
         origin: Origin,
-        has_bar: bool,
+        csd: bool,
     ) -> Self {
         Self {
             id,
@@ -94,7 +94,7 @@ impl SuspendedWindow {
             identity,
             last_title,
             origin,
-            has_bar,
+            csd,
             chrome: RefCell::new(SuspendedChrome::default()),
         }
     }
@@ -282,13 +282,6 @@ impl WindowExt for StageWindow {
 
     fn is_suspended(&self) -> bool {
         matches!(self, Self::Suspended(_))
-    }
-
-    fn suspended_has_bar(&self) -> bool {
-        match self {
-            Self::Client(_) => true,
-            Self::Suspended(s) => s.has_bar,
-        }
     }
 }
 

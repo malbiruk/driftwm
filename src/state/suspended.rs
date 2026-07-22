@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
-use smithay::utils::{IsAlive, Logical, Rectangle, SERIAL_COUNTER, Size};
+use smithay::utils::{IsAlive, Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, with_states};
 use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::xdg_activation::XdgActivationToken;
@@ -52,7 +52,7 @@ pub struct UnmapSnapshot {
     pub has_parent: bool,
     pub is_modal: bool,
     pub rect: Rectangle<i32, Logical>,
-    pub has_bar: bool,
+    pub csd: bool,
 }
 
 /// How long a suspend / real-close mark stays live. A client that refuses to
@@ -322,7 +322,8 @@ impl DriftWm {
         // The bar stays the stand-in's: the adopted window's decoration entry
         // isn't populated yet on the first-commit adopt path, and the stand-in's
         // bar faithfully carries what the relaunched window will draw.
-        let bar = self.window_ssd_bar(&suspended) as f64;
+        let bar_i = self.window_ssd_bar(&suspended);
+        let bar = bar_i as f64;
         let bw = self.window_border_width(root) as f64;
         let standin_rect = Some(driftwm::layout::snap::SnapRect {
             x_low: pos.x as f64 - bw,
@@ -330,6 +331,22 @@ impl DriftWm {
             y_low: pos.y as f64 - bar - bw,
             y_high: pos.y as f64 + body_size.h as f64 + bw,
         });
+
+        // A CSD-origin stand-in shrank its body under the bar at conversion, so
+        // hand the app back the full window: positioned above the body by the
+        // current bar height, sized to include it. If the bar height changed
+        // while suspended the outer rect drifts by the difference — the same
+        // drift a live SSD window sees on reload, so no special handling. An
+        // SSD-origin adopt keeps the body rect; its SSD bar re-attaches via the
+        // normal decoration path.
+        let (adopt_pos, adopt_size) = if s.csd {
+            (
+                Point::from((pos.x, pos.y - bar_i)),
+                Size::from((body_size.w, body_size.h + bar_i)),
+            )
+        } else {
+            (pos, body_size)
+        };
 
         // Inherit the suspended window's focus if it held it (a relaunch the
         // user is waiting on ends up focused); focus that already moved on is
@@ -347,9 +364,10 @@ impl DriftWm {
         self.stage.remove(&StageWindow::Client(window.clone()));
         self.stage
             .replace(&suspended, StageWindow::Client(window.clone()));
-        self.stage.set_position(window, pos);
-        // The adopted window restores (fit/fullscreen round-trips) to the body.
-        self.stage.set_restore_size_if_missing(window, body_size);
+        self.stage.set_position(window, adopt_pos);
+        // The adopted window restores (fit/fullscreen round-trips) to its
+        // reassembled size.
+        self.stage.set_restore_size_if_missing(window, adopt_size);
         // Seed the stable snap rect from the stand-in's so the window is a
         // cluster member from the instant it adopts the slot, not only after its
         // first settle (the first-commit path skips adopted windows because
@@ -358,11 +376,12 @@ impl DriftWm {
             self.stable_snap_rects.insert(root.id(), rect);
         }
 
-        // Fill the suspended body rect. The caller decides when the configure
-        // is sent (first-commit path folds it into the initial configure).
+        // Fill the reassembled window rect. The caller decides when the
+        // configure is sent (first-commit path folds it into the initial
+        // configure).
         if let Some(toplevel) = window.toplevel() {
             toplevel.with_pending_state(|state| {
-                state.size = Some(body_size);
+                state.size = Some(adopt_size);
             });
         }
 
@@ -608,7 +627,10 @@ impl DriftWm {
         if live.w <= 0 || live.h <= 0 {
             return;
         }
-        let has_bar = self
+        // A CSD window has no decoration entry; the stand-in records that origin
+        // so adopt can hand back the full geometry (the bar it grows shrinks the
+        // body, not the footprint).
+        let csd = !self
             .decorations
             .contains_key(&DecorationKey::Surface(surface.id()));
         let rect = self.markless_suspend_rect(&window, surface);
@@ -621,7 +643,7 @@ impl DriftWm {
                 has_parent: window.parent_surface().is_some(),
                 is_modal: window.is_modal(),
                 rect,
-                has_bar,
+                csd,
             },
         );
     }
@@ -691,13 +713,15 @@ impl DriftWm {
         {
             return None;
         }
-        // An SSD window has a decoration entry, a CSD one doesn't, and the
-        // stand-in keeps the same footprint (bar + body, or body only). The
-        // decoration map can flip during an unmap-before-destroy teardown, so
-        // the snapshot's pre-unmap truth wins where present; otherwise the live
-        // read (still valid this side of `cleanup_surface_state`).
-        let has_bar = snapshot.as_ref().map(|s| s.has_bar).unwrap_or_else(|| {
-            self.decorations
+        // An SSD window has a decoration entry, a CSD one doesn't. Every stand-in
+        // keeps the original footprint, but the origin decides how the geometry
+        // is reassembled on adopt. The decoration map can flip during an
+        // unmap-before-destroy teardown, so the snapshot's pre-unmap truth wins
+        // where present; otherwise the live read (still valid this side of
+        // `cleanup_surface_state`).
+        let csd = snapshot.as_ref().map(|s| s.csd).unwrap_or_else(|| {
+            !self
+                .decorations
                 .contains_key(&DecorationKey::Surface(surface.id()))
         });
         if let Some(mark) = suspend_mark {
@@ -705,7 +729,7 @@ impl DriftWm {
                 identity: mark.identity,
                 rect: mark.rect,
                 title: mark.title,
-                has_bar,
+                csd,
             });
         }
 
@@ -746,7 +770,7 @@ impl DriftWm {
             identity,
             rect,
             title,
-            has_bar,
+            csd,
         })
     }
 
@@ -785,6 +809,28 @@ impl DriftWm {
         Rectangle::new(loc, size)
     }
 
+    /// The stand-in's stage rect (its body) for a conversion. An SSD origin
+    /// keeps the content rect — the compositor bar sits above it. A CSD origin
+    /// shrinks the body under a bar of the current height so the outer footprint
+    /// (bar + body) still equals the original window rect. A window shorter than
+    /// the bar clamps to a 1px body: preserving the footprint would give a
+    /// zero/negative body, so the footprint grows by the shortfall instead.
+    pub(crate) fn standin_body_rect(
+        &self,
+        rect: Rectangle<i32, Logical>,
+        csd: bool,
+    ) -> Rectangle<i32, Logical> {
+        if !csd {
+            return rect;
+        }
+        let bar = self.config.decorations.title_bar_height;
+        let body_h = (rect.size.h - bar).max(1);
+        Rectangle::new(
+            Point::from((rect.loc.x, rect.loc.y + bar)),
+            Size::from((rect.size.w, body_h)),
+        )
+    }
+
     /// Replace a destroying client window with a suspended stand-in in place:
     /// same z-slot and `ElementId`, at the recorded rect. Runs the conversion
     /// cleanup checklist before `cleanup_surface_state` wipes the surface state.
@@ -802,15 +848,18 @@ impl DriftWm {
 
         let sid = SuspendedId(self.next_suspended_id);
         self.next_suspended_id += 1;
+        // A CSD origin shrinks its body under the bar so the outer footprint is
+        // unchanged; an SSD one already had a bar above its content rect.
+        let body = self.standin_body_rect(conv.rect, conv.csd);
         // A live suspend (explicit action or suspend_on_close) is an explicit,
         // user-visible artifact, so it always returns on restore.
         let suspended = Rc::new(SuspendedWindow::new(
             sid,
-            conv.rect.size,
+            body.size,
             conv.identity,
             conv.title,
             driftwm::session::Origin::Explicit,
-            conv.has_bar,
+            conv.csd,
         ));
         let new_element = StageWindow::Suspended(suspended);
 
@@ -825,7 +874,7 @@ impl DriftWm {
         self.stage.clear_restore_size(window);
         self.stage.clear_fill(window);
         self.stage.take_pin(window);
-        self.stage.set_position(window, conv.rect.loc);
+        self.stage.set_position(window, body.loc);
         self.stage.replace(window, new_element);
 
         if was_focused {
@@ -897,9 +946,10 @@ pub struct SuspendConversion {
     pub identity: AppIdentity,
     pub rect: Rectangle<i32, Logical>,
     pub title: String,
-    /// Whether the closing window has SSD chrome — the stand-in matches:
-    /// barred for SSD, body-only for CSD.
-    pub has_bar: bool,
+    /// Whether the closing window was client-decorated. Every stand-in is
+    /// barred, but a CSD origin shrinks the body under the bar (preserving the
+    /// footprint) and reassembles the full geometry on adopt.
+    pub csd: bool,
 }
 
 /// Build the `sh -c` command line and child environment for a relaunch. The
@@ -973,15 +1023,16 @@ impl DriftWm {
             identity,
             display_name.to_string(),
             driftwm::session::Origin::Explicit,
-            true,
+            false,
         ));
         self.map_window(StageWindow::Suspended(s), pos, true);
         sid
     }
 
-    /// As [`Self::insert_suspended_for_test`], but body-only (a CSD-origin
-    /// stand-in): no compositor title bar, footprint == the body rect.
-    pub fn insert_suspended_barless_for_test(
+    /// As [`Self::insert_suspended_for_test`], but a CSD-origin stand-in
+    /// (`csd = true`): still barred chrome, but the origin flag drives adopt to
+    /// hand the app back a full window (body height + bar) above `pos`.
+    pub fn insert_suspended_csd_for_test(
         &mut self,
         id: u64,
         pos: smithay::utils::Point<i32, smithay::utils::Logical>,
@@ -1001,7 +1052,7 @@ impl DriftWm {
             identity,
             display_name.to_string(),
             driftwm::session::Origin::Explicit,
-            false,
+            true,
         ));
         self.map_window(StageWindow::Suspended(s), pos, true);
         sid
@@ -1041,13 +1092,7 @@ impl DriftWm {
     ) -> Option<(i32, i32, i32, bool, bool)> {
         let s = self.find_suspended(id)?;
         let size = s.size.get();
-        crate::render::ensure_body(
-            &s,
-            size,
-            self.decoration_scale,
-            !s.has_bar,
-            &self.config.decorations,
-        );
+        crate::render::ensure_body(&s, size, self.decoration_scale, &self.config.decorations);
         crate::render::ensure_label(
             &s,
             size,

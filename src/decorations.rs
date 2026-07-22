@@ -324,14 +324,12 @@ pub fn render_title_bar(
 
 /// CPU-render a suspended window's body fill: the SSD background color with
 /// rounded corners so it tucks inside the border arc instead of poking past it.
-/// The bottom pair is always rounded; the top pair only when `round_top` (a
-/// barless CSD stand-in, whose top isn't covered by a title bar). `scale`
-/// supersamples like `render_title_bar`; the fill is premultiplied.
+/// Only the bottom pair rounds — the title bar always covers the top corners.
+/// `scale` supersamples like `render_title_bar`; the fill is premultiplied.
 pub fn render_body_fill(
     width: i32,
     height: i32,
     scale: i32,
-    round_top: bool,
     config: &DecorationConfig,
 ) -> MemoryRenderBuffer {
     let s = scale.max(1);
@@ -347,7 +345,7 @@ pub fn render_body_fill(
     for y in 0..h {
         for x in 0..w {
             let idx = ((y * w + x) * 4) as usize;
-            let a = body_corner_alpha_at(x, y, w, h, cr, round_top) * ba;
+            let a = body_corner_alpha_at(x, y, w, h, cr) * ba;
             pixels[idx] = (bg[0] as f64 * a) as u8;
             pixels[idx + 1] = (bg[1] as f64 * a) as u8;
             pixels[idx + 2] = (bg[2] as f64 * a) as u8;
@@ -365,10 +363,10 @@ pub fn render_body_fill(
     )
 }
 
-/// Anti-aliased coverage (1 inside → 0 outside) for a body pixel, rounding the
-/// bottom corners always and the top corners only when `round_top`. Mirrors
+/// Anti-aliased coverage (1 inside → 0 outside) for a body pixel, rounding only
+/// the bottom corners (the title bar covers the top pair). Mirrors
 /// `corner_alpha_at`'s smoothstep falloff.
-fn body_corner_alpha_at(x: i32, y: i32, w: i32, h: i32, r: f64, round_top: bool) -> f64 {
+fn body_corner_alpha_at(x: i32, y: i32, w: i32, h: i32, r: f64) -> f64 {
     if r <= 0.0 {
         return 1.0;
     }
@@ -382,12 +380,7 @@ fn body_corner_alpha_at(x: i32, y: i32, w: i32, h: i32, r: f64, round_top: bool)
     } else {
         return 1.0;
     };
-    let cy = if py < r {
-        if !round_top {
-            return 1.0;
-        }
-        r
-    } else if py > h as f64 - r {
+    let cy = if py > h as f64 - r {
         h as f64 - r
     } else {
         return 1.0;

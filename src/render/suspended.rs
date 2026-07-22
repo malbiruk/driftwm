@@ -96,21 +96,20 @@ pub(crate) fn ensure_label(
     chrome.label_key = Some(key);
 }
 
-/// Rebuild the rounded body buffer for the current size / scale / top-rounding
-/// state. `round_top` is true only for a barless stand-in (no bar over the top
-/// corners). Writes into the element's `chrome` cell.
+/// Rebuild the rounded body buffer for the current size / scale. The bar always
+/// covers the top corners, so only the bottom pair rounds. Writes into the
+/// element's `chrome` cell.
 pub(crate) fn ensure_body(
     s: &SuspendedWindow,
     body: Size<i32, Logical>,
     scale: i32,
-    round_top: bool,
     config: &DecorationConfig,
 ) {
-    let key = (body.w, body.h, scale, round_top);
+    let key = (body.w, body.h, scale);
     if s.chrome.borrow().body_key == Some(key) {
         return;
     }
-    let buf = crate::decorations::render_body_fill(body.w, body.h, scale, round_top, config);
+    let buf = crate::decorations::render_body_fill(body.w, body.h, scale, config);
     let mut chrome = s.chrome.borrow_mut();
     chrome.body = Some(buf);
     chrome.body_key = Some(key);
@@ -140,13 +139,9 @@ pub(super) fn push_suspended_element(
 ) {
     let key = DecorationKey::Suspended(s.id);
     let size = s.size.get();
-    // A CSD-origin stand-in is body-only, so its footprint matches the live
-    // window it replaced; an SSD-origin one keeps its bar.
-    let bar_height = if s.has_bar {
-        config.title_bar_height
-    } else {
-        0
-    };
+    // Every stand-in draws the same bar; a CSD-origin one already shrank its
+    // body under it, so the outer footprint matches the window it replaced.
+    let bar_height = config.title_bar_height;
 
     // Pre-zoom, output-relative logical origin (geometry loc is 0 for a
     // suspended window, and they're never pinned/fullscreen).
@@ -195,9 +190,9 @@ pub(super) fn push_suspended_element(
         }
     }
 
-    // Rounded body fill in the SSD background color, below the label. The top
-    // corners round only when there's no bar covering them.
-    ensure_body(s, size, decoration_scale, !s.has_bar, config);
+    // Rounded body fill in the SSD background color, below the label. The bar
+    // covers the top corners, so only the bottom pair rounds.
+    ensure_body(s, size, decoration_scale, config);
     {
         let chrome = s.chrome.borrow();
         if let Some(buf) = chrome.body.as_ref() {
@@ -223,33 +218,31 @@ pub(super) fn push_suspended_element(
         }
     }
 
-    // Title bar via the reused windowless rasterizer — only for an SSD-origin
-    // stand-in. Rendered textless (the centered label already names the app);
-    // the close button and its hover highlight stay.
-    if s.has_bar {
-        let deco = decorations
-            .entry(key.clone())
-            .or_insert_with(|| WindowDecoration::new(size.w, focused, config));
-        deco.update(size.w, focused, false, decoration_scale, "", config);
-        let bar_physical: Point<f64, Physical> =
-            Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
-        if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
-            renderer,
-            bar_physical,
-            &deco.title_bar,
-            None,
-            None,
-            None,
-            Kind::Unspecified,
-        ) {
-            target.push(OutputRenderElements::Decoration(
-                PixelSnapRescaleElement::from_element(
-                    bar_elem,
-                    Point::<i32, Physical>::from((0, 0)),
-                    zoom,
-                ),
-            ));
-        }
+    // Title bar via the reused windowless rasterizer. Rendered textless (the
+    // centered label already names the app); the close button and its hover
+    // highlight stay.
+    let deco = decorations
+        .entry(key.clone())
+        .or_insert_with(|| WindowDecoration::new(size.w, focused, config));
+    deco.update(size.w, focused, false, decoration_scale, "", config);
+    let bar_physical: Point<f64, Physical> =
+        Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
+    if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
+        renderer,
+        bar_physical,
+        &deco.title_bar,
+        None,
+        None,
+        None,
+        Kind::Unspecified,
+    ) {
+        target.push(OutputRenderElements::Decoration(
+            PixelSnapRescaleElement::from_element(
+                bar_elem,
+                Point::<i32, Physical>::from((0, 0)),
+                zoom,
+            ),
+        ));
     }
 
     // Border + shadow around title bar + body, keyed by the suspended id.

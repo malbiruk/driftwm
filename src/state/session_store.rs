@@ -17,7 +17,7 @@ use std::time::Duration;
 use smithay::desktop::Window;
 use smithay::reexports::calloop::RegistrationToken;
 use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
-use smithay::utils::{Logical, Point, Size};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 use smithay::wayland::seat::WaylandFocus;
 
 use driftwm::canvas::{ScreenPos, internal_to_rule, rule_to_internal, screen_to_canvas};
@@ -111,7 +111,7 @@ impl DriftWm {
             identity,
             entry.title,
             entry.origin,
-            entry.has_bar,
+            entry.csd,
         ));
         self.map_window(StageWindow::Suspended(s), loc, false);
     }
@@ -262,10 +262,13 @@ impl DriftWm {
         let app_id = window.app_id_or_class().unwrap_or_default();
         let identity = self.resolve_identity(&app_id)?;
         let title = window.window_title().unwrap_or_default();
-        // Restore the stand-in with a bar iff the live window is SSD.
-        let has_bar = self.window_ssd_bar(window) > 0;
+        // A CSD window (no SSD bar) restores to a stand-in whose body is shrunk
+        // under the bar, so persist that shrunken body — the same rect a live
+        // suspend leaves, so restore + adopt reproduce the original footprint.
+        let csd = self.window_ssd_bar(window) == 0;
         let (loc, size) = self.live_window_rect(&client);
-        let (x, y) = internal_to_rule(loc, size);
+        let body = self.standin_body_rect(Rectangle::new(loc, size), csd);
+        let (x, y) = internal_to_rule(body.loc, body.size);
         let id = *next_id;
         *next_id += 1;
         Some(SessionEntry {
@@ -275,9 +278,9 @@ impl DriftWm {
             display_name: identity.display_name,
             title,
             position: [x, y],
-            size: [size.w, size.h],
+            size: [body.size.w, body.size.h],
             origin: Origin::Quit,
-            has_bar,
+            csd,
         })
     }
 
@@ -346,7 +349,7 @@ fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>) -> SessionEntr
         position: [x, y],
         size: [size.w, size.h],
         origin: s.origin,
-        has_bar: s.has_bar,
+        csd: s.csd,
     }
 }
 
@@ -416,7 +419,7 @@ mod tests {
             position,
             size,
             origin: Origin::Explicit,
-            has_bar: true,
+            csd: false,
         }
     }
 

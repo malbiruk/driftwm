@@ -1606,30 +1606,24 @@ impl DriftWm {
     ) -> Option<DecorationHit> {
         let loc = self.stage.position_of(&StageWindow::Suspended(s.clone()))?;
         let size = s.size.get();
-        // A barless (CSD-origin) stand-in has bar == 0: no close button, no bar
-        // band — the whole frame is body + resize border, matching the live
-        // CSD window's footprint.
-        let bar = if s.has_bar {
-            self.config.decorations.title_bar_height
-        } else {
-            0
-        };
+        // Every stand-in draws the same bar; a CSD-origin one shrank its body
+        // under it, so the bar band and close button sit at the same offsets as
+        // an SSD-origin stand-in's.
+        let bar = self.config.decorations.title_bar_height;
         let border_width = driftwm::config::DecorationConfig::RESIZE_BORDER_WIDTH;
 
-        if s.has_bar {
-            if crate::decorations::close_button_contains(pos, loc, size.w, bar) {
-                return Some(DecorationHit::CloseButton);
-            }
-            // The whole bar band, including the padding strip right of the close
-            // button, is a drag target — the stand-in draws chrome across its
-            // full width, so no sliver falls through to a window beneath.
-            if pos.y >= (loc.y - bar) as f64
-                && pos.y < loc.y as f64
-                && pos.x >= loc.x as f64
-                && pos.x < (loc.x + size.w) as f64
-            {
-                return Some(DecorationHit::TitleBar);
-            }
+        if crate::decorations::close_button_contains(pos, loc, size.w, bar) {
+            return Some(DecorationHit::CloseButton);
+        }
+        // The whole bar band, including the padding strip right of the close
+        // button, is a drag target — the stand-in draws chrome across its full
+        // width, so no sliver falls through to a window beneath.
+        if pos.y >= (loc.y - bar) as f64
+            && pos.y < loc.y as f64
+            && pos.x >= loc.x as f64
+            && pos.x < (loc.x + size.w) as f64
+        {
+            return Some(DecorationHit::TitleBar);
         }
         // Body: the content rect below the title bar. A centered label sub-rect
         // relaunches; the rest focuses + raises.

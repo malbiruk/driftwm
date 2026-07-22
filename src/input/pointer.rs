@@ -660,13 +660,8 @@ impl DriftWm {
                     );
                 }
                 DecorationHit::Body => {
+                    // The body is focus-only for every stand-in — the bar drags.
                     self.focus_and_raise_suspended(id);
-                    // A barless (CSD-origin) stand-in has no bar to grab, so the
-                    // whole body is its move surface. A barred stand-in keeps
-                    // body = focus-only — its bar drags.
-                    if !s.has_bar {
-                        self.start_suspended_move(pointer, &s, pos, button, serial, false);
-                    }
                 }
             }
             return true;

@@ -541,15 +541,15 @@ fn dismiss_runs_focus_follow() {
     );
 }
 
-/// A barless (CSD-origin) stand-in has no bar: no CloseButton or TitleBar hit
-/// anywhere, the whole frame is Body/Label (+ resize border), and its visual
-/// frame carries no bar strip above the body.
+/// A CSD-origin stand-in (csd=true) wears the same bar as any other: the same
+/// CloseButton / TitleBar hits and bar strip above the body. The origin only
+/// changes adopt geometry, not chrome.
 #[test]
-fn barless_stand_in_has_no_bar_hits() {
+fn csd_stand_in_has_uniform_bar_hits() {
     let mut f = Fixture::with_config(config_ssd());
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
-    let sid = f.state().insert_suspended_barless_for_test(
+    let sid = f.state().insert_suspended_csd_for_test(
         1,
         Point::from((500, 500)),
         Size::from((400, 300)),
@@ -557,99 +557,66 @@ fn barless_stand_in_has_no_bar_hits() {
         "S",
     );
 
-    // No bar in the geometry model.
+    // Barred like any stand-in: a full bar strip sits above the body.
     let elem = StageWindow::Suspended(f.state().find_suspended(sid).unwrap());
-    assert_eq!(f.state().window_ssd_bar(&elem), 0);
+    let bar = f.state().config.decorations.title_bar_height;
+    assert_eq!(f.state().window_ssd_bar(&elem), bar);
     let frame = f.state().visual_frame_rect(&elem).unwrap();
     let bw = f.state().default_border_width() as f64;
     assert_eq!(
         frame.y_low,
-        500.0 - bw,
-        "frame top is body top minus border"
+        500.0 - bar as f64 - bw,
+        "frame top includes the bar strip"
     );
 
-    // Where a barred stand-in's close button / bar band would sit (just above
-    // the body top) is not a title-bar or close hit.
-    for x in [500.0 + 20.0, 500.0 + 200.0, 500.0 + 400.0 - 20.0] {
-        let hit = f.state().decoration_under(pt(x, 500.0 - 12.0));
-        assert!(
-            !matches!(
-                hit,
-                Some((DecoTarget::Suspended(_), DecorationHit::TitleBar))
-                    | Some((DecoTarget::Suspended(_), DecorationHit::CloseButton))
-            ),
-            "no bar/close hit above a barless body at x={x}"
-        );
-    }
-
-    // The body itself is a plain Body hit (no bar anywhere on the frame).
+    // The close button sits on the right of the bar; the rest of the band drags.
+    assert!(matches!(
+        f.state()
+            .decoration_under(pt(500.0 + 400.0 - 20.0, 500.0 - 12.0)),
+        Some((DecoTarget::Suspended(_), DecorationHit::CloseButton))
+    ));
+    assert!(matches!(
+        f.state().decoration_under(pt(500.0 + 50.0, 500.0 - 12.0)),
+        Some((DecoTarget::Suspended(_), DecorationHit::TitleBar))
+    ));
+    // The body itself is a plain Body hit.
     assert!(matches!(
         f.state().decoration_under(pt(500.0 + 200.0, 500.0 + 150.0)),
-        Some((DecoTarget::Suspended(_), DecorationHit::Body))
-    ));
-    // The top-left content corner is Body too (not a phantom title bar).
-    assert!(matches!(
-        f.state().decoration_under(pt(500.0 + 2.0, 500.0 + 2.0)),
         Some((DecoTarget::Suspended(_), DecorationHit::Body))
     ));
 
     f.state().dismiss_suspended(sid);
 }
 
-/// A barless (CSD-origin) stand-in's whole body is drag-to-move: a plain-LMB
-/// Body press starts a move grab. A barred (SSD-origin) stand-in keeps Body =
-/// focus-only — its bar is the move surface. The centered Label still wins over
-/// the barless body-drag and relaunches.
+/// A plain-LMB body press on a stand-in is focus-only for both origins — the
+/// bar drags, not the body. The centered Label still relaunches.
 #[test]
-fn barless_stand_in_body_drags_to_move() {
+fn stand_in_body_is_focus_only() {
     let body = pt(500.0 + 200.0, 500.0 + 150.0);
 
-    // Barless: a plain body press starts a move grab.
-    {
+    // A body press only focuses, for both an SSD-origin and a CSD-origin
+    // stand-in — neither body drags.
+    for csd in [false, true] {
         let mut f = Fixture::with_config(config_ssd());
         f.add_output(1, (1920, 1080));
         origin_view(&mut f);
-        let sid = f.state().insert_suspended_barless_for_test(
-            1,
-            Point::from((500, 500)),
-            Size::from((400, 300)),
-            "s",
-            "S",
-        );
-        let pointer = f.state().seat.get_pointer().unwrap();
-        let serial = SERIAL_COUNTER.next_serial();
-        let consumed = f.state().try_suspended_button(
-            &pointer,
-            body,
-            BTN_LEFT,
-            serial,
-            ModifiersState::default(),
-        );
-        assert!(consumed);
-        assert!(
-            f.state().seat.get_pointer().unwrap().is_grabbed(),
-            "a barless body press starts a move grab"
-        );
-        assert!(
-            matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
-            "the press also focused the stand-in"
-        );
-        // The grab holds only the id; dismissing degrades it to a no-op.
-        f.state().dismiss_suspended(sid);
-    }
-
-    // Barred: a plain body press only focuses — the bar drags, not the body.
-    {
-        let mut f = Fixture::with_config(config_ssd());
-        f.add_output(1, (1920, 1080));
-        origin_view(&mut f);
-        let sid = f.state().insert_suspended_for_test(
-            1,
-            Point::from((500, 500)),
-            Size::from((400, 300)),
-            "s",
-            "S",
-        );
+        let sid = if csd {
+            f.state().insert_suspended_csd_for_test(
+                1,
+                Point::from((500, 500)),
+                Size::from((400, 300)),
+                "s",
+                "S",
+            )
+        } else {
+            f.state().insert_suspended_for_test(
+                1,
+                Point::from((500, 500)),
+                Size::from((400, 300)),
+                "s",
+                "S",
+            )
+        };
         let pointer = f.state().seat.get_pointer().unwrap();
         let serial = SERIAL_COUNTER.next_serial();
         let consumed = f.state().try_suspended_button(
@@ -662,17 +629,16 @@ fn barless_stand_in_body_drags_to_move() {
         assert!(consumed);
         assert!(
             !f.state().seat.get_pointer().unwrap().is_grabbed(),
-            "a barred body press does not start a move"
+            "a body press does not start a move (csd={csd})"
         );
         assert!(
             matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
-            "the barred body press focused the stand-in"
+            "the body press focused the stand-in (csd={csd})"
         );
         f.state().dismiss_suspended(sid);
     }
 
-    // The centered Label still relaunches on a barless stand-in — it is not
-    // swallowed by the body-drag.
+    // The centered Label still relaunches — it is not swallowed by the body.
     {
         let tmp = super::real::TempDir::new();
         std::fs::write(
@@ -686,7 +652,7 @@ fn barless_stand_in_body_drags_to_move() {
         f.state().desktop_entry_cache = Some(driftwm::desktop_entry::DesktopEntryCache::new(vec![
             tmp.path().to_path_buf(),
         ]));
-        let sid = f.state().insert_suspended_barless_for_test(
+        let sid = f.state().insert_suspended_for_test(
             1,
             Point::from((500, 500)),
             Size::from((400, 300)),
@@ -907,46 +873,45 @@ fn suspended_is_a_snap_target() {
     f.state().dismiss_suspended(sid);
 }
 
-/// A barless CSD-origin stand-in's snap rect has no title-bar strip — its top
-/// edge is the body top (minus border), exactly like the live CSD window it
-/// replaced. A barred SSD-origin stand-in keeps the bar strip.
+/// Every stand-in's snap rect includes the title-bar strip above the body,
+/// regardless of origin — its top edge is `loc - bar - border`.
 #[test]
-fn barless_stand_in_snap_rect_has_no_bar_strip() {
+fn stand_in_snap_rect_includes_bar_strip() {
     let mut f = Fixture::with_config(config_ssd());
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
 
-    let barred = f.state().insert_suspended_for_test(
+    let ssd = f.state().insert_suspended_for_test(
         1,
         Point::from((600, 400)),
         Size::from((400, 300)),
         "b",
         "B",
     );
-    let barless = f.state().insert_suspended_barless_for_test(
+    let csd = f.state().insert_suspended_csd_for_test(
         2,
         Point::from((600, 900)),
         Size::from((400, 300)),
         "c",
         "C",
     );
-    let barred_elem = StageWindow::Suspended(f.state().find_suspended(barred).unwrap());
-    let barless_elem = StageWindow::Suspended(f.state().find_suspended(barless).unwrap());
+    let ssd_elem = StageWindow::Suspended(f.state().find_suspended(ssd).unwrap());
+    let csd_elem = StageWindow::Suspended(f.state().find_suspended(csd).unwrap());
 
     let bw = f.state().default_border_width() as f64;
     let bar = f.state().config.decorations.title_bar_height as f64;
-    let br = f.state().snap_rect_for(&barred_elem).unwrap();
-    let bl = f.state().snap_rect_for(&barless_elem).unwrap();
-
-    assert_eq!(br.y_low, 400.0 - bar - bw, "barred stand-in keeps its bar");
-    assert_eq!(bl.y_low, 900.0 - bw, "barless stand-in has no bar strip");
     assert!(
         bar > 0.0,
-        "config must actually give SSD a bar for this to bite"
+        "config must actually give a bar for this to bite"
     );
+    let sr = f.state().snap_rect_for(&ssd_elem).unwrap();
+    let cr = f.state().snap_rect_for(&csd_elem).unwrap();
 
-    f.state().dismiss_suspended(barred);
-    f.state().dismiss_suspended(barless);
+    assert_eq!(sr.y_low, 400.0 - bar - bw, "SSD-origin keeps its bar");
+    assert_eq!(cr.y_low, 900.0 - bar - bw, "CSD-origin is barred too");
+
+    f.state().dismiss_suspended(ssd);
+    f.state().dismiss_suspended(csd);
 }
 
 /// A client dragged against a stand-in's edge snaps to it, docking side-by-side

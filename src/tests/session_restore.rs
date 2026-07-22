@@ -77,7 +77,7 @@ fn entry(id: u64, app: &str, origin: Origin) -> SessionEntry {
         position: [100, 200],
         size: [400, 300],
         origin,
-        has_bar: true,
+        csd: false,
     }
 }
 
@@ -112,7 +112,9 @@ fn quit_serialize_round_trip() {
     assert_eq!(saved.entries[1].app_id, "beta");
     assert!(saved.entries.iter().all(|e| e.origin == Origin::Quit));
 
-    // A fresh compositor materializes them in order at the same rects.
+    // A fresh compositor materializes them in order. These are CSD windows, so
+    // their stand-in bodies are shrunk under the bar (footprint preserved): the
+    // Quit record persists the shrunken body, restore lands at it verbatim.
     let mut f = Fixture::with_config(config_restore(true));
     f.add_output(1, (1920, 1080));
     f.state().session_store.path = Some(path.clone());
@@ -121,12 +123,12 @@ fn quit_serialize_round_trip() {
     let restored = suspended_in_order(&mut f);
     assert_eq!(restored.len(), 2);
     assert_eq!(restored[0].0.identity.app_id, "alpha");
-    assert_eq!(restored[0].1, Point::from((500, 500)));
-    assert_eq!(restored[0].0.size.get(), Size::from((400, 300)));
+    assert_eq!(restored[0].1, Point::from((500, 525)));
+    assert_eq!(restored[0].0.size.get(), Size::from((400, 275)));
     assert_eq!(restored[0].0.origin, Origin::Quit);
     assert_eq!(restored[1].0.identity.app_id, "beta");
-    assert_eq!(restored[1].1, Point::from((-300, 100)));
-    assert_eq!(restored[1].0.size.get(), Size::from((200, 200)));
+    assert_eq!(restored[1].1, Point::from((-300, 125)));
+    assert_eq!(restored[1].0.size.get(), Size::from((200, 175)));
 
     for (s, _) in restored {
         f.state().dismiss_suspended(s.id);
@@ -651,11 +653,12 @@ fn create_and_dismiss_write_immediately() {
     );
 }
 
-/// The barless flag round-trips through session.json: a CSD window suspends to
-/// a body-only stand-in, the durable write records it, and a fresh compositor
-/// materializes it body-only regardless of its own decoration default.
+/// The `csd` flag round-trips through session.json: a CSD window suspends to a
+/// stand-in that records its client-decorated origin, the durable write keeps
+/// it, and a fresh compositor materializes it as CSD-origin regardless of its
+/// own decoration default.
 #[test]
-fn barless_flag_round_trips_through_session() {
+fn csd_flag_round_trips_through_session() {
     let cache = TempDir::new();
     let tmp = TempDir::new();
     let path = tmp.path().join("session.json");
@@ -689,11 +692,11 @@ fn barless_flag_round_trips_through_session() {
     let saved = session::read(&path);
     assert_eq!(saved.entries.len(), 1);
     assert!(
-        !saved.entries[0].has_bar,
-        "the file records the CSD stand-in body-only"
+        saved.entries[0].csd,
+        "the file records the CSD-origin stand-in"
     );
 
-    // A fresh compositor (whose own default is SSD) materializes it body-only:
+    // A fresh compositor (whose own default is SSD) materializes it CSD-origin:
     // the flag rides on the entry, not the restoring config.
     let mut f = Fixture::with_config(config_restore(true));
     f.add_output(1, (1920, 1080));
@@ -701,10 +704,7 @@ fn barless_flag_round_trips_through_session() {
     f.state().load_session();
     let restored = suspended_in_order(&mut f);
     assert_eq!(restored.len(), 1);
-    assert!(
-        !restored[0].0.has_bar,
-        "the restored stand-in stays body-only"
-    );
+    assert!(restored[0].0.csd, "the restored stand-in stays CSD-origin");
 
     f.state().dismiss_suspended(restored[0].0.id);
 }

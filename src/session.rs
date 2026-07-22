@@ -40,15 +40,13 @@ pub struct SessionEntry {
     pub position: [i32; 2],
     pub size: [i32; 2],
     pub origin: Origin,
-    /// Whether the stand-in draws a compositor title bar (SSD-origin) or is
-    /// body-only (CSD-origin). Additive: a file without this field defaults to
-    /// `true`, so previously-saved sessions restore barred.
-    #[serde(default = "default_true")]
-    pub has_bar: bool,
-}
-
-fn default_true() -> bool {
-    true
+    /// Whether the suspended window's origin was client-decorated. Every
+    /// stand-in is barred; a CSD origin shrank its body under the bar (this
+    /// entry's rect is that shrunken body) so adopt can reassemble the full
+    /// geometry. Additive: a file without this field defaults to `false`
+    /// (SSD-origin).
+    #[serde(default)]
+    pub csd: bool,
 }
 
 /// A per-output camera/zoom, mirroring the runtime state file's shape.
@@ -210,7 +208,7 @@ mod tests {
             position: [id as i32 * 10, -(id as i32) * 5],
             size: [400, 300],
             origin,
-            has_bar: true,
+            csd: false,
         }
     }
 
@@ -244,26 +242,23 @@ mod tests {
     }
 
     #[test]
-    fn has_bar_round_trips_and_defaults_true_for_old_files() {
+    fn csd_round_trips_and_defaults_false_for_old_files() {
         let tmp = TempDir::new();
         let path = tmp.path.join("session.json");
-        let mut barless = entry(1, Origin::Explicit);
-        barless.has_bar = false;
+        let mut csd = entry(1, Origin::Explicit);
+        csd.csd = true;
         let envelope = SessionEnvelope {
             version: VERSION,
             saved_at: 0,
-            entries: vec![barless, entry(2, Origin::Explicit)],
+            entries: vec![csd, entry(2, Origin::Explicit)],
             outputs: BTreeMap::new(),
         };
         write(&path, &envelope, false).unwrap();
         let read_back = read(&path);
-        assert!(
-            !read_back.entries[0].has_bar,
-            "barless flag survives the write"
-        );
-        assert!(read_back.entries[1].has_bar);
+        assert!(read_back.entries[0].csd, "csd flag survives the write");
+        assert!(!read_back.entries[1].csd);
 
-        // A file predating the field omits it entirely and defaults to barred.
+        // A file predating the field omits it entirely and defaults to SSD.
         std::fs::write(
             &path,
             r#"{"version":1,"saved_at":0,"outputs":{},"entries":[
@@ -274,8 +269,8 @@ mod tests {
         let legacy = read(&path);
         assert_eq!(legacy.entries.len(), 1);
         assert!(
-            legacy.entries[0].has_bar,
-            "a pre-field file defaults to a barred stand-in"
+            !legacy.entries[0].csd,
+            "a pre-field file defaults to an SSD-origin stand-in"
         );
     }
 

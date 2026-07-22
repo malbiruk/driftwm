@@ -65,12 +65,6 @@ pub trait WindowExt {
     fn is_suspended(&self) -> bool {
         false
     }
-    /// Whether a suspended stand-in draws a compositor title bar. Meaningful
-    /// only when [`WindowExt::is_suspended`] is true; the default suits every
-    /// live window (which negotiates SSD via xdg-decoration instead).
-    fn suspended_has_bar(&self) -> bool {
-        true
-    }
 }
 
 impl WindowExt for Window {

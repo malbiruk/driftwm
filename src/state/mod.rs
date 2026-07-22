@@ -2167,15 +2167,11 @@ impl DriftWm {
     }
 
     pub fn window_ssd_bar<W: WaylandFocus + WindowExt>(&self, window: &W) -> i32 {
-        // A suspended window has no surface to resolve a `decorations` entry
-        // against, so key off the element: an SSD-origin stand-in keeps its
-        // bar, a CSD-origin one is body-only.
+        // Every stand-in draws the same textless bar (a CSD-origin one shrinks
+        // its body under it), so a suspended element always carries the bar
+        // height regardless of origin.
         if window.is_suspended() {
-            return if window.suspended_has_bar() {
-                self.config.decorations.title_bar_height
-            } else {
-                0
-            };
+            return self.config.decorations.title_bar_height;
         }
         window
             .wl_surface()
