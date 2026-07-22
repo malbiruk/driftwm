@@ -252,10 +252,8 @@ focus_on_open = false
     assert_eq!(keyboard_focus(&mut f), Some(server_surface(&nofocus)));
 }
 
-/// The very first window mapped is suppressed: there is no prior focus holder
-/// for the activation correction to fall back to, so it must clear its own
-/// Activated state rather than panic or leave the map-sequence configure
-/// advertising a stale Activated.
+/// The very first window mapped is suppressed: with no prior focus holder,
+/// the map-sequence configure must still go out without Activated.
 #[test]
 fn focus_on_open_false_as_first_window_takes_no_focus_or_activation() {
     let mut f = Fixture::with_config(config(
