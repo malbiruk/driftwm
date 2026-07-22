@@ -6,11 +6,15 @@ SYSCONFDIR ?= /etc
 
 .PHONY: build install uninstall
 
+TARGET_DIR = $(or $(CARGO_TARGET_DIR),target)
+
 build:
 	cargo build --release
+	# stage into dist/: sudo make install runs with env_reset and can't see CARGO_TARGET_DIR
+	install -Dm755 $(TARGET_DIR)/release/driftwm dist/driftwm
 
 install:
-	install -Dm755 target/release/driftwm $(DESTDIR)$(BINDIR)/driftwm
+	install -Dm755 dist/driftwm $(DESTDIR)$(BINDIR)/driftwm
 	install -Dm755 resources/driftwm-session $(DESTDIR)$(BINDIR)/driftwm-session
 	install -Dm644 resources/driftwm.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/driftwm.desktop
 	install -Dm644 resources/driftwm-portals.conf $(DESTDIR)$(DATADIR)/xdg-desktop-portal/driftwm-portals.conf
