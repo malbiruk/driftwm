@@ -219,17 +219,15 @@ pub fn is_origin_visible(
 const ACTIVE_BOOKMARK_HYSTERESIS: f64 = 0.9;
 
 /// The active bookmark for one output's viewport: the visible bookmark nearest
-/// the usable-area center, with hysteresis favoring the incumbent.
+/// the usable-area center, with hysteresis favoring the incumbent (see
+/// `ACTIVE_BOOKMARK_HYSTERESIS`). Ties break by name (BTreeMap order); `None`
+/// when no bookmark is visible.
 ///
 /// `bookmarks` are stored Y-up (user/rule/IPC convention) while the camera is
 /// internal Y-down, so each bookmark's y is negated before comparison — the
 /// same flip `go_to_canvas_point` applies. `usable_center` is the screen-space
 /// center of the usable area (panels excluded, as `SetBookmark` uses); the
 /// canvas-space target is `camera + usable_center / zoom`.
-///
-/// Candidates are the bookmarks visible in the viewport. The nearest wins,
-/// tie-broken by name (BTreeMap order). The incumbent keeps the title while it
-/// stays visible unless a rival is >10% closer. No visible bookmarks → `None`.
 pub fn active_bookmark(
     bookmarks: &BTreeMap<String, [f64; 2]>,
     camera: Point<f64, Logical>,
@@ -862,8 +860,6 @@ mod tests {
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), None::<&&str>);
         assert_eq!(result, None);
     }
-
-    // -- active_bookmark tests --
 
     fn bookmarks(entries: &[(&str, f64, f64)]) -> BTreeMap<String, [f64; 2]> {
         entries

@@ -125,15 +125,14 @@ fn create_workspace_handle<D>(
 }
 
 /// Diff the bookmark registry against the advertised set and reconcile every
-/// bound client: create handles for new bookmarks, `removed` gone ones, flip
-/// the `active` state bit when the focused output's incumbent changes, and
-/// reconcile the group's `output_enter`/`output_leave` against the wl_outputs
-/// each client has bound. `active` is the focused output's incumbent — the only
-/// output whose incumbent the protocol projects. `outputs` are the live outputs
-/// (those with a wl_output global). Emits `done` per instance only when it
-/// changed. Runs every frame: the manager global predates every wl_output
-/// global and clients bind outputs on their own schedule, so output_enter can
-/// only be delivered by diffing per frame, as the protocol requires.
+/// bound client, emitting `done` per instance only when something changed.
+/// `active` is the focused output's incumbent — the only output whose
+/// incumbent the protocol projects. `outputs` are the live outputs (those
+/// with a wl_output global).
+///
+/// Runs every frame: the manager global predates every wl_output global and
+/// clients bind outputs on their own schedule, so output_enter can only be
+/// delivered by diffing per frame, as the protocol requires.
 pub fn refresh<D>(
     ws_state: &mut ExtWorkspaceManagerState,
     bookmarks: &BTreeMap<String, [f64; 2]>,

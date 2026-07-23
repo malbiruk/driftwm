@@ -68,13 +68,11 @@ fn bind_hydrates_group_and_a_workspace_per_bookmark() {
     let id = connect(&mut f);
     let ws = &f.client(id).state.ext_workspace;
 
-    // One group for the whole canvas, advertising create_workspace.
     assert!(ws.group.is_some(), "a workspace group is advertised");
     // A workspace per bookmark, named after it, id == name (BTreeMap order).
     assert_eq!(ws.names(), vec!["far".to_string(), "home".to_string()]);
     assert_eq!(ws.workspace("home").unwrap().id.as_deref(), Some("home"));
     assert_eq!(ws.workspace("far").unwrap().id.as_deref(), Some("far"));
-    // Each workspace joined the group.
     assert!(ws.entered("home") && ws.entered("far"));
     // The hydration burst ends in exactly one atomic done.
     assert_eq!(ws.done_count, 1);
@@ -92,7 +90,6 @@ fn registry_insert_and_remove_reach_the_client() {
         vec!["a".to_string()]
     );
 
-    // A bookmark inserted into the registry surfaces as a new workspace.
     f.state().bookmarks.insert("b".into(), [100.0, 0.0]);
     refresh(&mut f);
     f.double_roundtrip(id);
@@ -101,7 +98,6 @@ fn registry_insert_and_remove_reach_the_client() {
         vec!["a".to_string(), "b".to_string()]
     );
 
-    // Removing it from the registry removes the workspace.
     f.state().bookmarks.remove("a");
     refresh(&mut f);
     f.double_roundtrip(id);
@@ -178,7 +174,6 @@ fn create_workspace_then_commit_bookmarks_the_viewport_center() {
     // camera centers the canvas origin, so the new bookmark lands there.
     assert_eq!(f.state().bookmarks["new"], [0.0, 0.0]);
 
-    // …and the created bookmark round-trips back out as a workspace.
     refresh(&mut f);
     f.double_roundtrip(id);
     assert_eq!(
@@ -239,7 +234,6 @@ fn active_state_marks_the_bookmark_under_the_viewport() {
     // The default camera centers the canvas origin, where "spot" sits.
     assert_eq!(f.client(id).state.ext_workspace.active(), Some("spot"));
 
-    // Pan far away so no bookmark is in view: the active bit clears.
     aim_output(&out, (100_000.0, 100_000.0));
     refresh(&mut f);
     f.double_roundtrip(id);
@@ -340,7 +334,6 @@ fn ipc_reports_active_bookmark_top_level_and_per_output() {
         "the sole output reports its own incumbent too"
     );
 
-    // Away from every bookmark, both the top-level and per-output field clear.
     aim_output(&out, (100_000.0, 100_000.0));
     refresh(&mut f);
     let info = crate::ipc::state_info(f.state());
@@ -464,7 +457,6 @@ fn destroying_the_group_keeps_workspaces_and_requests_flowing() {
         "changes still arrive under a done barrier"
     );
 
-    // And a buffered activate still applies on commit through the live manager.
     handle(&mut f, id, "dest").activate();
     manager(&mut f, id).commit();
     f.double_roundtrip(id);

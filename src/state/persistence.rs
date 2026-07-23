@@ -416,9 +416,7 @@ impl DriftWm {
         // camera moved.
         let active_name = self.active_output().map(|o| o.name());
         let active_dirty = active_name != self.state_file_active_output;
-        // An active-bookmark flip is broadcast-only (like a title change): it can
-        // happen with the camera still (set-bookmark under the current viewport,
-        // delete of the active bookmark), so it never marks the file dirty.
+        // Broadcast-only, like a title change (see `active_bookmark_dirty`).
         let incumbent_dirty = std::mem::take(&mut self.active_bookmark_dirty);
 
         if !layout_dirty

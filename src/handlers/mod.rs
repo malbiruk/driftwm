@@ -812,7 +812,6 @@ impl ExtWorkspaceHandler for DriftWm {
     }
 
     fn workspace_activate(&mut self, name: String) {
-        // Jump the focused viewport to the bookmark — go-to-bookmark semantics.
         self.execute_action(&driftwm::config::Action::GoToBookmark(name));
     }
 
