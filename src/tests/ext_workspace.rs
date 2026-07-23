@@ -9,7 +9,9 @@
 //! `src/canvas.rs`; here it's exercised end to end through `OutputState`.
 
 use smithay::utils::Point;
-use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::ExtWorkspaceHandleV1;
+use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::{
+    ExtWorkspaceHandleV1, State,
+};
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
 use super::client::ClientId;
@@ -373,5 +375,158 @@ fn group_output_enter_and_leave_track_the_live_outputs() {
         f.client(id).state.ext_workspace.output_leaves.len(),
         1,
         "the group retracts the disconnected output"
+    );
+}
+
+#[test]
+fn removal_leaves_the_group_before_removing_the_workspace() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[("gone", 0.0, 0.0)]);
+    let id = connect(&mut f);
+    let h = handle(&mut f, id, "gone");
+    assert!(
+        f.client(id).state.ext_workspace.entered("gone"),
+        "the workspace joined the group"
+    );
+
+    f.state().bookmarks.remove("gone");
+    refresh(&mut f);
+    f.double_roundtrip(id);
+
+    let ws = &f.client(id).state.ext_workspace;
+    // A workspace may only be removed once it belongs to no group, so the group
+    // must emit workspace_leave before the workspace is removed.
+    assert!(
+        ws.workspace_leaves.contains(&h),
+        "the workspace left the group"
+    );
+    let record = ws.workspaces.iter().find(|w| w.handle == h).unwrap();
+    assert!(record.removed, "and was then removed");
+}
+
+#[test]
+fn every_workspace_gets_an_initial_state_event() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // "here" sits at the origin (under the default camera → active); "far" is
+    // far off-screen (inactive).
+    seed(&mut f, &[("here", 0.0, 0.0), ("far", 100_000.0, 0.0)]);
+    let id = connect(&mut f);
+
+    let empty = State::empty().bits();
+    let active = State::Active.bits();
+    {
+        // Bind hydration sends state for every workspace — empty for inactive
+        // ones (omission would wrongly read as active-cleared, not "unset").
+        let ws = &f.client(id).state.ext_workspace;
+        assert_eq!(ws.workspace("far").unwrap().state, Some(empty));
+        assert_eq!(ws.workspace("here").unwrap().state, Some(active));
+    }
+
+    // A bookmark created later gets its initial state through the refresh path.
+    f.state().bookmarks.insert("late".into(), [100_000.0, 0.0]);
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id)
+            .state
+            .ext_workspace
+            .workspace("late")
+            .unwrap()
+            .state,
+        Some(empty),
+    );
+}
+
+#[test]
+fn destroying_the_group_keeps_workspaces_and_requests_flowing() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[("dest", 500.0, -300.0)]);
+    let id = connect(&mut f);
+
+    // The client drops the group handle but keeps the manager and workspaces.
+    let group = f.client(id).state.ext_workspace.group.clone().unwrap();
+    group.destroy();
+    f.double_roundtrip(id);
+
+    // A registry insert still surfaces as a workspace, under a done barrier —
+    // only the group-scoped events are suppressed.
+    let done_before = f.client(id).state.ext_workspace.done_count;
+    f.state().bookmarks.insert("added".into(), [0.0, 0.0]);
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    let ws = &f.client(id).state.ext_workspace;
+    assert!(ws.names().contains(&"added".to_string()));
+    assert!(
+        ws.done_count > done_before,
+        "changes still arrive under a done barrier"
+    );
+
+    // And a buffered activate still applies on commit through the live manager.
+    handle(&mut f, id, "dest").activate();
+    manager(&mut f, id).commit();
+    f.double_roundtrip(id);
+    assert!(
+        f.state().camera_target().is_some(),
+        "activate + commit still jumps the camera after the group is gone"
+    );
+}
+
+#[test]
+fn manager_stop_sends_finished() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[]);
+    let id = connect(&mut f);
+
+    manager(&mut f, id).stop();
+    f.double_roundtrip(id);
+    assert!(
+        f.client(id).state.ext_workspace.finished,
+        "stop elicits a finished event"
+    );
+}
+
+#[test]
+fn two_clients_both_receive_registry_changes() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[("a", 0.0, 0.0)]);
+    let id1 = connect(&mut f);
+    let id2 = connect(&mut f);
+    assert_eq!(
+        f.client(id1).state.ext_workspace.names(),
+        vec!["a".to_string()]
+    );
+    assert_eq!(
+        f.client(id2).state.ext_workspace.names(),
+        vec!["a".to_string()]
+    );
+
+    f.state().bookmarks.insert("b".into(), [100.0, 0.0]);
+    refresh(&mut f);
+    f.double_roundtrip(id1);
+    f.double_roundtrip(id2);
+    let both = vec!["a".to_string(), "b".to_string()];
+    assert_eq!(f.client(id1).state.ext_workspace.names(), both);
+    assert_eq!(f.client(id2).state.ext_workspace.names(), both);
+}
+
+#[test]
+fn incremental_change_arrives_under_a_done_barrier() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[("a", 0.0, 0.0)]);
+    let id = connect(&mut f);
+    let done_before = f.client(id).state.ext_workspace.done_count;
+
+    f.state().bookmarks.insert("b".into(), [100.0, 0.0]);
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    assert!(
+        f.client(id).state.ext_workspace.done_count > done_before,
+        "the insert arrives atomically under a new done"
     );
 }
