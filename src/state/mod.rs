@@ -631,6 +631,11 @@ pub struct DriftWm {
     pub on_demand_layer: Option<WlSurface>,
     /// The active popup keyboard/pointer grab, if any. See [`PopupGrabState`].
     pub popup_grab: Option<PopupGrabState>,
+    /// The window under an active interactive `MoveSurfaceGrab`, tracked so the
+    /// relaunch adopt path can tell whether *this* window is being dragged right
+    /// now — a plain "any grab active" check would wrongly block adoption while
+    /// some other window is being moved. Set on grab motion, cleared on unset.
+    pub interactive_move: Option<Window>,
 
     pub held_action: Option<(u32, driftwm::config::Action, Instant)>,
 

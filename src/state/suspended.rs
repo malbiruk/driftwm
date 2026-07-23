@@ -23,6 +23,7 @@ use driftwm::desktop_entry::{AppIdentity, DesktopEntryCache};
 use driftwm::window_ext::WindowExt;
 
 use crate::decorations::DecorationKey;
+use crate::grabs::ResizeState;
 use crate::state::{DriftWm, StageWindow, SuspendedId, SuspendedWindow};
 use crate::surface_tree::focus_belongs_to_toplevel;
 
@@ -306,6 +307,30 @@ impl DriftWm {
         candidates.first().map(|(sid, _)| *sid)
     }
 
+    /// A window mid-interactive-move or -resize is being driven by a live grab;
+    /// adopting it into a stand-in slot would fight that grab (the next motion
+    /// snaps it back, button-up reseeds the snap rect). Unlike the durable
+    /// fullscreen/pinned/widget/dialog carve-outs this is transient, so the
+    /// caller leaves the pending relaunch to its TTL rather than dismissing.
+    pub(crate) fn window_under_interactive_grab(
+        &self,
+        window: &Window,
+        surface: &WlSurface,
+    ) -> bool {
+        if self.interactive_move.as_ref() == Some(window) {
+            return true;
+        }
+        with_states(surface, |states| {
+            !matches!(
+                *states
+                    .data_map
+                    .get_or_insert(|| std::cell::RefCell::new(ResizeState::Idle))
+                    .borrow(),
+                ResizeState::Idle
+            )
+        })
+    }
+
     /// Adopt `window` (a relaunched client's freshly-mapped toplevel) into
     /// suspended window `sid`: a compound stage op — remove the window's own
     /// fresh entry (its `ElementId` discarded), then `Stage::replace` the
@@ -367,6 +392,14 @@ impl DriftWm {
             .window_focus_surface()
             .is_some_and(|t| focus_belongs_to_toplevel(&t.0, root));
 
+        // `remove` below drops the adopted window from the focus history; the
+        // refocus path re-seats it at the front, but a non-refocus adopt (an
+        // already-open window forwarding the token while a newer window holds
+        // focus) must keep its prior MRU slot or the window silently vanishes
+        // from the Alt-Tab cycle until it is next focused. Capture the slot now.
+        let client = StageWindow::Client(window.clone());
+        let history_slot = self.stage.focus_history().iter().position(|w| *w == client);
+
         // Compound replace: the fresh entry must leave before the suspended
         // entry is replaced, or the same window would sit in two z-slots and
         // trip the duplicate-window invariant.
@@ -417,6 +450,8 @@ impl DriftWm {
             // Activated hint here — it rides the decoration-tail configure the
             // caller sends, and any displaced peer is deactivated on the wire.
             self.activate_riding_batch(window);
+        } else if let Some(idx) = history_slot {
+            self.stage.restore_focus_history_at(&client, idx);
         }
         self.refresh_pointer_focus();
         // An adopt is an immediate, user-visible change — write through now.

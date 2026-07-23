@@ -807,6 +807,172 @@ fn late_token_does_not_adopt_a_widget_window() {
     client_close(&mut f, cid, &widget);
 }
 
+/// A dialog (a toplevel with a parent) that presents a live relaunch token must
+/// NOT be adopted. Every suspend path excludes dialogs, so no stand-in ever
+/// stands for one; adopting the dialog would tear a preferences window off its
+/// parent. The token is honored by dismissing the stale stand-in and leaving the
+/// dialog with its parent.
+#[test]
+fn late_token_does_not_adopt_a_dialog() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    // A single-instance app is already open with a child dialog (same client —
+    // a toplevel's parent must be its own client's toplevel).
+    let cid = f.add_client();
+    let parent = map_window(&mut f, cid, "myapp", (300, 200));
+    let parent_toplevel = f.client(cid).window(&parent).xdg_toplevel.clone();
+    let dialog = f.client(cid).create_window();
+    let dsurface = dialog.surface.clone();
+    dialog.set_app_id("dialog");
+    dialog.set_parent(Some(&parent_toplevel));
+    dialog.commit();
+    f.roundtrip(cid);
+    let dwin = f.client(cid).window(&dsurface);
+    dwin.set_size(300, 200);
+    dwin.attach_new_buffer();
+    dwin.ack_last_and_commit();
+    f.double_roundtrip(cid);
+    let dialog_win = window_by_app_id(&mut f, "dialog").unwrap();
+    let pos_before = f.state().stage.position_of(&dialog_win);
+
+    // A suspended stand-in of the app is relaunched; the dialog forwards the token.
+    let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+    present_token(&mut f, cid, &dsurface, token);
+
+    assert_eq!(
+        f.state().stage.position_of(&dialog_win),
+        pos_before,
+        "the dialog was not relocated"
+    );
+    assert!(
+        !suspended_present(&mut f),
+        "the now-stale stand-in was dismissed"
+    );
+    assert_eq!(
+        f.state().debug_counters()["pending_relaunches"],
+        0,
+        "the pending relaunch was consumed"
+    );
+    assert_eq!(token_count(&mut f), 0, "the token was deregistered");
+
+    client_close(&mut f, cid, &dsurface);
+    client_close(&mut f, cid, &parent);
+}
+
+/// A screen-pinned window that presents a live relaunch token must NOT be
+/// adopted: hijacking it into the stand-in slot would rip it out of its pin.
+/// Same carve-out branch as fullscreen — the token dismisses the stale stand-in
+/// and leaves the window pinned at its site.
+#[test]
+fn late_token_does_not_adopt_a_pinned_window() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(
+        Config::from_toml("[[window_rules]]\napp_id = \"myapp\"\npinned_to_screen = true\n")
+            .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    // A pinned window of the app is already open (rule-pinned at map).
+    let cid = f.add_client();
+    let win_surface = map_window(&mut f, cid, "myapp", (300, 200));
+    let pinned = window_by_app_id(&mut f, "myapp").unwrap();
+    assert!(f.state().is_pinned(&pinned), "the window pinned via rule");
+    let site_before = f.state().stage.pin_of(&pinned).cloned();
+
+    // A suspended stand-in of the same app is relaunched; the pinned window
+    // forwards the token back.
+    let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+    present_token(&mut f, cid, &win_surface, token);
+
+    assert!(
+        f.state().is_pinned(&pinned),
+        "the window stayed pinned — not adopted"
+    );
+    assert_eq!(
+        f.state().stage.pin_of(&pinned).cloned(),
+        site_before,
+        "the pin site is unchanged"
+    );
+    assert!(
+        !suspended_present(&mut f),
+        "the stale stand-in was dismissed"
+    );
+    assert_eq!(f.state().debug_counters()["pending_relaunches"], 0);
+    assert_eq!(token_count(&mut f), 0, "the token was deregistered");
+
+    client_close(&mut f, cid, &win_surface);
+}
+
+/// Adopting an UNFOCUSED already-open window preserves its MRU standing. The
+/// stand-in didn't hold focus and a newer window does, so the refocus path
+/// doesn't run — but the adopted window must still be reachable in the focus
+/// history, not silently dropped out of the Alt-Tab cycle.
+#[test]
+fn adopt_of_unfocused_window_keeps_focus_history() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    // A of the app opens (focused on map); then B opens and takes focus, so A is
+    // unfocused but still in the MRU history behind B.
+    let cid = f.add_client();
+    let a = map_window(&mut f, cid, "myapp", (300, 200));
+    let bid = f.add_client();
+    let b = map_window(&mut f, bid, "other", (300, 200));
+    let a_win = window_by_app_id(&mut f, "myapp").unwrap();
+    let b_win = window_by_app_id(&mut f, "other").unwrap();
+    assert_eq!(
+        f.state().focused_window().as_ref(),
+        Some(&b_win),
+        "B holds focus, A is unfocused"
+    );
+    assert!(
+        f.state()
+            .stage
+            .focus_history()
+            .iter()
+            .any(|w| w.client() == Some(&a_win)),
+        "A is in the MRU before adoption"
+    );
+
+    // Relaunch a same-app stand-in; unfocused A forwards the token.
+    let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+    present_token(&mut f, cid, &a, token);
+
+    let adopted = window_by_app_id(&mut f, "myapp").expect("A adopted the slot");
+    assert_eq!(
+        f.state().focused_window().as_ref(),
+        Some(&b_win),
+        "focus stayed on B — the non-refocus adopt path ran"
+    );
+    assert!(
+        f.state()
+            .stage
+            .focus_history()
+            .iter()
+            .any(|w| w.client() == Some(&adopted)),
+        "the adopted window is still reachable in the Alt-Tab cycle"
+    );
+
+    settle_resize(&mut f, cid, &a, (400, 300));
+    client_close(&mut f, cid, &a);
+    client_close(&mut f, bid, &b);
+}
+
 /// A dismiss while a relaunch is in flight cancels it: the token is deregistered
 /// on the spot, so a late presentation is a no-op and the window maps normally.
 #[test]

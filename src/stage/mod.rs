@@ -257,6 +257,17 @@ impl<W: StageElement> Stage<W> {
         &self.focus_history
     }
 
+    /// Re-insert `window` into the focus history at `index` (clamped to the
+    /// current length), restoring the MRU standing a compound adopt dropped when
+    /// its `remove` cleared the old entry. No-op if already present.
+    pub fn restore_focus_history_at(&mut self, window: &W, index: usize) {
+        if self.focus_history.iter().any(|w| w == window) {
+            return;
+        }
+        let idx = index.min(self.focus_history.len());
+        self.focus_history.insert(idx, window.clone());
+    }
+
     /// Remove `window` from the focus history, clamping any active cycle.
     /// Used by paths that exclude a still-live window from the cycle
     /// (pinning, widget rules).

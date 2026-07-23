@@ -289,8 +289,9 @@ impl XdgActivationHandler for DriftWm {
             && self.pending_relaunches.contains_key(&sid)
             && self.find_suspended(sid).is_some()
         {
-            let root = self
-                .window_for_surface(&surface)
+            let window = self.window_for_surface(&surface);
+            let root = window
+                .as_ref()
                 .and_then(|w| w.wl_surface().map(|s| s.into_owned()))
                 .unwrap_or_else(|| surface.clone());
             if self.pending_center.contains(&root) {
@@ -304,21 +305,30 @@ impl XdgActivationHandler for DriftWm {
             // to its running window is fulfilling the press, not being hijacked.
             // The press expressed placement intent at the stand-in's slot, so
             // adopt the window into it.
-            if let Some(window) = self.window_for_surface(&surface)
-                && self.stage.id_of(&window).is_some()
-            {
-                // A window already fullscreen, pinned, or rule-placed as a
-                // widget is where policy wants it; adopting would rip it out of
-                // that membership and strand the camera park. Drop the stand-in
-                // instead and leave the window alone.
+            if let Some(window) = window {
+                // A window already fullscreen, pinned, rule-placed as a widget,
+                // or living as a dialog/modal of another window is where policy
+                // (or its parent) wants it; adopting would rip it out of that
+                // membership — and, for a dialog, tear it off its parent. Every
+                // suspend path excludes dialogs, so no stand-in ever stands for
+                // one. Drop the stand-in instead and leave the window alone.
                 if self.is_window_fullscreen(&window)
                     || self.is_pinned(&window)
                     || window.is_widget()
+                    || window.parent_surface().is_some()
+                    || window.is_modal()
                 {
                     tracing::debug!(
-                        "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned/widget; dismissing stand-in"
+                        "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned/widget/dialog; dismissing stand-in"
                     );
                     self.dismiss_suspended(sid);
+                    return;
+                }
+                // About to adopt — but not while the window is under an active
+                // interactive move/resize grab: teleporting it would fight the
+                // grab. Transient (unlike the carve-outs above), so leave the
+                // pending relaunch to its TTL and don't dismiss the stand-in.
+                if self.window_under_interactive_grab(&window, &root) {
                     return;
                 }
                 self.adopt_relaunched(&window, &root, sid);
