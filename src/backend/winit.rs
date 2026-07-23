@@ -278,6 +278,7 @@ pub fn init_winit(
 
             // --- Post-render ---
             crate::render::refresh_foreign_toplevels(data);
+            crate::render::refresh_ext_workspaces(data);
             crate::render::post_render(data, &output);
             data.render
                 .evict_idle_capture_state(data.start_time.elapsed());

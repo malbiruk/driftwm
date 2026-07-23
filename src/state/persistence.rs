@@ -416,6 +416,10 @@ impl DriftWm {
         // camera moved.
         let active_name = self.active_output().map(|o| o.name());
         let active_dirty = active_name != self.state_file_active_output;
+        // An active-bookmark flip is broadcast-only (like a title change): it can
+        // happen with the camera still (set-bookmark under the current viewport,
+        // delete of the active bookmark), so it never marks the file dirty.
+        let incumbent_dirty = std::mem::take(&mut self.active_bookmark_dirty);
 
         if !layout_dirty
             && !any_output_dirty
@@ -423,11 +427,13 @@ impl DriftWm {
             && !screen_space_dirty
             && !active_dirty
         {
-            if titles_dirty {
+            if titles_dirty || incumbent_dirty {
                 crate::ipc::broadcast_state_event(self);
                 // Cache the new titles or this re-fires every tick; the file
                 // itself deliberately stays stale on title-only changes.
-                self.state_file_windows = window_fps;
+                if titles_dirty {
+                    self.state_file_windows = window_fps;
+                }
             }
             return;
         }

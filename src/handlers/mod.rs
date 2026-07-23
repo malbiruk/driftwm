@@ -793,6 +793,41 @@ impl ForeignToplevelHandler for DriftWm {
 
 driftwm::delegate_foreign_toplevel!(DriftWm);
 
+use driftwm::protocols::ext_workspace::{ExtWorkspaceHandler, ExtWorkspaceManagerState};
+
+impl ExtWorkspaceHandler for DriftWm {
+    fn ext_workspace_state(&mut self) -> &mut ExtWorkspaceManagerState {
+        &mut self.ext_workspace_state
+    }
+
+    fn ext_workspace_outputs(&self) -> Vec<smithay::output::Output> {
+        self.space.outputs().cloned().collect()
+    }
+
+    fn workspace_activate(&mut self, name: String) {
+        // Jump the focused viewport to the bookmark — go-to-bookmark semantics.
+        self.execute_action(&driftwm::config::Action::GoToBookmark(name));
+    }
+
+    fn workspace_create(&mut self, name: String) {
+        if name.is_empty() {
+            tracing::info!("ext-workspace create_workspace: ignoring empty name");
+            return;
+        }
+        // Capture the focused viewport center under this name — set-bookmark
+        // semantics (overwrites an existing bookmark; registry keys are unique).
+        self.execute_action(&driftwm::config::Action::SetBookmark(name));
+    }
+
+    fn workspace_remove(&mut self, name: String) {
+        if self.bookmarks.remove(&name).is_some() {
+            self.session_store_mark_dirty();
+        }
+    }
+}
+
+driftwm::delegate_ext_workspace!(DriftWm);
+
 impl smithay::wayland::foreign_toplevel_list::ForeignToplevelListHandler for DriftWm {
     fn foreign_toplevel_list_state(
         &mut self,

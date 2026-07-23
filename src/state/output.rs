@@ -137,6 +137,7 @@ impl DriftWm {
             &mut self.foreign_toplevel_state,
             output,
         );
+        driftwm::protocols::ext_workspace::send_output_enter(&mut self.ext_workspace_state, output);
     }
 
     /// Backend-independent disconnect policy for an output. Runs whether the
@@ -165,6 +166,7 @@ impl DriftWm {
             &mut self.foreign_toplevel_state,
             output,
         );
+        driftwm::protocols::ext_workspace::send_output_leave(&mut self.ext_workspace_state, output);
         self.image_copy_capture_state.remove_output(output);
         self.screencopy_state.remove_output(output);
         self.gamma_control_manager_state.output_removed(output);

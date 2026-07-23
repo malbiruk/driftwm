@@ -152,6 +152,10 @@ impl DriftWm {
             smithay::wayland::foreign_toplevel_list::ForeignToplevelListState::new_with_filter::<
                 Self,
             >(&dh, client_is_unrestricted);
+        let ext_workspace_state = driftwm::protocols::ext_workspace::ExtWorkspaceManagerState::new::<
+            Self,
+            _,
+        >(&dh, client_is_unrestricted);
         let screencopy_state = driftwm::protocols::screencopy::ScreencopyManagerState::new::<Self, _>(
             &dh,
             client_is_unrestricted,
@@ -313,6 +317,7 @@ impl DriftWm {
             layer_shell_state,
             foreign_toplevel_state,
             foreign_toplevel_list_state,
+            ext_workspace_state,
             screencopy_state,
             output_management_state,
             output_power_state,
@@ -375,6 +380,7 @@ impl DriftWm {
             state_file_canvas_layers: Vec::new(),
             state_file_fullscreen: Vec::new(),
             state_file_active_output: None,
+            active_bookmark_dirty: false,
             autostart,
             active_outputs: HashSet::new(),
             redraws_needed: HashSet::new(),

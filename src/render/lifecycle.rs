@@ -37,6 +37,46 @@ pub fn refresh_foreign_toplevels(state: &mut crate::state::DriftWm) {
     );
 }
 
+/// Recompute each output's active bookmark and sync the ext-workspace protocol.
+/// Call once per frame alongside `refresh_foreign_toplevels`. Incumbents live
+/// per-output in `OutputState`; the focused output's is what the protocol's
+/// single `active` bit and the IPC `active_bookmark` fields report.
+pub fn refresh_ext_workspaces(state: &mut crate::state::DriftWm) {
+    use crate::state::{output_logical_size, output_state};
+
+    let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+    for output in &outputs {
+        let (camera, zoom) = {
+            let os = output_state(output);
+            (os.camera, os.zoom)
+        };
+        let viewport = output_logical_size(output);
+        let usable_center = state.usable_center_screen_on(output);
+        let incumbent = output_state(output).active_bookmark.clone();
+        let winner = canvas::active_bookmark(
+            &state.bookmarks,
+            camera,
+            viewport,
+            zoom,
+            usable_center,
+            incumbent.as_deref(),
+        );
+        if winner != incumbent {
+            output_state(output).active_bookmark = winner;
+            state.active_bookmark_dirty = true;
+        }
+    }
+
+    let active = state
+        .active_output()
+        .and_then(|o| output_state(&o).active_bookmark.clone());
+    driftwm::protocols::ext_workspace::refresh::<crate::state::DriftWm>(
+        &mut state.ext_workspace_state,
+        &state.bookmarks,
+        active.as_deref(),
+    );
+}
+
 /// Frame-callback primary-scanout filter, gating callback rate by visibility.
 /// Returning `None` for off-screen surfaces makes smithay fall through to its
 /// `FRAME_CALLBACK_THROTTLE`-gated `frame_overdue` path (the heartbeat rate)

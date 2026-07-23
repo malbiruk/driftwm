@@ -310,6 +310,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
 
     // 4. Foreign toplevel refresh (once per frame, not per-output)
     crate::render::refresh_foreign_toplevels(data);
+    crate::render::refresh_ext_workspaces(data);
 
     // 4a. Drain queued mode changes before re-notifying clients so the
     // re-broadcast reflects the new mode state. Mode changes either come from

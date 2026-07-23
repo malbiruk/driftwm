@@ -298,6 +298,10 @@ pub struct OutputState {
     pub layout_position: Point<i32, Logical>,
     pub home_return: Option<HomeReturn>,
     pub fullscreen_return: Option<FullscreenReturn>,
+    /// This output's active bookmark: the visible bookmark nearest its usable
+    /// center, with hysteresis. Recomputed per frame by the ext-workspace
+    /// refresh; the focused output's value is what the protocol and IPC report.
+    pub active_bookmark: Option<String>,
 }
 
 pub fn init_output_state(
@@ -330,6 +334,7 @@ pub fn init_output_state(
             layout_position,
             home_return: None,
             fullscreen_return: None,
+            active_bookmark: None,
         })
     });
 }
@@ -515,6 +520,7 @@ pub struct DriftWm {
     pub foreign_toplevel_state: driftwm::protocols::foreign_toplevel::ForeignToplevelManagerState,
     pub foreign_toplevel_list_state:
         smithay::wayland::foreign_toplevel_list::ForeignToplevelListState,
+    pub ext_workspace_state: driftwm::protocols::ext_workspace::ExtWorkspaceManagerState,
     pub screencopy_state: driftwm::protocols::screencopy::ScreencopyManagerState,
     pub output_management_state: driftwm::protocols::output_management::OutputManagementState,
     pub output_power_state: driftwm::protocols::output_power::OutputPowerState,
@@ -690,6 +696,12 @@ pub struct DriftWm {
     /// top-level camera and the snapshot's `active` flags follow the active
     /// output, so switching outputs must dirty them even when no camera moved.
     pub state_file_active_output: Option<String>,
+    /// Set by the per-frame ext-workspace refresh when any output's active
+    /// bookmark flipped. Broadcast-only (like a title change): forces a
+    /// subscription push without marking the state file dirty, since an
+    /// incumbent can flip with the camera still (set-bookmark under the current
+    /// viewport, delete of the active bookmark).
+    pub active_bookmark_dirty: bool,
 
     pub autostart: Vec<String>,
 
@@ -2562,6 +2574,7 @@ mod tests {
             layout_position: Point::from(layout_position),
             home_return: None,
             fullscreen_return: None,
+            active_bookmark: None,
         }
     }
 
