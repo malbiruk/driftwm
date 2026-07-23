@@ -195,7 +195,15 @@ rule coordinates, output-relative, so they paste straight into a
 `pinned_to_screen` rule); `layers` (namespaces of screen-space layer-shell
 surfaces); `canvas_layers` (canvas-positioned layers with rule-coordinate
 position and size); and `outputs` (per-output `name`, viewport `camera` (center,
-Y-up), `zoom`, logical `size`, and `active` flag).
+Y-up), `zoom`, logical `size`, `active` flag, and `active_bookmark`).
+
+`active_bookmark` (top-level) is the focused output's active bookmark — the
+bookmark nearest the viewport's usable center among those currently visible, or
+`null` when none is in view. Each `outputs` entry carries its own
+`active_bookmark` for that output's viewport. This is the same value the
+`ext-workspace-v1` protocol marks `active`, so a bar can highlight the current
+bookmark. It follows the camera, so it belongs to `state`/`subscribe` rather
+than the registry-only `bookmark` verb.
 
 ### Events
 

@@ -297,7 +297,7 @@ fn layout_code(layout_list: &str, index: usize) -> Option<String> {
 }
 
 fn cmd_state(state: &mut DriftWm) -> Response {
-    Response::State(state_info(state))
+    Response::State(Box::new(state_info(state)))
 }
 
 /// Build the full state snapshot shared by the `state` reply and subscription
@@ -316,9 +316,9 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
         .space
         .outputs()
         .map(|output| {
-            let (cam, z) = {
+            let (cam, z, active_bookmark) = {
                 let os = crate::state::output_state(output);
-                (os.camera, os.zoom)
+                (os.camera, os.zoom, os.active_bookmark.clone())
             };
             let logical = crate::state::output_logical_size(output);
             OutputInfo {
@@ -327,9 +327,14 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
                 zoom: z,
                 size: [logical.w, logical.h],
                 active: active.as_ref() == Some(output),
+                active_bookmark,
             }
         })
         .collect();
+
+    // The focused output's incumbent — the value ext-workspace advertises.
+    let active_bookmark =
+        active.and_then(|o| crate::state::output_state(&o).active_bookmark.clone());
 
     StateInfo {
         camera,
@@ -342,6 +347,7 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
         layers,
         canvas_layers,
         outputs,
+        active_bookmark,
     }
 }
 

@@ -130,7 +130,9 @@ pub enum Response {
     },
     Zoom(f64),
     Layout(String),
-    State(StateInfo),
+    /// Boxed so the whole-state snapshot doesn't bloat every other (tiny)
+    /// reply variant. Serde-transparent, so the wire shape is unchanged.
+    State(Box<StateInfo>),
     DebugCounters(BTreeMap<String, usize>),
     Focused(Option<FocusedWindow>),
     /// Window-center, Y-up coordinates.
@@ -196,6 +198,11 @@ pub struct StateInfo {
     /// the top-level `camera`.
     #[serde(default)]
     pub outputs: Vec<OutputInfo>,
+    /// The focused output's active bookmark — the bookmark nearest its usable
+    /// center among those visible, or `None` when no bookmark is in view. The
+    /// same value the ext-workspace-v1 protocol marks `active`.
+    #[serde(default)]
+    pub active_bookmark: Option<String>,
 }
 
 /// One output's viewport in the `state` reply. `camera` is the viewport
@@ -207,6 +214,10 @@ pub struct OutputInfo {
     pub zoom: f64,
     pub size: [i32; 2],
     pub active: bool,
+    /// This output's active bookmark (nearest visible to its usable center),
+    /// or `None` when no bookmark is in view.
+    #[serde(default)]
+    pub active_bookmark: Option<String>,
 }
 
 /// A line pushed to a subscribed connection. Not wrapped in a `Reply` —
@@ -491,7 +502,9 @@ mod tests {
                 zoom: 1.0,
                 size: [1920, 1200],
                 active: true,
+                active_bookmark: Some("home".into()),
             }],
+            active_bookmark: Some("home".into()),
         }
     }
 
@@ -500,7 +513,7 @@ mod tests {
         let replies: Vec<Reply> = vec![
             Ok(Response::Camera { x: 1.0, y: 2.0 }),
             Ok(Response::Zoom(1.5)),
-            Ok(Response::State(sample_state())),
+            Ok(Response::State(Box::new(sample_state()))),
             Ok(Response::DebugCounters(
                 [("stage_entries".to_string(), 2usize)]
                     .into_iter()
@@ -537,7 +550,7 @@ mod tests {
     /// The `State` reply serializes as `{"State":{...}}` with every field present.
     #[test]
     fn state_response_wire_shape() {
-        let json = serde_json::to_value(Response::State(sample_state())).unwrap();
+        let json = serde_json::to_value(Response::State(Box::new(sample_state()))).unwrap();
         let obj = json
             .get("State")
             .expect("State serializes as {\"State\":{...}}");
@@ -563,7 +576,7 @@ mod tests {
     /// variants — pin them together.
     #[test]
     fn event_payload_matches_state_reply() {
-        let response = serde_json::to_value(Response::State(sample_state())).unwrap();
+        let response = serde_json::to_value(Response::State(Box::new(sample_state()))).unwrap();
         let event = serde_json::to_value(Event::State(sample_state())).unwrap();
         assert_eq!(response.get("State"), event.get("State"));
         assert!(response.get("State").is_some());
