@@ -298,25 +298,25 @@ impl XdgActivationHandler for DriftWm {
                 self.pending_adoptions.insert(root, sid);
                 return;
             }
-            // Already placed. Only a window mapped since the relaunch was
-            // spawned can be the relaunched one; an already-open window
-            // presenting our token (a single-instance app forwarding the
-            // startup id to its running instance) must not be hijacked. Leave
-            // it be — the pending reverts to dormant when its deadline sweeps.
+            // Already placed. Any window presenting our token is the app's own
+            // answer to this relaunch: the token traveled from the spawn through
+            // the child env into the app, so a single-instance app forwarding it
+            // to its running window is fulfilling the press, not being hijacked.
+            // The press expressed placement intent at the stand-in's slot, so
+            // adopt the window into it.
             if let Some(window) = self.window_for_surface(&surface)
-                && let Some(id) = self.stage.id_of(&window)
-                && self
-                    .pending_relaunches
-                    .get(&sid)
-                    .is_some_and(|p| p.maps_new_window(id))
+                && self.stage.id_of(&window).is_some()
             {
-                // A window already fullscreen or pinned is where policy wants
-                // it; adopting would rip it out of that membership and strand
-                // the camera park. Drop the stand-in instead and leave the
-                // window alone.
-                if self.is_window_fullscreen(&window) || self.is_pinned(&window) {
+                // A window already fullscreen, pinned, or rule-placed as a
+                // widget is where policy wants it; adopting would rip it out of
+                // that membership and strand the camera park. Drop the stand-in
+                // instead and leave the window alone.
+                if self.is_window_fullscreen(&window)
+                    || self.is_pinned(&window)
+                    || window.is_widget()
+                {
                     tracing::debug!(
-                        "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned; dismissing stand-in"
+                        "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned/widget; dismissing stand-in"
                     );
                     self.dismiss_suspended(sid);
                     return;

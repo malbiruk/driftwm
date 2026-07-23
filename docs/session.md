@@ -154,16 +154,18 @@ activation token and waits for its window to come back, matching it to the
 stand-in by, in order:
 
 1. **The activation token**, if the app presents it back (most native Wayland
-   toolkits do).
+   toolkits do). This works whether the app maps a fresh window or — as a
+   single-instance app does — forwards the token to its already-running window;
+   either way that window moves into the stand-in's slot, sized to fit.
 2. **App identity**, as a 5-second fallback for apps that ignore the token:
    the oldest pending relaunch of the same app_id adopts the next window of
    that app_id to map.
 
 ### Limitations
 
-- **Single-instance apps** (Chrome and other apps that focus an existing
-  window instead of opening a new one) may never present the token or map a
-  new window at all — nothing to adopt. The stand-in reverts to dormant
+- **Apps that never present the token back** and map no new window (some
+  single-instance apps just focus an existing window without forwarding the
+  activation token) leave nothing to adopt. The stand-in reverts to dormant
   (showing the app's name again) after about 30 seconds.
 - **The 5-second fallback window is a capture hazard**: if you manually launch
   another window of the same app while a relaunch is pending, it can get

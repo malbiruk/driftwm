@@ -20,7 +20,6 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::wayland::xdg_activation::XdgActivationToken;
 
 use driftwm::desktop_entry::{AppIdentity, DesktopEntryCache};
-use driftwm::stage::ElementId;
 use driftwm::window_ext::WindowExt;
 
 use crate::decorations::DecorationKey;
@@ -81,22 +80,10 @@ pub struct PendingRelaunch {
     token: XdgActivationToken,
     /// When the relaunch was spawned — FIFO ordering for the identity fallback.
     spawned_at: Instant,
-    /// The next stage id at spawn time: only a window mapped at or after this
-    /// (id `>=` it) can be the relaunched window. Guards the post-map token
-    /// path against a single-instance app forwarding the startup id to its
-    /// already-open window.
-    spawn_element_id: ElementId,
     /// After this, the identity fallback stops matching (token match still works).
     fallback_deadline: Instant,
     /// After this, the whole pending relaunch is garbage-collected.
     deadline: Instant,
-}
-
-impl PendingRelaunch {
-    /// Whether `id` names a window mapped since this relaunch was spawned.
-    pub fn maps_new_window(&self, id: ElementId) -> bool {
-        id >= self.spawn_element_id
-    }
 }
 
 impl DriftWm {
@@ -229,7 +216,6 @@ impl DriftWm {
             PendingRelaunch {
                 token: token.clone(),
                 spawned_at: now,
-                spawn_element_id: self.stage.next_element_id(),
                 fallback_deadline: now + FALLBACK_WINDOW,
                 deadline: now + RELAUNCH_TTL,
             },

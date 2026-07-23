@@ -210,13 +210,6 @@ impl<W: StageElement> Stage<W> {
         self.entries.iter().find(|e| e.id == id).map(|e| &e.window)
     }
 
-    /// The `ElementId` the next mapped window will receive. Snapshotting it lets
-    /// a caller later tell whether a window was mapped after that point (its id
-    /// is `>=` the snapshot) — ids are monotonic and never reused.
-    pub fn next_element_id(&self) -> ElementId {
-        ElementId(self.next_id)
-    }
-
     /// Raise `window`, then its descendants breadth-first, so each child ends
     /// up directly above its own parent without jumping over unrelated windows
     /// higher in the stack. Returns the raise order so the caller can apply

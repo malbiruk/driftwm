@@ -434,10 +434,12 @@ fn token_adopt_post_first_commit_focuses_adopted_window() {
 }
 
 /// A single-instance app forwards the startup id to its already-open window,
-/// which then presents our token. That pre-existing window must NOT be hijacked
-/// into the suspended slot — only a window mapped since the relaunch can adopt.
+/// which then presents our token. Token possession is proof the window is the
+/// app's own answer to this relaunch, so it is adopted into the stand-in's slot:
+/// relocated onto the stand-in rect, inheriting its `ElementId`, sized to the
+/// body, and consuming the stand-in.
 #[test]
-fn already_open_same_app_window_is_not_hijacked() {
+fn already_open_same_app_window_is_adopted() {
     let tmp = TempDir::new();
     let mut f = Fixture::with_config(Config::default());
     f.add_output(1, (1920, 1080));
@@ -447,31 +449,54 @@ fn already_open_same_app_window_is_not_hijacked() {
     // An existing window of the app is already open (mapped before the relaunch).
     let cid = f.add_client();
     let existing = map_window(&mut f, cid, "myapp", (300, 200));
-    let existing_win = window_by_app_id(&mut f, "myapp").unwrap();
-    let pos_before = f.state().stage.position_of(&existing_win);
 
     // A suspended stand-in of the same app is relaunched.
     let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    let susp = StageWindow::Suspended(f.state().find_suspended(sid).unwrap());
+    let eid = f.state().stage.id_of(&susp).unwrap();
     f.state().relaunch_suspended(sid);
-    // Past the fallback window, so identity matching can't fire either.
+    // Past the fallback window, so identity matching can't fire either — only
+    // the token path can adopt the already-open window.
     f.state().expire_relaunch_fallback_for_test(sid);
     let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
 
     // The running instance activates its EXISTING window with our token.
     present_token(&mut f, cid, &existing, token);
 
+    // The already-open window now occupies the stand-in's stage entry: same
+    // ElementId (its own prior entry was consumed by the adopt).
+    let adopted = window_by_app_id(&mut f, "myapp").expect("the existing window adopted the slot");
     assert_eq!(
-        f.state().stage.position_of(&existing_win),
-        pos_before,
-        "the already-open window was not relocated"
+        f.state().stage.id_of(&adopted),
+        Some(eid),
+        "took the stand-in's ElementId"
     );
-    assert!(suspended_present(&mut f), "the stand-in was not consumed");
+    assert_eq!(
+        f.state().stage.position_of(&adopted),
+        Some(Point::from((800, 500))),
+        "relocated onto the stand-in rect"
+    );
     assert!(
-        f.state().is_suspended_launching(sid),
-        "the relaunch is still pending"
+        f.client(cid)
+            .window(&existing)
+            .configures_received
+            .iter()
+            .any(|(_, c)| c.size == (400, 300)),
+        "configured to the stand-in body size"
+    );
+    assert!(!suspended_present(&mut f), "the stand-in was consumed");
+    assert_eq!(
+        f.state().debug_counters()["pending_relaunches"],
+        0,
+        "the pending relaunch was consumed"
+    );
+    assert_eq!(
+        token_count(&mut f),
+        0,
+        "the token was deregistered on adopt"
     );
 
-    f.state().dismiss_suspended(sid);
+    settle_resize(&mut f, cid, &existing, (400, 300));
     client_close(&mut f, cid, &existing);
 }
 
