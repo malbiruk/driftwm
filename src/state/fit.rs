@@ -130,14 +130,10 @@ impl DriftWm {
             return;
         };
 
-        // Resize in-place: keep visual center, compute new loc from saved size
+        // Resize in-place around the preserved visual center.
         let center = self.window_visual_center(window).unwrap_or_default();
         let bar = self.window_ssd_bar(window);
-        let total_h = saved_size.h + bar;
-        let new_loc = Point::from((
-            (center.x - saved_size.w as f64 / 2.0) as i32,
-            (center.y - total_h as f64 / 2.0) as i32 + bar,
-        ));
+        let new_loc = super::frame_loc_for_center(center, saved_size, bar);
 
         // Record the current (fit-era) geometry so the commit handler can
         // tell when the client has actually processed the exit configure,
@@ -286,13 +282,9 @@ impl DriftWm {
         let old_size = window.geometry().size;
         let bar = self.window_ssd_bar(window);
         let bw = self.window_border_width(&wl_surface);
-        // Mirror unfit_window's new_loc computation so per-edge deltas match.
+        // Mirror unfit_window's new_loc so per-edge deltas match.
         let center = self.window_visual_center(window).unwrap_or_default();
-        let total_h = saved_size.h + bar;
-        let new_loc = Point::from((
-            (center.x - saved_size.w as f64 / 2.0) as i32,
-            (center.y - total_h as f64 / 2.0) as i32 + bar,
-        ));
+        let new_loc = super::frame_loc_for_center(center, saved_size, bar);
         let old_rect = snap_rect_at(old_loc, old_size, bar, bw);
         let new_rect = snap_rect_at(new_loc, saved_size, bar, bw);
         // See `fit_window_snapped` for why we refresh member caches here.

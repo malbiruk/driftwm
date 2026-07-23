@@ -2360,10 +2360,10 @@ impl DriftWm {
 }
 
 /// Center of the visual frame (content plus the SSD title-bar strip above it)
-/// from a content top-left, content size, and bar height. Shared by
-/// `window_visual_center` (clients) and `nav_center` (any stage element) so the
-/// two formulas can't drift.
-fn visual_frame_center(
+/// from a content top-left, content size, and bar height. Inverse of
+/// [`frame_loc_for_center`]. Shared by `window_visual_center`, `nav_center`, and
+/// the fit/fill/fullscreen exit settles so the formula can't drift.
+pub(crate) fn visual_frame_center(
     loc: Point<i32, Logical>,
     size: Size<i32, Logical>,
     bar: f64,
@@ -2371,6 +2371,22 @@ fn visual_frame_center(
     Point::from((
         loc.x as f64 + size.w as f64 / 2.0,
         loc.y as f64 - bar + (size.h as f64 + bar) / 2.0,
+    ))
+}
+
+/// Content top-left that places a frame of `size` (plus its `bar` strip) so its
+/// visual center lands on `center`. Inverse of [`visual_frame_center`]; used by
+/// the fit exit and the pending-recenter completion to re-place a window around
+/// a preserved center.
+pub(crate) fn frame_loc_for_center(
+    center: Point<f64, Logical>,
+    size: Size<i32, Logical>,
+    bar: i32,
+) -> Point<i32, Logical> {
+    let total_h = size.h + bar;
+    Point::from((
+        (center.x - size.w as f64 / 2.0) as i32,
+        (center.y - total_h as f64 / 2.0) as i32 + bar,
     ))
 }
 

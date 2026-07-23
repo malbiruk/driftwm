@@ -168,13 +168,10 @@ impl DriftWm {
             return;
         };
 
-        // Visual center of the saved geometry, matching the convention unfit and
-        // the pending-recenter completion in `handlers/compositor.rs` use.
-        let bar = self.window_ssd_bar(window);
-        let target_center = Point::from((
-            saved_pos.x as f64 + saved_size.w as f64 / 2.0,
-            saved_pos.y as f64 - bar as f64 + (saved_size.h + bar) as f64 / 2.0,
-        ));
+        // Visual center of the saved geometry; the settle completion re-derives
+        // the loc from it via `frame_loc_for_center`.
+        let bar = self.window_ssd_bar(window) as f64;
+        let target_center = super::visual_frame_center(saved_pos, saved_size, bar);
 
         let pre_exit_size = window.geometry().size;
         self.send_size_configure(window, saved_size);

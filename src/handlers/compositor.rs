@@ -676,11 +676,8 @@ impl CompositorHandler for DriftWm {
                     let geo = window.geometry();
                     if geo.size.w > 0 && geo.size.h > 0 && geo.size != pre_exit_size {
                         let bar = self.window_ssd_bar(&window);
-                        let total_h = geo.size.h + bar;
-                        let new_loc = smithay::utils::Point::from((
-                            (target_center.x - geo.size.w as f64 / 2.0) as i32,
-                            (target_center.y - total_h as f64 / 2.0) as i32 + bar,
-                        ));
+                        let new_loc =
+                            crate::state::frame_loc_for_center(target_center, geo.size, bar);
                         self.map_window(window.clone(), new_loc, false);
                         self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
                         self.pending_recenter.remove(&root.id());
@@ -996,6 +993,13 @@ impl DriftWm {
         let grew = (current.x_high - current.x_low) > (stable.x_high - stable.x_low) + EPS
             || (current.y_high - current.y_low) > (stable.y_high - stable.y_low) + EPS;
         if !grew {
+            return;
+        }
+
+        // Clients may ack a configure before their resized frame lands, so ack
+        // state can't gate this: a surface mid-settle after a fullscreen/fit/fill
+        // exit keeps committing stale-sized frames until it resizes.
+        if self.pending_recenter.contains_key(&surface.id()) {
             return;
         }
 

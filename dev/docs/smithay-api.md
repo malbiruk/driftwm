@@ -105,6 +105,14 @@ Non-empty does **not** imply a pending *resize*: a compositor queues size-less
 owed resize inspect each `ToplevelConfigure`'s `state.size` for a real
 (non-zero) size differing from the committed geometry, not just list length.
 
+Pruning is latched to the `ack_configure` *request* (the acked configure moves
+to `last_acked`), not to the commit that applies it — and real clients (GTK4)
+ack as soon as they process the event, then keep committing old-size frames
+until their next resized render. So "no pending configures" must **not** be
+read as "committed geometry is current". To gate on a size transition actually
+completing, track it compositor-side off the committed geometry changing (see
+`pending_recenter`), not off ack state.
+
 ### `send_pending_configure` before the initial configure
 `ToplevelSurface::send_pending_configure()` gates on `has_pending_changes()`,
 which is `!initial_configure_sent || <server_pending differs>`. So it does **not**

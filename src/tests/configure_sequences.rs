@@ -663,6 +663,313 @@ fn fullscreen_exit_straggler_keeps_position() {
     );
 }
 
+/// Real clients (GTK4/celluloid) ack the restore configure as soon as they
+/// process it, then keep committing old-fullscreen-sized frames for a frame
+/// or two. Once acked, pending configures is empty, so the "unacked configure
+/// differs from committed geometry" bail goes blind and the stale-sized
+/// commit misreads as a grow-past-settled reflow.
+#[test]
+fn fullscreen_exit_early_ack_straggler_keeps_position() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Park A settled and gap-adjacent to B in canvas space: the settled
+    // adjacency is the reflow's anchor precondition.
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(a.clone()));
+    f.state()
+        .map_window(b.clone(), Point::from((1200 + gap, 300)), false);
+    let pre_pos = f.state().stage.position_of(&a).unwrap();
+
+    // Client-initiated fullscreen, then adopt the fullscreen size.
+    let window = f.client(id).window(&a_surface);
+    window.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    // Exit runs synchronously server-side; the compositor sends the restore
+    // configure.
+    let window = f.client(id).window(&a_surface);
+    window.unset_fullscreen();
+    f.double_roundtrip(id);
+
+    // Early ack: the client acks the restore configure immediately, before
+    // resizing — pending configures is now empty.
+    let window = f.client(id).window(&a_surface);
+    window.ack_last();
+
+    // Straggler: a still-fullscreen-sized frame (viewport destination
+    // untouched) lands after the ack.
+    let window = f.client(id).window(&a_surface);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(pre_pos),
+        "a stale-sized frame committed after an early ack must not relocate the exiting window"
+    );
+
+    // Already acked above (the early ack), so this just draws the resize —
+    // re-acking the same serial would be a protocol error.
+    let (w, h) = f
+        .client(id)
+        .window(&a_surface)
+        .configures_received
+        .last()
+        .unwrap()
+        .1
+        .size;
+    let window = f.client(id).window(&a_surface);
+    window.set_size(w as u16, h as u16);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(pre_pos),
+        "the exiting window must settle back at its pre-fullscreen position"
+    );
+}
+
+/// A client exiting fullscreen may settle at a size the compositor never
+/// configured (an aspect-constrained player choosing its own dimensions).
+/// The recenter must still land on the pre-fullscreen center, not some
+/// adjacent-placement spot, and the settle must be over after that one commit.
+#[test]
+fn fullscreen_exit_settles_at_client_chosen_size_recentered() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Park A settled and gap-adjacent to B in canvas space: the settled
+    // adjacency is the reflow's anchor precondition.
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(a.clone()));
+    f.state()
+        .map_window(b.clone(), Point::from((1200 + gap, 300)), false);
+    let pre_pos = f.state().stage.position_of(&a).unwrap();
+
+    // Client-initiated fullscreen, then adopt the fullscreen size.
+    let window = f.client(id).window(&a_surface);
+    window.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    // Exit runs synchronously server-side; the compositor sends the restore
+    // configure.
+    let window = f.client(id).window(&a_surface);
+    window.unset_fullscreen();
+    f.double_roundtrip(id);
+
+    // Early ack: the client acks the restore configure immediately, before
+    // resizing — pending configures is now empty.
+    let window = f.client(id).window(&a_surface);
+    window.ack_last();
+
+    // The client settles at a size of its own choosing (700 × 500) instead of
+    // the configured restore size (800 × 600) — already acked above, so this
+    // just draws; re-acking the same serial would be a protocol error.
+    let window = f.client(id).window(&a_surface);
+    window.set_size(700, 500);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+
+    let pre_exit_center = (pre_pos.x as f64 + 400.0, pre_pos.y as f64 + 300.0);
+    let settled_pos = f.state().stage.position_of(&a).unwrap();
+    let settled_center = (settled_pos.x as f64 + 350.0, settled_pos.y as f64 + 250.0);
+    assert!(
+        (settled_center.0 - pre_exit_center.0).abs() <= 2.0
+            && (settled_center.1 - pre_exit_center.1).abs() <= 2.0,
+        "client-chosen settle size must recenter on the pre-fullscreen center, \
+         got {settled_center:?}, want {pre_exit_center:?}"
+    );
+
+    let window = f.client(id).window(&a_surface);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(settled_pos),
+        "a repeat commit at the settled size must leave the position unchanged"
+    );
+}
+
+/// A re-fullscreen mid-settle (before the client ever resizes down to the
+/// restore size) must not let the outstanding recenter fire against the new
+/// fullscreen geometry, and must not corrupt the position the window returns
+/// to when it eventually exits fullscreen for real.
+#[test]
+fn refullscreen_during_exit_settle_keeps_return_position() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Park A settled and gap-adjacent to B in canvas space: the settled
+    // adjacency is the reflow's anchor precondition.
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(a.clone()));
+    f.state()
+        .map_window(b.clone(), Point::from((1200 + gap, 300)), false);
+    let pre_pos = f.state().stage.position_of(&a).unwrap();
+
+    // Client-initiated fullscreen, then adopt the fullscreen size.
+    let window = f.client(id).window(&a_surface);
+    window.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    // Exit runs synchronously server-side; the compositor sends the restore
+    // configure.
+    let window = f.client(id).window(&a_surface);
+    window.unset_fullscreen();
+    f.double_roundtrip(id);
+
+    // Early ack: the client acks the restore configure immediately, before
+    // resizing — pending configures is now empty.
+    let window = f.client(id).window(&a_surface);
+    window.ack_last();
+
+    // Stale fullscreen-sized straggler lands after the ack, mid-settle.
+    let window = f.client(id).window(&a_surface);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+
+    // The client re-fullscreens immediately, before ever resizing down to the
+    // restore size — the exit settle is still outstanding.
+    let window = f.client(id).window(&a_surface);
+    window.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    assert!(
+        f.state().stage.is_fullscreen(&a),
+        "the re-fullscreen request must take effect despite the outstanding settle"
+    );
+
+    // Exit again — a fresh restore configure, safe to ack.
+    let window = f.client(id).window(&a_surface);
+    window.unset_fullscreen();
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(pre_pos),
+        "the mid-settle re-fullscreen must not corrupt the saved return position"
+    );
+}
+
+/// A window mid fill-exit settle (a `pending_recenter` outstanding, client not
+/// yet resized down) that then enters fullscreen must drop that recenter:
+/// otherwise the settle completion fires on the first fullscreen-sized commit
+/// and map_windows the now-fullscreen window off its output's camera origin,
+/// breaking the fullscreen-parking invariant (`state/viewport.rs`).
+#[test]
+fn fullscreen_during_fill_exit_settle_stays_at_camera_origin() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Moving the camera (fill/fullscreen below) seeds a per-output blur
+    // generation that only clears on output disconnect, so it can never return
+    // to the pre-output baseline.
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Pin the camera (mapping pans it) and park A gap-adjacent to B so fill has
+    // real free space to grow into (a non-noop fill).
+    let gap = f.state().config.snap_gap as i32;
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(a.clone()));
+    f.state()
+        .map_window(b.clone(), Point::from((1200 + gap, 300)), false);
+
+    // Fill A, then let the client adopt the filled size as a real client would.
+    f.state().toggle_fill_window(&a);
+    assert!(f.state().stage.is_fill(&a), "fill must not silently no-op");
+    f.double_roundtrip(id);
+    let (w, h) = f
+        .client(id)
+        .window(&a_surface)
+        .configures_received
+        .last()
+        .unwrap()
+        .1
+        .size;
+    let cw = f.client(id).window(&a_surface);
+    cw.set_size(w as u16, h as u16);
+    cw.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // Unfill: registers a pending recenter whose pre_exit_size is the filled
+    // size. Do NOT settle it — the client never resizes down.
+    f.state().toggle_fill_window(&a);
+    f.double_roundtrip(id);
+    let a_id = super::server_surface(&a).id();
+    assert!(
+        f.state().pending_recenter.contains_key(&a_id),
+        "unfill must register a settle to complete later"
+    );
+
+    // Enter fullscreen while that settle is still outstanding, then adopt the
+    // fullscreen size. The fullscreen-sized commit differs from the outstanding
+    // pre_exit_size, so a surviving recenter would fire against it.
+    let cw = f.client(id).window(&a_surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    assert!(f.state().stage.is_fullscreen(&a));
+    let origin = f.state().camera().to_i32_round();
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(origin),
+        "a fullscreen window must stay parked at its camera origin, not be \
+         recentered by a leftover fill-exit settle"
+    );
+    assert!(
+        !f.state().pending_recenter.contains_key(&a_id),
+        "entering fullscreen must drop the outstanding fill-exit recenter"
+    );
+}
+
 /// A window that maps under a fullscreen window and itself requests fullscreen
 /// before its first commit takes the deferred `pending_fullscreen` path:
 /// background-placed, then fullscreened on the buffer commit. Its fullscreen

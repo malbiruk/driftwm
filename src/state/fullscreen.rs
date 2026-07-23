@@ -1,10 +1,11 @@
 use smithay::{
     desktop::Window,
+    reexports::wayland_server::Resource,
     utils::{Logical, Point, Size},
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, FocusTarget};
+use super::{DriftWm, FocusTarget, PendingRecenter};
 use driftwm::window_ext::WindowExt;
 
 impl DriftWm {
@@ -112,6 +113,15 @@ impl DriftWm {
                 displaced.set_activated(false);
             }
             self.exit_fullscreen_on(&output);
+        }
+
+        // A re-fullscreen mid-settle must drop any outstanding exit recenter for
+        // this window (a prior fullscreen/fit/fill exit, or the same-window
+        // cross-output exit just above): otherwise the settle completion fires on
+        // a fullscreen-sized commit and maps the now-fullscreen window to a
+        // recentered position.
+        if let Some(surface) = window.wl_surface() {
+            self.pending_recenter.remove(&surface.id());
         }
 
         let viewport_size = super::output_logical_size(&output);
@@ -293,6 +303,35 @@ impl DriftWm {
 
         // Restore window position, camera, zoom on the specific output
         self.map_window(entry.window.clone(), entry.saved_location, false);
+
+        // The client keeps committing viewport-sized frames until it acks the
+        // restore configure and resizes; those stale-sized commits would read as
+        // "grown past settled" in the reflow, so register a settle to hold the
+        // footprint until it resizes. Skip when the committed size already
+        // matches saved_size: no resized commit will arrive and the entry would
+        // gate forever (the recenter would be an identity reposition to
+        // saved_location anyway).
+        //
+        // pre_exit_size is the geometry committed at exit. An enter->exit inside
+        // one frame can leave the client's first fullscreen-sized frame in flight;
+        // if its size differs from saved_size it completes the settle early
+        // against a stale footprint. Fit/fill exits carry the same race.
+        if let Some(surface) = entry.window.wl_surface() {
+            let current_size = entry.window.geometry().size;
+            if current_size != entry.saved_size {
+                let bar = self.window_ssd_bar(&entry.window) as f64;
+                let target_center =
+                    super::visual_frame_center(entry.saved_location, entry.saved_size, bar);
+                self.pending_recenter.insert(
+                    surface.id(),
+                    PendingRecenter {
+                        target_center,
+                        pre_exit_size: current_size,
+                    },
+                );
+            }
+        }
+
         // Re-pin if it was pinned before fullscreen, then snap its Space loc
         // back to screen_pos (update_output_from_camera's sync only fires on a
         // camera change, which restoring the saved camera may not be).
