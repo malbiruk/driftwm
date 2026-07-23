@@ -440,7 +440,7 @@ fn cmd_focus(arg: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
                 return Err(e);
             };
             let info = suspended_focused_info(state, id);
-            state.navigate_to_suspended(id);
+            state.reveal_suspended(id);
             return Ok(Response::Focused(info));
         }
     };

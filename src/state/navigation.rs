@@ -75,18 +75,7 @@ impl DriftWm {
 
         self.raise_and_focus(window, serial);
 
-        let target_zoom = if reset_zoom {
-            output_state(output).overview_return = None;
-            1.0
-        } else {
-            let overview_ret = output_state(output).overview_return;
-            output_state(output).overview_return = None;
-            if let Some((_, saved_zoom)) = overview_ret {
-                saved_zoom
-            } else {
-                output_state(output).zoom
-            }
-        };
+        let target_zoom = self.navigation_target_zoom(output, reset_zoom);
 
         let window_loc = self.stage.position_of(window).unwrap_or_default();
         let window_size = window.geometry().size;
@@ -109,6 +98,18 @@ impl DriftWm {
         });
         os.camera_target = Some(target);
         os.zoom_target = Some(target_zoom);
+    }
+
+    /// The zoom a navigation animates to on `output`, consuming any pending
+    /// overview return. `reset_zoom` goes to 1.0; otherwise the pre-overview
+    /// zoom comes back when leaving overview, else the current zoom is kept.
+    pub(crate) fn navigation_target_zoom(&mut self, output: &Output, reset_zoom: bool) -> f64 {
+        let overview_return = output_state(output).overview_return.take();
+        if reset_zoom {
+            1.0
+        } else {
+            overview_return.map_or_else(|| output_state(output).zoom, |(_, saved_zoom)| saved_zoom)
+        }
     }
 
     /// Arm a completed-click auto-navigate for `window` at press time. No-op

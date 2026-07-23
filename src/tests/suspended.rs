@@ -6,11 +6,11 @@
 use driftwm::config::{BTN_LEFT, Config};
 use driftwm::layout::snap::SnapState;
 use smithay::input::keyboard::ModifiersState;
-use smithay::utils::{Point, Rectangle, SERIAL_COUNTER, Size};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 
 use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
-use crate::state::{FocusIntent, FocusTarget, StageWindow};
+use crate::state::{FocusIntent, FocusTarget, StageWindow, SuspendedId};
 
 use super::{Fixture, map_window, window_by_app_id};
 
@@ -1070,6 +1070,205 @@ fn center_nearest_reaches_a_stand_in() {
     );
 
     f.state().dismiss_suspended(sid);
+}
+
+/// Where the stand-in's visual center lands on screen once the pending camera
+/// animation settles. A centering action puts it at the usable viewport center.
+fn settled_center_screen(f: &mut Fixture, sid: SuspendedId) -> Point<f64, Logical> {
+    let camera = f.state().camera_target().expect("a camera target was set");
+    let zoom = f.state().zoom_target().expect("a zoom target was set");
+    let s = f
+        .state()
+        .find_suspended(sid)
+        .expect("the stand-in is alive");
+    let rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Suspended(s))
+        .expect("the stand-in has a visual frame");
+    Point::from((
+        ((rect.x_low + rect.x_high) / 2.0 - camera.x) * zoom,
+        ((rect.y_low + rect.y_high) / 2.0 - camera.y) * zoom,
+    ))
+}
+
+fn assert_centers_on(f: &mut Fixture, sid: SuspendedId) {
+    let settled = settled_center_screen(f, sid);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        (settled.x - vc.x).abs() < 1e-6 && (settled.y - vc.y).abs() < 1e-6,
+        "the stand-in settles at the viewport center: {settled:?} vs {vc:?}"
+    );
+}
+
+/// `focus-center` over a stand-in that is already fully on screen still centers
+/// it and resets zoom, matching what it does for a live window. The reveal-only
+/// semantics of `msg focus` (pan only when clipped) belong to the IPC verb.
+#[test]
+fn focus_center_centers_a_fully_visible_stand_in() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    f.state().set_zoom(0.8);
+
+    // Fully on screen at this zoom, but far from the viewport center.
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((100, 100)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let s = f.state().find_suspended(sid).unwrap();
+    assert!(
+        f.state()
+            .window_fully_in_viewport(&StageWindow::Suspended(s)),
+        "the stand-in starts fully visible"
+    );
+
+    // Canvas coords — outside the body under a screen-space reading, so the
+    // hit-test's coordinate space is pinned by the zoom being off 1:1.
+    f.state().warp_pointer(pt(450.0, 380.0));
+    f.state()
+        .execute_action(&driftwm::config::Action::FocusCenter);
+
+    assert_centers_on(&mut f, sid);
+    assert_eq!(
+        f.state().zoom_target(),
+        Some(1.0),
+        "focus-center resets zoom on a stand-in as it does on a window"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// A focused stand-in holds no seat keyboard focus, so `center-window` can't
+/// find it through `focused_window` — it still centers the stand-in rather than
+/// falling back to whichever element sits nearest the viewport center.
+#[test]
+fn center_window_centers_the_focused_stand_in() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "near", (400, 300));
+    origin_view(&mut f);
+
+    // The live window sits nearer the viewport center than the stand-in, so the
+    // nearest-fallback would claim it.
+    let vc = f.state().viewport_center_canvas();
+    let near = window_by_app_id(&mut f, "near").unwrap();
+    f.state().map_window(
+        StageWindow::Client(near),
+        Point::from((vc.x as i32 - 200, vc.y as i32 - 150)),
+        true,
+    );
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((vc.x as i32 + 1500, vc.y as i32 + 900)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    f.state().focus_and_raise_suspended(sid);
+
+    f.state()
+        .execute_action(&driftwm::config::Action::CenterWindow);
+
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+        "center-window kept the stand-in focused instead of grabbing the client"
+    );
+    assert_centers_on(&mut f, sid);
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// Directional `center-nearest` centers a stand-in it reaches even when that
+/// stand-in is already fully visible, and — like the live-window path — leaves
+/// zoom where it is.
+#[test]
+fn center_nearest_centers_a_fully_visible_stand_in() {
+    use driftwm::config::{Action, Direction};
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    f.state().set_zoom(0.8);
+
+    let vc = f.state().viewport_center_canvas();
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((vc.x as i32 + 300, vc.y as i32 - 100)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let s = f.state().find_suspended(sid).unwrap();
+    assert!(
+        f.state()
+            .window_fully_in_viewport(&StageWindow::Suspended(s)),
+        "the stand-in starts fully visible"
+    );
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().set_window_focus(None, serial);
+    f.state()
+        .execute_action(&Action::CenterNearest(Direction::Right));
+
+    assert_centers_on(&mut f, sid);
+    assert_eq!(
+        f.state().zoom_target(),
+        Some(0.8),
+        "center-nearest preserves zoom on a stand-in as it does on a window"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// A focused stand-in anchors the directional search the way a focused window
+/// does: it becomes the cone origin, so repeating the direction steps past it
+/// instead of re-selecting it.
+#[test]
+fn center_nearest_steps_past_the_focused_stand_in() {
+    use driftwm::config::{Action, Direction};
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+
+    // Two stand-ins right of the viewport center, both fully visible.
+    let near = f.state().insert_suspended_for_test(
+        1,
+        Point::from((1100, 440)),
+        Size::from((300, 200)),
+        "near",
+        "Near",
+    );
+    let far = f.state().insert_suspended_for_test(
+        2,
+        Point::from((1600, 440)),
+        Size::from((200, 200)),
+        "far",
+        "Far",
+    );
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().set_window_focus(None, serial);
+    f.state()
+        .execute_action(&Action::CenterNearest(Direction::Right));
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == near),
+        "the first press lands on the nearer stand-in"
+    );
+
+    // The camera hasn't animated yet, so the viewport center is unchanged — only
+    // the anchor can carry the search past the stand-in it just landed on.
+    f.state()
+        .execute_action(&Action::CenterNearest(Direction::Right));
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == far),
+        "the second press stepped past it to the farther stand-in"
+    );
+
+    f.state().dismiss_suspended(near);
+    f.state().dismiss_suspended(far);
 }
 
 /// A suspended stand-in is a snap target like any window: its `snap_rect_for`

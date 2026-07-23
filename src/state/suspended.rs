@@ -124,37 +124,59 @@ impl DriftWm {
 
     /// Focus + raise a suspended window and, if it isn't already fully on
     /// screen, pan the active output's camera to center it (no zoom change).
-    /// Backs `msg focus <id>` on a suspended window.
-    pub fn navigate_to_suspended(&mut self, id: SuspendedId) {
+    /// Backs `msg focus <id>` on a suspended window — the centering actions want
+    /// `center_on_suspended` instead, which always centers.
+    pub fn reveal_suspended(&mut self, id: SuspendedId) {
         self.focus_and_raise_suspended(id);
         let Some(s) = self.find_suspended(id) else {
             return;
         };
-        let element = StageWindow::Suspended(s.clone());
-        if self.window_fully_in_viewport(&element) {
+        if self.window_fully_in_viewport(&StageWindow::Suspended(s.clone())) {
             return;
         }
         let Some(output) = self.active_output() else {
             return;
         };
+        let zoom = crate::state::output_state(&output).zoom;
+        self.center_camera_on_suspended(&s, &output, zoom);
+    }
+
+    /// Focus + raise a suspended window and center the active output's camera on
+    /// it unconditionally — the stand-in counterpart of `navigate_to_window`;
+    /// `reset_zoom` matches its meaning there.
+    pub fn center_on_suspended(&mut self, id: SuspendedId, reset_zoom: bool) {
+        self.focus_and_raise_suspended(id);
+        let Some(s) = self.find_suspended(id) else {
+            return;
+        };
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let zoom = self.navigation_target_zoom(&output, reset_zoom);
+        self.center_camera_on_suspended(&s, &output, zoom);
+    }
+
+    fn center_camera_on_suspended(
+        &mut self,
+        s: &Rc<SuspendedWindow>,
+        output: &smithay::output::Output,
+        target_zoom: f64,
+    ) {
+        let element = StageWindow::Suspended(s.clone());
         let loc = self.stage.position_of(&element).unwrap_or_default();
         let size = s.size.get();
         let bar = self.window_ssd_bar(&element);
-        let vc = self.usable_center_screen_on(&output);
-        let zoom = crate::state::output_state(&output).zoom;
-        let target = driftwm::canvas::camera_to_center_window(loc, size, vc, zoom, bar);
-        let center = smithay::utils::Point::from((
-            loc.x as f64 + size.w as f64 / 2.0,
-            loc.y as f64 - bar as f64 + (size.h as f64 + bar as f64) / 2.0,
-        ));
-        let mut os = crate::state::output_state(&output);
+        let vc = self.usable_center_screen_on(output);
+        let target = driftwm::canvas::camera_to_center_window(loc, size, vc, target_zoom, bar);
+        let center = self.nav_center(&element);
+        let mut os = crate::state::output_state(output);
         os.momentum.stop();
         os.zoom_animation_anchor = Some(crate::state::ZoomAnimationAnchor {
             canvas: center,
             screen: vc,
         });
         os.camera_target = Some(target);
-        os.zoom_target = Some(zoom);
+        os.zoom_target = Some(target_zoom);
     }
 
     /// Relaunch the app behind a suspended window: resolve its `Exec=`, mint a

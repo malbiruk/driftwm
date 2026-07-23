@@ -126,6 +126,10 @@ impl DriftWm {
             Action::CenterWindow => {
                 if let Some(window) = self.focused_window().filter(|w| self.is_canvas_window(w)) {
                     self.navigate_to_window(&window, true);
+                } else if let Some(id) = self.gated_suspended_focus() {
+                    // A focused stand-in holds no seat focus, so `focused_window`
+                    // never sees it — center it like any other focused window.
+                    self.center_on_suspended(id, true);
                 } else {
                     // No focused window: center the nearest canvas element to the
                     // viewport center — stand-ins included, so the user can land
@@ -147,7 +151,7 @@ impl DriftWm {
                         .cloned();
                     match closest {
                         Some(StageWindow::Client(w)) => self.navigate_to_window(&w, true),
-                        Some(StageWindow::Suspended(s)) => self.navigate_to_suspended(s.id),
+                        Some(StageWindow::Suspended(s)) => self.center_on_suspended(s.id, true),
                         None => {}
                     }
                 }
@@ -167,7 +171,7 @@ impl DriftWm {
                 {
                     // A stand-in occludes any client beneath it — center the
                     // stand-in by its visual frame, not the hidden client.
-                    self.navigate_to_suspended(s.id);
+                    self.center_on_suspended(s.id, true);
                 }
             }
             Action::CenterNearest(dir) => {
@@ -177,31 +181,22 @@ impl DriftWm {
                     Anchor(Point<f64, smithay::utils::Logical>),
                 }
 
-                let focused = self.focused_window().filter(|w| !self.is_pinned(w));
+                // Focus intent, not seat focus: a focused stand-in holds no
+                // keyboard focus but anchors the search like any other element.
+                let focused = self.focused_anchor_element().filter(|e| !self.is_pinned(e));
 
                 // Anchor the directional search to the just-exited fullscreen
                 // window (wherever the restored view placed it) — otherwise the
                 // anchor falls back to a corner/offscreen spot and the swipe
                 // finds nothing.
-                let anchor = was_fullscreen.clone().or_else(|| {
-                    focused.filter(|w| {
-                        self.window_visible_at_least(w, CENTER_NEAREST_ANCHOR_THRESHOLD)
+                let anchor = was_fullscreen.clone().map(StageWindow::Client).or_else(|| {
+                    focused.filter(|e| {
+                        self.window_visible_at_least(e, CENTER_NEAREST_ANCHOR_THRESHOLD)
                     })
                 });
 
-                let (origin, skip) = if let Some(ref w) = anchor {
-                    let center = self.window_visual_center(w).unwrap_or_else(|| {
-                        let loc = self.stage.position_of(w).unwrap_or_default();
-                        let size = w.geometry().size;
-                        Point::from((
-                            loc.x as f64 + size.w as f64 / 2.0,
-                            loc.y as f64 + size.h as f64 / 2.0,
-                        ))
-                    });
-                    (
-                        center,
-                        Some(NavTarget::Window(StageWindow::Client(w.clone()))),
-                    )
+                let (origin, skip) = if let Some(ref elem) = anchor {
+                    (self.nav_center(elem), Some(NavTarget::Window(elem.clone())))
                 } else {
                     (self.viewport_center_canvas(), None)
                 };
@@ -239,7 +234,7 @@ impl DriftWm {
                         self.navigate_to_window(&w, false);
                     }
                     Some(NavTarget::Window(StageWindow::Suspended(s))) => {
-                        self.navigate_to_suspended(s.id);
+                        self.center_on_suspended(s.id, false);
                     }
                     Some(NavTarget::Anchor(p)) => {
                         // Unfocus so next CenterNearest searches from viewport center (= this anchor)
