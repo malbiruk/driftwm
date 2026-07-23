@@ -225,6 +225,11 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Suspend(_)
             | Request::Relaunch(_)
             | Request::Action(_)
+            // Setting or deleting a bookmark can flip an active-bookmark incumbent
+            // without moving the camera; the per-frame refresh needs a render to
+            // pick it up. Bare get/list (no `to`, no `delete`) stays a pure query.
+            | Request::Bookmark { to: Some(_), .. }
+            | Request::Bookmark { delete: true, .. }
     )
 }
 

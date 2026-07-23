@@ -801,7 +801,14 @@ impl ExtWorkspaceHandler for DriftWm {
     }
 
     fn ext_workspace_outputs(&self) -> Vec<smithay::output::Output> {
-        self.space.outputs().cloned().collect()
+        // Skip virtual placeholders for disconnected monitors — their wl_output
+        // global is gone, so advertising them to a late-binding client would
+        // enter an output the client can't resolve.
+        self.space
+            .outputs()
+            .filter(|o| !self.disconnected_outputs.contains(&o.name()))
+            .cloned()
+            .collect()
     }
 
     fn workspace_activate(&mut self, name: String) {
@@ -817,11 +824,15 @@ impl ExtWorkspaceHandler for DriftWm {
         // Capture the focused viewport center under this name — set-bookmark
         // semantics (overwrites an existing bookmark; registry keys are unique).
         self.execute_action(&driftwm::config::Action::SetBookmark(name));
+        // The registry change reaches clients only through the per-frame
+        // refresh, so poke a render (nothing else self-schedules one at idle).
+        self.mark_all_dirty();
     }
 
     fn workspace_remove(&mut self, name: String) {
         if self.bookmarks.remove(&name).is_some() {
             self.session_store_mark_dirty();
+            self.mark_all_dirty();
         }
     }
 }

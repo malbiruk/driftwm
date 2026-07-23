@@ -27,9 +27,13 @@ const VERSION: u32 = 1;
 /// One bound client: its manager, the single group handle, the per-bookmark
 /// workspace handles, the outputs already advertised via `output_enter`, and
 /// the double-buffered requests awaiting `commit`.
+///
+/// `group` is `None` once the client destroys the group handle while keeping
+/// the manager live: workspaces, state, and `done` keep flowing, but
+/// group-scoped events (output/workspace enter/leave) are then skipped.
 struct ManagerInstance {
     manager: ExtWorkspaceManagerV1,
-    group: ExtWorkspaceGroupHandleV1,
+    group: Option<ExtWorkspaceGroupHandleV1>,
     workspaces: BTreeMap<String, ExtWorkspaceHandleV1>,
     outputs: Vec<WlOutput>,
     pending: Vec<PendingOp>,
@@ -92,8 +96,9 @@ impl ExtWorkspaceManagerState {
 
 /// Create a workspace handle for one bookmark on one instance and send its
 /// initial burst: `workspace` (manager) → `id` → `name` → `capabilities` →
-/// `workspace_enter` (group). The `active` state bit is sent separately by the
-/// caller so it can be ordered after all creations within one atomic `done`.
+/// `state` → `workspace_enter` (group). The protocol requires `state` among the
+/// initial details, so every workspace starts at `empty`; the caller re-emits
+/// `state(active)` on the active one within the same atomic `done`.
 fn create_workspace_handle<D>(
     display: &DisplayHandle,
     client: &Client,
@@ -112,7 +117,10 @@ fn create_workspace_handle<D>(
     handle.id(name.to_owned());
     handle.name(name.to_owned());
     handle.capabilities(WorkspaceCapabilities::Activate | WorkspaceCapabilities::Remove);
-    inst.group.workspace_enter(&handle);
+    handle.state(State::empty());
+    if let Some(group) = &inst.group {
+        group.workspace_enter(&handle);
+    }
     inst.workspaces.insert(name.to_owned(), handle);
 }
 
@@ -147,35 +155,49 @@ pub fn refresh<D>(
         };
         let mut changed = false;
 
-        // The wl_outputs this client has currently bound, across all live
-        // outputs (a client can bind the same output more than once).
-        let mut current: Vec<WlOutput> = Vec::new();
-        for output in outputs {
-            for wl_output in output.client_outputs(&client) {
-                if !current.contains(&wl_output) {
-                    current.push(wl_output);
+        // Reconcile group outputs only while the group handle is live.
+        if let Some(group) = inst.group.clone() {
+            // The distinct wl_output resources this client has bound across the
+            // live outputs. Each distinct resource gets its own enter; the
+            // dedup only guards against the same resource being listed twice.
+            let mut current: Vec<WlOutput> = Vec::new();
+            for output in outputs {
+                for wl_output in output.client_outputs(&client) {
+                    if !current.contains(&wl_output) {
+                        current.push(wl_output);
+                    }
                 }
             }
-        }
-        for wl_output in &current {
-            if !inst.outputs.contains(wl_output) {
-                inst.group.output_enter(wl_output);
-                inst.outputs.push(wl_output.clone());
-                changed = true;
+            for wl_output in &current {
+                if !inst.outputs.contains(wl_output) {
+                    group.output_enter(wl_output);
+                    inst.outputs.push(wl_output.clone());
+                    changed = true;
+                }
             }
+            inst.outputs.retain(|wl_output| {
+                if !wl_output.is_alive() {
+                    // Client released the proxy: drop it, but never send a leave
+                    // to a dead wl_output (segfault hazard).
+                    return false;
+                }
+                if current.contains(wl_output) {
+                    true
+                } else {
+                    group.output_leave(wl_output);
+                    changed = true;
+                    false
+                }
+            });
         }
-        inst.outputs.retain(|wl_output| {
-            if current.contains(wl_output) {
-                true
-            } else {
-                inst.group.output_leave(wl_output);
-                changed = true;
-                false
-            }
-        });
 
         for name in &removed {
             if let Some(handle) = inst.workspaces.remove(name) {
+                // A workspace must leave its group before removal — the protocol
+                // only removes workspaces belonging to no group.
+                if let Some(group) = &inst.group {
+                    group.workspace_leave(&handle);
+                }
                 handle.removed();
                 changed = true;
             }
@@ -218,12 +240,17 @@ pub fn send_output_leave(ws_state: &mut ExtWorkspaceManagerState, output: &Outpu
         let Some(client) = inst.manager.client() else {
             continue;
         };
+        let Some(group) = inst.group.clone() else {
+            continue;
+        };
         let client_outputs: Vec<_> = output.client_outputs(&client).collect();
         let mut changed = false;
         inst.outputs.retain(|wl_output| {
             if client_outputs.iter().any(|o| o == wl_output) {
-                inst.group.output_leave(wl_output);
-                changed = true;
+                if wl_output.is_alive() {
+                    group.output_leave(wl_output);
+                    changed = true;
+                }
                 false
             } else {
                 true
@@ -271,7 +298,7 @@ where
 
         let mut inst = ManagerInstance {
             manager: manager.clone(),
-            group,
+            group: Some(group.clone()),
             workspaces: BTreeMap::new(),
             outputs: Vec::new(),
             pending: Vec::new(),
@@ -279,7 +306,7 @@ where
 
         for output in &outputs {
             for wl_output in output.client_outputs(client) {
-                inst.group.output_enter(&wl_output);
+                group.output_enter(&wl_output);
                 inst.outputs.push(wl_output);
             }
         }
@@ -374,16 +401,16 @@ where
         match request {
             ext_workspace_group_handle_v1::Request::CreateWorkspace { workspace } => {
                 let ws_state = state.ext_workspace_state();
-                if let Some(inst) = ws_state.instances.iter_mut().find(|i| &i.group == resource) {
+                if let Some(inst) = ws_state
+                    .instances
+                    .iter_mut()
+                    .find(|i| i.group.as_ref() == Some(resource))
+                {
                     inst.pending.push(PendingOp::Create(workspace));
                 }
             }
-            ext_workspace_group_handle_v1::Request::Destroy => {
-                state
-                    .ext_workspace_state()
-                    .instances
-                    .retain(|i| &i.group != resource);
-            }
+            // Destroy is a destructor — the tombstone happens in `destroyed`.
+            ext_workspace_group_handle_v1::Request::Destroy => {}
             other => {
                 tracing::debug!("ext_workspace_group_handle_v1: ignoring unknown request {other:?}")
             }
@@ -396,10 +423,16 @@ where
         resource: &ExtWorkspaceGroupHandleV1,
         _data: &(),
     ) {
-        state
+        // The client dropped the group but may keep the manager and workspaces:
+        // tombstone only the group so its events stop while the rest flows.
+        if let Some(inst) = state
             .ext_workspace_state()
             .instances
-            .retain(|i| &i.group != resource);
+            .iter_mut()
+            .find(|i| i.group.as_ref() == Some(resource))
+        {
+            inst.group = None;
+        }
     }
 }
 
@@ -438,8 +471,9 @@ where
             // deactivate/assign are unsupported (capabilities omit them); accept
             // them as no-ops per protocol politeness.
             ext_workspace_handle_v1::Request::Deactivate
-            | ext_workspace_handle_v1::Request::Assign { .. }
-            | ext_workspace_handle_v1::Request::Destroy => {}
+            | ext_workspace_handle_v1::Request::Assign { .. } => {}
+            // Destroy is a destructor — cleanup happens in `destroyed`.
+            ext_workspace_handle_v1::Request::Destroy => {}
             other => {
                 tracing::debug!("ext_workspace_handle_v1: ignoring unknown request {other:?}")
             }
