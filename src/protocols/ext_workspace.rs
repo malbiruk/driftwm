@@ -117,14 +117,20 @@ fn create_workspace_handle<D>(
 }
 
 /// Diff the bookmark registry against the advertised set and reconcile every
-/// bound client: create handles for new bookmarks, `removed` gone ones, and
-/// flip the `active` state bit when the focused output's incumbent changes.
-/// `active` is the focused output's incumbent — the only output whose incumbent
-/// the protocol projects. Emits `done` per instance only when it changed.
+/// bound client: create handles for new bookmarks, `removed` gone ones, flip
+/// the `active` state bit when the focused output's incumbent changes, and
+/// reconcile the group's `output_enter`/`output_leave` against the wl_outputs
+/// each client has bound. `active` is the focused output's incumbent — the only
+/// output whose incumbent the protocol projects. `outputs` are the live outputs
+/// (those with a wl_output global). Emits `done` per instance only when it
+/// changed. Runs every frame: the manager global predates every wl_output
+/// global and clients bind outputs on their own schedule, so output_enter can
+/// only be delivered by diffing per frame, as the protocol requires.
 pub fn refresh<D>(
     ws_state: &mut ExtWorkspaceManagerState,
     bookmarks: &BTreeMap<String, [f64; 2]>,
     active: Option<&str>,
+    outputs: &[Output],
 ) where
     D: Dispatch<ExtWorkspaceHandleV1, ()> + 'static,
 {
@@ -133,10 +139,6 @@ pub fn refresh<D>(
     let removed: Vec<String> = ws_state.workspaces.difference(&live).cloned().collect();
     let active_changed = ws_state.active.as_deref() != active;
 
-    if created.is_empty() && removed.is_empty() && !active_changed {
-        return;
-    }
-
     let old_active = ws_state.active.clone();
     let display = ws_state.display.clone();
     for inst in &mut ws_state.instances {
@@ -144,6 +146,33 @@ pub fn refresh<D>(
             continue;
         };
         let mut changed = false;
+
+        // The wl_outputs this client has currently bound, across all live
+        // outputs (a client can bind the same output more than once).
+        let mut current: Vec<WlOutput> = Vec::new();
+        for output in outputs {
+            for wl_output in output.client_outputs(&client) {
+                if !current.contains(&wl_output) {
+                    current.push(wl_output);
+                }
+            }
+        }
+        for wl_output in &current {
+            if !inst.outputs.contains(wl_output) {
+                inst.group.output_enter(wl_output);
+                inst.outputs.push(wl_output.clone());
+                changed = true;
+            }
+        }
+        inst.outputs.retain(|wl_output| {
+            if current.contains(wl_output) {
+                true
+            } else {
+                inst.group.output_leave(wl_output);
+                changed = true;
+                false
+            }
+        });
 
         for name in &removed {
             if let Some(handle) = inst.workspaces.remove(name) {
@@ -178,28 +207,6 @@ pub fn refresh<D>(
 
     ws_state.workspaces = live;
     ws_state.active = active.map(str::to_owned);
-}
-
-/// Advertise a newly connected output to every bound client's group via
-/// `output_enter`. Called from the output-connect hook once the wl_output
-/// global exists.
-pub fn send_output_enter(ws_state: &mut ExtWorkspaceManagerState, output: &Output) {
-    for inst in &mut ws_state.instances {
-        let Some(client) = inst.manager.client() else {
-            continue;
-        };
-        let mut changed = false;
-        for wl_output in output.client_outputs(&client) {
-            if !inst.outputs.iter().any(|o| o == &wl_output) {
-                inst.group.output_enter(&wl_output);
-                inst.outputs.push(wl_output);
-                changed = true;
-            }
-        }
-        if changed {
-            inst.manager.done();
-        }
-    }
 }
 
 /// Retract a disconnecting output from every bound client's group via

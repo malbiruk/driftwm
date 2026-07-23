@@ -137,7 +137,8 @@ impl DriftWm {
             &mut self.foreign_toplevel_state,
             output,
         );
-        driftwm::protocols::ext_workspace::send_output_enter(&mut self.ext_workspace_state, output);
+        // ext-workspace output_enter is reconciled per frame in `refresh` (the
+        // client hasn't bound the new wl_output global yet at this point).
     }
 
     /// Backend-independent disconnect policy for an output. Runs whether the

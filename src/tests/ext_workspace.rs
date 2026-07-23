@@ -345,3 +345,33 @@ fn ipc_reports_active_bookmark_top_level_and_per_output() {
     assert_eq!(info.active_bookmark, None);
     assert_eq!(info.outputs[0].active_bookmark, None);
 }
+
+#[test]
+fn group_output_enter_and_leave_track_the_live_outputs() {
+    let mut f = Fixture::new();
+    let _out1 = f.add_output(1, (1920, 1080));
+    let out2 = f.add_output(2, (1280, 720));
+    seed(&mut f, &[]);
+    let id = connect(&mut f);
+
+    // The manager global predates every wl_output, and the client binds outputs
+    // only after the manager, so the bind burst can't carry the enters — the
+    // per-frame refresh reconciles them once the client has bound the outputs.
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id).state.ext_workspace.output_enters.len(),
+        2,
+        "the group advertises both live outputs via output_enter"
+    );
+
+    // Disconnecting one output retracts it. The leave is sent before the
+    // wl_output global is torn down, so the client's proxy is still valid.
+    f.remove_output(&out2);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id).state.ext_workspace.output_leaves.len(),
+        1,
+        "the group retracts the disconnected output"
+    );
+}

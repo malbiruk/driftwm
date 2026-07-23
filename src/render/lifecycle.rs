@@ -70,10 +70,18 @@ pub fn refresh_ext_workspaces(state: &mut crate::state::DriftWm) {
     let active = state
         .active_output()
         .and_then(|o| output_state(&o).active_bookmark.clone());
+    // Only outputs with a live wl_output global can carry group enters; the
+    // virtual placeholders left by a full disconnect have none.
+    let live_outputs: Vec<Output> = outputs
+        .iter()
+        .filter(|o| !state.disconnected_outputs.contains(&o.name()))
+        .cloned()
+        .collect();
     driftwm::protocols::ext_workspace::refresh::<crate::state::DriftWm>(
         &mut state.ext_workspace_state,
         &state.bookmarks,
         active.as_deref(),
+        &live_outputs,
     );
 }
 
