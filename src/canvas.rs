@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::collections::VecDeque;
 use std::time::Duration;
 
@@ -186,16 +187,89 @@ pub fn visible_fraction(
     (iw * ih) / area
 }
 
-/// Check whether the canvas origin (0, 0) is visible in the current viewport.
-/// At zoom < 1.0, the visible area is larger: viewport_size / zoom.
-pub fn is_origin_visible(
+/// Check whether an arbitrary canvas point is visible in the current viewport.
+/// At zoom < 1.0, the visible area is larger: viewport_size / zoom. Bounds are
+/// inclusive on both edges (a point exactly on an edge counts as visible).
+pub fn is_point_visible(
+    point: Point<f64, Logical>,
     camera: Point<f64, Logical>,
     viewport_size: Size<i32, Logical>,
     zoom: f64,
 ) -> bool {
     let visible_w = viewport_size.w as f64 / zoom;
     let visible_h = viewport_size.h as f64 / zoom;
-    camera.x <= 0.0 && 0.0 <= camera.x + visible_w && camera.y <= 0.0 && 0.0 <= camera.y + visible_h
+    camera.x <= point.x
+        && point.x <= camera.x + visible_w
+        && camera.y <= point.y
+        && point.y <= camera.y + visible_h
+}
+
+/// Check whether the canvas origin (0, 0) is visible in the current viewport.
+pub fn is_origin_visible(
+    camera: Point<f64, Logical>,
+    viewport_size: Size<i32, Logical>,
+    zoom: f64,
+) -> bool {
+    is_point_visible(Point::from((0.0, 0.0)), camera, viewport_size, zoom)
+}
+
+/// A rival bookmark must be at least this fraction of the incumbent's distance
+/// to steal the active title — 10% closer. Damps flip-flop when two bookmarks
+/// sit near-equidistant from the viewport center.
+const ACTIVE_BOOKMARK_HYSTERESIS: f64 = 0.9;
+
+/// The active bookmark for one output's viewport: the visible bookmark nearest
+/// the usable-area center, with hysteresis favoring the incumbent.
+///
+/// `bookmarks` are stored Y-up (user/rule/IPC convention) while the camera is
+/// internal Y-down, so each bookmark's y is negated before comparison — the
+/// same flip `go_to_canvas_point` applies. `usable_center` is the screen-space
+/// center of the usable area (panels excluded, as `SetBookmark` uses); the
+/// canvas-space target is `camera + usable_center / zoom`.
+///
+/// Candidates are the bookmarks visible in the viewport. The nearest wins,
+/// tie-broken by name (BTreeMap order). The incumbent keeps the title while it
+/// stays visible unless a rival is >10% closer. No visible bookmarks → `None`.
+pub fn active_bookmark(
+    bookmarks: &BTreeMap<String, [f64; 2]>,
+    camera: Point<f64, Logical>,
+    viewport_size: Size<i32, Logical>,
+    zoom: f64,
+    usable_center: Point<f64, Logical>,
+    incumbent: Option<&str>,
+) -> Option<String> {
+    let target = Point::<f64, Logical>::from((
+        camera.x + usable_center.x / zoom,
+        camera.y + usable_center.y / zoom,
+    ));
+
+    let mut best: Option<(&str, f64)> = None;
+    let mut incumbent_dist: Option<f64> = None;
+    for (name, &[x, y]) in bookmarks {
+        let point = Point::from((x, -y));
+        if !is_point_visible(point, camera, viewport_size, zoom) {
+            continue;
+        }
+        let dx = point.x - target.x;
+        let dy = point.y - target.y;
+        let dist = (dx * dx + dy * dy).sqrt();
+        if incumbent == Some(name.as_str()) {
+            incumbent_dist = Some(dist);
+        }
+        if best.is_none_or(|(_, d)| dist < d) {
+            best = Some((name.as_str(), dist));
+        }
+    }
+
+    let (best_name, best_dist) = best?;
+    if let (Some(inc), Some(inc_dist)) = (incumbent, incumbent_dist) {
+        // Incumbent still visible: keep it unless a rival is decisively closer.
+        if best_name != inc && best_dist < ACTIVE_BOOKMARK_HYSTERESIS * inc_dist {
+            return Some(best_name.to_owned());
+        }
+        return Some(inc.to_owned());
+    }
+    Some(best_name.to_owned())
 }
 
 /// The canvas rectangle visible at the current camera + zoom.
@@ -787,5 +861,225 @@ mod tests {
         let items: Vec<(&str, Point<f64, Logical>)> = vec![];
         let result = find_nearest(origin, &Direction::Right, items.into_iter(), None::<&&str>);
         assert_eq!(result, None);
+    }
+
+    // -- active_bookmark tests --
+
+    fn bookmarks(entries: &[(&str, f64, f64)]) -> BTreeMap<String, [f64; 2]> {
+        entries
+            .iter()
+            .map(|&(name, x, y)| (name.to_owned(), [x, y]))
+            .collect()
+    }
+
+    #[test]
+    fn point_visibility_inclusive_and_zoom_aware() {
+        let viewport = vp(1000, 1000);
+        // Origin at the top-left corner of the viewport (inclusive edge).
+        assert!(is_point_visible(pt(0.0, 0.0), cam(0.0, 0.0), viewport, 1.0));
+        // Just outside the right edge at zoom 1.0.
+        assert!(!is_point_visible(
+            pt(1001.0, 0.0),
+            cam(0.0, 0.0),
+            viewport,
+            1.0
+        ));
+        // At zoom 0.5 the viewport covers 2000 canvas units, so it's visible.
+        assert!(is_point_visible(
+            pt(1001.0, 0.0),
+            cam(0.0, 0.0),
+            viewport,
+            0.5
+        ));
+    }
+
+    #[test]
+    fn active_bookmark_none_when_empty() {
+        let bms = bookmarks(&[]);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(0.0, 0.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn active_bookmark_none_when_all_off_screen() {
+        // Bookmark Y-up (500, -600) → internal (500, 600) sits inside a
+        // 1000x1000 viewport at camera (0,0), so shift the camera away.
+        let bms = bookmarks(&[("far", 5000.0, -5000.0)]);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(0.0, 0.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn active_bookmark_nearest_wins() {
+        // Camera (0,0), zoom 1.0, usable center (500,500) → target internal
+        // (500, 500). "near" Y-up (450, -450) → internal (450, 450); "far"
+        // Y-up (100, -100) → internal (100, 100). "near" is closer.
+        let bms = bookmarks(&[("near", 450.0, -450.0), ("far", 100.0, -100.0)]);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(0.0, 0.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None
+            ),
+            Some("near".to_owned())
+        );
+    }
+
+    #[test]
+    fn active_bookmark_y_flip() {
+        // A bookmark at positive Y-up y matches a camera looking at negative
+        // internal y. Bookmark Y-up (0, 400) → internal (0, -400). Put it dead
+        // center by aiming the target there: camera (-500, -900), usable center
+        // (500, 500), zoom 1.0 → target internal (0, -400).
+        let bms = bookmarks(&[("up", 0.0, 400.0)]);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(-500.0, -900.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None,
+            ),
+            Some("up".to_owned())
+        );
+        // A camera looking at positive internal y (i.e. negative Y-up) must NOT
+        // see this bookmark as visible.
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(-500.0, 100.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn active_bookmark_hysteresis_holds_incumbent() {
+        // Two bookmarks, incumbent "a" slightly farther than rival "b" but not
+        // by >10%: incumbent keeps the title. Target internal (500, 500).
+        // "a" internal (450, 500) → dist 50; "b" internal (550, 500) → dist 50.
+        // Nudge so "b" is only ~9% closer: a at dist 55, b at dist 50.
+        let bms = bookmarks(&[("a", 445.0, -500.0), ("b", 550.0, -500.0)]);
+        let held = active_bookmark(
+            &bms,
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+            pt(500.0, 500.0),
+            Some("a"),
+        );
+        assert_eq!(held, Some("a".to_owned()));
+    }
+
+    #[test]
+    fn active_bookmark_hysteresis_yields_to_decisive_rival() {
+        // Rival "b" is >10% closer than incumbent "a": rival wins.
+        // "a" internal (300, 500) → dist 200; "b" internal (550, 500) → dist 50.
+        let bms = bookmarks(&[("a", 300.0, -500.0), ("b", 550.0, -500.0)]);
+        let flipped = active_bookmark(
+            &bms,
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+            pt(500.0, 500.0),
+            Some("a"),
+        );
+        assert_eq!(flipped, Some("b".to_owned()));
+    }
+
+    #[test]
+    fn active_bookmark_incumbent_left_rect_falls_back_to_nearest() {
+        // Incumbent "gone" is no longer visible → normal nearest-wins among the
+        // remaining candidates, no hysteresis credit for the absent incumbent.
+        let bms = bookmarks(&[("here", 450.0, -450.0)]);
+        let result = active_bookmark(
+            &bms,
+            cam(0.0, 0.0),
+            vp(1000, 1000),
+            1.0,
+            pt(500.0, 500.0),
+            Some("gone"),
+        );
+        assert_eq!(result, Some("here".to_owned()));
+    }
+
+    #[test]
+    fn active_bookmark_tie_break_by_name() {
+        // Two equidistant candidates → BTreeMap order wins ("a" before "b").
+        // Both at internal (500, 450) and (500, 550), dist 50 each.
+        let bms = bookmarks(&[("b", 500.0, -550.0), ("a", 500.0, -450.0)]);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam(0.0, 0.0),
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                None
+            ),
+            Some("a".to_owned())
+        );
+    }
+
+    #[test]
+    fn active_bookmark_midpoint_pan_does_not_flip() {
+        // Incumbent "a" and rival "b" straddle the viewport. Panning the camera
+        // toward the midpoint keeps both near-equidistant, so the incumbent
+        // holds until the rival crosses the 10% margin.
+        let bms = bookmarks(&[("a", 200.0, -500.0), ("b", 800.0, -500.0)]);
+        // Target moved slightly toward "b" (usable center → internal 520,500):
+        // a dist 320, b dist 280 → b is 12.5% closer, so it flips.
+        let cam_near_b = cam(20.0, 0.0);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam_near_b,
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                Some("a")
+            ),
+            Some("b".to_owned())
+        );
+        // A gentler pan (internal target 505,500): a dist 305, b dist 295 →
+        // only ~3% closer, incumbent holds.
+        let cam_slight = cam(5.0, 0.0);
+        assert_eq!(
+            active_bookmark(
+                &bms,
+                cam_slight,
+                vp(1000, 1000),
+                1.0,
+                pt(500.0, 500.0),
+                Some("a")
+            ),
+            Some("a".to_owned())
+        );
     }
 }
