@@ -26,6 +26,11 @@ use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_protocols::ext::workspace::v1::client::{
+    ext_workspace_group_handle_v1::{self, ExtWorkspaceGroupHandleV1},
+    ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
+    ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
+};
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
 use wayland_protocols::wp::viewporter::client::wp_viewporter::WpViewporter;
@@ -75,6 +80,76 @@ pub struct State {
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
+
+    /// Recorded ext-workspace-v1 protocol activity for assertions.
+    pub ext_workspace: ExtWorkspace,
+}
+
+/// Every ext-workspace-v1 event the compositor sends, captured for inspection.
+/// Follows the `WlOutput` recording idiom: handle events land in fields, they
+/// never drive behavior. The manager, group and per-workspace handles are all
+/// created by the compositor (the manager via the registry, the group and
+/// workspaces via `new_id` events), so the recorder owns the client-side proxies.
+#[derive(Default)]
+pub struct ExtWorkspace {
+    pub manager: Option<ExtWorkspaceManagerV1>,
+    pub group: Option<ExtWorkspaceGroupHandleV1>,
+    pub group_capabilities: Option<u32>,
+    /// Count of manager `done` events — the protocol's atomicity barrier.
+    pub done_count: usize,
+    pub finished: bool,
+    /// Group `output_enter` / `output_leave` targets, in arrival order.
+    pub output_enters: Vec<WlOutput>,
+    pub output_leaves: Vec<WlOutput>,
+    /// Group `workspace_enter` / `workspace_leave` targets, in arrival order.
+    pub workspace_enters: Vec<ExtWorkspaceHandleV1>,
+    pub workspace_leaves: Vec<ExtWorkspaceHandleV1>,
+    pub workspaces: Vec<WorkspaceRecord>,
+}
+
+/// One `ext_workspace_handle_v1` and its latest advertised properties. `state`
+/// and `capabilities` hold the raw bitfields; the last value of each wins.
+pub struct WorkspaceRecord {
+    pub handle: ExtWorkspaceHandleV1,
+    pub id: Option<String>,
+    pub name: Option<String>,
+    pub capabilities: Option<u32>,
+    pub state: Option<u32>,
+    pub removed: bool,
+}
+
+impl ExtWorkspace {
+    /// Names of every workspace the compositor advertised and hasn't removed.
+    pub fn names(&self) -> Vec<String> {
+        self.workspaces
+            .iter()
+            .filter(|w| !w.removed)
+            .filter_map(|w| w.name.clone())
+            .collect()
+    }
+
+    /// The live workspace record named `name`, if any.
+    pub fn workspace(&self, name: &str) -> Option<&WorkspaceRecord> {
+        self.workspaces
+            .iter()
+            .find(|w| !w.removed && w.name.as_deref() == Some(name))
+    }
+
+    /// Name of the workspace currently carrying the `active` state bit, if any.
+    pub fn active(&self) -> Option<&str> {
+        let active_bit = ext_workspace_handle_v1::State::Active.bits();
+        self.workspaces
+            .iter()
+            .find(|w| !w.removed && w.state.is_some_and(|s| s & active_bit != 0))
+            .and_then(|w| w.name.as_deref())
+    }
+
+    /// Whether the group emitted `workspace_enter` for the workspace named `name`.
+    pub fn entered(&self, name: &str) -> bool {
+        self.workspaces
+            .iter()
+            .any(|w| w.name.as_deref() == Some(name) && self.workspace_enters.contains(&w.handle))
+    }
 }
 
 pub struct Window {
@@ -237,6 +312,7 @@ impl Client {
             layers: Vec::new(),
             popups: Vec::new(),
             activation_token: None,
+            ext_workspace: ExtWorkspace::default(),
         };
 
         Self {
@@ -785,6 +861,9 @@ impl Dispatch<WlRegistry, ()> for State {
                     let version = min(version, WlOutput::interface().version);
                     let output = registry.bind(name, version, qh, ());
                     state.outputs.insert(output, String::new());
+                } else if interface == ExtWorkspaceManagerV1::interface().name {
+                    let version = min(version, ExtWorkspaceManagerV1::interface().version);
+                    state.ext_workspace.manager = Some(registry.bind(name, version, qh, ()));
                 }
 
                 let global = Global {
@@ -818,6 +897,107 @@ impl Dispatch<WlOutput, ()> for State {
                 *state.outputs.get_mut(output).unwrap() = name;
             }
             wl_output::Event::Description { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ExtWorkspaceManagerV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _manager: &ExtWorkspaceManagerV1,
+        event: <ExtWorkspaceManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_workspace_manager_v1::Event::WorkspaceGroup { workspace_group } => {
+                state.ext_workspace.group = Some(workspace_group);
+            }
+            ext_workspace_manager_v1::Event::Workspace { workspace } => {
+                state.ext_workspace.workspaces.push(WorkspaceRecord {
+                    handle: workspace,
+                    id: None,
+                    name: None,
+                    capabilities: None,
+                    state: None,
+                    removed: false,
+                });
+            }
+            ext_workspace_manager_v1::Event::Done => state.ext_workspace.done_count += 1,
+            ext_workspace_manager_v1::Event::Finished => state.ext_workspace.finished = true,
+            _ => unreachable!(),
+        }
+    }
+
+    wayland_client::event_created_child!(State, ExtWorkspaceManagerV1, [
+        ext_workspace_manager_v1::EVT_WORKSPACE_GROUP_OPCODE => (ExtWorkspaceGroupHandleV1, ()),
+        ext_workspace_manager_v1::EVT_WORKSPACE_OPCODE => (ExtWorkspaceHandleV1, ()),
+    ]);
+}
+
+impl Dispatch<ExtWorkspaceGroupHandleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        _group: &ExtWorkspaceGroupHandleV1,
+        event: <ExtWorkspaceGroupHandleV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_workspace_group_handle_v1::Event::Capabilities { capabilities } => {
+                state.ext_workspace.group_capabilities = Some(capabilities.into());
+            }
+            ext_workspace_group_handle_v1::Event::OutputEnter { output } => {
+                state.ext_workspace.output_enters.push(output);
+            }
+            ext_workspace_group_handle_v1::Event::OutputLeave { output } => {
+                state.ext_workspace.output_leaves.push(output);
+            }
+            ext_workspace_group_handle_v1::Event::WorkspaceEnter { workspace } => {
+                state.ext_workspace.workspace_enters.push(workspace);
+            }
+            ext_workspace_group_handle_v1::Event::WorkspaceLeave { workspace } => {
+                state.ext_workspace.workspace_leaves.push(workspace);
+            }
+            ext_workspace_group_handle_v1::Event::Removed => {
+                state.ext_workspace.group = None;
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ExtWorkspaceHandleV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        handle: &ExtWorkspaceHandleV1,
+        event: <ExtWorkspaceHandleV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let Some(record) = state
+            .ext_workspace
+            .workspaces
+            .iter_mut()
+            .find(|w| &w.handle == handle)
+        else {
+            return;
+        };
+        match event {
+            ext_workspace_handle_v1::Event::Id { id } => record.id = Some(id),
+            ext_workspace_handle_v1::Event::Name { name } => record.name = Some(name),
+            ext_workspace_handle_v1::Event::Capabilities { capabilities } => {
+                record.capabilities = Some(capabilities.into());
+            }
+            ext_workspace_handle_v1::Event::State { state } => {
+                record.state = Some(state.into());
+            }
+            ext_workspace_handle_v1::Event::Coordinates { .. } => (),
+            ext_workspace_handle_v1::Event::Removed => record.removed = true,
             _ => unreachable!(),
         }
     }

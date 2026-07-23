@@ -24,6 +24,7 @@ mod client_teardown;
 mod config_reload;
 mod configure_sequences;
 mod cycle_windows;
+mod ext_workspace;
 mod focus_timing;
 mod hot_corners;
 mod hotplug;
