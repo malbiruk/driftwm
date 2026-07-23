@@ -156,7 +156,10 @@ stand-in by, in order:
 1. **The activation token**, if the app presents it back (most native Wayland
    toolkits do). This works whether the app maps a fresh window or — as a
    single-instance app does — forwards the token to its already-running window;
-   either way that window moves into the stand-in's slot, sized to fit.
+   either way that window moves into the stand-in's slot, sized to fit. Note
+   that the app picks the answering window: one with several windows open that
+   forwards the token to an existing sibling will have *that* sibling moved,
+   abandoning its old spot.
 2. **App identity**, as a 5-second fallback for apps that ignore the token:
    the oldest pending relaunch of the same app_id adopts the next window of
    that app_id to map.

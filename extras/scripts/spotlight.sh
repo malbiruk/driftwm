@@ -13,11 +13,15 @@ XDG_DATA_DIRS="${XDG_DATA_DIRS:-/usr/local/share:/usr/share}"
 FUZZEL_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/fuzzel"
 touch "$FUZZEL_CACHE"
 
-# App table: `name \t icon \t exec \t desktop-file \t wmclass` per entry.
+# App table: `name \t icon \t exec \t desktop-file \t wmclass \t listable`.
+# NoDisplay/Hidden/no-Exec entries stay in the table with listable=0 — they
+# don't belong in the app list but often carry the StartupWMClass that names
+# a window. `.dirs` alongside records which dirs the table was built from.
 APPS_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/driftwm-spotlight-apps.tsv"
 
 # ~/.local first so it wins the first-seen dedup below.
 app_dirs=$(printf '%s' "$HOME/.local/share:$XDG_DATA_DIRS" | tr ':' '\n' | sed 's|$|/applications|')
+dirs_now=$(for dir in $app_dirs; do [ -d "$dir" ] && printf '%s\n' "$dir"; done)
 
 display=$(mktemp)
 lookup=$(mktemp)
@@ -27,6 +31,11 @@ trap 'rm -f "$display" "$lookup" "$tmp"' EXIT
 # --- App table (rebuilt only when a .desktop file or applications dir changed) ---
 rebuild=0
 [ -f "$APPS_CACHE" ] || rebuild=1
+# The dir set itself can change with no mtime to catch it (a data dir with
+# old contents appearing in XDG_DATA_DIRS, or a dir vanishing wholesale).
+if [ "$rebuild" = 0 ]; then
+    [ "$dirs_now" = "$(cat "$APPS_CACHE.dirs" 2>/dev/null)" ] || rebuild=1
+fi
 if [ "$rebuild" = 0 ]; then
     # Dir mtime catches installs/removals, file mtime catches edits.
     stale=$(find $app_dirs -maxdepth 1 \( -type d -o -name '*.desktop' \) \
@@ -35,21 +44,20 @@ if [ "$rebuild" = 0 ]; then
 fi
 if [ "$rebuild" = 1 ]; then
     set --
-    for dir in $app_dirs; do
-        [ -d "$dir" ] || continue
+    for dir in $dirs_now; do
         for f in "$dir"/*.desktop; do
             [ -f "$f" ] && set -- "$@" "$f"
         done
     done
-    tmp=$(mktemp)
+    # Same-dir temp so the mv is an atomic rename, never a truncated copy.
+    tmp=$(mktemp "$APPS_CACHE.XXXXXX")
     if [ "$#" -gt 0 ]; then
         # Single pass over every file; [Desktop Entry] section only.
         awk -F= '
             function emit() {
-                if (did == "") return
-                if (nodisp || (type != "" && type != "Application")) return
-                if (name == "" || exec_line == "") return
-                print name "\t" icon "\t" exec_line "\t" did "\t" wmclass
+                if (did == "" || name == "") return
+                listable = !nodisp && (type == "" || type == "Application") && exec_line != ""
+                print name "\t" icon "\t" exec_line "\t" did "\t" wmclass "\t" (listable ? 1 : 0)
             }
             FNR == 1 {
                 emit()
@@ -73,6 +81,7 @@ if [ "$rebuild" = 1 ]; then
         : > "$tmp"
     fi
     mv "$tmp" "$APPS_CACHE"
+    printf '%s\n' "$dirs_now" > "$APPS_CACHE.dirs"
 fi
 
 # --- Windows (canvas windows focused-first, then fullscreen/pinned, suspended last) ---
@@ -87,9 +96,9 @@ driftwm msg state --json 2>/dev/null \
         # Resolve app_id -> Name/Icon against the table: exact filename, then
         # filename substring, then StartupWMClass. Also tidies the title.
         row=$(TITLE="$title" awk -F'\t' -v id="$app_id" '
-            $4 == id ".desktop" && exact == "" { exact = $1 "\t" $2 }
-            index($4, id) && subm == ""        { subm = $1 "\t" $2 }
-            $5 == id && wm == ""               { wm = $1 "\t" $2 }
+            $4 == id ".desktop" && exact == ""            { exact = $1 "\t" $2 }
+            id != "" && index($4, id) && subm == ""       { subm = $1 "\t" $2 }
+            id != "" && $5 == id && wm == ""              { wm = $1 "\t" $2 }
             END {
                 best = exact != "" ? exact : subm != "" ? subm : wm
                 if (best == "") best = id "\t" id
@@ -114,7 +123,7 @@ driftwm msg state --json 2>/dev/null \
 done
 
 # --- Apps: dedup by Name (first-seen wins), rank by fuzzel usage count, then name ---
-awk -F'\t' '!seen[$1]++' "$APPS_CACHE" \
+awk -F'\t' '$6 == 1 && !seen[$1]++' "$APPS_CACHE" \
   | awk -F'\t' -v cache="$FUZZEL_CACHE" '
         BEGIN {
             while ((getline line < cache) > 0) {
