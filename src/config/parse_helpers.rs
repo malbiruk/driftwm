@@ -14,7 +14,7 @@ use super::toml::{
     OutputOutlineConfig, OutputRuleFile, PassKeysFile, WindowRuleFile,
 };
 use super::types::{
-    Action, BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FontWeight, HotCorners,
+    BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FontWeight, HotCorners,
     KeyCombo, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition, PassKeys,
     Pattern, TitleAlign, WindowRule,
 };
@@ -556,7 +556,7 @@ pub(super) fn parse_output_rule(
         .unwrap_or_default();
 
     let hot_corners = match r.hot_corners {
-        Some(hcf) => parse_hot_corners(hcf)?,
+        Some(hcf) => parse_hot_corners(hcf, errors)?,
         None => HotCorners::default(),
     };
 
@@ -570,7 +570,10 @@ pub(super) fn parse_output_rule(
     })
 }
 
-pub(super) fn parse_hot_corners(hcf: HotCornersFile) -> Result<HotCorners, String> {
+pub(super) fn parse_hot_corners(
+    hcf: HotCornersFile,
+    errors: &mut Warnings,
+) -> Result<HotCorners, String> {
     use super::parse::parse_action;
     use super::types::HotCorner;
 
@@ -582,25 +585,29 @@ pub(super) fn parse_hot_corners(hcf: HotCornersFile) -> Result<HotCorners, Strin
     }
 
     let mut bindings = HashMap::new();
-    let try_set = |corner: HotCorner,
-                   raw: &Option<String>,
-                   bindings: &mut HashMap<HotCorner, Action>|
-     -> Result<(), String> {
-        if let Some(s) = raw {
-            if s == "none" {
-                bindings.remove(&corner);
-            } else {
-                let action = parse_action(s)?;
+    for (corner, field, raw) in [
+        (HotCorner::TopLeft, "top_left", &hcf.top_left),
+        (HotCorner::TopRight, "top_right", &hcf.top_right),
+        (HotCorner::BottomLeft, "bottom_left", &hcf.bottom_left),
+        (HotCorner::BottomRight, "bottom_right", &hcf.bottom_right),
+    ] {
+        let Some(s) = raw else { continue };
+        if s == "none" {
+            bindings.remove(&corner);
+            continue;
+        }
+        match parse_action(s) {
+            Ok(action) => {
                 bindings.insert(corner, action);
             }
+            // Drop only the corner — failing the whole entry would also drop
+            // the monitor's scale/mode/position, bringing the display up wrong.
+            Err(e) => collect_warn(
+                errors,
+                format!("config: [outputs.hot_corners] {field} = \"{s}\": {e}"),
+            ),
         }
-        Ok(())
-    };
-
-    try_set(HotCorner::TopLeft, &hcf.top_left, &mut bindings)?;
-    try_set(HotCorner::TopRight, &hcf.top_right, &mut bindings)?;
-    try_set(HotCorner::BottomLeft, &hcf.bottom_left, &mut bindings)?;
-    try_set(HotCorner::BottomRight, &hcf.bottom_right, &mut bindings)?;
+    }
 
     let disable_when_fullscreen = hcf.disable_when_fullscreen.unwrap_or(true);
     let disable_while_dragging = hcf.disable_while_dragging.unwrap_or(true);

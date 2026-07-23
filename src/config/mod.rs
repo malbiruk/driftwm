@@ -1513,6 +1513,32 @@ mod tests {
     }
 
     #[test]
+    fn a_bad_hot_corner_action_drops_only_that_corner() {
+        let toml_str = r#"
+            [[outputs]]
+            name = "eDP-1"
+            scale = 2.0
+            [outputs.hot_corners]
+            top_left = "go-to 0 0"
+            top_right = "center-window"
+        "#;
+        let (config, _) = Config::from_toml_collect(toml_str).unwrap();
+        let output = &config.output_configs[0];
+        // The monitor keeps its scale/mode/position and its working corners.
+        assert_eq!(output.scale, Some(2.0));
+        assert_eq!(
+            output.hot_corners.bindings.get(&HotCorner::TopRight),
+            Some(&Action::CenterWindow)
+        );
+        assert!(
+            !output
+                .hot_corners
+                .bindings
+                .contains_key(&HotCorner::TopLeft)
+        );
+    }
+
+    #[test]
     fn non_finite_bookmark_seed_is_dropped_with_warning() {
         let toml_str = r#"
             [navigation.bookmarks]
