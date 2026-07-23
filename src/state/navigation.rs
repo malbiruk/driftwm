@@ -14,12 +14,15 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{DriftWm, PendingClickNavigate, StageWindow, ZoomAnimationAnchor, output_state};
+use super::{
+    DriftWm, PendingClickNavigate, PendingPick, PickTarget, StageWindow, ZoomAnimationAnchor,
+    output_state,
+};
 
 /// Max pointer travel (screen px) between press and release for a click to
 /// still count as a click rather than a drag. Beyond it, no auto-navigate — a
 /// text selection or slow drag inside a client never slides the canvas.
-const CLICK_NAVIGATE_SLOP: f64 = 5.0;
+pub(crate) const CLICK_NAVIGATE_SLOP: f64 = 5.0;
 
 /// Skip the activation pan only when the window is already fully inside its
 /// home output's viewport. Any clipping → pan that output to bring it fully
@@ -229,6 +232,89 @@ impl DriftWm {
         if let Some(token) = self.click_navigate_timer.take() {
             self.loop_handle.remove(token);
         }
+    }
+
+    /// Whether canvas content is too small to interact with directly, so clicks
+    /// pick windows instead of reaching them. A pure function of the active
+    /// output's current zoom — no stored flag. Strict `<`, so the `0.0` sentinel
+    /// (feature off) is handled by the `t > 0.0` guard.
+    pub(crate) fn pick_mode(&self) -> bool {
+        let t = self.config.zoom_interact_min;
+        t > 0.0 && self.zoom() < t
+    }
+
+    /// Arm a pick-mode left click for `target` at press time (canvas coords).
+    /// Fired on release by `resolve_pick` if the pointer barely moved and we're
+    /// still below the threshold; cancelled by `maybe_promote_pick` on a drag.
+    pub(crate) fn arm_pick(
+        &mut self,
+        target: PickTarget,
+        press_pos: Point<f64, Logical>,
+        button: u32,
+    ) {
+        let Some(output) = self.active_output() else {
+            return;
+        };
+        let press_screen_pos = canvas_to_screen(CanvasPos(press_pos), self.camera(), self.zoom()).0;
+        self.pending_pick = Some(PendingPick {
+            target,
+            press_screen_pos,
+            button,
+            output,
+        });
+    }
+
+    /// Resolve a pick armed by `arm_pick` at button release: center the target
+    /// (with `reset_zoom`, carrying the viewport back above the threshold, so a
+    /// pick is a one-shot navigation, not a mode). A drag already cancelled the
+    /// pick via `maybe_promote_pick`, so a surviving pending means the click
+    /// stayed within slop.
+    ///
+    /// Must run *before* the release forwards at `on_pointer_button`'s tail: the
+    /// `is_grabbed()` guard catches a gesture/edge-pan grab installed between
+    /// press and release, and those grabs self-terminate inside `pointer.button`.
+    pub(crate) fn resolve_pick(&mut self, button: u32) {
+        let Some(pending) = self.pending_pick.take() else {
+            return;
+        };
+        // A different button lifted — keep waiting for the armed one (mirrors
+        // resolve_click_navigate's button-mismatch branch).
+        if pending.button != button {
+            self.pending_pick = Some(pending);
+            return;
+        }
+        // A grab installed between press and release (3-finger swipe, popup,
+        // edge-pan) owns the interaction; a stray center would reset zoom to 1.0.
+        if self.seat.get_pointer().is_some_and(|p| p.is_grabbed()) {
+            return;
+        }
+        // A release on a different output can't be compared to the press.
+        if self.active_output().as_ref() != Some(&pending.output) {
+            return;
+        }
+        // Zoomed above the threshold while holding — respect that deliberate
+        // zoom rather than stomping it back to 1.0.
+        if !self.pick_mode() {
+            return;
+        }
+        match pending.target {
+            PickTarget::Client(window) => {
+                if window.alive() {
+                    self.navigate_to_window(&window, true);
+                }
+            }
+            PickTarget::Suspended(id) => {
+                if self.find_suspended(id).is_some() {
+                    self.center_on_suspended(id, true);
+                }
+            }
+        }
+    }
+
+    /// Drop any armed pick — on a fresh press (a new interaction) or on
+    /// promotion to a move. Mirrors `cancel_click_navigate`.
+    pub(crate) fn cancel_pick(&mut self) {
+        self.pending_pick = None;
     }
 
     /// Reveal and focus `window` on the output it already lives on, without

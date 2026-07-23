@@ -215,6 +215,11 @@ pub struct Config {
     /// Animate zoom back to 1.0 when an off-screen window requests activation
     /// (xdg-activation or foreign-toplevel click) (true) or just pan to it at current zoom (false).
     pub zoom_reset_on_activation: bool,
+    /// Zoom threshold (1.0 = 100%) below which canvas windows stop receiving
+    /// pointer input: a left click centers the window under the cursor, a drag
+    /// anywhere on it moves it. `0.0` disables the feature (strict `<`
+    /// comparison, so the sentinel needs no special case).
+    pub zoom_interact_min: f64,
     pub snap_enabled: bool,
     pub snap_gap: f64,
     pub snap_distance: f64,
@@ -1045,6 +1050,16 @@ impl Config {
             ),
             zoom_reset_on_new_window: raw.zoom.reset_on_new_window.unwrap_or(true),
             zoom_reset_on_activation: raw.zoom.reset_on_activation.unwrap_or(true),
+            // clamp_warn (not non_negative): folds NaN into the below-min branch
+            // → 0.0 → off, and rejects values above MAX_ZOOM rather than
+            // silently accepting a threshold no zoom can ever fall below.
+            zoom_interact_min: clamp_warn(
+                raw.zoom.interact_min.unwrap_or(0.0),
+                0.0,
+                crate::canvas::MAX_ZOOM,
+                "zoom.interact_min",
+                &mut errors,
+            ),
             snap_enabled: raw.snap.enabled.unwrap_or(true),
             snap_gap: non_negative(raw.snap.gap.unwrap_or(12.0), "snap.gap", &mut errors),
             snap_distance: non_negative(

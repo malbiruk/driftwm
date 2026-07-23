@@ -222,6 +222,13 @@ impl DriftWm {
         self.apply_output_rules_after_reload();
         self.recompute_decoration_scale();
 
+        // A `zoom.interact_min` edit can flip pick mode without any pointer
+        // motion, so the stale pointer focus wouldn't self-heal until the next
+        // move. Resync once here (polish, not correctness: the pick decision
+        // uses element_under, not pointer focus, so a click right after the edit
+        // already behaves correctly). Runs after the config swap above.
+        self.refresh_pointer_focus();
+
         if let Some(msg) = super::errors::summarize_config_errors(&config_errors) {
             self.set_error(ErrorSource::Config, msg);
         } else {

@@ -27,7 +27,7 @@ use smithay::wayland::compositor::RegionAttributes;
 use std::rc::Rc;
 
 use crate::decorations::{DecorationHit, DecorationKey};
-use crate::state::{DriftWm, FocusTarget, StageWindow, SuspendedWindow};
+use crate::state::{DriftWm, FocusTarget, PickTarget, StageWindow, SuspendedWindow};
 use driftwm::canvas::{CanvasPos, ScreenPos, screen_space_focus_loc, screen_to_canvas};
 use driftwm::config::HotCorner;
 use driftwm::protocols::output_power::OutputPowerHandler;
@@ -379,6 +379,30 @@ impl DriftWm {
         screen_pos: Point<f64, smithay::utils::Logical>,
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
+        self.focus_cascade(screen_pos, canvas_pos, false)
+    }
+
+    /// As `pointer_focus_under`, but suppresses pointer focus on a canvas window
+    /// under the pointer while in pick mode: its clicks pick/move it rather than
+    /// reaching the client. Route every real-input pointer path through this so
+    /// a per-frame resync can't hand the client its enter back. Touch stays on
+    /// `pointer_focus_under` (out of scope).
+    pub(crate) fn pointer_focus_under_pick(
+        &mut self,
+        screen_pos: Point<f64, smithay::utils::Logical>,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
+        // Evaluated before the cascade so no output_state guard is live inside it.
+        let pick_guard = self.pick_mode();
+        self.focus_cascade(screen_pos, canvas_pos, pick_guard)
+    }
+
+    fn focus_cascade(
+        &mut self,
+        screen_pos: Point<f64, smithay::utils::Logical>,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+        pick_guard: bool,
+    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         // A fullscreen window occludes the Top/Bottom/Background layers on its
         // output — only Overlay renders above it (mirror compose_frame's layer
         // culling). Hit-testing the hidden layers here would route clicks to a
@@ -421,6 +445,14 @@ impl DriftWm {
         if let Some(hit) = self.surface_under(canvas_pos, Some(false)) {
             self.pointer_over_layer = false;
             self.pointer_over_screen_space = false;
+            // Pick mode: this window receives no pointer input — clicks pick or
+            // move it. Return None rather than skipping the branch so the click
+            // can't fall through to the canvas layers / widgets / Bottom layers
+            // beneath, which must not receive it either. The side-effect flags
+            // are still set once, here. (Stand-ins are handled above.)
+            if pick_guard {
+                return None;
+            }
             return Some(hit);
         }
 
@@ -620,7 +652,7 @@ impl DriftWm {
         )
         .0;
         let old_focus = pointer.current_focus();
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
         let serial = SERIAL_COUNTER.next_serial();
         let time = self.start_time.elapsed().as_millis() as u32;
         pointer.motion(
@@ -685,7 +717,10 @@ impl DriftWm {
         let time = Event::time_msec(&event);
         let pointer = self.seat.get_pointer().unwrap();
         let old_focus = pointer.current_focus();
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
+        // Promote an armed pick to a move once the drag clears the slop. Before
+        // pointer.motion so the freshly installed grab receives this event.
+        self.maybe_promote_pick(canvas_pos);
         pointer.motion(
             self,
             under,
@@ -880,7 +915,7 @@ impl DriftWm {
         // so zwp_relative_pointer clients agree with wl_pointer about the target
         // surface — otherwise relative motion lands on a window underneath a
         // layer surface while wl_pointer.motion lands on the layer.
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
 
         // Reject a confined move that would leave the surface or its region:
         // forward only the relative delta (the app still tracks motion) and hold
@@ -915,6 +950,9 @@ impl DriftWm {
             }
         }
 
+        // Promote an armed pick to a move once the drag clears the slop. Before
+        // pointer.motion so the freshly installed grab receives this event.
+        self.maybe_promote_pick(canvas_pos);
         pointer.motion(
             self,
             under.clone(),
@@ -1110,6 +1148,37 @@ impl DriftWm {
         point: Point<f64, Logical>,
     ) -> Option<(&Window, Point<i32, Logical>)> {
         self.element_under_skipping(point, |_| false)
+    }
+
+    /// The pick target under a canvas position: a suspended stand-in occluding
+    /// the point, or a non-widget canvas window taken as one uniform target —
+    /// its content, its SSD chrome (title bar, close button, resize borders) and
+    /// its CSD resize margin all count, because `surface_under` reports every one
+    /// of those bands. Shared by `try_pick_button`, the hover affordance, and the
+    /// scroll fallback so the three agree on exactly what a click below the
+    /// threshold hits and where the affordance appears. Pinned, fullscreen and
+    /// widget windows are excluded (`surface_under(_, Some(false))` skips widgets
+    /// and off-output fullscreen; `is_canvas_window` rejects the rest).
+    pub(crate) fn pick_target_under(
+        &self,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+    ) -> Option<PickTarget> {
+        // A stand-in owns no surface, so `surface_under` can't see it. Check the
+        // decoration channel first: it is topmost-first, so a client's content or
+        // chrome above the stand-in wins and this arm won't match.
+        if let Some((DecoTarget::Suspended(s), _)) = self.decoration_under(canvas_pos) {
+            return Some(PickTarget::Suspended(s.id));
+        }
+        let (target, _) = self.surface_under(canvas_pos, Some(false))?;
+        // A content hit may be a subsurface; walk to the root toplevel before
+        // resolving to a window (chrome hits already return the toplevel).
+        let mut root = target.0;
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        let window = self.window_for_surface(&root)?;
+        self.is_canvas_window(&window)
+            .then_some(PickTarget::Client(window))
     }
 
     /// The screen-pinned window under an output-relative screen position:
@@ -1397,8 +1466,42 @@ impl DriftWm {
 
     /// Update cursor icon based on what decoration area the pointer is over.
     /// Called after pointer motion to set resize/pointer cursors for SSD areas.
-    fn update_decoration_cursor(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
-        if self.cursor.grab_cursor || self.pointer_over_layer {
+    /// `pub(crate)` so `flush_pointer_resync` can refresh the pick affordance on
+    /// zoom-driven frames that no pointer motion covers.
+    pub(crate) fn update_decoration_cursor(
+        &mut self,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+    ) {
+        use smithay::input::pointer::{CursorIcon, CursorImageStatus};
+        // An active grab (incl. a promoted pick move showing Grabbing) owns the
+        // cursor icon.
+        if self.cursor.grab_cursor {
+            return;
+        }
+        // Pick mode: the whole body of a canvas window / stand-in is a click
+        // target, so advertise it with a Pointer cursor and suppress the
+        // chrome hit-test below, which would otherwise show a resize/close
+        // cursor over a target that only picks or moves — a visible lie. Placed
+        // before the pointer_over_layer return so the clear arm still runs over
+        // empty canvas backed by a Background layer, killing the affordance latch
+        // (the early return would skip the only code that clears it). Falls
+        // through — not returns — with no pick target, so layer-surface and
+        // pinned-window cursors served past the returns below keep working.
+        if self.pick_mode() {
+            let over_pick_target = self.pick_target_under(canvas_pos).is_some();
+            if over_pick_target {
+                self.cursor.decoration_cursor = true;
+                self.cursor.cursor_status = CursorImageStatus::Named(CursorIcon::Pointer);
+                self.clear_all_close_hovered();
+                return;
+            }
+            if self.cursor.decoration_cursor {
+                self.cursor.decoration_cursor = false;
+                self.cursor.cursor_status = CursorImageStatus::default_named();
+                self.clear_all_close_hovered();
+            }
+        }
+        if self.pointer_over_layer {
             return;
         }
         // Pinned windows are screen-space; check them first (they're above
@@ -1425,7 +1528,6 @@ impl DriftWm {
                         DecoTarget::Suspended(s) => Some((DecorationKey::Suspended(s.id), h)),
                     })
             };
-        use smithay::input::pointer::{CursorIcon, CursorImageStatus};
         match hit {
             Some((key, DecorationHit::CloseButton)) => {
                 self.cursor.decoration_cursor = true;

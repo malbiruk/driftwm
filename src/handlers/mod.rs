@@ -1162,6 +1162,10 @@ impl SessionLockHandler for DriftWm {
         }
         self.held_action = None;
         self.cursor.grab_cursor = false;
+        // Pick mode makes decoration_cursor true over whole window bodies, so
+        // locking while hovering a pick target would leave it set through the
+        // lock and until the next motion after unlock.
+        self.cursor.decoration_cursor = false;
         // Withheld touch events must never reach an app beneath the lock
         // surface — their deadline timer would otherwise replay them mid-lock.
         self.discard_touch_holdback();

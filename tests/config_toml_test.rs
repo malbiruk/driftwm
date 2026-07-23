@@ -410,6 +410,58 @@ fn toml_zoom_reset_policies_can_be_disabled_independently() {
 }
 
 #[test]
+fn toml_zoom_interact_min_defaults_off_without_warning() {
+    let (config, warnings) = Config::from_toml_collect("").unwrap();
+    assert_eq!(config.zoom_interact_min, 0.0);
+    assert!(
+        !warnings.iter().any(|w| w.contains("interact_min")),
+        "the default (feature off) must parse warning-free, got {warnings:?}"
+    );
+}
+
+#[test]
+fn toml_zoom_interact_min_valid_value_parses_without_warning() {
+    let toml = r#"
+        [zoom]
+        interact_min = 0.3
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert!((config.zoom_interact_min - 0.3).abs() < f64::EPSILON);
+    assert!(
+        !warnings.iter().any(|w| w.contains("interact_min")),
+        "a valid in-range value must not warn, got {warnings:?}"
+    );
+}
+
+#[test]
+fn toml_zoom_interact_min_above_max_clamps_to_one_with_warning() {
+    let toml = r#"
+        [zoom]
+        interact_min = 2.0
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert!((config.zoom_interact_min - 1.0).abs() < f64::EPSILON);
+    assert!(
+        warnings.iter().any(|w| w.contains("interact_min")),
+        "an above-max value should clamp with a warning, got {warnings:?}"
+    );
+}
+
+#[test]
+fn toml_zoom_interact_min_negative_clamps_to_zero_with_warning() {
+    let toml = r#"
+        [zoom]
+        interact_min = -1.0
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert_eq!(config.zoom_interact_min, 0.0);
+    assert!(
+        warnings.iter().any(|w| w.contains("interact_min")),
+        "a negative value should clamp with a warning, got {warnings:?}"
+    );
+}
+
+#[test]
 fn toml_auto_navigate_on_close_defaults_true() {
     let config = Config::from_toml("").unwrap();
     assert!(config.auto_navigate_on_close);

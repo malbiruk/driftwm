@@ -434,6 +434,17 @@ impl PointerGrab<DriftWm> for MoveSurfaceGrab {
     fn unset(&mut self, data: &mut DriftWm) {
         data.clear_edge_pan(&self.output);
         data.disarm_interactive_move(&self.window);
+        // A pick-mode promote is the only move that sets grab_cursor (title-bar
+        // / alt+drag / gesture / pinned moves never do, and resize grabs can't
+        // be concurrent), so this restores only that case. Defer to the next
+        // frame's flush rather than calling into PointerHandle here, where the
+        // pointer mutex may be held: clearing grab_cursor lets flush's
+        // `pick_mode() || decoration_cursor` gate run update_decoration_cursor,
+        // which recomputes Pointer/default.
+        if data.cursor.grab_cursor {
+            data.cursor.grab_cursor = false;
+            data.pending_pointer_resync = true;
+        }
     }
 
     crate::grabs::forward_pointer_grab_methods!();

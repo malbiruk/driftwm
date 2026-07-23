@@ -154,6 +154,15 @@ impl PointerGrab<DriftWm> for SuspendedMoveGrab {
     fn unset(&mut self, data: &mut DriftWm) {
         // The move settled: persist the new position on the debounce timer.
         data.session_store_mark_dirty();
+        // A pick-mode promote is the only stand-in move that sets grab_cursor.
+        // Defer the cursor restore to the next frame's flush rather than
+        // calling into PointerHandle here, where the pointer mutex may be
+        // held: clear grab_cursor and queue a resync — the flush's
+        // `pick_mode() || decoration_cursor` gate then recomputes the cursor.
+        if data.cursor.grab_cursor {
+            data.cursor.grab_cursor = false;
+            data.pending_pointer_resync = true;
+        }
     }
 
     crate::grabs::forward_pointer_grab_methods!();

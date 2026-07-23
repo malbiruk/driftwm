@@ -185,6 +185,7 @@ pub(super) struct ZoomConfig {
     pub touch_speed: Option<f64>,
     pub trackpad_speed: Option<f64>,
     pub mouse_speed: Option<f64>,
+    pub interact_min: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

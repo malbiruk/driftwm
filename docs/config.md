@@ -423,6 +423,12 @@ Default: `true`
 
 animate zoom to 1.0 when an off-screen window requests focus (false = keep current zoom, pan only)
 
+### `interact_min`
+
+Default: `0.0`
+
+zoom (1.0 = 100%) below which a window is too small to touch: left click centers it, drag anywhere moves it, pointer input is suppressed. 0 disables. Note the reachable minimum zoom is dynamic (fit * 0.5), so with few windows a low threshold can be unreachable and thus inert.
+
 ## `[snap]`
 
 ### `enabled`

@@ -22,6 +22,7 @@ pub use cluster_snapshot::{ClusterMember, ClusterResizeSnapshot};
 pub use cursor::{CursorFrames, CursorState};
 pub use errors::ErrorSource;
 pub use focus::{FocusIntent, FocusTarget};
+pub(crate) use navigation::CLICK_NAVIGATE_SLOP;
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
 pub use session_store::SessionStore;
@@ -155,6 +156,25 @@ pub struct PendingClickNavigate {
     /// compositor's job, and a deferral there would put a dead beat on every
     /// click.
     pub defer: bool,
+}
+
+/// What a pick-mode press landed on: a canvas client window or a suspended
+/// stand-in. Below `zoom_interact_min` both are one uniform click/drag target.
+#[derive(Clone)]
+pub enum PickTarget {
+    Client(Window),
+    Suspended(SuspendedId),
+}
+
+/// A left click armed in pick mode (below `zoom_interact_min`). On release
+/// within the slop it centers the target; a drag past the slop promotes to a
+/// move (and cancels this). Mirrors `PendingClickNavigate` — press screen
+/// coords and output make the slop comparison zoom- and output-safe.
+pub struct PendingPick {
+    pub target: PickTarget,
+    pub press_screen_pos: Point<f64, Logical>,
+    pub button: u32,
+    pub output: Output,
 }
 
 /// Session lock state machine: Unlocked → Pending → Locked → Unlocked.
@@ -668,6 +688,13 @@ pub struct DriftWm {
     /// pause alongside `suppressed_keys`.
     pub held_buttons: HashSet<u32>,
 
+    /// Buttons whose press pick mode swallowed (below `zoom_interact_min`), so
+    /// their release is swallowed too rather than forwarded to a client that
+    /// never saw the press. Drained in `track_held_button` (not on the release
+    /// path) so a release missed while locked or after an output drop can't
+    /// leave a stale entry that suppresses a later real release.
+    pub pick_swallowed_buttons: HashSet<u32>,
+
     pub gesture_state: Option<GestureState>,
     pub pending_middle_click: Option<PendingMiddleClick>,
 
@@ -772,6 +799,9 @@ pub struct DriftWm {
 
     /// Click armed for auto-navigate on release (see `auto_navigate_on_click`).
     pub pending_click_navigate: Option<PendingClickNavigate>,
+
+    /// Left click armed in pick mode (see `PendingPick`, `arm_pick`).
+    pub pending_pick: Option<PendingPick>,
 
     /// Timer for the deferred click-navigate pan. The pan waits out the
     /// double-click window so a second click can cancel it; a fresh press clears

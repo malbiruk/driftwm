@@ -28,6 +28,7 @@ mod ext_workspace;
 mod focus_timing;
 mod hot_corners;
 mod hotplug;
+mod interact_min;
 mod opacity;
 mod popups;
 mod real_clients;

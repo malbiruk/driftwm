@@ -59,7 +59,15 @@ impl DriftWm {
             if self.suspended_occludes(canvas_pos) {
                 return None;
             }
-            self.surface_under(canvas_pos, Some(false))
+            let window_hit = self.surface_under(canvas_pos, Some(false));
+            // Pick mode: a canvas window under the pointer holds no pointer
+            // focus, mirroring focus_cascade's pick guard, so every per-frame
+            // resync agrees and can't hand the client its enter back. Widgets /
+            // canvas layers / Bottom layers keep focus.
+            if window_hit.is_some() && self.pick_mode() {
+                return None;
+            }
+            window_hit
                 .or_else(|| self.canvas_layer_under(canvas_pos))
                 .or_else(|| self.surface_under(canvas_pos, Some(true)))
         }
@@ -162,6 +170,17 @@ impl DriftWm {
             },
         );
         pointer.frame(self);
+        // Pick-mode transitions are zoom-driven, so the pick affordance won't
+        // refresh on the pinch into/out of pick mode or the zoom-to-1.0
+        // animation after a pick — this per-frame resync is the only pointer
+        // path on every zoom writer. Gate on decoration_cursor too, not
+        // pick_mode() alone: the frame that steps above the threshold must still
+        // run once to clear a latched affordance, and it already reads
+        // pick_mode() == false. The second disjunct is a bare bool (no hit-test)
+        // and self-clears once the clear arm sets decoration_cursor = false.
+        if self.pick_mode() || self.cursor.decoration_cursor {
+            self.update_decoration_cursor(pos);
+        }
     }
 
     /// Apply scroll momentum each frame. Suppressed during active
