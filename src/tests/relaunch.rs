@@ -500,6 +500,108 @@ fn already_open_same_app_window_is_adopted() {
     client_close(&mut f, cid, &existing);
 }
 
+/// Keyboard focus rides an already-open adopt the same as a freshly-mapped one:
+/// the stand-in held focus, so the window it hands off to inherits it and gets
+/// an Activated configure on the wire.
+#[test]
+fn already_open_adopt_focuses_and_activates_the_window() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    let cid = f.add_client();
+    let existing = map_window(&mut f, cid, "myapp", (300, 200));
+
+    let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    // The stand-in holds focus — the user is waiting on this relaunch.
+    f.state().focus_and_raise_suspended(sid);
+    f.state().relaunch_suspended(sid);
+    f.state().expire_relaunch_fallback_for_test(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+
+    present_token(&mut f, cid, &existing, token);
+
+    let adopted = window_by_app_id(&mut f, "myapp").expect("the existing window adopted the slot");
+    assert_eq!(
+        f.state().focused_window().as_ref(),
+        Some(&adopted),
+        "the adopted window inherits keyboard focus"
+    );
+    let configs = f.client(cid).window(&existing).format_recent_configures();
+    assert!(
+        configs.contains("Activated"),
+        "an adopted window inheriting focus must get an Activated configure, got:\n{configs}"
+    );
+
+    settle_resize(&mut f, cid, &existing, (400, 300));
+    client_close(&mut f, cid, &existing);
+}
+
+/// Two stand-ins of the same app are both relaunched; the first spawn's window
+/// maps and adopts stand-in #1. The second pending relaunch's token then lands
+/// on that now-placed window — last press wins: the window rehomes into
+/// stand-in #2's slot instead of the already-placed token being ignored.
+#[test]
+fn later_token_rehomes_an_already_adopted_window() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    let sid1 = insert_suspended(&mut f, 1, "myapp", (100, 100), (400, 300));
+    let sid2 = insert_suspended(&mut f, 2, "myapp", (900, 600), (500, 350));
+    let susp2 = StageWindow::Suspended(f.state().find_suspended(sid2).unwrap());
+    let eid2 = f.state().stage.id_of(&susp2).unwrap();
+
+    f.state().relaunch_suspended(sid1);
+    f.state().relaunch_suspended(sid2);
+    let token1 = f.state().pending_relaunch_token_for_test(sid1).unwrap();
+    let token2 = f.state().pending_relaunch_token_for_test(sid2).unwrap();
+
+    // The relaunched app's window presents stand-in #1's token before its first
+    // buffer and adopts that slot.
+    let cid = f.add_client();
+    let surface = begin_window(&mut f, cid, "myapp");
+    present_token(&mut f, cid, &surface, token1);
+    finish_window(&mut f, cid, &surface, (300, 200));
+    assert!(
+        !f.state().is_suspended_launching(sid1),
+        "stand-in #1's relaunch settled first"
+    );
+
+    // The same window then presents stand-in #2's still-pending token.
+    present_token(&mut f, cid, &surface, token2);
+
+    let adopted = window_by_app_id(&mut f, "myapp").expect("adopted");
+    assert_eq!(
+        f.state().stage.id_of(&adopted),
+        Some(eid2),
+        "took stand-in #2's ElementId"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&adopted),
+        Some(Point::from((900, 600))),
+        "rehomed onto stand-in #2's rect"
+    );
+    assert!(
+        f.client(cid)
+            .window(&surface)
+            .configures_received
+            .iter()
+            .any(|(_, c)| c.size == (500, 350)),
+        "configured to stand-in #2's body size"
+    );
+    assert!(!suspended_present(&mut f), "both stand-ins were consumed");
+    assert_eq!(f.state().debug_counters()["pending_relaunches"], 0);
+    assert_eq!(token_count(&mut f), 0, "both tokens were deregistered");
+
+    settle_resize(&mut f, cid, &surface, (500, 350));
+    client_close(&mut f, cid, &surface);
+}
+
 /// Identity fallback (Signal B): a token-less window of the same app is adopted
 /// within the 5s window, oldest pending first (FIFO), each landing on its own
 /// suspended rect via `ElementId`.
@@ -655,6 +757,54 @@ fn late_token_does_not_adopt_a_fullscreen_window() {
     );
 
     client_close(&mut f, cid, &surface);
+}
+
+/// A widget (rule-placed off the normal window flow) that already sits open and
+/// then presents a live relaunch token must NOT be adopted: hijacking it into
+/// the stand-in's slot would rip it out of its rule placement. The token is
+/// honored by dismissing the now-stale stand-in and leaving the widget exactly
+/// where it is.
+#[test]
+fn late_token_does_not_adopt_a_widget_window() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(
+        Config::from_toml("[[window_rules]]\napp_id = \"myapp\"\nwidget = true\n").unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    // A widget of the app is already open (rule-placed before the relaunch).
+    let cid = f.add_client();
+    let widget = map_window(&mut f, cid, "myapp", (300, 200));
+    let widget_win = window_by_app_id(&mut f, "myapp").unwrap();
+    let pos_before = f.state().stage.position_of(&widget_win);
+
+    // A suspended stand-in of the same app is relaunched.
+    let sid = insert_suspended(&mut f, 1, "myapp", (800, 500), (400, 300));
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+
+    // The widget's own client presents the token back.
+    present_token(&mut f, cid, &widget, token);
+
+    assert_eq!(
+        f.state().stage.position_of(&widget_win),
+        pos_before,
+        "the widget was not relocated"
+    );
+    assert!(
+        !suspended_present(&mut f),
+        "the now-stale stand-in was dismissed"
+    );
+    assert_eq!(
+        f.state().debug_counters()["pending_relaunches"],
+        0,
+        "the pending relaunch was consumed"
+    );
+    assert_eq!(token_count(&mut f), 0, "the token was deregistered");
+
+    client_close(&mut f, cid, &widget);
 }
 
 /// A dismiss while a relaunch is in flight cancels it: the token is deregistered
