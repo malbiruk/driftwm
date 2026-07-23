@@ -219,7 +219,8 @@ https://github.com/user-attachments/assets/31c235e6-baae-4843-bb43-aca749e41f04
 Layer shell surfaces (waybar, fuzzel, mako) work as expected. Foreign toplevel
 management means your dock/taskbar shows all windows — click one and the
 viewport pans to it and centers it. See [`extras/`](extras/) for a fuzzel
-window-search script that lets you search and jump to any open window.
+spotlight script that searches open windows, suspended windows, and installed
+apps in one list — jump to a window, relaunch a stand-in, or launch an app.
 
 ### Window suspend & session restore
 
@@ -462,7 +463,7 @@ Compositor-agnostic full Wayland shells like **noctalia**, **wayle**, and **dank
 
 The [`extras/`](extras/) directory contains a complete setup — driftwm config,
 GLSL shader wallpapers, Python widgets (clock, calendar, system stats, power
-menu), waybar with taskbar/tray, fuzzel window-search script, and window rules
+menu), waybar with taskbar/tray, fuzzel spotlight script, and window rules
 tying it all together. Use it as a starting point or steal pieces.
 
 ## Community

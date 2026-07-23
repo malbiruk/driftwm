@@ -38,7 +38,8 @@ lookup_desktop() {
 display=$(mktemp)
 lookup=$(mktemp)
 apps_tmp=$(mktemp)
-trap 'rm -f "$display" "$lookup" "$apps_tmp"' EXIT
+tmp=""
+trap 'rm -f "$display" "$lookup" "$apps_tmp" "$tmp"' EXIT
 
 # --- Windows (canvas windows focused-first, then fullscreen/pinned, suspended last) ---
 driftwm msg state --json 2>/dev/null \
@@ -55,9 +56,9 @@ driftwm msg state --json 2>/dev/null \
         icon="${desktop#*	}"
         [ "$kind" = "s" ] && mark="ᶻ" || mark="›"
         if [ -n "$display_title" ]; then
-            printf '%s %s  %s\0icon\x1f%s\n' "$mark" "$display_title" "$app_name" "$icon" >> "$display"
+            printf '%s %s  %s\0icon\037%s\n' "$mark" "$display_title" "$app_name" "$icon" >> "$display"
         else
-            printf '%s %s\0icon\x1f%s\n' "$mark" "$app_name" "$icon" >> "$display"
+            printf '%s %s\0icon\037%s\n' "$mark" "$app_name" "$icon" >> "$display"
         fi
         printf '%s\t%s\n' "$kind" "$wid" >> "$lookup"
 done
@@ -104,7 +105,7 @@ awk -F'\t' '!seen[$1]++' "$apps_tmp" \
     ' \
   | sort -t '	' -k1,1nr -k2,2f \
   | while IFS='	' read -r _count name icon exec_line did; do
-      printf '%s\0icon\x1f%s\n' "$name" "$icon" >> "$display"
+      printf '%s\0icon\037%s\n' "$name" "$icon" >> "$display"
       printf 'a\t%s\t%s\n' "$did" "$exec_line" >> "$lookup"
 done
 
@@ -124,12 +125,12 @@ kind=$(printf '%s' "$match" | cut -f1)
 
 if [ "$kind" = "w" ]; then
     sel_id=$(printf '%s' "$match" | cut -f2)
-    exec driftwm msg focus --id "$sel_id"
+    driftwm msg focus --id "$sel_id"
 elif [ "$kind" = "s" ]; then
     sel_id=$(printf '%s' "$match" | cut -f2)
     # Pan to the stand-in first so the relaunch adopts in view.
     driftwm msg focus --id "$sel_id"
-    exec driftwm msg relaunch --id "$sel_id"
+    driftwm msg relaunch --id "$sel_id"
 else
     sel_did=$(printf '%s' "$match" | cut -f2)
     exec_line=$(printf '%s' "$match" | cut -f3-)
