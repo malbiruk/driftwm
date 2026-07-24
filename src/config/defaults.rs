@@ -409,9 +409,9 @@ pub(super) fn default_bindings(mod_key: ModKey) -> HashMap<KeyCombo, Action> {
         ),
     ]);
 
-    // Send-to-output bindings (Mod+Alt+Arrow) — only for Super mod_key
-    // to avoid conflict with Alt-based bindings
-    if mod_key == ModKey::Super {
+    // Send-to-output bindings (Mod+Alt+Arrow) — skipped when Alt *is* the mod
+    // key, where the combo would collapse into the plain Alt bindings.
+    if mod_key != ModKey::Alt {
         let m_alt = Modifiers {
             alt: true,
             ..m.clone()

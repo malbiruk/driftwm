@@ -9,11 +9,13 @@ fn parse_modifiers(parts: &[&str], mod_key: ModKey) -> Result<Modifiers, String>
             "mod" => match mod_key {
                 ModKey::Alt => mods.alt = true,
                 ModKey::Super => mods.logo = true,
+                ModKey::Mod3 => mods.mod3 = true,
             },
             "alt" => mods.alt = true,
             "super" | "logo" => mods.logo = true,
             "ctrl" | "control" => mods.ctrl = true,
             "shift" => mods.shift = true,
+            "mod3" => mods.mod3 = true,
             other => return Err(format!("unknown modifier: {other}")),
         }
     }
@@ -23,22 +25,16 @@ fn parse_modifiers(parts: &[&str], mod_key: ModKey) -> Result<Modifiers, String>
 /// True if every `+`-separated token names a modifier — a combo with no keysym,
 /// so it's a tap-modifier binding rather than a `parse_key_combo`. Modifier names
 /// are never valid keysym names, so this never shadows a real key binding.
-fn is_modifier_only(s: &str) -> bool {
-    let mut parts = s.split('+').map(str::trim).peekable();
-    parts.peek().is_some()
-        && parts.all(|p| {
-            matches!(
-                p.to_lowercase().as_str(),
-                "mod" | "alt" | "super" | "logo" | "ctrl" | "control" | "shift"
-            )
-        })
+fn is_modifier_only(s: &str, mod_key: ModKey) -> bool {
+    let parts: Vec<&str> = s.split('+').map(str::trim).collect();
+    parse_modifiers(&parts, mod_key).is_ok()
 }
 
 /// Parse a modifier-only combo like "alt+shift" into a `Modifiers` set for a
 /// tap-modifier binding. Returns `None` when `s` is not modifier-only, so the
 /// caller falls back to `parse_key_combo`.
 pub fn parse_tap_combo(s: &str, mod_key: ModKey) -> Option<Result<Modifiers, String>> {
-    if !is_modifier_only(s) {
+    if !is_modifier_only(s, mod_key) {
         return None;
     }
     let parts: Vec<&str> = s.split('+').map(str::trim).collect();
@@ -659,5 +655,49 @@ mod tests {
             let trigger = GestureTrigger::Swipe { fingers: 4 };
             assert_eq!(parse_gesture_config_entry(&trigger, name), Err(err));
         }
+    }
+
+    #[test]
+    fn mod3_combines_with_other_modifiers_in_a_combo() {
+        let combo = parse_key_combo("mod3+shift+q", ModKey::Alt).unwrap();
+        assert_eq!(
+            combo.modifiers,
+            Modifiers {
+                mod3: true,
+                shift: true,
+                ..Modifiers::EMPTY
+            }
+        );
+    }
+
+    #[test]
+    fn bare_mod3_shift_combo_is_recognized_as_a_tap_binding() {
+        let mods = parse_tap_combo("mod3+shift", ModKey::Alt)
+            .expect("a modifier-only combo must be recognized as a tap binding")
+            .unwrap();
+        assert_eq!(
+            mods,
+            Modifiers {
+                mod3: true,
+                shift: true,
+                ..Modifiers::EMPTY
+            }
+        );
+    }
+
+    #[test]
+    fn mod_plus_iso_level5_shift_parses_as_a_key_binding_not_a_tap() {
+        // "iso_level5_shift" is a real keysym, not a modifier alias — must not
+        // be swallowed by is_modifier_only/parse_tap_combo.
+        assert!(parse_tap_combo("mod+iso_level5_shift", ModKey::Alt).is_none());
+        let combo = parse_key_combo("mod+iso_level5_shift", ModKey::Alt).unwrap();
+        assert_eq!(combo.sym.raw(), keysyms::KEY_ISO_Level5_Shift);
+        assert_eq!(
+            combo.modifiers,
+            Modifiers {
+                alt: true,
+                ..Modifiers::EMPTY
+            }
+        );
     }
 }

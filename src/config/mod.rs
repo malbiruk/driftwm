@@ -471,6 +471,7 @@ impl Config {
         let mod_key = match raw.mod_key.as_deref() {
             Some("alt") => ModKey::Alt,
             Some("super") | None => ModKey::Super,
+            Some("mod3") => ModKey::Mod3,
             Some(other) => {
                 warn_and_collect!("config: unknown mod_key '{other}', using super");
                 ModKey::Super
@@ -1233,6 +1234,9 @@ fn tap_combo_label(m: &Modifiers) -> String {
     if m.logo {
         parts.push("super");
     }
+    if m.mod3 {
+        parts.push("mod3");
+    }
     parts.join("+")
 }
 
@@ -1766,6 +1770,147 @@ mod tests {
         "#;
         let config = Config::from_toml(toml_str).unwrap();
         assert!(config.tap_bindings.is_empty());
+    }
+
+    #[test]
+    fn bare_mod3_shift_keybinding_parses_as_tap() {
+        let toml_str = r#"
+            [keybindings]
+            "mod3+shift" = "switch-layout next"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        let mods = Modifiers {
+            mod3: true,
+            shift: true,
+            ..Modifiers::EMPTY
+        };
+        assert!(matches!(
+            config.tap_lookup(&mods),
+            Some(Action::SwitchLayout(LayoutSwitch::Next))
+        ));
+    }
+
+    #[test]
+    fn mod_key_mod3_resolves_mod_bindings_without_setting_logo_or_alt() {
+        let toml_str = r#"
+            mod_key = "mod3"
+            [keybindings]
+            "mod+q" = "close-window"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        let sym = parse::parse_key_combo("q", ModKey::Super).unwrap().sym;
+
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    iso_level5_shift: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            Some(&Action::CloseWindow)
+        );
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    logo: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            None,
+            "mod_key = mod3 must not also satisfy super/logo bindings"
+        );
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    alt: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            None,
+            "mod_key = mod3 must not also satisfy alt bindings"
+        );
+    }
+
+    #[test]
+    fn send_to_output_defaults_present_for_mod3_and_super_but_not_alt() {
+        for (mod_key_str, mod_key) in [("mod3", ModKey::Mod3), ("super", ModKey::Super)] {
+            let toml_str = format!("mod_key = \"{mod_key_str}\"");
+            let config = Config::from_toml(&toml_str).unwrap();
+            let mut combo = parse::parse_key_combo("mod+alt+up", mod_key).unwrap();
+            combo.normalize();
+            assert!(
+                config.bindings.contains_key(&combo),
+                "mod_key = {mod_key_str} should keep the send-to-output defaults"
+            );
+        }
+
+        let config = Config::from_toml("mod_key = \"alt\"").unwrap();
+        assert!(
+            !config
+                .bindings
+                .values()
+                .any(|a| matches!(a, Action::SendToOutput(_))),
+            "mod_key = alt should drop the send-to-output defaults, \
+             which would collapse into the plain alt bindings"
+        );
+    }
+
+    #[test]
+    fn mod3_keybinding_does_not_fire_when_mod3_is_not_held() {
+        let toml_str = r#"
+            [keybindings]
+            "mod3+q" = "close-window"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        let sym = parse::parse_key_combo("q", ModKey::Super).unwrap().sym;
+
+        assert_eq!(config.lookup(&ModifiersState::default(), sym), None);
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    iso_level5_shift: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            Some(&Action::CloseWindow)
+        );
+    }
+
+    #[test]
+    fn plain_keybinding_does_not_fire_when_mod3_is_also_held() {
+        let toml_str = r#"
+            [keybindings]
+            "shift+q" = "close-window"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        let sym = parse::parse_key_combo("q", ModKey::Super).unwrap().sym;
+
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    shift: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            Some(&Action::CloseWindow)
+        );
+        assert_eq!(
+            config.lookup(
+                &ModifiersState {
+                    shift: true,
+                    iso_level5_shift: true,
+                    ..Default::default()
+                },
+                sym
+            ),
+            None,
+            "an extra held modifier (mod3) must break the exact-match lookup"
+        );
     }
 
     #[test]

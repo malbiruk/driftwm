@@ -222,10 +222,15 @@ fn is_enter_keysym(raw: u32) -> bool {
 /// modifier keysyms are the contiguous block Shift_L … Hyper_R, minus the two
 /// lock keysyms in that range (Caps_Lock, Shift_Lock): those toggle rather than
 /// hold, so pressing one should cancel a tap like any other key.
+///
+/// ISO_Level5_Shift (the Mod3 keysym) sits far below that block, so it must
+/// be named separately or `mod3` taps would taint their own chord and never
+/// fire.
 fn is_modifier_keysym(raw: u32) -> bool {
     (keysyms::KEY_Shift_L..=keysyms::KEY_Hyper_R).contains(&raw)
         && raw != keysyms::KEY_Caps_Lock
         && raw != keysyms::KEY_Shift_Lock
+        || raw == keysyms::KEY_ISO_Level5_Shift
 }
 
 /// Tracks held modifier chords so tap-modifier bindings can fire — an action
@@ -304,6 +309,7 @@ mod tests {
             alt,
             shift,
             logo,
+            ..Modifiers::EMPTY
         }
     }
 
@@ -400,5 +406,32 @@ mod tests {
         let alt = m(false, true, false, false);
         t.update(KeyState::Pressed, true, &alt);
         assert_eq!(t.update(KeyState::Released, true, &NONE), Some(alt));
+    }
+
+    #[test]
+    fn mod3_tap_fires_via_is_modifier_keysym() {
+        // Other tests pass a hand-picked `is_modifier` bool; this one runs the
+        // real is_modifier_keysym so a regression there is caught here too.
+        let mut t = TapTracker::default();
+        let mod3 = Modifiers {
+            mod3: true,
+            ..Modifiers::EMPTY
+        };
+        let is_mod3 = is_modifier_keysym(keysyms::KEY_ISO_Level5_Shift);
+        t.update(KeyState::Pressed, is_mod3, &mod3);
+        assert_eq!(t.update(KeyState::Released, is_mod3, &NONE), Some(mod3));
+    }
+
+    #[test]
+    fn mod3_press_would_taint_its_own_chord_if_treated_as_a_normal_key() {
+        // Without the ISO_Level5_Shift carve-out, this press taints the chord
+        // as a non-modifier key, so the release never completes it.
+        let mut t = TapTracker::default();
+        let mod3 = Modifiers {
+            mod3: true,
+            ..Modifiers::EMPTY
+        };
+        t.update(KeyState::Pressed, false, &mod3);
+        assert_eq!(t.update(KeyState::Released, false, &NONE), None);
     }
 }

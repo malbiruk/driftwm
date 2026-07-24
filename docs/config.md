@@ -15,7 +15,7 @@ config with `driftwm --check-config`.
 
 Default: `"super"`
 
-Window manager modifier key: "super" (default) or "alt"
+Window manager modifier key: "super" (default), "alt", or "mod3". Nothing occupies mod3 by default — remap a key onto it in your keymap first.
 
 ### `focus_follows_mouse`
 
@@ -664,7 +664,7 @@ disable_defaults = ["keys"]
 
 ## `[keybindings]`
 
-Keyboard bindings: "Modifier+...+Keysym" = "action [arg]" Merges with defaults. Use "none" to unbind a default binding. "mod" expands to mod_key. Literal modifiers: alt, super, ctrl, shift. Keysyms are XKB names (case-insensitive): return, tab, up, a, equal, etc. A bare modifier combo (e.g. "alt+shift") is a tap binding (fires on chord release; see [input.keyboard] options).
+Keyboard bindings: "Modifier+...+Keysym" = "action [arg]" Merges with defaults. Use "none" to unbind a default binding. "mod" expands to mod_key. Literal modifiers: alt, super (alias logo), ctrl (alias control), shift, mod3. Keysyms are XKB names (case-insensitive): return, tab, up, a, equal, etc. A bare modifier combo (e.g. "alt+shift") is a tap binding (fires on chord release; see [input.keyboard] options).
 
 Actions:
 

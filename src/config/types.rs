@@ -122,6 +122,9 @@ pub struct Modifiers {
     pub alt: bool,
     pub shift: bool,
     pub logo: bool,
+    /// xkb's Mod3 slot. smithay surfaces it under the (misnamed)
+    /// `iso_level5_shift` field of `ModifiersState`.
+    pub mod3: bool,
 }
 
 impl Modifiers {
@@ -130,6 +133,7 @@ impl Modifiers {
         alt: false,
         shift: false,
         logo: false,
+        mod3: false,
     };
 
     pub fn from_state(state: &ModifiersState) -> Self {
@@ -138,6 +142,7 @@ impl Modifiers {
             alt: state.alt,
             shift: state.shift,
             logo: state.logo,
+            mod3: state.iso_level5_shift,
         }
     }
 
@@ -152,6 +157,7 @@ impl Modifiers {
             alt: self.alt || other.alt,
             shift: self.shift || other.shift,
             logo: self.logo || other.logo,
+            mod3: self.mod3 || other.mod3,
         }
     }
 
@@ -162,6 +168,7 @@ impl Modifiers {
             && (!self.alt || state.alt)
             && (!self.shift || state.shift)
             && (!self.logo || state.logo)
+            && (!self.mod3 || state.iso_level5_shift)
     }
 }
 
@@ -170,6 +177,7 @@ impl Modifiers {
 pub enum ModKey {
     Alt,
     Super,
+    Mod3,
 }
 
 /// How a new window is placed on the canvas when no window rule positions it.
@@ -199,6 +207,10 @@ impl ModKey {
                 logo: true,
                 ..Modifiers::EMPTY
             },
+            ModKey::Mod3 => Modifiers {
+                mod3: true,
+                ..Modifiers::EMPTY
+            },
         }
     }
 
@@ -207,6 +219,7 @@ impl ModKey {
         match self {
             ModKey::Alt => state.alt,
             ModKey::Super => state.logo,
+            ModKey::Mod3 => state.iso_level5_shift,
         }
     }
 }
@@ -1195,5 +1208,38 @@ mod tests {
         assert!(ThresholdAction::CenterNearest.ends_fullscreen());
         assert!(!ThresholdAction::Fixed(Action::Spawn("foo".into())).ends_fullscreen());
         assert!(ThresholdAction::Fixed(Action::CloseWindow).ends_fullscreen());
+    }
+
+    #[test]
+    fn all_held_requires_mod3_bit_too() {
+        let mod3 = Modifiers {
+            mod3: true,
+            ..Modifiers::EMPTY
+        };
+        assert!(!mod3.all_held(&ModifiersState::default()));
+        assert!(mod3.all_held(&ModifiersState {
+            iso_level5_shift: true,
+            ..Default::default()
+        }));
+    }
+
+    #[test]
+    fn union_combines_mod3_bit() {
+        let a = Modifiers {
+            mod3: true,
+            ..Modifiers::EMPTY
+        };
+        let b = Modifiers {
+            shift: true,
+            ..Modifiers::EMPTY
+        };
+        assert_eq!(
+            a.union(&b),
+            Modifiers {
+                mod3: true,
+                shift: true,
+                ..Modifiers::EMPTY
+            }
+        );
     }
 }

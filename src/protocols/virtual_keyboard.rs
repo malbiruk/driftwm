@@ -157,6 +157,7 @@ fn handle_key<D: VirtualKeyboardBindingHandler>(
         alt: kb.state.mod_name_is_active(xkb::MOD_NAME_ALT, effective),
         shift: kb.state.mod_name_is_active(xkb::MOD_NAME_SHIFT, effective),
         logo: kb.state.mod_name_is_active(xkb::MOD_NAME_LOGO, effective),
+        iso_level5_shift: kb.state.mod_name_is_active(xkb::MOD_NAME_MOD3, effective),
         ..Default::default()
     };
     if !state.virtual_key_binding(&modifiers, sym) {
