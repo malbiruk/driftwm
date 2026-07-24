@@ -854,27 +854,35 @@ impl DriftWm {
                 .borrow()
         });
 
-        let (edges, initial_window_location, initial_window_size, initial_screen_pos) =
-            match resize_state {
-                ResizeState::Resizing {
-                    edges,
-                    initial_window_location,
-                    initial_window_size,
-                    initial_screen_pos,
-                }
-                | ResizeState::WaitingForLastCommit {
-                    edges,
-                    initial_window_location,
-                    initial_window_size,
-                    initial_screen_pos,
-                } => (
-                    edges,
-                    initial_window_location,
-                    initial_window_size,
-                    initial_screen_pos,
-                ),
-                ResizeState::Idle => return,
-            };
+        let (
+            edges,
+            initial_window_location,
+            initial_window_size,
+            initial_screen_pos,
+            last_committed_size,
+        ) = match resize_state {
+            ResizeState::Resizing {
+                edges,
+                initial_window_location,
+                initial_window_size,
+                initial_screen_pos,
+                last_committed_size,
+            }
+            | ResizeState::WaitingForLastCommit {
+                edges,
+                initial_window_location,
+                initial_window_size,
+                initial_screen_pos,
+                last_committed_size,
+            } => (
+                edges,
+                initial_window_location,
+                initial_window_size,
+                initial_screen_pos,
+                last_committed_size,
+            ),
+            ResizeState::Idle => return,
+        };
 
         let current_geo = window.geometry();
 
@@ -930,6 +938,18 @@ impl DriftWm {
             self.map_window(window.clone(), new_loc, false);
         }
 
+        // Bump the blur generation only when this commit actually changed the
+        // committed size. handle_resize_commit runs on every commit of the
+        // toplevel, so an unconditional bump would force every frosted window on
+        // all outputs to re-blur at a busy client's repaint rate under a
+        // held-still resize border. The top/left reposition above is derived
+        // from the size delta, so an unchanged committed size means no
+        // reposition either.
+        let size_changed = current_geo.size != last_committed_size;
+        if size_changed {
+            self.render.blur_geometry_generation += 1;
+        }
+
         if matches!(resize_state, ResizeState::WaitingForLastCommit { .. }) {
             // Anchor restore_size to the user's final choice so a subsequent
             // fit/fullscreen round-trip restores to this.
@@ -941,6 +961,21 @@ impl DriftWm {
                     .replace(ResizeState::Idle);
             });
             self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
+        } else if size_changed {
+            // Still resizing: carry the new committed size forward so the next
+            // commit compares against it (write-back only on change).
+            with_states(surface, |states| {
+                states
+                    .data_map
+                    .get_or_insert(|| RefCell::new(ResizeState::Idle))
+                    .replace(ResizeState::Resizing {
+                        edges,
+                        initial_window_location,
+                        initial_window_size,
+                        initial_screen_pos,
+                        last_committed_size: current_geo.size,
+                    });
+            });
         }
     }
 

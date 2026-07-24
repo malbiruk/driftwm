@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab, TouchGestureGrab};
+use crate::grabs::{MoveGrab, ResizeGrab, ResizeState, TouchGestureGrab};
 use crate::input::DecoTarget;
 use crate::state::{DriftWm, FocusTarget, SessionLock, StageWindow, output_state};
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
@@ -327,7 +327,7 @@ impl DriftWm {
         output: Output,
         slots: usize,
         snapped: bool,
-    ) -> Option<ResizeSurfaceGrab> {
+    ) -> Option<ResizeGrab> {
         let initial_window_location = self.stage.position_of(window)?;
         let initial_window_size = window.geometry().size;
         let wl_surface = window.wl_surface().map(|s| s.into_owned())?;
@@ -351,6 +351,7 @@ impl DriftWm {
                     initial_window_location,
                     initial_window_size,
                     initial_screen_pos: pinned_initial_screen_pos,
+                    last_committed_size: initial_window_size,
                 });
         });
 
@@ -368,7 +369,7 @@ impl DriftWm {
             crate::state::ClusterResizeSnapshot::empty()
         };
         let constraints = crate::grabs::SizeConstraints::for_window(window);
-        Some(ResizeSurfaceGrab::new_touch(
+        Some(ResizeGrab::new_touch(
             touch_start,
             window.clone(),
             edges,

@@ -1,7 +1,9 @@
 use std::cell::RefCell;
 
-use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab};
-use crate::state::{DriftWm, FocusTarget, PopupGrabState, StageWindow, output_state};
+use crate::grabs::{MoveGrab, ResizeGrab, ResizeState};
+use crate::state::{
+    ClusterMember, DriftWm, FocusTarget, PopupGrabState, StageWindow, output_state,
+};
 use crate::surface_tree::focus_belongs_to_toplevel;
 use driftwm::window_ext::WindowExt;
 use smithay::{
@@ -533,6 +535,7 @@ impl XdgShellHandler for DriftWm {
                     initial_window_location,
                     initial_window_size,
                     initial_screen_pos: pinned_initial_screen_pos,
+                    last_committed_size: initial_window_size,
                 });
         });
 
@@ -555,9 +558,9 @@ impl XdgShellHandler for DriftWm {
             };
         let constraints = crate::grabs::SizeConstraints::for_window(&window);
         let locked_ratio = crate::grabs::locked_ratio_for(&window, initial_window_size);
-        let grab = ResizeSurfaceGrab {
+        let grab = ResizeGrab {
             start_data,
-            window,
+            target: ClusterMember::Client(window),
             edges,
             initial_window_location,
             initial_window_size,

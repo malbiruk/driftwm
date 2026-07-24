@@ -27,9 +27,9 @@ use driftwm::config::{
 };
 use driftwm::layout::snap::SnapState;
 
-use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab};
+use crate::grabs::{MoveGrab, ResizeGrab, ResizeState};
 use crate::input::pointer::{edges_from_position, resize_cursor};
-use crate::state::{DriftWm, FocusTarget, StageWindow};
+use crate::state::{ClusterMember, DriftWm, FocusTarget, StageWindow};
 
 use super::{GestureState, direction_from_vector};
 
@@ -486,7 +486,7 @@ impl DriftWm {
         self.gesture_state = Some(GestureState::SwipeMove);
     }
 
-    /// Set up a ResizeSurfaceGrab on the pointer so gesture updates just warp
+    /// Set up a ResizeGrab on the pointer so gesture updates just warp
     /// the cursor and the grab handles the resize (mirrors `start_gesture_move`
     /// / Alt+RMB drag).
     ///
@@ -543,6 +543,7 @@ impl DriftWm {
                     initial_window_location: initial_location,
                     initial_window_size: initial_size,
                     initial_screen_pos: None,
+                    last_committed_size: initial_size,
                 });
         });
 
@@ -568,13 +569,13 @@ impl DriftWm {
         let Some(output) = self.active_output() else {
             return;
         };
-        let grab = ResizeSurfaceGrab {
+        let grab = ResizeGrab {
             start_data: GrabStartData {
                 focus: None,
                 button: 0, // no physical button — gesture-initiated
                 location: pos,
             },
-            window,
+            target: ClusterMember::Client(window),
             edges,
             initial_window_location: initial_location,
             initial_window_size: initial_size,

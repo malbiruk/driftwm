@@ -89,7 +89,7 @@ impl ClusterResizeMember {
     }
 }
 
-/// Frozen-at-grab-start cluster snapshot for `ResizeSurfaceGrab`.
+/// Frozen-at-grab-start cluster snapshot for `ResizeGrab`.
 ///
 /// `members` holds every cluster member except primary. The snap-target
 /// exclude set is the *static* shift set only (members with an axis
@@ -146,6 +146,12 @@ impl ClusterResizeSnapshot {
     /// the primary to the top of the z-order so it stays on top of its own
     /// cluster. Writes go through the stage (the map_window contract, inlined
     /// here because the grab owns this snapshot, not `DriftWm`).
+    ///
+    /// Returns whether a member's *live* position actually changed this call
+    /// (compared before each re-map, excluding the primary's z-raise re-map) —
+    /// the interactive-resize blur bump consumes this to catch a mid-tick
+    /// reflow on a size-constant tick. "Shifts non-empty" would over-report,
+    /// bumping every tick of a held cascade.
     #[allow(clippy::too_many_arguments)]
     pub fn apply_member_shifts(
         &mut self,
@@ -155,14 +161,15 @@ impl ClusterResizeSnapshot {
         new_w: i32,
         new_h: i32,
         gap: f64,
-    ) {
+    ) -> bool {
         if self.members.is_empty() {
-            return;
+            return false;
         }
         let width_delta = new_w - initial_size.w;
         let height_delta = new_h - initial_size.h;
         let shifts = self.compute_shifts(stage, width_delta, height_delta, gap);
 
+        let mut moved = false;
         for (i, (dx, dy)) in &shifts {
             let m = &self.members[*i];
             let Some(element) = m.window.resolve(stage) else {
@@ -171,6 +178,9 @@ impl ClusterResizeSnapshot {
             // Shifting a member re-anchors it, invalidating any fill restore point.
             stage.clear_fill(&element);
             let new_pos = m.initial_pos + Point::from((*dx, *dy));
+            if stage.position_of(&element) != Some(new_pos) {
+                moved = true;
+            }
             stage.map(element, new_pos);
         }
 
@@ -179,6 +189,7 @@ impl ClusterResizeSnapshot {
         {
             stage.map(primary.clone(), cur);
         }
+        moved
     }
 
     /// Per-member translation vector for one motion tick. Wraps

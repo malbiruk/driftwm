@@ -15,7 +15,7 @@ pub enum GestureState {
     SwipePan,
     /// Double-tap+drag → move window via MoveGrab on the pointer.
     SwipeMove,
-    /// Swipe → resize window via ResizeSurfaceGrab on the pointer (gesture
+    /// Swipe → resize window via ResizeGrab on the pointer (gesture
     /// updates warp the cursor; the grab does the resize math).
     SwipeResizeGrab,
     /// Threshold swipe — accumulate delta, detect direction, fire once.

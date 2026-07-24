@@ -34,6 +34,7 @@ mod opacity;
 mod popups;
 mod real_clients;
 mod relaunch;
+mod resize_parity;
 mod send_to_output;
 mod session_restore;
 mod soak;

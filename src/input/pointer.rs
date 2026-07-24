@@ -13,7 +13,7 @@ use smithay::{
         calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
-    utils::{Point, SERIAL_COUNTER},
+    utils::{Point, SERIAL_COUNTER, Size},
     wayland::compositor::with_states,
 };
 
@@ -22,13 +22,11 @@ use smithay::wayland::seat::WaylandFocus;
 use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{
-    MoveGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab, SuspendedResizeGrab,
-};
+use crate::grabs::{MIN_SUSPENDED_SIZE, MoveGrab, NavigateGrab, PanGrab, ResizeGrab, ResizeState};
 use crate::input::DecoTarget;
 use crate::state::{
-    CLICK_NAVIGATE_SLOP, ClusterResizeSnapshot, DriftWm, FocusTarget, PendingMiddleClick,
-    PickTarget, StageWindow, SuspendedWindow, ZoomAnimationAnchor,
+    CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
+    PendingMiddleClick, PickTarget, StageWindow, SuspendedWindow, ZoomAnimationAnchor,
 };
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{self, BindingContext, MouseAction};
@@ -937,16 +935,29 @@ impl DriftWm {
         } else {
             ClusterResizeSnapshot::empty()
         };
-        let grab = SuspendedResizeGrab::new(
+        let grab = ResizeGrab {
             start_data,
-            s.id,
+            target: ClusterMember::Suspended(s.id),
             edges,
-            origin,
-            size,
-            pos,
+            initial_window_location: origin,
+            initial_window_size: size,
+            last_window_size: size,
             output,
+            last_clamped_location: pos,
+            snap: driftwm::layout::snap::SnapState::default(),
+            // A stand-in has no client-declared min/max; fold its usable-chrome
+            // floor into the shared constraints so the apply head clamps it just
+            // like a client minimum.
+            constraints: crate::grabs::SizeConstraints {
+                min: Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE)),
+                max: Size::from((0, 0)),
+            },
             cluster_resize,
-        );
+            pinned_initial_screen_pos: None,
+            touch_start: None,
+            touch_slots: 0,
+            locked_ratio: None,
+        };
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
@@ -1198,6 +1209,7 @@ impl DriftWm {
                     initial_window_location,
                     initial_window_size,
                     initial_screen_pos: pinned_initial_screen_pos,
+                    last_committed_size: initial_window_size,
                 });
         });
 
@@ -1235,9 +1247,9 @@ impl DriftWm {
         };
         let constraints = crate::grabs::SizeConstraints::for_window(window);
         let locked_ratio = crate::grabs::locked_ratio_for(window, initial_window_size);
-        let grab = ResizeSurfaceGrab {
+        let grab = ResizeGrab {
             start_data,
-            window: window.clone(),
+            target: ClusterMember::Client(window.clone()),
             edges,
             initial_window_location,
             initial_window_size,
