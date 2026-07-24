@@ -1008,7 +1008,7 @@ impl DriftWm {
     /// whose hint actually changed — so a focus change (click, raise) that
     /// isn't followed by another configure still reaches the client. Idempotent:
     /// a repeat call (hover, re-raise) changes nothing and sends nothing.
-    fn set_activated_exclusive<Q>(&self, target: &Q)
+    pub(crate) fn set_activated_exclusive<Q>(&self, target: &Q)
     where
         StageWindow: PartialEq<Q>,
     {

@@ -211,8 +211,9 @@ impl XdgShellHandler for DriftWm {
     // driftwm has no minimize concept, but a client that minimizes itself
     // stalls: xdg-shell carries no "minimized" state, so the toolkit stops
     // drawing and only clears its internal minimized flag on a configure with
-    // `Activated` — which driftwm never sends on plain focus. Refuse the
-    // minimize and send an `Activated` configure to wake it back up.
+    // `Activated`. The exclusive-activation gate would suppress that configure
+    // when the window is already the activated one (idempotent, sends nothing),
+    // so force `Activated` unconditionally here to un-stick the client.
     fn minimize_request(&mut self, surface: ToplevelSurface) {
         surface.with_pending_state(|state| {
             state.states.set(xdg_toplevel::State::Activated);

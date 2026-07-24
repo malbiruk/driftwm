@@ -510,6 +510,9 @@ impl DriftWm {
             if !already_focused {
                 let serial = SERIAL_COUNTER.next_serial();
                 self.set_window_focus(focus_surface, serial);
+                // Reclaim the Activated hint too: hover may have handed it to
+                // another output's window while pulling keyboard focus away.
+                self.set_activated_exclusive(&window);
             }
             return;
         }
@@ -543,6 +546,9 @@ impl DriftWm {
             if !already {
                 let serial = SERIAL_COUNTER.next_serial();
                 self.set_suspended_focus(id, serial);
+                // The stand-in has no toplevel to activate, but this still
+                // clears the Activated hint off the previously-focused window.
+                self.set_activated_exclusive(&StageWindow::Suspended(s));
             }
             return;
         }
@@ -565,10 +571,8 @@ impl DriftWm {
             return;
         }
 
-        let focus_surface = self
-            .topmost_modal_child(&window)
-            .or(Some(window))
-            .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
+        let target = self.topmost_modal_child(&window).unwrap_or(window);
+        let focus_surface = target.wl_surface().map(|s| FocusTarget(s.into_owned()));
 
         // Compare against the window-focus intent, not the live keyboard focus:
         // while a layer surface owns focus the latter never matches, which would
@@ -582,6 +586,8 @@ impl DriftWm {
 
         let serial = SERIAL_COUNTER.next_serial();
         self.set_window_focus(focus_surface, serial);
+        // Keep the client's Activated hint in step with keyboard focus without raising it.
+        self.set_activated_exclusive(&target);
     }
 
     /// Deactivate the constraint on the previous focus if focus changed,

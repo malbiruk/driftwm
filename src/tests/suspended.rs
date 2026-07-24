@@ -12,7 +12,7 @@ use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
 use crate::state::{FocusIntent, FocusTarget, StageWindow, SuspendedId};
 
-use super::{Fixture, map_window, window_by_app_id};
+use super::{Fixture, is_activated, map_window, window_by_app_id};
 
 /// Server decorations on by default so suspended chrome (and the client bar)
 /// resolve, and 1:1 canvas↔screen (camera origin, zoom 1).
@@ -496,6 +496,57 @@ fn hover_sets_suspended_intent() {
     assert!(
         matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
         "hovering a suspended window sets the Suspended intent"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// A stand-in owns no toplevel to activate, but hovering onto one must still
+/// clear the `Activated` hint off whichever real window held it.
+#[test]
+fn hover_onto_suspended_deactivates_the_previous_window() {
+    let mut f = Fixture::with_config(
+        Config::from_toml(
+            r#"
+            focus_follows_mouse = true
+            [decorations]
+            default_mode = "server"
+        "#,
+        )
+        .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+
+    // Well clear of wherever auto-placement put A, so the two never overlap.
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((5000, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    // Inserting the stand-in exclusively activates it too (a no-op on the wire,
+    // no toplevel) which already cleared A; re-focus A here so the assertion
+    // below isolates the hover path.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    assert!(is_activated(&a));
+
+    let center = pt(5200.0, 450.0);
+    f.state().warp_pointer(center);
+    f.state().maybe_hover_focus(center);
+
+    assert!(
+        matches!(f.state().window_focus, Some(FocusIntent::Suspended(s)) if s == sid),
+        "hovering the stand-in sets the Suspended intent"
+    );
+    assert!(
+        !is_activated(&a),
+        "hovering onto a stand-in must clear the previously-activated window's Activated hint"
     );
 
     f.state().dismiss_suspended(sid);
