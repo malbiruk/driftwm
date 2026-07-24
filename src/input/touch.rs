@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use std::time::Duration;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab, TouchGestureGrab};
+use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab, TouchGestureGrab};
 use crate::input::DecoTarget;
 use crate::state::{DriftWm, FocusTarget, SessionLock, StageWindow, output_state};
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
@@ -582,7 +582,7 @@ impl DriftWm {
         window: &Window,
         touch_start: TouchGrabStartData<DriftWm>,
         slots: usize,
-    ) -> Option<MoveSurfaceGrab> {
+    ) -> Option<MoveGrab> {
         let site = self.stage.pin_of(window).cloned()?;
         let output = self.output_by_name(&site.output)?;
         let (camera, zoom) = {
@@ -591,7 +591,7 @@ impl DriftWm {
         };
         let finger_screen = canvas_to_screen(CanvasPos(touch_start.location), camera, zoom).0;
         let grab_offset = site.screen_pos.to_f64() - finger_screen;
-        Some(MoveSurfaceGrab::new_pinned_touch(
+        Some(MoveGrab::new_pinned_touch(
             touch_start,
             window.clone(),
             output,
@@ -644,8 +644,7 @@ impl DriftWm {
         // One finger down (the titlebar press); the grab intercepts its motion
         // and up directly, so no `down` forward is needed.
         self.arm_interactive_move(window);
-        let grab =
-            MoveSurfaceGrab::new_touch(start, window.clone(), initial, output, 1, Vec::new());
+        let grab = MoveGrab::new_touch(start, window.clone(), initial, output, 1, Vec::new());
         self.seat.get_touch().unwrap().set_grab(self, grab, serial);
     }
 

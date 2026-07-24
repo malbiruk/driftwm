@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 
-use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
+use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab};
 use crate::state::{DriftWm, FocusTarget, PopupGrabState, StageWindow, output_state};
 use crate::surface_tree::focus_belongs_to_toplevel;
 use driftwm::window_ext::WindowExt;
@@ -421,7 +421,7 @@ impl XdgShellHandler for DriftWm {
             // Moving re-anchors the window, invalidating any fill restore point.
             self.stage.clear_fill(&window);
             self.arm_interactive_move(&window);
-            let grab = MoveSurfaceGrab::new(
+            let grab = MoveGrab::new(
                 start_data,
                 window,
                 initial_window_location,
@@ -468,7 +468,7 @@ impl XdgShellHandler for DriftWm {
             // Moving re-anchors the window, invalidating any fill restore point.
             self.stage.clear_fill(&window);
             self.arm_interactive_move(&window);
-            let grab = MoveSurfaceGrab::new_touch(
+            let grab = MoveGrab::new_touch(
                 touch_start,
                 window,
                 initial_window_location,

@@ -4,9 +4,11 @@
 //! normal window keeps the canvas-center placement. Outputs tile left-to-right
 //! by add order, so the second-added output sits to the right of the first.
 
-use smithay::utils::Point;
+use smithay::utils::{Point, Size};
 
 use driftwm::config::{Action, Direction};
+
+use crate::state::StageWindow;
 
 use super::{Fixture, config, map_window, window_by_app_id};
 
@@ -239,4 +241,86 @@ fn canvas_window_moves_to_target_output() {
         f.state().output_for_window(&window).map(|o| o.name()),
         Some(out2.name())
     );
+}
+
+/// A focused stand-in obeys `send-to-output` through the shared `execute_action`
+/// dispatch: it re-centers on the target output's usable area, keeps gated
+/// suspended focus, and lands on the target output.
+#[test]
+fn stand_in_moves_to_target_output() {
+    let mut f = Fixture::new();
+    let _out1 = f.add_output(1, (1920, 1080));
+    let out2 = f.add_output(2, (1280, 720));
+    // Pan out2 to a distinct canvas region so output_for_window can tell where
+    // the stand-in landed.
+    crate::state::output_state(&out2).camera = Point::from((5000.0, 5000.0));
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    f.state().focus_and_raise_suspended(sid);
+    assert_eq!(
+        f.state().gated_suspended_focus(),
+        Some(sid),
+        "precondition: the stand-in holds focus"
+    );
+
+    f.state()
+        .execute_action(&Action::SendToOutput(Direction::Right));
+
+    let s = f.state().find_suspended(sid).unwrap();
+    // out2's usable center in canvas coords: camera (5000,5000) + (640,360).
+    assert_eq!(
+        f.state()
+            .stage
+            .position_of(&StageWindow::Suspended(s.clone())),
+        Some(Point::from((5440, 5210))),
+        "the stand-in centers on the target output's usable area"
+    );
+    assert_eq!(
+        f.state()
+            .output_for_window(&StageWindow::Suspended(s))
+            .map(|o| o.name()),
+        Some(out2.name())
+    );
+    assert_eq!(
+        f.state().gated_suspended_focus(),
+        Some(sid),
+        "focus follows the stand-in to the target output"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
+/// With a single output there is nowhere to send to: a focused stand-in stays
+/// put.
+#[test]
+fn stand_in_send_to_output_single_output_is_noop() {
+    let mut f = Fixture::new();
+    let _out1 = f.add_output(1, (1920, 1080));
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    f.state().focus_and_raise_suspended(sid);
+
+    f.state()
+        .execute_action(&Action::SendToOutput(Direction::Right));
+
+    let s = f.state().find_suspended(sid).unwrap();
+    assert_eq!(
+        f.state().stage.position_of(&StageWindow::Suspended(s)),
+        Some(Point::from((400, 300))),
+        "a single output leaves the stand-in in place"
+    );
+
+    f.state().dismiss_suspended(sid);
 }

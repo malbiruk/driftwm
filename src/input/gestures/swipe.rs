@@ -27,7 +27,7 @@ use driftwm::config::{
 };
 use driftwm::layout::snap::SnapState;
 
-use crate::grabs::{MoveSurfaceGrab, ResizeState, ResizeSurfaceGrab};
+use crate::grabs::{MoveGrab, ResizeState, ResizeSurfaceGrab};
 use crate::input::pointer::{edges_from_position, resize_cursor};
 use crate::state::{DriftWm, FocusTarget, StageWindow};
 
@@ -419,7 +419,7 @@ impl DriftWm {
         self.gesture_output = None;
     }
 
-    /// Enter Swipe3Move state: focus + raise the window, set a MoveSurfaceGrab
+    /// Enter Swipe3Move state: focus + raise the window, set a MoveGrab
     /// on the pointer so gesture updates just warp the cursor and the grab
     /// handles window positioning (identical to Alt+click drag). Pinned windows
     /// get the screen-space pinned grab; widgets fall through to Swipe3Pan.
@@ -434,7 +434,7 @@ impl DriftWm {
             return;
         }
         let serial = SERIAL_COUNTER.next_serial();
-        self.raise_with_children(&window);
+        self.raise_with_children(&StageWindow::Client(window.clone()));
         let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
@@ -470,7 +470,7 @@ impl DriftWm {
             self.stage.clear_fill(member);
         }
         self.arm_interactive_move(&window);
-        let grab = MoveSurfaceGrab::new(
+        let grab = MoveGrab::new(
             GrabStartData {
                 focus: None,
                 button: 0, // no physical button — gesture-initiated
@@ -501,7 +501,7 @@ impl DriftWm {
         let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
         };
-        self.raise_with_children(&window);
+        self.raise_with_children(&StageWindow::Client(window.clone()));
         self.set_window_focus(Some(FocusTarget(wl_surface.clone())), serial);
         self.enforce_below_windows();
 

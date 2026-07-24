@@ -237,7 +237,7 @@ impl DriftWm {
 
     /// Apply edge auto-pan each frame during a window drag near viewport edges.
     /// Synthetic pointer motion keeps cursor at the same screen position and
-    /// lets the active MoveSurfaceGrab reposition the window automatically.
+    /// lets the active MoveGrab reposition the window automatically.
     pub fn apply_edge_pan(&mut self) {
         let Some(output) = self.active_output() else {
             return;

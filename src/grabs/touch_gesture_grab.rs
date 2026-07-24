@@ -23,7 +23,7 @@ use driftwm::window_ext::WindowExt;
 use crate::input::touch::HeldTouchEvent;
 use crate::state::{DriftWm, FocusTarget, StageWindow, output_state};
 
-use super::MoveSurfaceGrab;
+use super::MoveGrab;
 use super::touch_recognizer::{Decision, TapOutcome, TouchInput, TouchKind, TouchRecognizer};
 
 /// Logical pixels per millimetre for `output`, used to convert physical gesture
@@ -247,8 +247,7 @@ impl TouchGestureGrab {
         // stays alive until every one of them lifts.
         let slots = self.core.finger_count();
         data.arm_interactive_move(&window);
-        let grab =
-            MoveSurfaceGrab::new_touch(start, window, initial, self.output.clone(), slots, members);
+        let grab = MoveGrab::new_touch(start, window, initial, self.output.clone(), slots, members);
         handle.set_grab(self, data, seq, grab);
         true
     }

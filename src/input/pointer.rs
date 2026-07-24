@@ -23,8 +23,7 @@ use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{
-    MoveSurfaceGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab, SuspendedMoveGrab,
-    SuspendedResizeGrab,
+    MoveGrab, NavigateGrab, PanGrab, ResizeState, ResizeSurfaceGrab, SuspendedResizeGrab,
 };
 use crate::input::DecoTarget;
 use crate::state::{
@@ -349,7 +348,7 @@ impl DriftWm {
                                 // point (which includes position) no longer applies.
                                 self.stage.clear_fill(&window);
                                 self.arm_interactive_move(&window);
-                                let grab = MoveSurfaceGrab::new(
+                                let grab = MoveGrab::new(
                                     start_data,
                                     window,
                                     initial_window_location,
@@ -426,7 +425,7 @@ impl DriftWm {
                                 self.stage.clear_fill(member);
                             }
                             self.arm_interactive_move(&window);
-                            let grab = MoveSurfaceGrab::new(
+                            let grab = MoveGrab::new(
                                 start_data,
                                 window,
                                 initial_window_location,
@@ -829,7 +828,7 @@ impl DriftWm {
                     button,
                     location: canvas_pos,
                 };
-                let grab = MoveSurfaceGrab::new(
+                let grab = MoveGrab::new(
                     start_data,
                     window,
                     initial_window_location,
@@ -849,8 +848,7 @@ impl DriftWm {
                 // Take the cursor only once the grab is certain — start_suspended_move
                 // has its own silent bails, and a stale grab_cursor would latch
                 // the Grabbing icon forever (update_decoration_cursor early-returns
-                // on it). SuspendedMoveGrab clears fill and installs the grab;
-                // MoveSurfaceGrab can't move a stand-in.
+                // on it). start_suspended_move clears fill and installs the grab.
                 if !self.start_suspended_move(&pointer, &s, canvas_pos, button, serial, false) {
                     return false;
                 }
@@ -899,7 +897,7 @@ impl DriftWm {
             button,
             location: pos,
         };
-        let grab = SuspendedMoveGrab::new(start_data, s.id, output, origin, pos, cluster_members);
+        let grab = MoveGrab::new(start_data, s.id, origin, output, cluster_members);
         pointer.set_grab(self, grab, serial, Focus::Clear);
         true
     }
@@ -1106,7 +1104,7 @@ impl DriftWm {
             location: pos,
         };
         self.arm_interactive_move(window);
-        let grab = MoveSurfaceGrab::new_pinned(start_data, window.clone(), output, grab_offset);
+        let grab = MoveGrab::new_pinned(start_data, window.clone(), output, grab_offset);
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 

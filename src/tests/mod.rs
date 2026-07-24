@@ -37,6 +37,7 @@ mod relaunch;
 mod send_to_output;
 mod session_restore;
 mod soak;
+mod stand_in_parity;
 mod suspend_flows;
 mod suspended;
 mod window_opening;

@@ -657,7 +657,7 @@ pub struct DriftWm {
     pub on_demand_layer: Option<WlSurface>,
     /// The active popup keyboard/pointer grab, if any. See [`PopupGrabState`].
     pub popup_grab: Option<PopupGrabState>,
-    /// Windows under an active interactive `MoveSurfaceGrab`, tracked so the
+    /// Windows under an active interactive `MoveGrab`, tracked so the
     /// relaunch adopt path can tell whether *this* window is being dragged right
     /// now — a plain "any grab active" check would wrongly block adoption while
     /// some other window is being moved. A multiset (not an `Option`) because a
@@ -1062,13 +1062,15 @@ impl DriftWm {
     /// Raise `window`, then its child windows, so a child/modal dialog stays
     /// directly above its own parent without jumping over unrelated windows
     /// that sit higher in the stack.
-    pub fn raise_with_children(&mut self, window: &Window) {
+    pub fn raise_with_children(&mut self, window: &StageWindow) {
         // The stage does the raising and returns the raise order; activation is
         // exclusive to the topmost of it (the order's last element). Toggling it
         // per raised window instead would ping-pong the hint and flush a burst
-        // of configures between a parent and its modal child.
-        let target = StageWindow::from(window.clone());
-        if let Some(top) = self.stage.raise_with_children(&target).last().cloned() {
+        // of configures between a parent and its modal child. A stand-in target
+        // no-ops its own `set_activated`, but exclusivity still clears the
+        // previously-active client's hint — so focusing a stand-in deactivates
+        // the client that had focus.
+        if let Some(top) = self.stage.raise_with_children(window).last().cloned() {
             self.set_activated_exclusive(&top);
         }
     }
@@ -1213,7 +1215,7 @@ impl DriftWm {
 
     /// Raise a window and focus it (or its innermost modal child).
     pub fn raise_and_focus(&mut self, window: &Window, serial: smithay::utils::Serial) {
-        self.raise_with_children(window);
+        self.raise_with_children(&StageWindow::Client(window.clone()));
         self.enforce_below_windows();
 
         let focus_surface = self
@@ -1222,6 +1224,19 @@ impl DriftWm {
             .and_then(|w| w.wl_surface().map(|s| FocusTarget(s.into_owned())));
 
         self.set_window_focus(focus_surface, serial);
+    }
+
+    /// Raise + focus a stage element — the element-generic form of
+    /// `raise_and_focus` / `focus_and_raise_suspended`.
+    pub fn raise_and_focus_element(
+        &mut self,
+        element: &StageWindow,
+        serial: smithay::utils::Serial,
+    ) {
+        match element {
+            StageWindow::Client(w) => self.raise_and_focus(w, serial),
+            StageWindow::Suspended(s) => self.focus_and_raise_suspended(s.id),
+        }
     }
 
     /// Record a window-level keyboard-focus intent and recompute the actual
@@ -1852,18 +1867,24 @@ impl DriftWm {
         self.stage.fullscreen_on(&output.name()).is_some()
     }
 
-    /// Output whose viewport contains the window's center, or the active
-    /// output if the window isn't visible on any.
-    pub fn output_for_window(&self, window: &smithay::desktop::Window) -> Option<Output> {
+    /// Output whose viewport contains the element's center, or the active
+    /// output if it isn't visible on any. Element-generic: a stand-in resolves
+    /// by center containment exactly like a client (it never pins, so the
+    /// pin short-circuit is simply inert for it).
+    pub fn output_for_window<Q>(&self, window: &Q) -> Option<Output>
+    where
+        StageWindow: PartialEq<Q>,
+        Q: StageElement,
+    {
         // A pinned window is fixed to one output regardless of canvas geometry.
         if let Some(site) = self.stage.pin_of(window) {
             return self.output_by_name(&site.output);
         }
         let loc = self.stage.position_of(window)?;
-        let geo = window.geometry();
+        let size = window.size();
         let center: Point<f64, Logical> = Point::from((
-            loc.x as f64 + geo.size.w as f64 / 2.0,
-            loc.y as f64 + geo.size.h as f64 / 2.0,
+            loc.x as f64 + size.w as f64 / 2.0,
+            loc.y as f64 + size.h as f64 / 2.0,
         ));
         let found = self
             .space
@@ -2295,6 +2316,20 @@ impl DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
             .and_then(|w| w.client())
             .cloned()
+    }
+
+    /// The element action dispatch should treat as focused: the keyboard-focused
+    /// client window, else the stand-in holding gated suspended focus. The two
+    /// sources are mutually exclusive (a stand-in holds no seat keyboard focus),
+    /// so the client-first order changes no reachable outcome. Contrast
+    /// `focused_anchor_element`, which reads raw focus *intent* without the gate.
+    pub fn focused_element(&self) -> Option<StageWindow> {
+        if let Some(window) = self.focused_window() {
+            return Some(StageWindow::Client(window));
+        }
+        self.gated_suspended_focus()
+            .and_then(|id| self.find_suspended(id))
+            .map(StageWindow::Suspended)
     }
 
     pub fn window_ssd_bar<W: WaylandFocus + WindowExt>(&self, window: &W) -> i32 {

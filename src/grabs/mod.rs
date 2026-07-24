@@ -121,7 +121,7 @@ mod suspended_grab;
 mod touch_gesture_grab;
 mod touch_recognizer;
 
-pub use move_grab::MoveSurfaceGrab;
+pub use move_grab::MoveGrab;
 pub use navigate_grab::NavigateGrab;
 pub use pan_grab::PanGrab;
 pub use resize_grab::{
@@ -129,5 +129,5 @@ pub use resize_grab::{
     locked_ratio_for,
 };
 pub use screen_space_click::ScreenSpaceClickGrab;
-pub use suspended_grab::{SuspendedMoveGrab, SuspendedResizeGrab};
+pub use suspended_grab::SuspendedResizeGrab;
 pub use touch_gesture_grab::TouchGestureGrab;

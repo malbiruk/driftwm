@@ -37,6 +37,9 @@ impl ClusterMember {
     }
 
     /// Resolve back to the live stage element, or `None` if it left the stage.
+    /// The `Client` arm checks *liveness* (`IsAlive`); the `Suspended` arm checks
+    /// *stage presence* — two different notions, so this can't be collapsed into
+    /// one uniform check.
     pub fn resolve(&self, stage: &driftwm::stage::Stage<StageWindow>) -> Option<StageWindow> {
         match self {
             Self::Client(w) => {
@@ -48,6 +51,18 @@ impl ClusterMember {
                 .find(|s| s.id == *id)
                 .map(|s| StageWindow::Suspended(s.clone())),
         }
+    }
+}
+
+impl From<Window> for ClusterMember {
+    fn from(w: Window) -> Self {
+        Self::Client(w)
+    }
+}
+
+impl From<SuspendedId> for ClusterMember {
+    fn from(id: SuspendedId) -> Self {
+        Self::Suspended(id)
     }
 }
 

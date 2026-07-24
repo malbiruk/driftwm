@@ -44,6 +44,15 @@ impl DriftWm {
         }
     }
 
+    /// Navigate the active output's viewport to center on a stage element — the
+    /// element-generic form of `navigate_to_window` / `center_on_suspended`.
+    pub fn navigate_to_element(&mut self, element: &StageWindow, reset_zoom: bool) {
+        match element {
+            StageWindow::Client(w) => self.navigate_to_window(w, reset_zoom),
+            StageWindow::Suspended(s) => self.center_on_suspended(s.id, reset_zoom),
+        }
+    }
+
     /// As `navigate_to_window`, but pans `output`'s camera instead of the
     /// active one. Lets xdg-activation reveal a window on the monitor it
     /// already lives on rather than dragging the active monitor's camera

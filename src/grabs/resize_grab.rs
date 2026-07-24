@@ -172,7 +172,7 @@ pub struct ResizeSurfaceGrab {
     /// window's `screen_pos` at grab start.
     pub pinned_initial_screen_pos: Option<Point<i32, Logical>>,
     /// Touch grab start data, present only for touch-initiated resizes. Mirrors
-    /// `MoveSurfaceGrab`; `apply_resize` reads `start_data.location` so the
+    /// `MoveGrab`; `apply_resize` reads `start_data.location` so the
     /// pointer and touch paths share one resize core.
     pub touch_start: Option<TouchGrabStartData<DriftWm>>,
     /// Fingers down for a touch resize; the grab unsets when this reaches zero,

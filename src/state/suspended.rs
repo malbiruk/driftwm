@@ -103,7 +103,9 @@ impl DriftWm {
             return;
         };
         let element = StageWindow::Suspended(s);
-        self.stage.raise_with_children(&element);
+        // Go through the `DriftWm` wrapper (not `stage` directly) so the previous
+        // client's xdg `activated` hint clears when focus moves to the stand-in.
+        self.raise_with_children(&element);
         self.enforce_below_windows();
         let serial = SERIAL_COUNTER.next_serial();
         self.set_suspended_focus(id, serial);
