@@ -1709,6 +1709,8 @@ fn connector_type_name(connector: &connector::Info) -> &'static str {
         connector::Interface::HDMIA => "HDMI-A",
         connector::Interface::HDMIB => "HDMI-B",
         connector::Interface::EmbeddedDisplayPort => "eDP",
+        connector::Interface::LVDS => "LVDS",
+        connector::Interface::DSI => "DSI",
         connector::Interface::VGA => "VGA",
         _ => "Unknown",
     }
