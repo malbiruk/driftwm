@@ -9,7 +9,7 @@ description = "A trackpad-first infinite canvas Wayland compositor"
 repository = "https://github.com/malbiruk/driftwm"
 
 [dependencies]
-smithay = { git = "https://github.com/Smithay/smithay.git", rev = "5312d5caedd0c2ce563a63719d38ae2183149210", default-features = false, features = [
+smithay = { git = "https://github.com/Smithay/smithay.git", rev = "27af99ef492ab4d7dc5cd2e625374d2beb2772f7", default-features = false, features = [
     "backend_winit",
     "backend_udev",
     "backend_drm",
@@ -21,7 +21,7 @@ smithay = { git = "https://github.com/Smithay/smithay.git", rev = "5312d5caedd0c
     "wayland_frontend",
     "desktop",
 ] }
-smithay-drm-extras = { git = "https://github.com/Smithay/smithay.git", rev = "5312d5caedd0c2ce563a63719d38ae2183149210" }
+smithay-drm-extras = { git = "https://github.com/Smithay/smithay.git", rev = "27af99ef492ab4d7dc5cd2e625374d2beb2772f7" }
 libdisplay-info = "0.3.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 tiff = "0.11"
