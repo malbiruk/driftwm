@@ -25,6 +25,8 @@ impl DriftWm {
             self.configure_trackpad(device);
         } else if device.has_capability(smithay::reexports::input::DeviceCapability::Pointer) {
             self.configure_mouse(device);
+        } else if device.has_capability(smithay::reexports::input::DeviceCapability::TabletTool) {
+            self.configure_tablet(device);
         }
     }
 
@@ -81,6 +83,15 @@ impl DriftWm {
                 && let Err(e) = device.config_click_set_method(click)
             {
                 tracing::warn!("Failed to set click_method: {e:?}");
+            }
+        }
+    }
+
+    fn configure_tablet(&self, device: &mut smithay::reexports::input::Device) {
+        tracing::info!("Configuring tablet: {}", device.name());
+        if device.config_left_handed_is_available() {
+            if let Err(e) = device.config_left_handed_set(false) {
+                tracing::warn!("Failed to set tablet left_handed: {e:?}");
             }
         }
     }

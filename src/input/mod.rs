@@ -15,11 +15,16 @@ use smithay::{
     wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
+use smithay::backend::input::{
+    ProximityState, TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent,
+    TabletToolTipEvent, TabletToolTipState,
+};
 use smithay::desktop::Window;
 use smithay::desktop::space::SpaceElement;
 use smithay::reexports::wayland_server::Resource;
 use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 use smithay::wayland::seat::WaylandFocus;
+use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
 
 use smithay::utils::Logical;
 use smithay::wayland::compositor::RegionAttributes;
@@ -302,6 +307,18 @@ impl DriftWm {
                 InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
                 InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
                 InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
+                InputEvent::TabletToolAxis { event } => {
+                    self.on_tablet_tool_axis_locked::<I>(event)
+                }
+                InputEvent::TabletToolProximity { event } => {
+                    self.on_tablet_tool_proximity_locked::<I>(event)
+                }
+                InputEvent::TabletToolTip { event } => {
+                    self.on_tablet_tool_tip_locked::<I>(event)
+                }
+                InputEvent::TabletToolButton { event } => {
+                    self.on_tablet_tool_button_locked::<I>(event)
+                }
                 _ => {}
             }
             return;
@@ -344,6 +361,10 @@ impl DriftWm {
             InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
             InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
             InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
+            InputEvent::TabletToolAxis { event } => self.on_tablet_tool_axis::<I>(event),
+            InputEvent::TabletToolProximity { event } => self.on_tablet_tool_proximity::<I>(event),
+            InputEvent::TabletToolTip { event } => self.on_tablet_tool_tip::<I>(event),
+            InputEvent::TabletToolButton { event } => self.on_tablet_tool_button::<I>(event),
             _ => {}
         }
     }
@@ -1821,6 +1842,172 @@ impl DriftWm {
             }
         }
         None
+    }
+
+    // -- tablet tool handlers --
+
+    fn tablet_coords<I: InputBackend>(
+        &self,
+        event: &I::TabletToolAxisEvent,
+    ) -> Option<(Point<f64, smithay::utils::Logical>, Point<f64, smithay::utils::Logical>)> {
+        let output = self.active_output()?;
+        let output_geo = self.space.output_geometry(&output)?;
+        let screen_pos = event.position_transformed(output_geo.size);
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+        Some((screen_pos, canvas_pos))
+    }
+
+    fn on_tablet_tool_axis_locked<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent) {
+        let Some((screen_pos, _canvas_pos)) = self.tablet_coords::<I>(&event) else {
+            return;
+        };
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = event.time_msec();
+        let pointer = self.seat.get_pointer().unwrap();
+        let focus = self
+            .active_output()
+            .and_then(|o| self.lock_surfaces.get(&o))
+            .map(|ls| {
+                (
+                    FocusTarget(ls.wl_surface().clone()),
+                    Point::<f64, smithay::utils::Logical>::from((0.0, 0.0)),
+                )
+            });
+        pointer.motion(
+            self,
+            focus,
+            &MotionEvent {
+                location: screen_pos,
+                serial,
+                time,
+            },
+        );
+        pointer.frame(self);
+    }
+
+    fn on_tablet_tool_proximity_locked<I: InputBackend>(
+        &mut self,
+        _event: I::TabletToolProximityEvent,
+    ) {
+    }
+
+    fn on_tablet_tool_tip_locked<I: InputBackend>(&mut self, _event: I::TabletToolTipEvent) {}
+
+    fn on_tablet_tool_button_locked<I: InputBackend>(
+        &mut self,
+        _event: I::TabletToolButtonEvent,
+    ) {
+    }
+
+    fn on_tablet_tool_proximity<I: InputBackend>(&mut self, event: I::TabletToolProximityEvent) {
+        let output = match self.active_output() {
+            Some(o) => o,
+            None => return,
+        };
+        let Some(output_geo) = self.space.output_geometry(&output) else {
+            return;
+        };
+        let screen_pos = event.position_transformed(output_geo.size);
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+
+        let device = event.device();
+        let tablet_seat = self.seat.tablet_seat();
+        let tool_desc = event.tool();
+        let tablet_desc = TabletDescriptor::from(&device);
+
+        let dh = self.display_handle.clone();
+        let tablet = tablet_seat.add_tablet::<DriftWm>(&dh, &tablet_desc);
+        let tool = tablet_seat.add_tool::<DriftWm>(self, &dh, &tool_desc);
+
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = event.time_msec();
+
+        match event.state() {
+            ProximityState::In => {
+                if let Some((focus, loc)) = self.pointer_focus_under(screen_pos, canvas_pos) {
+                    tool.proximity_in(canvas_pos, (focus.0, loc), &tablet, serial, time);
+                }
+            }
+            ProximityState::Out => {
+                tool.proximity_out(time);
+            }
+        }
+    }
+
+    fn on_tablet_tool_axis<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent) {
+        let Some((screen_pos, canvas_pos)) = self.tablet_coords::<I>(&event) else {
+            return;
+        };
+
+        let device = event.device();
+        let tablet_seat = self.seat.tablet_seat();
+        let tool_desc = event.tool();
+        let tablet_desc = TabletDescriptor::from(&device);
+
+        let Some(tool) = tablet_seat.get_tool(&tool_desc) else {
+            return;
+        };
+        let Some(tablet) = tablet_seat.get_tablet(&tablet_desc) else {
+            return;
+        };
+
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = event.time_msec();
+
+        if event.pressure_has_changed() {
+            tool.pressure(event.pressure());
+        }
+        if event.distance_has_changed() {
+            tool.distance(event.distance());
+        }
+        if event.tilt_has_changed() {
+            tool.tilt(event.tilt());
+        }
+        if event.slider_has_changed() {
+            tool.slider_position(event.slider_position());
+        }
+        if event.rotation_has_changed() {
+            tool.rotation(event.rotation());
+        }
+        if event.wheel_has_changed() {
+            tool.wheel(event.wheel_delta(), event.wheel_delta_discrete());
+        }
+
+        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        let focus = under.as_ref().map(|(f, loc)| (f.0.clone(), *loc));
+        tool.motion(canvas_pos, focus, &tablet, serial, time);
+
+        // Update cursor position without sending pointer protocol events.
+        if let Some(pointer) = self.seat.get_pointer() {
+            pointer.set_location(canvas_pos);
+        }
+    }
+
+    fn on_tablet_tool_tip<I: InputBackend>(&mut self, event: I::TabletToolTipEvent) {
+        let tool_desc = event.tool();
+        let Some(tool) = self.seat.tablet_seat().get_tool(&tool_desc) else {
+            return;
+        };
+
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = event.time_msec();
+
+        match event.tip_state() {
+            TabletToolTipState::Down => tool.tip_down(serial, time),
+            TabletToolTipState::Up => tool.tip_up(time),
+        }
+    }
+
+    fn on_tablet_tool_button<I: InputBackend>(&mut self, event: I::TabletToolButtonEvent) {
+        let tool_desc = event.tool();
+        let Some(tool) = self.seat.tablet_seat().get_tool(&tool_desc) else {
+            return;
+        };
+
+        let serial = SERIAL_COUNTER.next_serial();
+        let time = event.time_msec();
+
+        tool.button(event.button(), event.button_state(), serial, time);
     }
 }
 

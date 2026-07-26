@@ -559,13 +559,29 @@ pub fn init_udev(
         .handle()
         .insert_source(libinput_backend, |mut event, _, data| {
             use smithay::backend::input::InputEvent;
+            use smithay::reexports::input::DeviceCapability;
+            use smithay::wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait};
             match &mut event {
                 InputEvent::DeviceAdded { device } => {
                     data.configure_libinput_device(device);
                     data.input_devices.push(device.clone());
+                    if device.has_capability(DeviceCapability::TabletTool) {
+                        let desc = TabletDescriptor::from(&*device);
+                        data.seat
+                            .tablet_seat()
+                            .add_tablet::<DriftWm>(&data.display_handle, &desc);
+                    }
                 }
                 InputEvent::DeviceRemoved { device } => {
                     data.input_devices.retain(|d| d != device);
+                    if device.has_capability(DeviceCapability::TabletTool) {
+                        let desc = TabletDescriptor::from(&*device);
+                        let tablet_seat = data.seat.tablet_seat();
+                        tablet_seat.remove_tablet(&desc);
+                        if tablet_seat.count_tablets() == 0 {
+                            tablet_seat.clear_tools();
+                        }
+                    }
                 }
                 _ => {}
             }

@@ -39,6 +39,7 @@ use smithay::{
         },
         shm::ShmState,
         single_pixel_buffer::SinglePixelBufferState,
+        tablet_manager::TabletManagerState,
         text_input::TextInputManagerState,
         viewporter::ViewporterState,
         virtual_keyboard::VirtualKeyboardManagerState,
@@ -111,6 +112,7 @@ impl DriftWm {
         let mut seat_state = SeatState::new();
         let data_device_state = DataDeviceState::new::<Self>(&dh);
 
+        let tablet_manager_state = TabletManagerState::new::<Self>(&dh);
         let cursor_shape_state = CursorShapeManagerState::new::<Self>(&dh);
         let viewporter_state = ViewporterState::new::<Self>(&dh);
         let fractional_scale_state = FractionalScaleManagerState::new::<Self>(&dh);
@@ -302,6 +304,7 @@ impl DriftWm {
             dmabuf_global: None,
             render_device: None,
             render_dmabuf_formats: None,
+            tablet_manager_state,
             cursor_shape_state,
             viewporter_state,
             fractional_scale_state,

@@ -10,6 +10,7 @@ use smithay::wayland::seat::WaylandFocus;
 use smithay::{
     backend::renderer::ImportDma,
     delegate_cursor_shape, delegate_data_control, delegate_data_device, delegate_dmabuf,
+    delegate_tablet_manager,
     delegate_ext_data_control, delegate_fractional_scale, delegate_idle_inhibit,
     delegate_input_method_manager, delegate_keyboard_shortcuts_inhibit, delegate_output,
     delegate_pointer_constraints, delegate_pointer_gestures, delegate_presentation,
@@ -206,6 +207,8 @@ impl OutputHandler for DriftWm {}
 delegate_output!(DriftWm);
 
 impl TabletSeatHandler for DriftWm {}
+
+delegate_tablet_manager!(DriftWm);
 
 delegate_cursor_shape!(DriftWm);
 

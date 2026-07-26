@@ -73,6 +73,7 @@ use smithay::wayland::selection::ext_data_control::DataControlState as ExtDataCo
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
+use smithay::wayland::tablet_manager::TabletManagerState;
 use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::viewporter::ViewporterState;
@@ -552,6 +553,8 @@ pub struct DriftWm {
     /// compositor has no direct DRM device). Used by ext-image-copy-capture.
     pub render_device: Option<u64>,
     pub render_dmabuf_formats: Option<smithay::backend::allocator::format::FormatSet>,
+    #[allow(dead_code)]
+    pub tablet_manager_state: TabletManagerState,
     #[allow(dead_code)]
     pub cursor_shape_state: CursorShapeManagerState,
     #[allow(dead_code)]
