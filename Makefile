@@ -11,13 +11,17 @@ TARGET_DIR = $(or $(CARGO_TARGET_DIR),target)
 build:
 	cargo build --release
 
+HAS_SYSTEMD := $(shell command -v systemctl >/dev/null 2>&1 && echo yes || echo no)
+
 install:
 	install -Dm755 $(TARGET_DIR)/release/driftwm $(DESTDIR)$(BINDIR)/driftwm
 	install -Dm755 resources/driftwm-session $(DESTDIR)$(BINDIR)/driftwm-session
 	install -Dm644 resources/driftwm.desktop $(DESTDIR)$(DATADIR)/wayland-sessions/driftwm.desktop
 	install -Dm644 resources/driftwm-portals.conf $(DESTDIR)$(DATADIR)/xdg-desktop-portal/driftwm-portals.conf
+ifeq ($(HAS_SYSTEMD),yes)
 	install -Dm644 resources/driftwm.service $(DESTDIR)$(LIBDIR)/systemd/user/driftwm.service
 	install -Dm644 resources/driftwm-shutdown.target $(DESTDIR)$(LIBDIR)/systemd/user/driftwm-shutdown.target
+endif
 	rm -f $(DESTDIR)$(SYSCONFDIR)/driftwm/config.toml
 	install -Dm644 config.reference.toml $(DESTDIR)$(SYSCONFDIR)/driftwm/config.reference.toml
 	for f in extras/wallpapers/*.glsl extras/wallpapers/*/*.glsl; do \
