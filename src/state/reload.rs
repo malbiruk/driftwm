@@ -52,22 +52,26 @@ impl DriftWm {
                 model: &kb.model,
                 ..Default::default()
             };
-            let keyboard = self.seat.get_keyboard().unwrap();
-            let num_lock = keyboard.modifier_state().num_lock;
-            if let Err(err) = keyboard.set_xkb_config(self, xkb) {
-                tracing::warn!("Config reload: error updating keyboard layout: {err:?}");
-                self.set_error(
-                    ErrorSource::Keyboard,
-                    "keyboard: invalid layout config — keeping previous".to_string(),
-                );
-                new_config.keyboard_layout = self.config.keyboard_layout.clone();
-            } else {
-                tracing::info!("Config reload: keyboard layout updated");
-                let mut mods = keyboard.modifier_state();
-                if mods.num_lock != num_lock {
-                    mods.num_lock = num_lock;
-                    keyboard.set_modifier_state(mods);
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                let num_lock = keyboard.modifier_state().num_lock;
+                if let Err(err) = keyboard.set_xkb_config(self, xkb) {
+                    tracing::warn!("Config reload: error updating keyboard layout: {err:?}");
+                    self.set_error(
+                        ErrorSource::Keyboard,
+                        "keyboard: invalid layout config — keeping previous".to_string(),
+                    );
+                    new_config.keyboard_layout = self.config.keyboard_layout.clone();
+                } else {
+                    tracing::info!("Config reload: keyboard layout updated");
+                    let mut mods = keyboard.modifier_state();
+                    if mods.num_lock != num_lock {
+                        mods.num_lock = num_lock;
+                        keyboard.set_modifier_state(mods);
+                    }
                 }
+            } else {
+                tracing::warn!("Config reload: no keyboard seat, skipping layout update");
+                new_config.keyboard_layout = self.config.keyboard_layout.clone();
             }
         }
         if new_config.autostart != self.config.autostart {
@@ -77,8 +81,11 @@ impl DriftWm {
         if new_config.repeat_rate != self.config.repeat_rate
             || new_config.repeat_delay != self.config.repeat_delay
         {
-            let keyboard = self.seat.get_keyboard().unwrap();
-            keyboard.change_repeat_info(new_config.repeat_rate, new_config.repeat_delay);
+            if let Some(keyboard) = self.seat.get_keyboard() {
+                keyboard.change_repeat_info(new_config.repeat_rate, new_config.repeat_delay);
+            } else {
+                tracing::warn!("Config reload: no keyboard seat, skipping repeat rate update");
+            }
         }
 
         if new_config.drift != self.config.drift {

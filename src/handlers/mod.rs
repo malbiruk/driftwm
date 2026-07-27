@@ -1186,24 +1186,22 @@ impl SessionLockHandler for DriftWm {
             self.loop_handle.remove(pending.timer_token);
         }
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        let pointer = self.seat.get_pointer().unwrap();
-        pointer.unset_grab(self, serial, 0);
+        if let Some(pointer) = self.seat.get_pointer() {
+            pointer.unset_grab(self, serial, 0);
 
-        // Deactivate any pointer constraint held on the current focus surface.
-        // Without this, a Wine game (or any client with a Locked constraint)
-        // keeps the cursor pinned through unlock — the lock screen can't move.
-        if let Some(focus) = pointer.current_focus() {
-            smithay::wayland::pointer_constraints::with_pointer_constraint(
-                &focus.0,
-                &pointer,
-                |c| {
-                    if let Some(c) = c
-                        && c.is_active()
-                    {
-                        c.deactivate();
-                    }
-                },
-            );
+            if let Some(focus) = pointer.current_focus() {
+                smithay::wayland::pointer_constraints::with_pointer_constraint(
+                    &focus.0,
+                    &pointer,
+                    |c| {
+                        if let Some(c) = c
+                            && c.is_active()
+                        {
+                            c.deactivate();
+                        }
+                    },
+                );
+            }
         }
 
         self.cursor.exec_cursor_show_at = None;
