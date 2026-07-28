@@ -85,6 +85,31 @@ impl CompositorHandler for DriftWm {
             });
         });
 
+        // Guard against layer-surface buffer-before-ack races (noctalia/
+        // quickshell).  If the pending buffer is a NewBuffer but the layer
+        // surface hasn't acked its initial configure, clear the buffer so
+        // smithay's protocol validation does not post a protocol error
+        // that kills the client.  The client will ack the configure and
+        // retry the buffer on its next commit.
+        add_pre_commit_hook::<DriftWm, _>(surface, |_state, _dh, surface| {
+            with_states(surface, |states| {
+                let Some(role) = states.data_map.get::<LayerSurfaceData>() else {
+                    return;
+                };
+                if role.lock().ok().is_some_and(|guard| guard.last_acked.is_some()) {
+                    return;
+                }
+                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                let has_new_buffer = matches!(
+                    attrs.pending().buffer,
+                    Some(BufferAssignment::NewBuffer(_))
+                );
+                if has_new_buffer {
+                    attrs.pending().buffer = Some(BufferAssignment::Removed);
+                }
+            });
+        });
+
         // Snapshot a mapped toplevel's markless-conversion inputs the instant it
         // unmaps. Registered before smithay's xdg role-reset hook (which fires on
         // the null-buffer commit and wipes app_id / title / geometry), so a
