@@ -96,14 +96,16 @@ impl CompositorHandler for DriftWm {
                 let Some(role) = states.data_map.get::<LayerSurfaceData>() else {
                     return;
                 };
-                if role.lock().ok().is_some_and(|guard| guard.last_acked.is_some()) {
+                if role
+                    .lock()
+                    .ok()
+                    .is_some_and(|guard| guard.last_acked.is_some())
+                {
                     return;
                 }
                 let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-                let has_new_buffer = matches!(
-                    attrs.pending().buffer,
-                    Some(BufferAssignment::NewBuffer(_))
-                );
+                let has_new_buffer =
+                    matches!(attrs.pending().buffer, Some(BufferAssignment::NewBuffer(_)));
                 if has_new_buffer {
                     attrs.pending().buffer = Some(BufferAssignment::Removed);
                 }
