@@ -201,8 +201,14 @@ pub struct PendingPick {
 /// Session lock state machine: Unlocked → Pending → Locked → Unlocked.
 pub enum SessionLock {
     Unlocked,
-    /// Lock requested; screen goes black until lock surface commits.
-    Pending(SessionLocker),
+    /// Lock requested; waiting for all lock surfaces to commit a buffer.
+    Pending {
+        locker: SessionLocker,
+        /// Outputs whose lock surface has committed a buffer.
+        ready_outputs: HashSet<Output>,
+        /// 1-second deadline timer to force-lock if a client is slow.
+        deadline_token: Option<RegistrationToken>,
+    },
     /// Lock confirmed; rendering only the lock surface. Carries the client's
     /// lock object purely so a later lock request can tell a live locker (which
     /// it must not displace) from one whose client died (which it may).
@@ -223,7 +229,7 @@ impl SessionLock {
     pub fn incumbent(&self) -> Option<&ExtSessionLockV1> {
         match self {
             SessionLock::Unlocked => None,
-            SessionLock::Pending(locker) => Some(locker.ext_session_lock()),
+            SessionLock::Pending { locker, .. } => Some(locker.ext_session_lock()),
             SessionLock::Locked(lock) => Some(lock),
         }
     }

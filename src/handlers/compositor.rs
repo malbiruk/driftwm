@@ -3,7 +3,7 @@ use std::cell::RefCell;
 use crate::decorations::DecorationKey;
 use crate::grabs::{ResizeState, has_left, has_top};
 use crate::handlers::layer_shell::LayerDestroyedMarker;
-use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, StageWindow};
+use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, SessionLock, StageWindow};
 use driftwm::window_ext::WindowExt;
 use smithay::desktop::layer_map_for_output;
 use smithay::utils::{Logical, Point, Rectangle};
@@ -109,7 +109,7 @@ impl CompositorHandler for DriftWm {
                     let has_new_buffer =
                         matches!(attrs.pending().buffer, Some(BufferAssignment::NewBuffer(_)));
                     if has_new_buffer {
-                        attrs.pending().buffer = Some(BufferAssignment::Removed);
+                        attrs.pending().buffer = None;
                     }
                 }
             });
@@ -250,28 +250,44 @@ impl CompositorHandler for DriftWm {
             });
         }
 
-        // Confirm session lock on the lock surface's first buffer commit.
-        if let crate::state::SessionLock::Pending(_) = &self.session_lock {
-            let is_lock_surface = self
+        // Accumulate lock surface commits and confirm only when all are ready.
+        if let crate::state::SessionLock::Pending {
+            ref mut ready_outputs,
+            ..
+        } = self.session_lock
+        {
+            let Some(output) = self
                 .lock_surfaces
-                .values()
-                .any(|ls| ls.wl_surface() == surface);
-            if is_lock_surface {
-                // locker.lock() consumes — take it out of the enum. The lock
-                // object outlives it in `Locked`, where a later lock request
-                // reads its liveness.
+                .iter()
+                .find(|(_, ls)| ls.wl_surface() == surface)
+                .map(|(o, _)| o.clone())
+            else {
+                return;
+            };
+            ready_outputs.insert(output);
+
+            let all_ready = self.lock_surfaces.keys().all(|o| ready_outputs.contains(o));
+            if all_ready {
                 let old =
-                    std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Unlocked);
-                if let crate::state::SessionLock::Pending(locker) = old {
+                    std::mem::replace(&mut self.session_lock, SessionLock::Unlocked);
+                if let SessionLock::Pending {
+                    locker,
+                    deadline_token,
+                    ..
+                } = old
+                {
+                    if let Some(token) = deadline_token {
+                        self.loop_handle.remove(token);
+                    }
                     let lock = locker.ext_session_lock().clone();
                     locker.lock();
-                    self.session_lock = crate::state::SessionLock::Locked(lock);
+                    self.session_lock = SessionLock::Locked(lock);
                     tracing::info!("Session lock confirmed");
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     self.set_keyboard_focus(Some(FocusTarget(surface.clone())), serial);
                 }
-                return;
             }
+            return;
         }
 
         if !is_sync_subsurface(surface) {

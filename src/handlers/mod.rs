@@ -1118,9 +1118,11 @@ driftwm::delegate_output_management!(DriftWm);
 
 use crate::state::SessionLock;
 use smithay::delegate_session_lock;
+use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use std::collections::HashSet;
 
 impl SessionLockHandler for DriftWm {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {
@@ -1157,13 +1159,39 @@ impl SessionLockHandler for DriftWm {
             // the new lock surface the keyboard on its first commit.
             Some(_) => {
                 tracing::info!("Replacing a session lock whose client died");
-                self.session_lock = SessionLock::Pending(confirmation);
+                self.session_lock = SessionLock::Pending {
+                    locker: confirmation,
+                    ready_outputs: HashSet::new(),
+                    deadline_token: None,
+                };
                 return;
             }
             None => {}
         }
         tracing::info!("Session lock requested");
-        self.session_lock = SessionLock::Pending(confirmation);
+
+        // 1-second deadline: force-lock even if not all surfaces mapped yet.
+        let deadline_token = {
+            let timer = Timer::from_duration(std::time::Duration::from_millis(1000));
+            self.loop_handle
+                .insert_source(timer, |_, _, data: &mut DriftWm| {
+                    let old = std::mem::replace(&mut data.session_lock, SessionLock::Unlocked);
+                    if let SessionLock::Pending { locker, .. } = old {
+                        let lock = locker.ext_session_lock().clone();
+                        locker.lock();
+                        data.session_lock = SessionLock::Locked(lock);
+                        tracing::info!("Session lock confirmed (deadline)");
+                    }
+                    TimeoutAction::Drop
+                })
+                .ok()
+        };
+
+        self.session_lock = SessionLock::Pending {
+            locker: confirmation,
+            ready_outputs: HashSet::new(),
+            deadline_token,
+        };
 
         // Kill all transient input/animation state so nothing fires during lock
         self.gesture_state = None;
@@ -1298,6 +1326,14 @@ impl SessionLockHandler for DriftWm {
             return;
         }
         tracing::info!("Session unlocked");
+        // Remove deadline timer if still active.
+        if let SessionLock::Pending {
+            deadline_token: Some(token),
+            ..
+        } = &self.session_lock
+        {
+            self.loop_handle.remove(*token);
+        }
         // Undo the canvas→screen conversion `lock` established, before anything
         // hit-tests with the stored location again.
         let pointer = self.seat.get_pointer().unwrap();
