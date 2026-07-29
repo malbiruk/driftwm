@@ -244,6 +244,14 @@ pin touch to an output by connector name; "none" (default) auto-detects the touc
 map_to_output = "DP-2"
 ```
 
+## `[input.tablet]`
+
+### `map_to_output`
+
+Default: `"none"`
+
+map tablet absolute coordinates to a specific output by name (e.g., "eDP-1")
+
 ## `[cursor]`
 
 ### `theme`
