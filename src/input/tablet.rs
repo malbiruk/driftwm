@@ -19,22 +19,19 @@ impl DriftWm {
             if device_name
                 .to_lowercase()
                 .contains(&mapping.name.to_lowercase())
-            {
-                if let Some(output) = self
+                && let Some(output) = self
                     .space
                     .outputs()
                     .find(|o| o.name() == mapping.map_to_output)
                 {
                     return Some(output.clone());
                 }
-            }
         }
         // 2. Fall back to global map_to_output
-        if let Some(ref target) = self.config.tablet.map_to_output {
-            if let Some(output) = self.space.outputs().find(|o| o.name() == *target) {
+        if let Some(ref target) = self.config.tablet.map_to_output
+            && let Some(output) = self.space.outputs().find(|o| o.name() == *target) {
                 return Some(output.clone());
             }
-        }
         // 3. Fall back to active output
         self.active_output()
     }
