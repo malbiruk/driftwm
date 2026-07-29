@@ -268,8 +268,7 @@ impl CompositorHandler for DriftWm {
 
             let all_ready = self.lock_surfaces.keys().all(|o| ready_outputs.contains(o));
             if all_ready {
-                let old =
-                    std::mem::replace(&mut self.session_lock, SessionLock::Unlocked);
+                let old = std::mem::replace(&mut self.session_lock, SessionLock::Unlocked);
                 if let SessionLock::Pending {
                     locker,
                     deadline_token,
