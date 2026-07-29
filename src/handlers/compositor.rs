@@ -7,7 +7,6 @@ use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, StageWind
 use driftwm::window_ext::WindowExt;
 use smithay::desktop::layer_map_for_output;
 use smithay::utils::{Logical, Point, Rectangle};
-use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData};
 use smithay::{
     delegate_compositor, delegate_shm,
     reexports::{
@@ -23,6 +22,8 @@ use smithay::{
         },
         dmabuf::get_dmabuf,
         seat::WaylandFocus,
+        session_lock::LockSurfaceData,
+        shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData},
         shell::xdg::XdgToplevelSurfaceData,
         shm::{ShmHandler, ShmState},
     },
@@ -85,29 +86,31 @@ impl CompositorHandler for DriftWm {
             });
         });
 
-        // Guard against layer-surface buffer-before-ack races (noctalia/
-        // quickshell).  If the pending buffer is a NewBuffer but the layer
-        // surface hasn't acked its initial configure, clear the buffer so
-        // smithay's protocol validation does not post a protocol error
-        // that kills the client.  The client will ack the configure and
-        // retry the buffer on its next commit.
+        // Guard against buffer-before-ack races on layer surfaces (noctalia/
+        // quickshell bar, clipboard) and session lock surfaces (noctalia lock
+        // screen).  If the pending buffer is a NewBuffer but the surface hasn't
+        // acked its initial configure, clear the buffer so smithay's protocol
+        // validation does not post a protocol error that kills the client.
+        // The client will ack the configure and retry the buffer.
         add_pre_commit_hook::<DriftWm, _>(surface, |_state, _dh, surface| {
             with_states(surface, |states| {
-                let Some(role) = states.data_map.get::<LayerSurfaceData>() else {
-                    return;
-                };
-                if role
-                    .lock()
-                    .ok()
-                    .is_some_and(|guard| guard.last_acked.is_some())
-                {
-                    return;
-                }
-                let mut attrs = states.cached_state.get::<SurfaceAttributes>();
-                let has_new_buffer =
-                    matches!(attrs.pending().buffer, Some(BufferAssignment::NewBuffer(_)));
-                if has_new_buffer {
-                    attrs.pending().buffer = Some(BufferAssignment::Removed);
+                let layer_needs_ack = states
+                    .data_map
+                    .get::<LayerSurfaceData>()
+                    .and_then(|role| role.lock().ok())
+                    .is_some_and(|guard| guard.last_acked.is_none());
+                let lock_needs_ack = states
+                    .data_map
+                    .get::<LockSurfaceData>()
+                    .and_then(|role| role.lock().ok())
+                    .is_some_and(|guard| guard.last_acked.is_none());
+                if layer_needs_ack || lock_needs_ack {
+                    let mut attrs = states.cached_state.get::<SurfaceAttributes>();
+                    let has_new_buffer =
+                        matches!(attrs.pending().buffer, Some(BufferAssignment::NewBuffer(_)));
+                    if has_new_buffer {
+                        attrs.pending().buffer = Some(BufferAssignment::Removed);
+                    }
                 }
             });
         });
