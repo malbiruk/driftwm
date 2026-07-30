@@ -240,10 +240,11 @@ impl CompositorHandler for DriftWm {
 
             let all_ready = self.lock_surfaces.keys().all(|o| ready_outputs.contains(o));
             if all_ready {
+                // Cancel the deadline timer BEFORE we move out of Pending.
+                self.cancel_pending_deadline();
                 let old =
                     std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Unlocked);
                 if let crate::state::SessionLock::Pending { locker, .. } = old {
-                    self.cancel_pending_deadline();
                     self.enter_locked(locker);
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     self.set_keyboard_focus(Some(FocusTarget(surface.clone())), serial);

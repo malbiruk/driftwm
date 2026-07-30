@@ -192,6 +192,9 @@ impl DriftWm {
         match self.loop_handle.insert_source(
             Timer::from_duration(Duration::from_millis(1000)),
             |_, _, data: &mut DriftWm| {
+                if !matches!(data.session_lock, SessionLock::Pending { .. }) {
+                    return TimeoutAction::Drop;
+                }
                 let old = std::mem::replace(&mut data.session_lock, SessionLock::Unlocked);
                 if let SessionLock::Pending { locker, .. } = old {
                     data.enter_locked(locker);
