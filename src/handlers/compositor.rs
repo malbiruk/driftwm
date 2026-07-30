@@ -220,25 +220,36 @@ impl CompositorHandler for DriftWm {
             });
         }
 
-        // Confirm session lock on the lock surface's first buffer commit.
-        if let crate::state::SessionLock::Pending(_) = &self.session_lock {
-            let is_lock_surface = self
+        // Accumulate lock-surface commits during `Pending` and only enter
+        // `Locked` once every output's lock surface has committed its first
+        // buffer. This avoids a blank flash when the desktop is still showing.
+        if let crate::state::SessionLock::Pending {
+            ref mut ready_outputs,
+            ..
+        } = self.session_lock
+        {
+            let Some(output) = self
                 .lock_surfaces
-                .values()
-                .any(|ls| ls.wl_surface() == surface);
-            if is_lock_surface {
-                // The locker is consumed by whatever eventually sends `locked` —
-                // take it out of the enum. The lock object outlives it in
-                // `Locked`, where a later lock request reads its liveness.
+                .iter()
+                .find(|(_, ls)| ls.wl_surface() == surface)
+                .map(|(o, _)| o.clone())
+            else {
+                return;
+            };
+            ready_outputs.insert(output);
+
+            let all_ready = self.lock_surfaces.keys().all(|o| ready_outputs.contains(o));
+            if all_ready {
                 let old =
                     std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Unlocked);
-                if let crate::state::SessionLock::Pending(locker) = old {
+                if let crate::state::SessionLock::Pending { locker, .. } = old {
+                    self.cancel_pending_deadline();
                     self.enter_locked(locker);
                     let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                     self.set_keyboard_focus(Some(FocusTarget(surface.clone())), serial);
                 }
-                return;
             }
+            return;
         }
 
         if !is_sync_subsurface(surface) {

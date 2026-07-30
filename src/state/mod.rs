@@ -200,10 +200,21 @@ pub struct PendingPick {
 }
 
 /// Session lock state machine: Unlocked → Pending → Locked → Unlocked.
+///
+/// `Pending` renders the normal desktop (no flash) while waiting for all lock
+/// surfaces to commit their first buffer, with a 1-second deadline after which
+/// we force-enter `Locked` regardless. `Locked` renders lock frames and defers
+/// the `locked` protocol event until every output has presented one.
 pub enum SessionLock {
     Unlocked,
-    /// Lock requested; screen goes black until lock surface commits.
-    Pending(SessionLocker),
+    /// Lock requested; desktop still visible until lock surfaces commit.
+    Pending {
+        locker: SessionLocker,
+        /// Outputs whose lock surface has committed its first buffer.
+        ready_outputs: HashSet<Output>,
+        /// 1-second deadline: force `Locked` even if not all surfaces mapped.
+        deadline_token: Option<RegistrationToken>,
+    },
     /// Rendering only the lock surface. Carries the client's lock object partly
     /// so a later lock request can tell a live locker (which it must not
     /// displace) from one whose client died (which it may).
@@ -232,7 +243,7 @@ impl SessionLock {
 
     /// Whether the compositor is currently painting a lock frame rather than the
     /// desktop. Deliberately distinct from [`Self::is_locked`], which gates
-    /// input: the two answer different questions and coincide only today.
+    /// input: the two answer different questions.
     ///
     /// The renderer and the lock-frame bookkeeping must both read *this* — a
     /// disagreement about whether a given frame was a lock frame would make the
@@ -242,7 +253,7 @@ impl SessionLock {
     /// space the pointer is in, which is settled when `Pending` is entered, not
     /// what the frame paints.
     pub fn renders_lock_frame(&self) -> bool {
-        !matches!(self, SessionLock::Unlocked)
+        matches!(self, SessionLock::Locked { .. })
     }
 
     /// The lock object of the client that owns the session, pending or
@@ -251,7 +262,7 @@ impl SessionLock {
     pub fn incumbent(&self) -> Option<&ExtSessionLockV1> {
         match self {
             SessionLock::Unlocked => None,
-            SessionLock::Pending(locker) => Some(locker.ext_session_lock()),
+            SessionLock::Pending { locker, .. } => Some(locker.ext_session_lock()),
             SessionLock::Locked { lock, .. } => Some(lock),
         }
     }

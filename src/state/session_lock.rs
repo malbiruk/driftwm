@@ -14,7 +14,10 @@ use driftwm::protocols::output_power::OutputPowerHandler;
 use smithay::{
     output::Output,
     reexports::{
-        calloop::timer::{TimeoutAction, Timer},
+        calloop::{
+            RegistrationToken,
+            timer::{TimeoutAction, Timer},
+        },
         drm::control::crtc,
         wayland_protocols::ext::session_lock::v1::server::ext_session_lock_v1::ExtSessionLockV1,
     },
@@ -169,6 +172,41 @@ impl DriftWm {
     pub fn cancel_lock_confirm_timer(&mut self) {
         if let Some(token) = self.lock_confirm_timer.take() {
             self.loop_handle.remove(token);
+        }
+    }
+
+    /// Cancel the pending deadline timer, if any.
+    pub fn cancel_pending_deadline(&mut self) {
+        if let SessionLock::Pending { deadline_token, .. } = &mut self.session_lock
+            && let Some(token) = deadline_token.take()
+        {
+            self.loop_handle.remove(token);
+        }
+    }
+
+    /// Arm a one-second deadline that forces `Pending → Locked` even if not all
+    /// lock surfaces have committed. Returns `None` when the timer cannot be
+    /// inserted (the compositor will keep showing the desktop until the surfaces
+    /// commit, which may never come without the backstop).
+    pub fn arm_pending_deadline(&mut self) -> Option<RegistrationToken> {
+        match self.loop_handle.insert_source(
+            Timer::from_duration(Duration::from_millis(1000)),
+            |_, _, data: &mut DriftWm| {
+                let old = std::mem::replace(&mut data.session_lock, SessionLock::Unlocked);
+                if let SessionLock::Pending { locker, .. } = old {
+                    data.enter_locked(locker);
+                }
+                TimeoutAction::Drop
+            },
+        ) {
+            Ok(token) => {
+                tracing::trace!("Pending lock deadline armed (1s)");
+                Some(token)
+            }
+            Err(e) => {
+                tracing::error!("Failed to arm pending lock deadline: {e:?}");
+                None
+            }
         }
     }
 

@@ -1131,6 +1131,7 @@ use smithay::delegate_session_lock;
 use smithay::wayland::session_lock::{
     LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use std::collections::HashSet;
 
 impl SessionLockHandler for DriftWm {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {
@@ -1167,20 +1168,25 @@ impl SessionLockHandler for DriftWm {
             // the new lock surface the keyboard on its first commit.
             Some(_) => {
                 tracing::info!("Replacing a session lock whose client died");
-                // Assigning over `Locked` drops the dead client's unconsumed
-                // locker but not its repeating confirmation timer, which would
-                // go on waking the loop for as long as the newcomer sits in
-                // `Pending`. Harmless if it fired — the timer's identity check
-                // sees a lock it no longer matches — but there is no reason to
-                // keep it armed.
+                self.cancel_pending_deadline();
                 self.cancel_lock_confirm_timer();
-                self.session_lock = SessionLock::Pending(confirmation);
+                let token = self.arm_pending_deadline();
+                self.session_lock = SessionLock::Pending {
+                    locker: confirmation,
+                    ready_outputs: HashSet::new(),
+                    deadline_token: token,
+                };
                 return;
             }
             None => {}
         }
         tracing::info!("Session lock requested");
-        self.session_lock = SessionLock::Pending(confirmation);
+        let token = self.arm_pending_deadline();
+        self.session_lock = SessionLock::Pending {
+            locker: confirmation,
+            ready_outputs: HashSet::new(),
+            deadline_token: token,
+        };
 
         // Kill all transient input/animation state so nothing fires during lock
         self.gesture_state = None;
@@ -1315,6 +1321,9 @@ impl SessionLockHandler for DriftWm {
             return;
         }
         tracing::info!("Session unlocked");
+        // Cancel both timers: the Pending deadline and the Locked confirm backstop.
+        self.cancel_pending_deadline();
+        self.cancel_lock_confirm_timer();
         // Undo the canvas→screen conversion `lock` established, before anything
         // hit-tests with the stored location again.
         let pointer = self.seat.get_pointer().unwrap();
@@ -1325,7 +1334,6 @@ impl SessionLockHandler for DriftWm {
         )
         .0;
         pointer.set_location(canvas_pos);
-        self.cancel_lock_confirm_timer();
         self.session_lock = SessionLock::Unlocked;
         self.lock_surfaces.clear();
         // A finger still down at unlock would otherwise leave its slot
