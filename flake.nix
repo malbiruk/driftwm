@@ -7,14 +7,15 @@
 
   outputs = { self, nixpkgs }:
     let
-      system = "x86_64-linux";
-      pkgs = nixpkgs.legacyPackages.${system};
+      systems = [ "x86_64-linux" "aarch64-linux" ];
+      forAllSystems = nixpkgs.lib.genAttrs systems;
+      pkgsFor = system: nixpkgs.legacyPackages.${system};
 
-      nativeBuildInputs = with pkgs; [
+      nativeBuildInputsFor = pkgs: with pkgs; [
         pkg-config
       ];
 
-      buildInputs = with pkgs; [
+      buildInputsFor = pkgs: with pkgs; [
         wayland
         wayland-protocols
         seatd # libseat
@@ -33,7 +34,7 @@
         pixman
       ];
 
-      runtimeLibs = with pkgs; [
+      runtimeLibsFor = pkgs: with pkgs; [
         wayland
         seatd
         libdisplay-info
@@ -52,59 +53,88 @@
       ];
     in
     {
-      packages.${system}.default = pkgs.rustPlatform.buildRustPackage rec {
-        pname = "driftwm";
-        version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
+      packages = forAllSystems (system:
+        let pkgs = pkgsFor system;
+        in {
+          default = pkgs.rustPlatform.buildRustPackage rec {
+            pname = "driftwm";
+            version = (builtins.fromTOML (builtins.readFile ./Cargo.toml)).package.version;
 
-        src = pkgs.lib.cleanSourceWith {
-          src = ./.;
-          filter = path: type:
-            let baseName = builtins.baseNameOf path;
-            in baseName != "target" && baseName != ".git" && baseName != ".direnv";
-        };
+            src = pkgs.lib.cleanSourceWith {
+              src = ./.;
+              filter = path: type:
+                let baseName = builtins.baseNameOf path;
+                in baseName != "target" && baseName != ".git" && baseName != ".direnv";
+            };
 
-        cargoLock = {
-          lockFile = ./Cargo.lock;
-          allowBuiltinFetchGit = true;
-        };
+            cargoLock = {
+              lockFile = ./Cargo.lock;
+              allowBuiltinFetchGit = true;
+            };
 
-        inherit nativeBuildInputs buildInputs;
+            # Running the suite is CI's job — don't make every user's rebuild pay for it.
+            doCheck = false;
 
-        # Make sure the binary can find shared libraries at runtime
-        postFixup = ''
-          patchelf --add-rpath "${pkgs.lib.makeLibraryPath runtimeLibs}" $out/bin/driftwm
-        '';
+            nativeBuildInputs = nativeBuildInputsFor pkgs;
+            buildInputs = buildInputsFor pkgs;
 
-        postInstall = ''
-          install -Dm755 resources/driftwm-session $out/bin/driftwm-session
-          install -Dm644 resources/driftwm.desktop $out/share/wayland-sessions/driftwm.desktop
-          install -Dm644 resources/driftwm-portals.conf $out/share/xdg-desktop-portal/driftwm-portals.conf
-          install -Dm644 resources/driftwm.service $out/lib/systemd/user/driftwm.service
-          install -Dm644 resources/driftwm-shutdown.target $out/lib/systemd/user/driftwm-shutdown.target
-          install -Dm644 config.reference.toml $out/etc/driftwm/config.reference.toml
-          for f in extras/wallpapers/*.glsl; do
-            install -Dm644 "$f" "$out/share/driftwm/wallpapers/$(basename "$f")"
-          done
+            # Make sure the binary can find shared libraries at runtime
+            postFixup = ''
+              patchelf --add-rpath "${pkgs.lib.makeLibraryPath (runtimeLibsFor pkgs)}" $out/bin/driftwm
+            '';
 
-        substituteInPlace $out/share/wayland-sessions/driftwm.desktop --replace-fail "Exec=driftwm-session" "Exec=$out/bin/driftwm-session"
+            postInstall = ''
+              install -Dm755 resources/driftwm-session $out/bin/driftwm-session
+              install -Dm644 resources/driftwm.desktop $out/share/wayland-sessions/driftwm.desktop
+              install -Dm644 resources/driftwm-portals.conf $out/share/xdg-desktop-portal/driftwm-portals.conf
+              install -Dm644 resources/driftwm.service $out/lib/systemd/user/driftwm.service
+              install -Dm644 resources/driftwm-shutdown.target $out/lib/systemd/user/driftwm-shutdown.target
+              install -Dm644 config.reference.toml $out/etc/driftwm/config.reference.toml
+              for f in extras/wallpapers/*.glsl; do
+                install -Dm644 "$f" "$out/share/driftwm/wallpapers/$(basename "$f")"
+              done
 
-        substituteInPlace $out/lib/systemd/user/driftwm.service --replace-fail "ExecStart=driftwm" "ExecStart=$out/bin/driftwm"
-        '';
+            substituteInPlace $out/share/wayland-sessions/driftwm.desktop --replace-fail "Exec=driftwm-session" "Exec=$out/bin/driftwm-session"
 
-        passthru.providedSessions = [ "driftwm" ];
+            substituteInPlace $out/lib/systemd/user/driftwm.service --replace-fail "ExecStart=driftwm" "ExecStart=$out/bin/driftwm"
+            '';
 
-        meta = with pkgs.lib; {
-          description = "A trackpad-first infinite canvas Wayland compositor";
-          license = licenses.gpl3Plus;
-          platforms = [ "x86_64-linux" ];
-          mainProgram = "driftwm";
-        };
+            passthru.providedSessions = [ "driftwm" ];
+
+            meta = with pkgs.lib; {
+              description = "A trackpad-first infinite canvas Wayland compositor";
+              license = licenses.gpl3Plus;
+              platforms = systems;
+              mainProgram = "driftwm";
+            };
+          };
+        });
+
+      devShells = forAllSystems (system:
+        let pkgs = pkgsFor system;
+        in {
+          default = pkgs.mkShell {
+            inputsFrom = [ self.packages.${system}.default ];
+            packages = [ pkgs.rustfmt ];
+
+            LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (runtimeLibsFor pkgs);
+          };
+        });
+
+      checks = forAllSystems (system:
+        let pkgs = pkgsFor system;
+        in {
+          default = pkgs.callPackage ./nix/test.nix {
+            driftwm-module = self.nixosModules.default;
+            driftwm-package = self.packages.${system}.default;
+          };
+        });
+
+      nixosModules.driftwm = { config, lib, pkgs, ... }: {
+        imports = [ ./nix/nixos-module.nix ];
+        programs.driftwm.package = lib.mkDefault self.packages.${pkgs.stdenv.hostPlatform.system}.default;
       };
 
-      devShells.${system}.default = pkgs.mkShell {
-        inputsFrom = [ self.packages.${system}.default ];
-
-        LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath runtimeLibs;
-      };
+      nixosModules.default = self.nixosModules.driftwm;
     };
 }
