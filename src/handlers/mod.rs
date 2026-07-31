@@ -15,8 +15,7 @@ use smithay::{
     delegate_pointer_constraints, delegate_pointer_gestures, delegate_presentation,
     delegate_primary_selection, delegate_relative_pointer, delegate_seat,
     delegate_security_context, delegate_single_pixel_buffer, delegate_tablet_manager,
-    delegate_text_input_manager, delegate_viewporter,
-    delegate_xdg_activation,
+    delegate_text_input_manager, delegate_viewporter, delegate_xdg_activation,
     input::{
         Seat, SeatHandler, SeatState,
         dnd::{self, DnDGrab},

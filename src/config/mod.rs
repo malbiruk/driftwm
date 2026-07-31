@@ -804,27 +804,6 @@ impl Config {
             }
         };
 
-        let tablet = TabletSettings {
-            map_to_output: raw
-                .input
-                .tablet
-                .map_to_output
-                .clone()
-                .filter(|o| o.as_str() != "none"),
-            mappings: raw
-                .input
-                .tablet
-                .mappings
-                .clone()
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| TabletMappingSettings {
-                    name: m.name,
-                    map_to_output: m.map_to_output,
-                })
-                .collect(),
-        };
-
         let gesture_thresholds = GestureThresholds {
             swipe_distance: non_negative(
                 raw.gestures.swipe_threshold.unwrap_or(12.0),
