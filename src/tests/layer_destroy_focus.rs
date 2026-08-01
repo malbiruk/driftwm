@@ -1,8 +1,9 @@
 //! Pointer-focus invariants around layer-surface teardown: a layer destroyed
 //! beneath a stationary cursor must not leave `pointer_over_layer` stale, or
 //! the next press/scroll lands on the canvas instead of the surface still
-//! under the pointer (the noctalia bar closes its panel — a second layer — on
-//! the click that hits it, and the following click was panning the canvas).
+//! under the pointer. The compositor re-seats focus on the destroy itself;
+//! the hit-test must also skip the role-destroyed surface that is still
+//! listed in the layer map until render-time cleanup.
 
 use driftwm::config::BTN_LEFT;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -54,8 +55,9 @@ fn map_layer(
     surface
 }
 
-/// dies on the bar's click. The cursor rests over the bar through the whole
-/// teardown; the next press must reach the bar again, not pan the canvas.
+/// A panel layer dies over a bar while the cursor rests on the bar. The next
+/// press — no pointer motion through the whole teardown — must reach the bar
+/// again, not pan the canvas.
 #[test]
 fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
     let mut f = Fixture::new();
@@ -63,8 +65,7 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
     let id = f.add_client();
     let device = FakeDevice::mouse();
 
-    // The bar: full-width bottom strip. No exclusive zone, like noctalia's
-    // `reserve_space = false`.
+    // The bar: full-width bottom strip with no exclusive zone.
     let bar = map_layer(
         &mut f,
         id,
@@ -76,8 +77,8 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
             | zwlr_layer_surface_v1::Anchor::Right,
     );
 
-    // The panel `open_near_click_session` opens over the bar: an Overlay layer
-    // covering the cursor's spot, above the bar in z-order.
+    // A covering layer above the bar, over the cursor's spot: a panel or OSD
+    // that opens anchored to the bar, and dies on the click that hits the bar.
     let panel = map_layer(
         &mut f,
         id,
@@ -98,7 +99,7 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
     );
 
     // The click that hits the bar closes the panel: layer-shell role first,
-    // wl_surface after (the teardown order a real panel uses).
+    // wl_surface after (the teardown order a real client uses).
     f.client(id).layer(&panel).layer_surface.destroy();
     f.double_roundtrip(id);
     assert_eq!(
