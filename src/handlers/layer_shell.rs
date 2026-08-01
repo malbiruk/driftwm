@@ -183,14 +183,9 @@ impl WlrLayerShellHandler for DriftWm {
         self.canvas_layers
             .retain(|cl| cl.surface.wl_surface() != surface.wl_surface());
 
-        // Reset pointer_over_layer — the surface may have been under the pointer.
-        // Next motion event will re-evaluate, but this prevents stale state in between.
-        self.pointer_over_layer = false;
-
-        // Mark this surface so our early pre-commit hook can neutralise the
-        // orphaned commits before smithay's layer-shell validation runs. We
-        // can't fix the cached state here directly because smithay resets it to
-        // defaults AFTER this callback.
+        // Mark this surface so our early pre-commit hook can set full anchors
+        // before smithay's layer-shell validation runs. We can't set anchors here
+        // directly because smithay resets cached state to defaults AFTER this callback.
         with_states(surface.wl_surface(), |states| {
             states
                 .data_map
@@ -202,6 +197,19 @@ impl WlrLayerShellHandler for DriftWm {
                 .0
                 .store(true, Ordering::Relaxed);
         });
+
+        // The surface may have been under the pointer. `pointer_over_layer` and
+        // smithay's pointer focus are only refreshed by real pointer motion, so
+        // without this a layer destroyed under a stationary cursor would route
+        // the next press/scroll to the canvas instead of the layer surface still
+        // beneath it. `layer_surface_under` skips the role-destroyed surface via
+        // the marker above, so the recompute lands on whatever is genuinely under
+        // the cursor. No-op while locked; `unlock` re-seats pointer focus anyway.
+        if self.session_lock.is_locked() {
+            self.pointer_over_layer = false;
+        } else {
+            self.refresh_pointer_focus();
+        }
 
         // Drop on-demand tracking if it pointed at this surface, then recompute
         // focus — it falls back to the next layer or the focused window.

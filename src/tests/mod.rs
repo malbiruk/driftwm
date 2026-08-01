@@ -36,6 +36,7 @@ mod hotplug;
 mod hover_focus;
 mod input_dispatch;
 mod interact_min;
+mod layer_destroy_focus;
 mod opacity;
 mod pinned_phantom;
 mod popups;
