@@ -237,6 +237,14 @@ impl DriftWm {
         self.session_store_flush();
     }
 
+    /// Whether a change is waiting on the debounce timer. Both write paths write
+    /// unconditionally, so an armed debounce has no other seam to observe short
+    /// of waiting out the wall-clock second.
+    #[cfg(test)]
+    pub(crate) fn session_store_dirty(&self) -> bool {
+        self.session_store.dirty
+    }
+
     /// Arm the debounced write for a move/resize: a one-shot ~1s timer coalesces
     /// a drag's stream of position/size updates into a single write.
     pub fn session_store_mark_dirty(&mut self) {

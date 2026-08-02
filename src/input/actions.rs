@@ -86,11 +86,11 @@ impl DriftWm {
                 _ => self.suspend_focused_window(suspend_restore_rect),
             },
             Action::NudgeWindow(dir) => {
-                if let Some(window) = self.focused_window().filter(|w| self.is_canvas_window(w))
-                    && let Some(loc) = self.stage.position_of(&window)
+                if let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e))
+                    && let Some(loc) = self.stage.position_of(&element)
                 {
                     // Nudging re-anchors the window, invalidating any fill restore point.
-                    self.stage.clear_fill(&window);
+                    self.stage.clear_fill(&element);
                     let step = self.config.nudge_step;
                     let (ux, uy) = dir.to_unit_vec();
                     let offset = (
@@ -99,9 +99,15 @@ impl DriftWm {
                     );
                     let new_loc = loc + Point::from(offset);
                     // The nudge is the window's new position.
-                    self.drop_owed_recenter(&window);
-                    self.map_window(window.clone(), new_loc, false);
-                    self.animate_window_move_from(&window, loc, None);
+                    self.drop_owed_recenter(&element);
+                    self.map_window(element.clone(), new_loc, false);
+                    self.animate_element_move_from(&element, loc, None);
+                    // A stand-in's canvas position is durable — persist the
+                    // nudge on the session-store debounce (the client arm stays
+                    // unmarked).
+                    if matches!(element, StageWindow::Suspended(_)) {
+                        self.session_store_mark_dirty();
+                    }
                 }
             }
             Action::PanViewport(dir) => {
@@ -438,14 +444,14 @@ impl DriftWm {
                 if self.try_restore_overview() {
                     // toggled back
                 } else if let Some(focused) =
-                    self.focused_window().filter(|w| self.is_canvas_window(w))
+                    self.focused_element().filter(|e| self.is_canvas_window(e))
                 {
                     let rects = self.all_windows_with_snap_rects();
                     // StageWindow's Hash/Eq are pointer identity — stable despite
                     // interior mutability. Same allow as cluster_snapshot.rs.
                     #[allow(clippy::mutable_key_type)]
                     let cluster = driftwm::layout::cluster::cluster_of(
-                        &StageWindow::Client(focused.clone()),
+                        &focused,
                         &rects,
                         self.config.snap_gap,
                     );

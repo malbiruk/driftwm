@@ -453,12 +453,8 @@ impl DriftWm {
         );
     }
 
-    /// Position-only canvas animation from `from_loc` (nudge, cluster shift).
-    /// The stage already holds the new position; the seed pins the old one.
-    ///
-    /// `waits_for` names the entry this one is being pushed by, if any: the leg
-    /// stays parked on the seed until that entry's own resize freeze releases,
-    /// so a pushed neighbour and the window pushing it move as one.
+    /// [`Self::animate_element_move_from`] for a client window.
+    #[cfg(test)]
     pub(crate) fn animate_window_move_from(
         &mut self,
         window: &Window,
@@ -468,8 +464,14 @@ impl DriftWm {
         self.animate_element_move_from(&StageWindow::Client(window.clone()), from_loc, waits_for);
     }
 
-    /// [`Self::animate_window_move_from`] for any stage element — a suspended
-    /// stand-in pushed by a cluster shift slides like the window it stands for.
+    /// Position-only canvas animation from `from_loc` (nudge, cluster shift),
+    /// for any stage element — a suspended stand-in slides like the window it
+    /// stands for. The stage already holds the new position; the seed pins the
+    /// old one.
+    ///
+    /// `waits_for` names the entry this one is being pushed by, if any: the leg
+    /// stays parked on the seed until that entry's own resize freeze releases,
+    /// so a pushed neighbour and the window pushing it move as one.
     pub(crate) fn animate_element_move_from(
         &mut self,
         element: &StageWindow,

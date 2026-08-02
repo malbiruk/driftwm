@@ -46,7 +46,11 @@ A suspended window differs from a live window in two ways:
 - **Excluded from Alt-Tab and focus history**, the same as a pinned widget —
   it's still focusable by hovering or clicking, but cycling and MRU never
   land on it, and neither does a taskbar's window list.
-- **Unpinnable, unfullscreenable, unfittable** — those actions no-op on it.
+- **Unpinnable, unfullscreenable, unfittable** — `toggle-pin-to-screen`,
+  `toggle-fullscreen`, `fit-window`, `fit-window-snapped` and `fill-window`
+  no-op on it: each needs a client to configure or a screen slot to pin to.
+  `zoom-to-fit-snapped` is not one of them — it only moves the camera, so it
+  frames a suspended window's cluster like any other.
 
 If the window was fullscreen or screen-pinned when suspended, it's returned
 to the canvas first, at its most recent windowed size.

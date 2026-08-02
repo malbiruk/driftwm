@@ -1,7 +1,8 @@
 //! Stand-in drag/action parity: a suspended stand-in and a client window flow
 //! through the one unified [`MoveGrab`], so a stand-in drag gains edge-pan,
-//! cross-output teleport, and fullscreen-output park, and focus/center actions
-//! resolve a focused stand-in the same way they resolve a focused client.
+//! cross-output teleport, and fullscreen-output park, and focus, center, nudge
+//! and zoom-to-fit-snapped resolve a focused stand-in the same way they resolve
+//! a focused client.
 //!
 //! Grabs are installed directly via the public `MoveGrab` constructors and
 //! driven with smithay's public `PointerHandle` (motion loop + a synthesized
@@ -12,11 +13,12 @@ use smithay::input::pointer::{ButtonEvent, Focus, GrabStartData, MotionEvent};
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 
-use driftwm::config::{Action, BTN_LEFT};
+use driftwm::config::{Action, BTN_LEFT, Direction};
 
 use crate::grabs::MoveGrab;
 use crate::state::{ClusterMember, StageWindow, output_state};
 
+use super::real::TempDir;
 use super::{Fixture, config, is_activated, map_window, window_by_app_id};
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -67,6 +69,16 @@ fn motion(f: &mut Fixture, loc: Point<f64, Logical>) {
         time: 0,
     };
     pointer.motion(f.state(), None, &event);
+}
+
+/// Clear the viewport targets and the fit's toggle-back memory, so the next
+/// `zoom-to-fit-snapped` fits afresh and the targets it leaves are its own.
+fn arm_fresh_fit(f: &mut Fixture) {
+    f.state().with_output_state(|os| {
+        os.camera_target = None;
+        os.zoom_target = None;
+        os.overview_return = None;
+    });
 }
 
 /// Release the left button, ending the drag through the real grab teardown.
@@ -504,4 +516,200 @@ size = [320, 240]
         f.state().camera_target().is_some(),
         "a focused pinned client falls through to center the nearest canvas window"
     );
+}
+
+/// A nudge steps a client and a stand-in alike: `nudge-window` resolves the
+/// focused *element*, and a stand-in holds no seat keyboard focus.
+#[test]
+fn nudge_moves_client_and_stand_in_alike() {
+    let initial = Point::from((400, 300));
+    // One step right at the default nudge_step of 20px.
+    let expected = Point::from((420, 300));
+
+    {
+        let mut f = Fixture::new();
+        f.add_output(1, (1920, 1080));
+        let id = f.add_client();
+        map_window(&mut f, id, "c", (400, 300));
+        let window = window_by_app_id(&mut f, "c").unwrap();
+        f.state()
+            .map_window(StageWindow::Client(window.clone()), initial, true);
+        let serial = SERIAL_COUNTER.next_serial();
+        f.state().raise_and_focus(&window, serial);
+
+        f.state()
+            .execute_action(&Action::NudgeWindow(Direction::Right));
+
+        assert_eq!(
+            f.state().stage.position_of(&StageWindow::Client(window)),
+            Some(expected),
+            "the client steps by nudge_step"
+        );
+    }
+
+    {
+        let mut f = Fixture::new();
+        f.add_output(1, (1920, 1080));
+        let sid = f
+            .state()
+            .insert_suspended_for_test(1, initial, Size::from((400, 300)), "s", "S");
+        f.state().focus_and_raise_suspended(sid);
+        assert_eq!(
+            f.state().gated_suspended_focus(),
+            Some(sid),
+            "precondition: the stand-in holds focus"
+        );
+        assert_eq!(
+            f.state().window_animations.len(),
+            0,
+            "precondition: nothing is animating the stand-in yet"
+        );
+
+        f.state()
+            .execute_action(&Action::NudgeWindow(Direction::Right));
+
+        let s = f.state().find_suspended(sid).unwrap();
+        assert_eq!(
+            f.state().stage.position_of(&StageWindow::Suspended(s)),
+            Some(expected),
+            "the stand-in steps by the same nudge_step"
+        );
+        // The nudge's own `map_window` already wrote the position asserted
+        // above, so without this the stand-in could teleport there and every
+        // other assertion would still pass.
+        assert_eq!(
+            f.state().window_animations.len(),
+            1,
+            "the stand-in slides to its new position"
+        );
+
+        f.state().dismiss_suspended(sid);
+    }
+}
+
+/// A stand-in's canvas position is durable session state, so nudging one arms
+/// the debounced write — while nudging a client window, whose position the
+/// durable store doesn't own, leaves it unarmed.
+#[test]
+fn nudge_marks_the_session_store_dirty_only_for_a_stand_in() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+
+    let id = f.add_client();
+    map_window(&mut f, id, "c", (400, 300));
+    let window = window_by_app_id(&mut f, "c").unwrap();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&window, serial);
+    let before = f
+        .state()
+        .stage
+        .position_of(&StageWindow::Client(window.clone()))
+        .unwrap();
+
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+    assert_eq!(
+        f.state()
+            .stage
+            .position_of(&StageWindow::Client(window.clone())),
+        Some(before + Point::from((20, 0))),
+        "precondition: the client nudge ran"
+    );
+    assert!(
+        !f.state().session_store_dirty(),
+        "a client window's nudge is not durable session state"
+    );
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((900, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    f.state().focus_and_raise_suspended(sid);
+
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+    assert!(
+        f.state().session_store_dirty(),
+        "the stand-in's new position is queued for the durable write"
+    );
+
+    // Required, not hygiene: this cancels the debounce timer the nudge armed,
+    // and `debug_counters` has no entry for event-loop timers, so the fixture's
+    // teardown baseline would not catch one left running.
+    f.state().dismiss_suspended(sid);
+}
+
+/// `zoom-to-fit-snapped` fired with a stand-in focused frames the very cluster
+/// its snapped client neighbour frames — the stand-in seeds `cluster_of` like
+/// any other member, instead of silently no-opping.
+#[test]
+fn zoom_to_fit_snapped_fires_from_a_focused_stand_in() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let stand_in = StageWindow::Suspended(f.state().find_suspended(sid).unwrap());
+
+    let id = f.add_client();
+    map_window(&mut f, id, "c", (400, 300));
+    let window = window_by_app_id(&mut f, "c").unwrap();
+    let client = StageWindow::Client(window.clone());
+
+    // Park the client flush against the stand-in's right edge, one snap_gap
+    // away and top-aligned, so the two BFS into a single cluster.
+    let gap = f.state().config.snap_gap;
+    let stand_in_rect = f.state().snap_rect_for(&stand_in).unwrap();
+    let client_rect = f.state().snap_rect_for(&client).unwrap();
+    let loc = f.state().stage.position_of(&client).unwrap();
+    let offset = Point::from((
+        (stand_in_rect.x_high + gap - client_rect.x_low).round() as i32,
+        (stand_in_rect.y_low - client_rect.y_low).round() as i32,
+    ));
+    f.state().map_window(client.clone(), loc + offset, false);
+
+    arm_fresh_fit(&mut f);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&window, serial);
+    f.state().execute_action(&Action::ZoomToFitSnapped);
+    let camera = f.state().camera_target();
+    let zoom = f.state().zoom_target();
+    assert!(
+        camera.is_some() && zoom.is_some(),
+        "precondition: the client-focused fit framed the cluster"
+    );
+
+    arm_fresh_fit(&mut f);
+    f.state().focus_and_raise_suspended(sid);
+    assert_eq!(
+        f.state().gated_suspended_focus(),
+        Some(sid),
+        "precondition: the stand-in holds focus"
+    );
+
+    f.state().execute_action(&Action::ZoomToFitSnapped);
+
+    assert_eq!(
+        f.state().camera_target(),
+        camera,
+        "the stand-in-triggered fit lands on the cluster's camera"
+    );
+    assert_eq!(
+        f.state().zoom_target(),
+        zoom,
+        "the stand-in-triggered fit lands on the cluster's zoom"
+    );
+
+    f.state().dismiss_suspended(sid);
 }
