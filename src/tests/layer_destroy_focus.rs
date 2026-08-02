@@ -1,9 +1,9 @@
-//! Pointer-focus invariants around layer-surface teardown: a layer destroyed
-//! beneath a stationary cursor must not leave `pointer_over_layer` stale, or
-//! the next press/scroll lands on the canvas instead of the surface still
-//! under the pointer. The compositor re-seats focus on the destroy itself;
-//! the hit-test must also skip the role-destroyed surface that is still
-//! listed in the layer map until render-time cleanup.
+//! Pointer-focus invariants when a layer appears or disappears under a
+//! stationary cursor: `pointer_over_layer` is only refreshed by pointer
+//! motion, so a layer destroyed (or revealed by a fullscreen exit) beneath a
+//! resting cursor would route the next press/scroll to the canvas instead of
+//! the layer surface under the pointer. The compositor re-seats focus on the
+//! scene change itself, and the tests pin the press to the correct grab.
 
 use driftwm::config::BTN_LEFT;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
@@ -115,6 +115,21 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
     // in the default config). A press over a layer always installs a
     // ScreenSpaceClickGrab; a PanGrab is the stale-flag regression.
     press(&mut f, &device, BTN_LEFT);
+    assert_click_grab(
+        &mut f,
+        "the press after the teardown must hit the bar, not pan the canvas",
+    );
+    release(&mut f, &device, BTN_LEFT);
+
+    // Cleanup: the panel's wl_surface, then the bar's layer surface.
+    f.client(id).layer(&panel).surface.destroy();
+    f.client(id).layer(&bar).layer_surface.destroy();
+    f.double_roundtrip(id);
+}
+
+/// A layer press delivers a `ScreenSpaceClickGrab`; a `PanGrab` means the
+/// press fell through to the canvas. Pressed, not yet released.
+fn assert_click_grab(f: &mut Fixture, why: &str) {
     let (pan_grab, click_grab) = f
         .state()
         .seat
@@ -127,15 +142,69 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
             )
         })
         .unwrap_or((false, false));
+    assert_eq!((pan_grab, click_grab), (false, true), "{why}");
+}
+
+/// Exiting fullscreen can restore a hidden bar beneath a stationary cursor:
+/// `enter_fullscreen` forced `pointer_over_layer` to false and nothing
+/// refreshed it until the exit. The exit re-seats focus on the revealed bar.
+#[test]
+fn fullscreen_exit_reveals_a_bar_under_the_stationary_cursor() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let device = FakeDevice::mouse();
+
+    let window_surface = super::map_window(&mut f, id, "w", (800, 600));
+    let output = f.state().active_output().unwrap();
+    let window = super::window_by_app_id(&mut f, "w").unwrap();
+
+    // The bar fullscreen hides and exit restores beneath the cursor.
+    let bar = map_layer(
+        &mut f,
+        id,
+        zwlr_layer_shell_v1::Layer::Top,
+        "bar",
+        (1920, 40),
+        zwlr_layer_surface_v1::Anchor::Bottom
+            | zwlr_layer_surface_v1::Anchor::Left
+            | zwlr_layer_surface_v1::Anchor::Right,
+    );
+
+    // Cursor over the bar's strip, then fullscreen over it.
+    let over_bar = Point::from((960.0, 1060.0));
+    pointer_to_screen(&mut f, &device, over_bar);
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &window_surface);
+
+    // The fullscreen window owns focus while it covers the bar.
     assert_eq!(
-        (pan_grab, click_grab),
-        (false, true),
-        "the press after the teardown must hit the bar, not pan the canvas"
+        pointer_focus(&mut f),
+        Some(super::server_surface(&window)),
+        "the fullscreen window owns focus while the bar is hidden beneath it"
+    );
+
+    // Exit with the cursor still over the bar's spot, no motion since.
+    f.state().exit_fullscreen_on(&output);
+    f.double_roundtrip(id);
+
+    let bar_server = layer_surface_by_namespace(&mut f, "bar");
+    assert_eq!(
+        pointer_focus(&mut f),
+        Some(bar_server),
+        "exiting fullscreen must re-seat focus on the bar revealed beneath the cursor"
+    );
+
+    press(&mut f, &device, BTN_LEFT);
+    assert_click_grab(
+        &mut f,
+        "the press must hit the bar, not the restored window",
     );
     release(&mut f, &device, BTN_LEFT);
 
-    // Cleanup: the panel's wl_surface, then the bar's layer surface.
-    f.client(id).layer(&panel).surface.destroy();
+    // Cleanup: the window, then the bar's layer surface.
+    f.client(id).window(&window_surface).destroy();
     f.client(id).layer(&bar).layer_surface.destroy();
     f.double_roundtrip(id);
 }

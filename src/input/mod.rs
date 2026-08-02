@@ -22,13 +22,11 @@ use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_cons
 use smithay::wayland::seat::WaylandFocus;
 
 use smithay::utils::Logical;
-use smithay::wayland::compositor::{RegionAttributes, with_states};
+use smithay::wayland::compositor::RegionAttributes;
 
 use std::rc::Rc;
-use std::sync::atomic::Ordering;
 
 use crate::decorations::{DecorationHit, DecorationKey};
-use crate::handlers::layer_shell::LayerDestroyedMarker;
 use crate::state::{DriftWm, FocusTarget, PickTarget, StageWindow, SuspendedWindow};
 use driftwm::canvas::{
     CanvasPos, ScreenPos, clamp_to_output, screen_space_focus_loc, screen_to_canvas,
@@ -2083,21 +2081,6 @@ impl DriftWm {
             // even though its bbox contains it, and the surface beneath must
             // still receive the input.
             for (surface, geo) in self.layers_on_sorted(&output, layer) {
-                // Skip a surface whose layer-shell role was destroyed but which
-                // is still listed in smithay's layer map until cleanup: its
-                // buffer geometry is stale, and hit-testing it would pin the
-                // pointer to a dead surface. `layer_destroyed` sets this marker
-                // before it recomputes pointer focus, so the recompute lands on
-                // whatever genuinely sits beneath the cursor.
-                let role_destroyed = with_states(surface.wl_surface(), |states| {
-                    states
-                        .data_map
-                        .get::<LayerDestroyedMarker>()
-                        .is_some_and(|m| m.0.load(Ordering::Relaxed))
-                });
-                if role_destroyed {
-                    continue;
-                }
                 let surface_local = screen_pos - geo.loc.to_f64();
                 if let Some((wl_surface, sub_loc)) =
                     surface.surface_under(surface_local, WindowSurfaceType::ALL)

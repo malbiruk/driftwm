@@ -202,14 +202,10 @@ impl WlrLayerShellHandler for DriftWm {
         // smithay's pointer focus are only refreshed by real pointer motion, so
         // without this a layer destroyed under a stationary cursor would route
         // the next press/scroll to the canvas instead of the layer surface still
-        // beneath it. `layer_surface_under` skips the role-destroyed surface via
-        // the marker above, so the recompute lands on whatever is genuinely under
-        // the cursor. No-op while locked; `unlock` re-seats pointer focus anyway.
-        if self.session_lock.is_locked() {
-            self.pointer_over_layer = false;
-        } else {
-            self.refresh_pointer_focus();
-        }
+        // beneath it. The layer was unmapped above, so the recompute lands on
+        // whatever is genuinely under the cursor. No-op while locked — `unlock`
+        // re-seats pointer focus anyway.
+        self.refresh_pointer_focus();
 
         // Drop on-demand tracking if it pointed at this surface, then recompute
         // focus — it falls back to the next layer or the focused window.
