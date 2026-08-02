@@ -12,8 +12,9 @@ use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use super::client::ClientId;
 use super::real::TempDir;
 use super::{
-    Fixture, adopt_last_configure, client_sees_maximized, config, end_grab,
-    install_client_resize_grab, map_window, seed_fit_and_fill, server_surface, window_by_app_id,
+    Fixture, adopt_last_configure, client_sees_maximized, config, configure_count, end_grab,
+    install_client_resize_grab, last_configured, map_window, map_window_with_limits,
+    seed_fit_and_fill, server_surface, window_by_app_id, window_position,
 };
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
@@ -23,33 +24,11 @@ fn resize(f: &mut Fixture, window: Option<WindowSelector>, to: Option<(i32, i32)
     dispatch(Request::Resize { window, to }, f.state())
 }
 
-fn position(f: &mut Fixture, window: &Window) -> Point<i32, Logical> {
-    f.state().stage.position_of(window).expect("staged")
-}
-
-fn configure_count(f: &mut Fixture, id: ClientId, surface: &ClientSurface) -> usize {
-    f.double_roundtrip(id);
-    f.client(id).window(surface).configures_received.len()
-}
-
-/// The size the client was last asked for. Round-trips first, since the
-/// configure is only queued when `dispatch` returns.
-fn last_configured(f: &mut Fixture, id: ClientId, surface: &ClientSurface) -> (i32, i32) {
-    f.double_roundtrip(id);
-    f.client(id)
-        .window(surface)
-        .configures_received
-        .last()
-        .expect("the client was configured")
-        .1
-        .size
-}
-
 /// Visual center from *committed* geometry. `window_visual_center` sizes itself
 /// from the last configure, which is the very thing a drift check must not
 /// assume the client honoured.
 fn committed_center(f: &mut Fixture, window: &Window) -> Point<f64, Logical> {
-    let loc = position(f, window);
+    let loc = window_position(f, window);
     let bar = f.state().window_ssd_bar(window) as f64;
     crate::state::visual_frame_center(loc, window.geometry().size, bar)
 }
@@ -65,32 +44,6 @@ fn cached_content_size(f: &mut Fixture, window: &Window) -> (f64, f64) {
         rect.x_high - rect.x_low - 2.0 * bw,
         rect.y_high - rect.y_low - bar - 2.0 * bw,
     )
-}
-
-/// Map a toplevel that declares size limits, so the compositor has real
-/// client-side bounds to clamp a request against.
-fn map_window_with_limits(
-    f: &mut Fixture,
-    id: ClientId,
-    app_id: &str,
-    size: (u16, u16),
-    min: (i32, i32),
-    max: (i32, i32),
-) -> ClientSurface {
-    let window = f.client(id).create_window();
-    let surface = window.surface.clone();
-    window.set_app_id(app_id);
-    window.set_min_size(min.0, min.1);
-    window.set_max_size(max.0, max.1);
-    window.commit();
-    f.roundtrip(id);
-
-    let window = f.client(id).window(&surface);
-    window.set_size(size.0, size.1);
-    window.attach_new_buffer();
-    window.ack_last_and_commit();
-    f.double_roundtrip(id);
-    surface
 }
 
 /// Commit a size the compositor never asked for, as a client does on a font
@@ -131,7 +84,7 @@ fn a_set_configures_the_request_and_holds_the_center() {
     let surface = map_window(&mut f, id, "term", (400, 300));
     let window = window_by_app_id(&mut f, "term").unwrap();
 
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
     let center = committed_center(&mut f, &window);
 
     assert_eq!(
@@ -143,7 +96,7 @@ fn a_set_configures_the_request_and_holds_the_center() {
     );
     assert_eq!(last_configured(&mut f, id, &surface), (600, 500));
     assert_eq!(
-        position(&mut f, &window),
+        window_position(&mut f, &window),
         before + Point::from((-100, -100)),
         "the window shifted by half the size delta on each axis"
     );
@@ -159,7 +112,7 @@ fn a_set_configures_the_request_and_holds_the_center() {
         "the acked size lands on the center the window started from"
     );
     assert_eq!(
-        position(&mut f, &window),
+        window_position(&mut f, &window),
         before + Point::from((-100, -100)),
         "and the commit left the placement alone — no reflow relocation"
     );
@@ -200,10 +153,10 @@ fn a_repeat_request_before_the_ack_does_not_walk_the_window() {
     let id = f.add_client();
     let surface = map_window(&mut f, id, "term", (400, 300));
     let window = window_by_app_id(&mut f, "term").unwrap();
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
 
     resize(&mut f, None, Some((600, 500))).unwrap();
-    let after_first = position(&mut f, &window);
+    let after_first = window_position(&mut f, &window);
     assert_eq!(after_first, before + Point::from((-100, -100)));
     let configures = configure_count(&mut f, id, &surface);
 
@@ -211,7 +164,7 @@ fn a_repeat_request_before_the_ack_does_not_walk_the_window() {
     // against that, the second request would shift the window by another half
     // delta; measured against the size already configured it is a no-op.
     resize(&mut f, None, Some((600, 500))).unwrap();
-    assert_eq!(position(&mut f, &window), after_first);
+    assert_eq!(window_position(&mut f, &window), after_first);
     assert_eq!(
         configure_count(&mut f, id, &surface),
         configures,
@@ -236,7 +189,7 @@ fn a_client_that_resized_itself_is_measured_from_committed_geometry() {
     client_resizes_itself(&mut f, id, &surface, (700, 600));
     assert_eq!(window.geometry().size, Size::from((700, 600)));
 
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
     let configures = configure_count(&mut f, id, &surface);
 
     resize(&mut f, None, Some((600, 500))).unwrap();
@@ -248,7 +201,7 @@ fn a_client_that_resized_itself_is_measured_from_committed_geometry() {
     );
     assert_eq!(configure_count(&mut f, id, &surface), configures + 1);
     assert_eq!(
-        position(&mut f, &window),
+        window_position(&mut f, &window),
         before + Point::from((50, 50)),
         "and the anchor came off the 700x600 the window actually had"
     );
@@ -288,7 +241,7 @@ fn non_positive_dimensions_are_rejected() {
     let id = f.add_client();
     map_window(&mut f, id, "term", (400, 300));
     let window = window_by_app_id(&mut f, "term").unwrap();
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
 
     for bad in [(0, 300), (400, 0), (-100, 300)] {
         assert_eq!(
@@ -297,7 +250,7 @@ fn non_positive_dimensions_are_rejected() {
             "{bad:?} must be rejected"
         );
     }
-    assert_eq!(position(&mut f, &window), before);
+    assert_eq!(window_position(&mut f, &window), before);
     assert_eq!(window.geometry().size, Size::from((400, 300)));
 }
 
@@ -435,7 +388,7 @@ fn a_set_is_refused_under_a_move_grab() {
     let id = f.add_client();
     map_window(&mut f, id, "term", (400, 300));
     let window = window_by_app_id(&mut f, "term").unwrap();
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
 
     f.state().arm_interactive_move(&window);
     let reply = resize(&mut f, None, Some((600, 500)));
@@ -445,7 +398,7 @@ fn a_set_is_refused_under_a_move_grab() {
             .is_err_and(|e| e.contains("interactive move or resize")),
         "a live grab recomputes the rect every motion tick, got {reply:?}"
     );
-    assert_eq!(position(&mut f, &window), before);
+    assert_eq!(window_position(&mut f, &window), before);
 
     f.state().disarm_interactive_move(&window);
     assert!(resize(&mut f, None, Some((600, 500))).is_ok());
@@ -461,7 +414,7 @@ fn a_set_is_refused_under_a_client_resize_grab() {
     let id = f.add_client();
     map_window(&mut f, id, "term", (400, 300));
     let window = window_by_app_id(&mut f, "term").unwrap();
-    let before = position(&mut f, &window);
+    let before = window_position(&mut f, &window);
 
     install_client_resize_grab(
         &mut f,
@@ -479,7 +432,7 @@ fn a_set_is_refused_under_a_client_resize_grab() {
             .is_err_and(|e| e.contains("interactive move or resize")),
         "got {reply:?}"
     );
-    assert_eq!(position(&mut f, &window), before);
+    assert_eq!(window_position(&mut f, &window), before);
 
     end_grab(&mut f);
 }

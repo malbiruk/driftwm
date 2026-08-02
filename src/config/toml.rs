@@ -128,6 +128,7 @@ pub(super) struct NavigationConfig {
     pub auto_navigate_on_close: Option<bool>,
     pub auto_navigate_on_click: Option<bool>,
     pub nudge_step: Option<i32>,
+    pub resize_step: Option<i32>,
     pub pan_step: Option<f64>,
     pub trackpad_speed: Option<f64>,
     pub mouse_speed: Option<f64>,

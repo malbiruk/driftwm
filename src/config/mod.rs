@@ -167,6 +167,8 @@ pub struct Config {
     pub drift: f64,
     /// Pixels per keyboard nudge (Mod+Shift+Arrow).
     pub nudge_step: i32,
+    /// Pixels per grow-window / shrink-window step (no default binding).
+    pub resize_step: i32,
     /// Pixels per keyboard pan (Mod+Ctrl+Arrow).
     pub pan_step: f64,
     /// Keyboard repeat delay (ms) and rate (keys/sec).
@@ -1062,6 +1064,11 @@ impl Config {
             nudge_step: non_negative(
                 raw.navigation.nudge_step.unwrap_or(20),
                 "navigation.nudge_step",
+                &mut errors,
+            ),
+            resize_step: non_negative(
+                raw.navigation.resize_step.unwrap_or(20),
+                "navigation.resize_step",
                 &mut errors,
             ),
             pan_step: non_negative(

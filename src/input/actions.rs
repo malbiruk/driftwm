@@ -110,6 +110,8 @@ impl DriftWm {
                     }
                 }
             }
+            Action::GrowWindow(dir) => self.step_resize_focused(dir, self.config.resize_step),
+            Action::ShrinkWindow(dir) => self.step_resize_focused(dir, -self.config.resize_step),
             Action::PanViewport(dir) => {
                 let Some(zoom) = self.with_output_state(|os| {
                     os.zoom_target = None;

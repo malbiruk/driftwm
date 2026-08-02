@@ -41,6 +41,7 @@ mod pinned_phantom;
 mod popups;
 mod real_clients;
 mod relaunch;
+mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
 mod send_to_output;
@@ -127,6 +128,63 @@ fn map_window(
     window.ack_last_and_commit();
     f.double_roundtrip(id);
     surface
+}
+
+/// [`map_window`] for a toplevel that declares size limits, so the compositor
+/// has real client-side bounds to clamp a request against. A zero on either axis
+/// of `min`/`max` means unconstrained, smithay's own convention.
+fn map_window_with_limits(
+    f: &mut Fixture,
+    id: client::ClientId,
+    app_id: &str,
+    size: (u16, u16),
+    min: (i32, i32),
+    max: (i32, i32),
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id(app_id);
+    window.set_min_size(min.0, min.1);
+    window.set_max_size(max.0, max.1);
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.set_size(size.0, size.1);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    surface
+}
+
+fn window_position(f: &mut Fixture, window: &Window) -> Point<i32, Logical> {
+    f.state().stage.position_of(window).expect("staged")
+}
+
+fn configure_count(
+    f: &mut Fixture,
+    id: client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+) -> usize {
+    f.double_roundtrip(id);
+    f.client(id).window(surface).configures_received.len()
+}
+
+/// The size the client was last asked for. Round-trips first, since the
+/// configure is only queued when the compositor call returns.
+fn last_configured(
+    f: &mut Fixture,
+    id: client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+) -> (i32, i32) {
+    f.double_roundtrip(id);
+    f.client(id)
+        .window(surface)
+        .configures_received
+        .last()
+        .expect("the client was configured")
+        .1
+        .size
 }
 
 /// Adopt the size the compositor most recently configured: set it client-side,

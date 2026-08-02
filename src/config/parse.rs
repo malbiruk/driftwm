@@ -114,6 +114,20 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
             Ok(Action::NudgeWindow(dir))
         }
+        // Reached only from a keybinding: the mouse and gesture parsers match
+        // these as continuous actions before ever falling through here.
+        "resize-window" | "resize-window-snapped" => Err(format!(
+            "{name} is a drag action for mouse, gesture and touch bindings — on a keybinding use \
+             grow-window <dir> or shrink-window <dir>"
+        )),
+        "grow-window" => {
+            let dir = parse_direction(arg.ok_or("grow-window requires a direction")?)?;
+            Ok(Action::GrowWindow(dir))
+        }
+        "shrink-window" => {
+            let dir = parse_direction(arg.ok_or("shrink-window requires a direction")?)?;
+            Ok(Action::ShrinkWindow(dir))
+        }
         "pan-viewport" => {
             let dir = parse_direction(arg.ok_or("pan-viewport requires a direction")?)?;
             Ok(Action::PanViewport(dir))
@@ -212,6 +226,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("fit-window-snapped", "fit-window-snapped"),
     ("focus-center", "focus-center"),
     ("go-to-bookmark", "go-to-bookmark 1"),
+    ("grow-window", "grow-window up"),
     ("home-toggle", "home-toggle"),
     ("move-to-bookmark", "move-to-bookmark 1"),
     ("nudge-window", "nudge-window up"),
@@ -221,6 +236,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("send-cursor-to-output", "send-cursor-to-output up"),
     ("send-to-output", "send-to-output up"),
     ("set-bookmark", "set-bookmark 1"),
+    ("shrink-window", "shrink-window up"),
     ("spawn", "spawn foo"),
     ("suspend-window", "suspend-window"),
     ("switch-layout", "switch-layout next"),
@@ -576,6 +592,8 @@ mod tests {
             Action::CloseWindow => "close-window",
             Action::SuspendWindow => "suspend-window",
             Action::NudgeWindow(_) => "nudge-window",
+            Action::GrowWindow(_) => "grow-window",
+            Action::ShrinkWindow(_) => "shrink-window",
             Action::PanViewport(_) => "pan-viewport",
             Action::CenterWindow => "center-window",
             Action::CenterNearest(_) => "center-nearest",

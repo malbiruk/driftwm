@@ -734,6 +734,10 @@ pub struct DriftWm {
     /// of `markless_suspend_rect`'s shrink protection) until unmap clears it.
     pub(crate) pending_adopt_settle:
         HashMap<smithay::reexports::wayland_server::backend::ObjectId, Size<i32, Logical>>,
+    /// What the last `grow-window` / `shrink-window` step promised, so the next
+    /// one can undo whatever the client refused. One slot: only the focused
+    /// element can be stepped, and a repeat re-resolves to the same one.
+    pub(crate) resize_step_anchor: Option<resize::StepAnchor>,
 
     /// Windows whose close was requested via `suspend-window`: their next
     /// `toplevel_destroyed` converts into a suspended window. Keyed by surface

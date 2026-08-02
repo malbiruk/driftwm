@@ -161,6 +161,53 @@ fn parse_action_nudge_window_up() {
 }
 
 #[test]
+fn parse_action_grow_and_shrink_window() {
+    assert!(matches!(
+        parse_action("grow-window up").unwrap(),
+        Action::GrowWindow(Direction::Up)
+    ));
+    assert!(matches!(
+        parse_action("shrink-window down-right").unwrap(),
+        Action::ShrinkWindow(Direction::DownRight)
+    ));
+    assert!(parse_action("grow-window").is_err());
+    assert!(parse_action("shrink-window sideways").is_err());
+}
+
+/// `resize-window` on a keybinding is a drag action — point at the two that
+/// do work rather than leaving a bare "unknown action".
+#[test]
+fn resize_window_on_a_keybinding_points_at_the_step_actions() {
+    use driftwm::config::GestureTrigger;
+    for name in ["resize-window", "resize-window-snapped"] {
+        let err = parse_action(name).expect_err("a drag action must not bind to a key");
+        assert!(err.contains("grow-window"), "got {err}");
+        assert!(matches!(
+            parse_mouse_action(name),
+            Ok(MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped)
+        ));
+        assert!(matches!(
+            parse_gesture_config_entry(&GestureTrigger::Swipe { fingers: 3 }, name),
+            Ok(GestureConfigEntry::Continuous(_))
+        ));
+    }
+}
+
+/// Held arrows step the size continuously. The fullscreen omission is
+/// deliberate: exiting fullscreen and then resizing is visible, where a canvas
+/// guard rejecting a fullscreen window would be a silent no-op.
+#[test]
+fn resize_actions_repeat_and_leave_fullscreen_first() {
+    for action in [
+        Action::GrowWindow(Direction::Up),
+        Action::ShrinkWindow(Direction::Up),
+    ] {
+        assert!(action.is_repeatable());
+        assert!(!action.runs_during_fullscreen());
+    }
+}
+
+#[test]
 fn parse_action_center_nearest_down_left() {
     let result = parse_action("center-nearest down-left").unwrap();
     assert!(matches!(result, Action::CenterNearest(Direction::DownLeft)));

@@ -49,8 +49,11 @@ A suspended window differs from a live window in two ways:
 - **Unpinnable, unfullscreenable, unfittable** — `toggle-pin-to-screen`,
   `toggle-fullscreen`, `fit-window`, `fit-window-snapped` and `fill-window`
   no-op on it: each needs a client to configure or a screen slot to pin to.
-  `zoom-to-fit-snapped` is not one of them — it only moves the camera, so it
-  frames a suspended window's cluster like any other.
+  Two things that sound like they belong here don't. `zoom-to-fit-snapped`
+  only moves the camera, so it frames a suspended window's cluster like any
+  other. And a suspended window *can* be resized — `grow-window`,
+  `shrink-window` and `driftwm msg resize` write its size directly, with no
+  client to configure, down to a 120px floor that keeps its chrome usable.
 
 If the window was fullscreen or screen-pinned when suspended, it's returned
 to the canvas first, at its most recent windowed size.

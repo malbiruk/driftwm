@@ -307,7 +307,8 @@ decoration            = "none"
 
 This applies to interactive resizes only — a mouse-border drag, a resize
 gesture, a touch resize. The `size` rule, fit/fullscreen, `driftwm msg resize`,
-and client-driven sizes are left alone.
+the `grow-window` / `shrink-window` bindings, and client-driven sizes are left
+alone.
 
 ### Overlay that opens without taking focus
 

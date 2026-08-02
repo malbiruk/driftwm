@@ -17,6 +17,7 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 use super::{DriftWm, StageWindow};
 use crate::grabs::{ResizeState, SizeConstraints};
+use driftwm::config::Direction;
 
 /// The size a non-interactive resize measures its delta and its anchor against.
 ///
@@ -56,6 +57,20 @@ fn owes_a_configured_size(window: &Window) -> bool {
                 )
             })
     })
+}
+
+/// The placement a `grow-window` / `shrink-window` step promised, kept until the
+/// next step can check it against what the client actually committed. Carries
+/// the pre-step size too, so a rect that came from anywhere else — a drag, a
+/// fit, the IPC verb — fails the range check instead of being "corrected".
+pub(crate) struct StepAnchor {
+    surface: smithay::reexports::wayland_server::backend::ObjectId,
+    placed: Point<i32, Logical>,
+    previous: Size<i32, Logical>,
+    requested: Size<i32, Logical>,
+    /// Per axis, whether the step moved the low edge — the only case where the
+    /// position has to absorb what the client did with the size.
+    moved_low: (bool, bool),
 }
 
 /// What a non-interactive resize clamps a request to: the client's declared
@@ -209,6 +224,109 @@ impl DriftWm {
         // bumps this: `handle_resize_commit` returns early outside a grab, and a
         // stand-in has no commit to reach it with at all.
         self.render.blur_geometry_generation += 1;
+    }
+
+    /// Walk the `dir` edge of the focused element outward by `step` px — inward
+    /// for a negative `step` — holding the opposite edge where it is. A diagonal
+    /// moves both of its named edges; an axis the direction does not name keeps
+    /// its size untouched.
+    ///
+    /// The shift that keeps the opposite edge still comes off the delta the
+    /// clamp actually granted, not the one asked for; what the client refuses
+    /// of that is taken back by [`Self::reconcile_step_anchor`] before the
+    /// next step measures anything.
+    pub(crate) fn step_resize_focused(&mut self, dir: &Direction, step: i32) {
+        let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e)) else {
+            return;
+        };
+        // A grab recomputes the rect absolutely from its own start anchors on
+        // every motion tick, so a step landing mid-drag is erased by the next
+        // one — and the settling tail still owes a top/left compensation this
+        // would strip the witnesses for.
+        if self.element_under_interactive_grab(&element) {
+            return;
+        }
+        let Some(loc) = self.reconcile_step_anchor(&element) else {
+            return;
+        };
+
+        let current = configured_element_size(&element);
+        // `to_unit_vec` is Y-down, the convention stage positions use, so a
+        // negative component names the edge that sits lower in coordinate order:
+        // left on x, top on y.
+        let (ux, uy) = dir.to_unit_vec();
+        let dw = (ux.abs() * step as f64).round() as i32;
+        let dh = (uy.abs() * step as f64).round() as i32;
+        let clamped = resize_constraints(&element)
+            .clamp(current.w.saturating_add(dw), current.h.saturating_add(dh));
+        // An axis the step leaves alone keeps its size, clamp included: a client
+        // is free to declare a `max_size` its current size already violates
+        // (after a fit, say), and `grow-window up` must not silently narrow the
+        // window and jump its right edge.
+        let size = Size::from((
+            if dw == 0 { current.w } else { clamped.0 },
+            if dh == 0 { current.h } else { clamped.1 },
+        ));
+        // Only an axis whose low edge is the named one moves the position, and it
+        // absorbs the whole granted delta.
+        let anchor_shift = Point::from((
+            if ux < 0.0 { size.w - current.w } else { 0 },
+            if uy < 0.0 { size.h - current.h } else { 0 },
+        ));
+        let loc = loc - anchor_shift;
+        self.resize_element_to(&element, size, loc, true);
+        self.resize_step_anchor = element.wl_surface().map(|surface| StepAnchor {
+            surface: surface.id(),
+            placed: loc,
+            previous: current,
+            requested: size,
+            moved_low: (ux < 0.0, uy < 0.0),
+        });
+    }
+
+    /// Take back the part of the previous step's placement the client refused,
+    /// and answer with the position the next step should measure from.
+    ///
+    /// A step places optimistically, so the anchor edge only lands where it was
+    /// promised if the client commits the size it was handed. One that keeps its
+    /// own size, or snaps to a cell, leaves the anchor off by the difference —
+    /// and unlike the absolute IPC verb, a relative step has no rect to re-derive
+    /// from, so left alone the error compounds once per key repeat.
+    ///
+    /// The record only applies while the element still sits where the step left
+    /// it and its size lies between what it had and what it was asked for.
+    /// Anything else — a nudge, a drag, a fit — means the promise is void.
+    fn reconcile_step_anchor(&mut self, element: &StageWindow) -> Option<Point<i32, Logical>> {
+        let loc = self.stage.position_of(element)?;
+        let Some(anchor) = self.resize_step_anchor.take() else {
+            return Some(loc);
+        };
+        let committed = configured_element_size(element);
+        let between = |c: i32, a: i32, b: i32| c >= a.min(b) && c <= a.max(b);
+        if element.wl_surface().map(|s| s.id()) != Some(anchor.surface)
+            || loc != anchor.placed
+            || !between(committed.w, anchor.previous.w, anchor.requested.w)
+            || !between(committed.h, anchor.previous.h, anchor.requested.h)
+        {
+            return Some(loc);
+        }
+
+        let corrected = Point::from((
+            if anchor.moved_low.0 {
+                loc.x + (anchor.requested.w - committed.w)
+            } else {
+                loc.x
+            },
+            if anchor.moved_low.1 {
+                loc.y + (anchor.requested.h - committed.h)
+            } else {
+                loc.y
+            },
+        ));
+        if corrected != loc {
+            self.stage.set_position(element, corrected);
+        }
+        Some(corrected)
     }
 
     /// Send a plain sized configure — no Maximized/Fullscreen/Resizing state, so
