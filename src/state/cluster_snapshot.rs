@@ -449,6 +449,27 @@ impl DriftWm {
         self.stable_snap_rects.insert(surface.id(), rect);
     }
 
+    /// Cache `window`'s stable snap rect at a rect it has been *configured* into
+    /// rather than one built from `geometry()`, for the paths that place a
+    /// window optimistically — a non-interactive resize, an adopt's owed-rect
+    /// payoff. Their `geometry()` is still the pre-ack size, so
+    /// [`Self::refresh_stable_snap_rect`] would pair the new position with the
+    /// old dimensions.
+    pub fn cache_stable_snap_rect(
+        &mut self,
+        window: &Window,
+        loc: Point<i32, Logical>,
+        size: Size<i32, Logical>,
+    ) {
+        let Some(surface) = window.wl_surface() else {
+            return;
+        };
+        let bar = self.window_ssd_bar(window);
+        let bw = self.window_border_width(&surface);
+        self.stable_snap_rects
+            .insert(surface.id(), super::fit::snap_rect_at(loc, size, bar, bw));
+    }
+
     /// Snapshot the focused element's cluster for a move drag: each member with
     /// its canvas offset from the primary. Frozen at drag start — cluster
     /// membership and offsets are invariant over motion / snap / cross-output
@@ -672,17 +693,8 @@ fn window_snap_rect(
         applied.as_ref().and_then(|r| r.decoration.as_ref()),
         &decoration_config.default_mode,
     );
-    let bw =
-        driftwm::config::effective_border_width(applied.as_ref(), mode, decoration_config) as f64;
-    Some((
-        surface,
-        driftwm::layout::snap::SnapRect {
-            x_low: loc.x as f64 - bw,
-            x_high: loc.x as f64 + size.w as f64 + bw,
-            y_low: loc.y as f64 - bar as f64 - bw,
-            y_high: loc.y as f64 + size.h as f64 + bw,
-        },
-    ))
+    let bw = driftwm::config::effective_border_width(applied.as_ref(), mode, decoration_config);
+    Some((surface, super::fit::snap_rect_at(loc, size, bar, bw)))
 }
 
 #[cfg(test)]

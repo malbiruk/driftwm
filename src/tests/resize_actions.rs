@@ -11,26 +11,15 @@ use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use super::client::ClientId;
 use super::real::TempDir;
 use super::{
-    Fixture, adopt_last_configure, config, configure_count, end_grab, install_client_resize_grab,
-    last_configured, map_window, map_window_with_limits, window_by_app_id, window_position,
+    Fixture, ack_but_keep_size, adopt_last_configure, config, configure_count, end_grab,
+    install_client_resize_grab, last_configured, map_window, map_window_with_limits,
+    window_by_app_id, window_position,
 };
 use crate::state::{ClusterResizeSnapshot, StageWindow};
 use driftwm::config::{Action, Direction};
 
 fn step(f: &mut Fixture, action: Action) {
     f.state().execute_action(&action);
-}
-
-/// Ack the configure and commit without taking the size that came with it — a
-/// fixed-size dialog's answer. smithay drops the pending configure at *ack*, so
-/// afterwards the compositor sees no outstanding configure and a committed
-/// geometry that never moved.
-fn ack_but_keep_size(f: &mut Fixture, id: ClientId, surface: &ClientSurface) {
-    f.double_roundtrip(id);
-    let window = f.client(id).window(surface);
-    window.attach_new_buffer();
-    window.ack_last_and_commit();
-    f.double_roundtrip(id);
 }
 
 /// Ack the configure and commit `size` instead of the one asked for — a
@@ -198,6 +187,14 @@ fn a_fully_clamped_grow_is_a_clean_no_op() {
         configures,
         "a zero-delta step sends no configure at all"
     );
+
+    // The clamp is what silenced the step, not the action being unreachable.
+    let client_window = f.client(id).window(&surface);
+    client_window.set_max_size(500, 900);
+    client_window.commit();
+    f.double_roundtrip(id);
+    step(&mut f, Action::GrowWindow(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (420, 300));
 }
 
 /// A client is free to declare a `max_size` its current size already violates —
@@ -245,6 +242,11 @@ resize_step = 0
 
     assert_eq!(window_position(&mut f, &window), before);
     assert_eq!(configure_count(&mut f, id, &surface), configures);
+
+    // The step is zero, not the action unreachable.
+    f.state().config.resize_step = 20;
+    step(&mut f, Action::GrowWindow(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (420, 300));
 }
 
 /// `non_negative` accepts any non-negative `i32`, so the target size has to
@@ -264,6 +266,63 @@ resize_step = 2147483647
     step(&mut f, Action::GrowWindow(Direction::Right));
 
     assert!(last_configured(&mut f, id, &surface).0 > 400);
+}
+
+/// `left` is the arm that also moves the window: the anchor shift is nearly the
+/// whole `i32` range, and it comes off a canvas coordinate that is already
+/// negative for any window left of the origin.
+#[test]
+fn a_pathological_resize_step_does_not_overflow_the_anchor_shift() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[navigation]
+resize_step = 2147483647
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        (-1000, 0).into(),
+        false,
+    );
+
+    step(&mut f, Action::GrowWindow(Direction::Left));
+
+    assert!(window_position(&mut f, &window).x < -1000);
+}
+
+/// The rects built around a step are the one place the requested size — which is
+/// unbounded — meets a canvas coordinate, which can sit anywhere in the `i32`
+/// range. Both have to be widened before they are added, not added and then
+/// widened. The window sits at a positive `x` and a negative `y` because that is
+/// the corner where each sum runs out of room.
+#[test]
+fn a_pathological_resize_step_does_not_overflow_the_snap_rect() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[navigation]
+resize_step = 2147483647
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+    let element = StageWindow::Client(window.clone());
+    f.state()
+        .map_window(element.clone(), (1000, -1000).into(), false);
+
+    step(&mut f, Action::GrowWindow(Direction::Right));
+
+    // `up` walks the low edge instead, so the position saturates to `i32::MIN` —
+    // and every snap rect built for the window from then on pairs that with the
+    // size the client is still committing.
+    step(&mut f, Action::GrowWindow(Direction::Up));
+
+    assert!(f.state().snap_rect_for(&element).is_some());
 }
 
 #[test]
@@ -291,6 +350,11 @@ size = [320, 240]
 
     assert_eq!(f.state().stage.position_of(&window), before);
     assert_eq!(configure_count(&mut f, id, &surface), configures);
+
+    // The pin is what silenced the step: the same window on the canvas takes it.
+    step(&mut f, Action::TogglePinToScreen);
+    step(&mut f, Action::GrowWindow(Direction::Right));
+    assert_eq!(last_configured(&mut f, id, &surface), (340, 240));
 }
 
 #[test]
@@ -341,6 +405,12 @@ fn a_step_is_ignored_under_a_client_resize_grab() {
     assert_eq!(configure_count(&mut f, id, &surface), configures);
 
     end_grab(&mut f);
+    // The settling tail counts as a grab too, so let the client commit out of it.
+    ack_but_keep_size(&mut f, id, &surface);
+
+    // The grab is what silenced the step, not the action being unreachable.
+    step(&mut f, Action::GrowWindow(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (420, 300));
 }
 
 /// A client that acks and then commits the size it already had — a fixed-size
@@ -375,6 +445,55 @@ fn repeated_grows_do_not_walk_a_client_that_keeps_its_size() {
     );
 }
 
+/// The correction rides out with the next step's own placement instead of being
+/// written on its own, so the frame it lands in is a whole one — even when that
+/// step turns out to have nothing left to grant and would otherwise be a no-op.
+#[test]
+fn a_correction_carried_by_a_fully_clamped_step_still_lands_whole() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window_with_limits(&mut f, id, "term", (400, 300), (0, 0), (410, 900));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+    let before = window_position(&mut f, &window);
+
+    step(&mut f, Action::GrowWindow(Direction::Left));
+    assert_eq!(last_configured(&mut f, id, &surface), (410, 300));
+
+    // The client refuses the 10px it was granted and tightens its maximum to the
+    // size it kept, leaving the next step a correction to take back and nothing
+    // to grant.
+    let client_window = f.client(id).window(&surface);
+    client_window.set_max_size(400, 900);
+    client_window.attach_new_buffer();
+    client_window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    assert_eq!(
+        window_position(&mut f, &window),
+        before + Point::from((-10, 0)),
+        "precondition: the anchor still carries the offer the client declined"
+    );
+    let generation = f.state().render.blur_geometry_generation;
+
+    step(&mut f, Action::GrowWindow(Direction::Left));
+
+    assert_eq!(
+        window_position(&mut f, &window),
+        before,
+        "the refused offer came back"
+    );
+    assert!(
+        f.state().render.blur_geometry_generation > generation,
+        "and the frost above the window it moved was refreshed with it"
+    );
+    let bw = f.state().default_border_width() as f64;
+    assert_eq!(
+        f.state().stable_snap_rects[&super::server_surface(&window).id()].x_low,
+        before.x as f64 - bw,
+        "as was the settled footprint the reflow measures against"
+    );
+}
+
 /// The counterpart, pinning both axes at once: a step on the far edges never
 /// writes a position, so nothing the client does with the size may move one.
 /// Taking the correction back on an axis the step never anchored would push the
@@ -392,7 +511,79 @@ fn repeated_grows_of_the_far_edges_never_move_the_window() {
         step(&mut f, Action::GrowWindow(Direction::DownRight));
         ack_but_keep_size(&mut f, id, &surface);
         assert_eq!(window_position(&mut f, &window), before);
+        assert_eq!(
+            last_configured(&mut f, id, &surface),
+            (414, 314),
+            "and each step still offers the client the same rect from the size \
+             it kept, rather than stacking another step onto a refused one"
+        );
     }
+}
+
+/// The mirror of the walk, on the footprint the reflow watches: a shrink asks
+/// for a rect *smaller* than the one a refusing client keeps committing, so a
+/// cache taken from the request alone leaves every later commit reading as "grew
+/// past settled". Beside a snapped neighbour that misread is a relocation — the
+/// window teleports out of the cluster the step was tidying.
+#[test]
+fn a_refused_shrink_beside_a_neighbour_leaves_the_window_put() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "w", (400, 300));
+    let w = window_by_app_id(&mut f, "w").unwrap();
+    map_window(&mut f, id, "n", (400, 300));
+    let n = window_by_app_id(&mut f, "n").unwrap();
+
+    // Park W settled, with N gap-adjacent to its right edge and y-overlapping —
+    // the reflow's "was snapped" anchor precondition.
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state().map_window(
+        StageWindow::Client(w.clone()),
+        Point::from((400, 300)),
+        true,
+    );
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(w.clone()));
+    let w_frame = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(w.clone()))
+        .unwrap();
+    let gap = f.state().config.snap_gap as i32;
+    let bw = f.state().default_border_width();
+    let n_loc = Point::from((w_frame.x_high as i32 + gap + bw, 300));
+    f.state()
+        .map_window(StageWindow::Client(n.clone()), n_loc, false);
+    f.state()
+        .refresh_stable_snap_rect(&StageWindow::Client(n.clone()));
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&w, serial);
+
+    step(&mut f, Action::ShrinkWindow(Direction::Left));
+    let placed = window_position(&mut f, &w);
+    assert_eq!(
+        placed,
+        Point::from((420, 300)),
+        "precondition: the named edge walked inward and the right one held"
+    );
+
+    ack_but_keep_size(&mut f, id, &surface);
+
+    assert_eq!(
+        w.geometry().size,
+        Size::from((400, 300)),
+        "precondition: the client refused the smaller size"
+    );
+    assert_eq!(
+        window_position(&mut f, &w),
+        placed,
+        "the refused shrink is not a grow past the settled footprint"
+    );
+    assert_eq!(
+        window_position(&mut f, &n),
+        n_loc,
+        "and the neighbour is untouched either way"
+    );
 }
 
 /// A cell-snapping terminal grants less than it was handed on every step, so the

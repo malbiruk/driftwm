@@ -96,6 +96,7 @@ impl DriftWm {
         self.pending_recenter.remove(&id);
         self.stable_snap_rects.remove(&id);
         self.pending_adopt_settle.remove(&id);
+        self.pending_resizes.remove(&id);
         // `resolve_suspend_conversion` consumes the unmap snapshot on the normal
         // destroy path; drop it here too so a surface torn down through a path
         // that never reached that consume (the wl_surface-level cleanup safety

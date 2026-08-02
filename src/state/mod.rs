@@ -51,7 +51,7 @@ pub use layers::CanvasLayer;
 pub(crate) use navigation::CLICK_NAVIGATE_SLOP;
 pub use persistence::{read_all_per_output_state, remove_state_file};
 pub use render_cache::{BorderCacheEntry, RenderCache, ShadowCacheEntry};
-pub(crate) use resize::{configured_element_size, resize_constraints};
+pub(crate) use resize::{owes_a_configured_size, resize_constraints};
 pub use session_store::{CameraSeed, SessionStore};
 pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
 pub use suspended::{
@@ -734,10 +734,15 @@ pub struct DriftWm {
     /// of `markless_suspend_rect`'s shrink protection) until unmap clears it.
     pub(crate) pending_adopt_settle:
         HashMap<smithay::reexports::wayland_server::backend::ObjectId, Size<i32, Logical>>,
-    /// What the last `grow-window` / `shrink-window` step promised, so the next
-    /// one can undo whatever the client refused. One slot: only the focused
-    /// element can be stepped, and a repeat re-resolves to the same one.
-    pub(crate) resize_step_anchor: Option<resize::StepAnchor>,
+    /// Sizes a non-interactive resize (`msg resize`, `grow-window` /
+    /// `shrink-window`) has asked a client for and is still waiting to see
+    /// answered, keyed by surface id. The next request measures against the
+    /// entry instead of against geometry the client may not have repainted yet,
+    /// and a step's entry also carries the placement it promised. Overwritten by
+    /// the next request on the same surface, and dropped with the surface; a step
+    /// that turns out to be a no-op leaves the standing entry alone.
+    pub(crate) pending_resizes:
+        HashMap<smithay::reexports::wayland_server::backend::ObjectId, resize::PendingResize>,
 
     /// Windows whose close was requested via `suspend-window`: their next
     /// `toplevel_destroyed` converts into a suspended window. Keyed by surface
@@ -1230,6 +1235,7 @@ impl DriftWm {
             ("pending_recenter", self.pending_recenter.len()),
             ("stable_snap_rects", self.stable_snap_rects.len()),
             ("pending_adopt_settle", self.pending_adopt_settle.len()),
+            ("pending_resizes", self.pending_resizes.len()),
             ("suspend_marks", self.suspend_marks.len()),
             ("real_close_marks", self.real_close_marks.len()),
             ("window_animations", self.window_animations.len()),

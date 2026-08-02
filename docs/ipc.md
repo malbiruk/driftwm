@@ -49,25 +49,22 @@ the reply is a request rather than a fact (see [Responses](#responses)). Read it
 back with a bare `resize` once the window has settled to see what it actually
 has. The window keeps its visual center, computed from the size being requested:
 a client that only accepts whole character cells therefore lands up to half its
-rounding off center. That error is bounded and re-derived on the next `resize`,
-never accumulated. `preserve_aspect_ratio` does not apply — it governs
-interactive resizes only.
+rounding off center. That error stays bounded — repeating a request changes
+nothing, and the next one re-derives from the size last asked for.
+`preserve_aspect_ratio` does not apply — it governs interactive resizes only.
 
 `resize` is refused while a window is under an interactive move or resize, since
 the live grab recomputes its rect on every motion tick and would erase the
 result — and for the frame after a drag ends, until the client commits the size
-it was dragged to. That guard sees the window being dragged, not the snapped
-neighbours a cluster drag carries along, so a `resize` aimed at one of those is
-accepted and then overwritten.
+it was dragged to.
 
-One case discards the centering: if a client commits a size *larger* than the
-one it was asked for and that footprint collides with a snapped neighbour, the
+One case discards the centering: if a client commits a size *larger* than the one
+it was asked for and that footprint collides with a snapped neighbour, the
 compositor relocates **the grown window itself** (not the neighbour) beside its
 cluster, and pans the camera after it when it is focused and no longer fully
-visible. A suspended stand-in has no such path, so growing one over a neighbour
-simply leaves the overlap in place.
+visible.
 
-Stand-ins differ in two more ways. They have no client to declare limits, so
+Stand-ins differ in two ways. They have no client to declare limits, so
 `resize` clamps them to a fixed 120x120 floor instead. And a stand-in left by a
 client-decorated window stores the body *without* the title bar it draws over
 it, so a `relaunch` after `resize --id <stand-in> 800 600` brings the app back at

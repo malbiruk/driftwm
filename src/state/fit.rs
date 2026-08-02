@@ -17,6 +17,10 @@ use driftwm::window_ext::WindowExt;
 /// own entry in the rect list those paths cluster over
 /// (`snap_rects_with_primary`), and by the adopt's owed-rect payoff for a
 /// size the client has been configured with but not yet committed.
+/// Every term is widened before it is added: a non-interactive resize pairs a
+/// size the client asked for — unbounded, since `resize_step` and `msg resize`
+/// both take any `i32` — with a canvas coordinate that can already sit anywhere
+/// in the range, and the sum of the two does not fit in an `i32`.
 pub(super) fn snap_rect_at(
     loc: Point<i32, Logical>,
     size: Size<i32, Logical>,
@@ -26,9 +30,9 @@ pub(super) fn snap_rect_at(
     let bw = border_width as f64;
     driftwm::layout::snap::SnapRect {
         x_low: loc.x as f64 - bw,
-        x_high: (loc.x + size.w) as f64 + bw,
-        y_low: (loc.y - bar) as f64 - bw,
-        y_high: (loc.y + size.h) as f64 + bw,
+        x_high: loc.x as f64 + size.w as f64 + bw,
+        y_low: loc.y as f64 - bar as f64 - bw,
+        y_high: loc.y as f64 + size.h as f64 + bw,
     }
 }
 

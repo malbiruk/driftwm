@@ -210,6 +210,22 @@ fn adopt_last_configure(
     f.double_roundtrip(id);
 }
 
+/// Ack the configure and commit without taking the size that came with it — a
+/// fixed-size dialog's answer. smithay drops the pending configure at *ack*, so
+/// afterwards the compositor sees no outstanding configure and a committed
+/// geometry that never moved.
+fn ack_but_keep_size(
+    f: &mut Fixture,
+    id: client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+) {
+    f.double_roundtrip(id);
+    let window = f.client(id).window(surface);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+}
+
 /// Create an xdg popup on the toplevel backing `parent`, map it (attach a
 /// buffer and ack), and settle. Returns the client-side popup surface.
 fn map_popup(

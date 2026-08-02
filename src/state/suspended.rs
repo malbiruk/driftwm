@@ -659,12 +659,7 @@ impl DriftWm {
         let Some(loc) = self.stage.position_of(window) else {
             return;
         };
-        let bar = self.window_ssd_bar(window);
-        let bw = self.window_border_width(root);
-        self.stable_snap_rects.insert(
-            root.id(),
-            crate::state::fit::snap_rect_at(loc, adopt_size, bar, bw),
-        );
+        self.cache_stable_snap_rect(window, loc, adopt_size);
     }
 
     /// Take `root` out of the stash and hand back what the hiding withheld,

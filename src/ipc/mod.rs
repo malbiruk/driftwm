@@ -659,6 +659,10 @@ fn cmd_resize(
     // The settling tail counts too: `handle_resize_commit` still owes a
     // top/left edge compensation, and this call clears every witness
     // `placement_owns_size` would have used to skip it.
+    //
+    // Only the window being dragged carries the state this reads, not the
+    // snapped neighbours a cluster drag carries along — a resize aimed at one of
+    // those is accepted and then overwritten by the drag's next tick.
     if state.element_under_interactive_grab(&element) {
         return Err(
             "this window is under an interactive move or resize, or still settling one".to_string(),
@@ -666,7 +670,7 @@ fn cmd_resize(
     }
 
     let (width, height) = crate::state::resize_constraints(&element).clamp(width, height);
-    let current = crate::state::configured_element_size(&element);
+    let current = state.requested_element_size(&element);
     let loc = state.stage.position_of(&element).unwrap_or_default();
     // Center-preserving: half the size delta off each axis. The SSD bar sits at
     // a fixed height above the content, so it cancels out of the difference and
@@ -678,7 +682,9 @@ fn cmd_resize(
     // Raise a client, as `move` does; leave a stand-in's z-order alone, as
     // `move` also does.
     let raise = matches!(element, StageWindow::Client(_));
-    state.resize_element_to(&element, Size::from((width, height)), loc, raise);
+    // Absolute: this rect is the whole answer, so there is no promise for a later
+    // call to reconcile against.
+    state.resize_element_to(&element, Size::from((width, height)), loc, raise, None);
     Ok(Response::Size { width, height })
 }
 
@@ -849,31 +855,20 @@ pub(crate) fn resolve_screenshot_region(
             Ok((crate::state::output_viewport_rect(&output), None))
         }
         ScreenshotTarget::Window { window } => {
-            // A live client wins; a selector resolving only to a stand-in
-            // captures its chrome in isolation (docs promise suspended ids
-            // screenshot). Pinned and fullscreen clients capture fine too —
-            // `window_visual_rect` returns the right rect for both.
-            match window_by_selector(state, window.as_ref()) {
-                Ok(w) => {
-                    let rect = window_visual_rect(state, &w)
-                        .ok_or_else(|| "window has no capturable area".to_string())?;
-                    Ok((rect, Some(StageWindow::Client(w))))
-                }
-                Err(e) => {
-                    let Some(id) = suspended_by_selector(state, window.as_ref()) else {
-                        return Err(e);
-                    };
-                    let s = state
-                        .find_suspended(id)
-                        .ok_or_else(|| "suspended window is gone".to_string())?;
-                    let element = StageWindow::Suspended(s);
-                    let rect = state
-                        .visual_frame_rect(&element)
-                        .map(snap_rect_to_rect)
-                        .ok_or_else(|| "suspended window has no capturable area".to_string())?;
-                    Ok((rect, Some(element)))
-                }
-            }
+            // A selector resolving only to a stand-in captures its chrome in
+            // isolation (docs promise suspended ids screenshot). Pinned and
+            // fullscreen clients capture fine too — `window_visual_rect` returns
+            // the right rect for both.
+            let element = element_by_selector(state, window.as_ref())?;
+            let rect = match &element {
+                StageWindow::Client(w) => window_visual_rect(state, w)
+                    .ok_or_else(|| "window has no capturable area".to_string())?,
+                StageWindow::Suspended(_) => state
+                    .visual_frame_rect(&element)
+                    .map(snap_rect_to_rect)
+                    .ok_or_else(|| "suspended window has no capturable area".to_string())?,
+            };
+            Ok((rect, Some(element)))
         }
         ScreenshotTarget::All => {
             // Union over every canvas element, stand-ins included — the capture

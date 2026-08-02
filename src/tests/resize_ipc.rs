@@ -12,13 +12,14 @@ use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 use super::client::ClientId;
 use super::real::TempDir;
 use super::{
-    Fixture, adopt_last_configure, client_sees_maximized, config, configure_count, end_grab,
-    install_client_resize_grab, last_configured, map_window, map_window_with_limits,
-    seed_fit_and_fill, server_surface, window_by_app_id, window_position,
+    Fixture, ack_but_keep_size, adopt_last_configure, client_sees_maximized, config,
+    configure_count, end_grab, install_client_resize_grab, last_configured, map_window,
+    map_window_with_limits, seed_fit_and_fill, server_surface, window_by_app_id, window_position,
 };
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
 use crate::state::{ClusterResizeSnapshot, StageWindow, SuspendedId};
+use driftwm::config::{Action, Direction};
 
 fn resize(f: &mut Fixture, window: Option<WindowSelector>, to: Option<(i32, i32)>) -> Reply {
     dispatch(Request::Resize { window, to }, f.state())
@@ -172,7 +173,145 @@ fn a_repeat_request_before_the_ack_does_not_walk_the_window() {
     );
 }
 
-/// Mirrors `configured_element_size`'s own note: once a client resizes itself,
+/// The ack is not the commit: smithay drops the pending configure the moment the
+/// client acks, and real clients ack as soon as they process the event and go on
+/// committing their old size. Measured against committed geometry from there, a
+/// re-run of the same layout script re-derives from the pre-resize size and
+/// shifts the window another half-delta every call — against a fixed-size dialog,
+/// forever, with no size change to show for it.
+#[test]
+fn a_repeat_request_after_the_ack_does_not_walk_the_window() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+
+    resize(&mut f, None, Some((600, 500))).unwrap();
+    let after_first = window_position(&mut f, &window);
+    ack_but_keep_size(&mut f, id, &surface);
+    assert_eq!(
+        window.geometry().size,
+        Size::from((400, 300)),
+        "precondition: acked, and still committing the size it already had"
+    );
+    let configures = configure_count(&mut f, id, &surface);
+
+    for _ in 0..3 {
+        resize(&mut f, None, Some((600, 500))).unwrap();
+    }
+
+    assert_eq!(window_position(&mut f, &window), after_first);
+    assert_eq!(
+        configure_count(&mut f, id, &surface),
+        configures,
+        "the request already outstanding makes each repeat a no-op"
+    );
+}
+
+/// An outstanding request only speaks for the window until something else
+/// configures a size of its own. A fit in between makes the fit's size the live
+/// one, so a request for the size that was outstanding before it has to reach
+/// the client instead of being swallowed as a repeat.
+#[test]
+fn a_fit_between_two_identical_requests_does_not_swallow_the_second() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+
+    resize(&mut f, None, Some((600, 500))).unwrap();
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    f.state().fit_window(&window);
+    f.double_roundtrip(id);
+    let configures = configure_count(&mut f, id, &surface);
+
+    resize(&mut f, None, Some((600, 500))).unwrap();
+
+    assert_eq!(last_configured(&mut f, id, &surface), (600, 500));
+    assert_eq!(configure_count(&mut f, id, &surface), configures + 1);
+}
+
+/// A step that finds nothing to do must not disarm the request an absolute
+/// resize left outstanding: dropping the record early puts the window straight
+/// back on the walk it exists to prevent.
+#[test]
+fn a_no_op_step_between_two_requests_does_not_rearm_the_walk() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[navigation]
+resize_step = 0
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+
+    resize(&mut f, None, Some((600, 500))).unwrap();
+    ack_but_keep_size(&mut f, id, &surface);
+    let after_first = window_position(&mut f, &window);
+    let configures = configure_count(&mut f, id, &surface);
+
+    f.state()
+        .execute_action(&Action::GrowWindow(Direction::Right));
+    resize(&mut f, None, Some((600, 500))).unwrap();
+
+    assert_eq!(window_position(&mut f, &window), after_first);
+    assert_eq!(configure_count(&mut f, id, &surface), configures);
+}
+
+/// The compositor cannot tell a client that answered by rounding the size it was
+/// handed from one that resized itself later to a size in the same range: both
+/// are a commit between what the window had and what it was asked for. Reading
+/// that as an answer is what keeps a repeated request from walking a
+/// cell-snapping terminal, so the rarer case pays for it — an in-band self-resize
+/// is misread, and the identical request that follows is a no-op. A request for
+/// any other size still reaches the client.
+#[test]
+fn an_in_band_self_resize_is_misread_as_an_answer() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+
+    resize(&mut f, None, Some((800, 600))).unwrap();
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    client_resizes_itself(&mut f, id, &surface, (600, 450));
+    let configures = configure_count(&mut f, id, &surface);
+    let before = window_position(&mut f, &window);
+
+    assert_eq!(
+        resize(&mut f, None, Some((800, 600))),
+        Ok(Response::Size {
+            width: 800,
+            height: 600
+        })
+    );
+    assert_eq!(
+        configure_count(&mut f, id, &surface),
+        configures,
+        "the repeat is swallowed: 600x450 still reads as an answer to 800x600"
+    );
+
+    assert!(resize(&mut f, None, Some((810, 600))).is_ok());
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (810, 600),
+        "any other size is measured from the outstanding request and reaches the client"
+    );
+    assert_eq!(
+        window_position(&mut f, &window),
+        before + Point::from((-5, 0)),
+        "and is anchored on the rect that request placed"
+    );
+}
+
+/// Mirrors `requested_element_size`'s own note: once a client resizes itself,
 /// the last configure is stale, and a request must measure from committed
 /// geometry instead.
 #[test]

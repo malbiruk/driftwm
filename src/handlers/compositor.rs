@@ -1219,22 +1219,8 @@ impl DriftWm {
         // configured carries a stale footprint — a window exiting fullscreen
         // keeps committing viewport-sized frames until it acks the restore
         // configure. Reflowing off that stale size would relocate the window, so
-        // wait for the settle. The owed resize is a pending configure with a real
-        // (non-zero) size that differs from what's committed; the compositor's
-        // benign zero-size ("client picks its own size") configures never gate.
-        let current_size = window.geometry().size;
-        let owed_resize = with_states(surface, |states| {
-            states
-                .data_map
-                .get::<XdgToplevelSurfaceData>()
-                .map(|d| {
-                    d.lock().unwrap().pending_configures().iter().any(|c| {
-                        matches!(c.state.size, Some(s) if s.w > 0 && s.h > 0 && s != current_size)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        if owed_resize {
+        // wait for the settle.
+        if crate::state::owes_a_configured_size(window) {
             return;
         }
 

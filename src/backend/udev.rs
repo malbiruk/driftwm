@@ -767,15 +767,10 @@ pub fn init_udev(
                     }
                     data.clear_lock_frames();
                     data.confirm_lock_on_session_pause();
-                    // Releases for held keys / cycle modifiers may not be delivered
-                    // when the session is paused. This is the only one of these
-                    // resets a switch we didn't initiate ourselves (`chvt`,
-                    // logind) ever reaches.
-                    data.suppressed_keys.clear();
-                    data.held_buttons.clear();
-                    data.held_action = None;
-                    data.stage.cancel_cycle();
-                    data.tap.reset();
+                    // The only reset a switch we didn't initiate ourselves
+                    // (`chvt`, logind) ever reaches — the keyboard handler's two
+                    // copies both hang off a key we intercepted.
+                    data.reset_held_input_state();
                 }
                 SessionEvent::ActivateSession => {
                     tracing::info!("Session resumed (VT switch back)");
