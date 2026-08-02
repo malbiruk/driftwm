@@ -233,27 +233,4 @@ impl DriftWm {
             self.fill_window(window);
         }
     }
-
-    /// Send a plain sized configure — no Maximized/Fullscreen/Resizing state, so
-    /// the window resizes in place. Tiled stays set from map time, so clients
-    /// keep suppressing their own chrome, and the explicit size keeps SCTK from
-    /// reading "Tiled + None" as "hold current size".
-    fn send_size_configure(&self, window: &Window, size: Size<i32, Logical>) {
-        use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
-        let Some(toplevel) = window.toplevel() else {
-            return;
-        };
-        toplevel.with_pending_state(|state| {
-            state.size = Some(size);
-            // Load-bearing for `fill_window`, which clears the fit membership it
-            // may have found: a Maximized outliving that is one the client can
-            // never shed — its restore button, or a panel's foreign-toplevel
-            // unset_maximized, dispatches an unmaximize_request that
-            // `unfit_window` drops on the absent saved size. Inert for the other
-            // caller, `unfill_window`: `set_fit` clears fill and `set_fill`
-            // clears fit, so a filled window is never also a fit one.
-            state.states.unset(xdg_toplevel::State::Maximized);
-        });
-        toplevel.send_configure();
-    }
 }

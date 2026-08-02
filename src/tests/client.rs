@@ -841,6 +841,17 @@ impl Window {
         self.viewport.set_destination(i32::from(w), i32::from(h));
     }
 
+    /// Declare a minimum size, the floor the compositor's `SizeConstraints`
+    /// clamps a resize request to. Applies on the next commit.
+    pub fn set_min_size(&self, w: i32, h: i32) {
+        self.xdg_toplevel.set_min_size(w, h);
+    }
+
+    /// Declare a maximum size, the ceiling `SizeConstraints` clamps to.
+    pub fn set_max_size(&self, w: i32, h: i32) {
+        self.xdg_toplevel.set_max_size(w, h);
+    }
+
     pub fn set_fullscreen(&self, output: Option<&WlOutput>) {
         self.xdg_toplevel.set_fullscreen(output);
     }

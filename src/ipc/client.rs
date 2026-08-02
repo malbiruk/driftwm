@@ -60,6 +60,26 @@ pub enum Msg {
         #[arg(long)]
         id: Option<u64>,
     },
+    /// Get a window's size, or resize it to `<width> <height>`.
+    ///
+    /// Dimensions are the client's own content in canvas units — they exclude
+    /// the compositor-drawn title bar and border, so a grid laid out from them
+    /// overlaps by that chrome on server-decorated windows. A request is clamped
+    /// to the client's declared minimum and maximum (a suspended stand-in has no
+    /// client, so it clamps to 120x120), and the reply echoes what was
+    /// configured, not what the client went on to commit. The window keeps its
+    /// center; a client that only accepts whole character cells lands up to half
+    /// its rounding off it. Pinned and fullscreen windows are refused, as with
+    /// `move`.
+    ///
+    /// `--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
+    Resize {
+        width: Option<i32>,
+        height: Option<i32>,
+        /// Target this window id.
+        #[arg(long)]
+        id: Option<u64>,
+    },
     /// Close the focused window, or one by `app_id` substring or `--id`.
     ///
     /// Errors when nothing matches.
@@ -359,6 +379,22 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
                 to,
             }
         }
+        Msg::Resize { width, height, id } => {
+            let to = match (width, height) {
+                (None, None) => None,
+                (Some(w), Some(h)) => {
+                    if *w <= 0 || *h <= 0 {
+                        return Err("resize needs a positive <width> and <height>".to_string());
+                    }
+                    Some((*w, *h))
+                }
+                _ => return Err("resize needs both <width> and <height>".to_string()),
+            };
+            Request::Resize {
+                window: id.map(WindowSelector::Id),
+                to,
+            }
+        }
         Msg::Opacity { value, id } => {
             // serde_json serializes non-finite floats as null, which the server
             // would read back as a get instead of rejecting — refuse them here.
@@ -509,6 +545,7 @@ fn print_response(response: Response) {
         }
         Response::Focused(None) => println!("(none)"),
         Response::Position { x, y } => println!("{x} {y}"),
+        Response::Size { width, height } => println!("{width} {height}"),
         Response::Opacity(value) => println!("{value}"),
         Response::Bookmark { x, y } => println!("{x} {y}"),
         Response::Bookmarks(bookmarks) => {
@@ -719,6 +756,51 @@ mod tests {
             to_request(&Msg::Move {
                 x: Some(1),
                 y: None,
+                id: None
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn resize_maps_id_and_dimensions() {
+        assert_eq!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: Some(600),
+                id: Some(3)
+            })
+            .unwrap(),
+            Request::Resize {
+                window: Some(WindowSelector::Id(3)),
+                to: Some((800, 600))
+            }
+        );
+        assert_eq!(
+            to_request(&Msg::Resize {
+                width: None,
+                height: None,
+                id: None
+            })
+            .unwrap(),
+            Request::Resize {
+                window: None,
+                to: None
+            }
+        );
+        // A lone dimension is an error, as is a non-positive one.
+        assert!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: None,
+                id: None
+            })
+            .is_err()
+        );
+        assert!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: Some(0),
                 id: None
             })
             .is_err()

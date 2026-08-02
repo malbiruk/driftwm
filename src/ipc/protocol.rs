@@ -54,6 +54,16 @@ pub enum Request {
         #[serde(default)]
         to: Option<(i32, i32)>,
     },
+    /// Resize or query a window. `window` `None` targets the focused window;
+    /// `to` `None` reads the size instead of setting it. Dimensions are the
+    /// client's own content in canvas units — no title bar, no border — and a
+    /// set is clamped to the client's declared minimum and maximum.
+    Resize {
+        #[serde(default)]
+        window: Option<WindowSelector>,
+        #[serde(default)]
+        to: Option<(i32, i32)>,
+    },
     /// Get or set a window's opacity. `window` `None` targets the focused
     /// window; `value` `None` reads instead of setting it. The value is `0.0`
     /// (transparent) to `1.0` (opaque); a window with no stored rule reads `1.0`.
@@ -139,6 +149,13 @@ pub enum Response {
     Position {
         x: i32,
         y: i32,
+    },
+    /// A window's content size. On a set this is what was *requested* of the
+    /// client after clamping, not a size it has necessarily committed — the one
+    /// reply in this protocol echoing a request rather than compositor state.
+    Size {
+        width: i32,
+        height: i32,
     },
     /// A window's opacity in `0.0`–`1.0`.
     Opacity(f64),
@@ -339,6 +356,22 @@ mod tests {
                 window: Some(WindowSelector::AppId("foot".into())),
                 to: Some((100, 200)),
             },
+            Request::Resize {
+                window: None,
+                to: None,
+            },
+            Request::Resize {
+                window: None,
+                to: Some((800, 600)),
+            },
+            Request::Resize {
+                window: Some(WindowSelector::Id(3)),
+                to: None,
+            },
+            Request::Resize {
+                window: Some(WindowSelector::AppId("foot".into())),
+                to: Some((800, 600)),
+            },
             Request::Opacity {
                 window: None,
                 value: None,
@@ -438,6 +471,14 @@ mod tests {
                 to: None
             }
         );
+        // Resize likewise: bare `{}` reads the focused window's size.
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"Resize":{}}"#).unwrap(),
+            Request::Resize {
+                window: None,
+                to: None
+            }
+        );
         // Opacity fields both default too: bare `{}` is the focused-window read.
         assert_eq!(
             serde_json::from_str::<Request>(r#"{"Opacity":{}}"#).unwrap(),
@@ -524,6 +565,10 @@ mod tests {
                 id: 5,
                 app_id: Some("foot".into()),
             }))),
+            Ok(Response::Size {
+                width: 800,
+                height: 600,
+            }),
             Ok(Response::Opacity(0.5)),
             Ok(Response::Bookmark {
                 x: 100.0,

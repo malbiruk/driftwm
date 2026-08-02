@@ -12,7 +12,7 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::seat::WaylandFocus;
 
 use crate::decorations::DecorationKey;
-use crate::state::{DriftWm, SuspendedId};
+use crate::state::{DriftWm, StageWindow, SuspendedId};
 use driftwm::window_ext::WindowExt;
 
 pub mod client;
@@ -199,6 +199,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Subscribe => unreachable!("Subscribe is handled before dispatch"),
         Request::Focus(arg) => cmd_focus(arg, state),
         Request::Move { window, to } => cmd_move(window, to, state),
+        Request::Resize { window, to } => cmd_resize(window, to, state),
         Request::Opacity { window, value } => cmd_opacity(window, value, state),
         Request::Close(sel) => cmd_close(sel, state),
         Request::Suspend(sel) => cmd_suspend(sel, state),
@@ -220,6 +221,7 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Zoom(Some(_))
             | Request::Focus(Some(_))
             | Request::Move { to: Some(_), .. }
+            | Request::Resize { to: Some(_), .. }
             | Request::Opacity { value: Some(_), .. }
             | Request::Close(_)
             | Request::Suspend(_)
@@ -546,20 +548,35 @@ fn cmd_bookmark(
     }
 }
 
-fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
-    // A live client wins; a selector resolving only to a suspended stand-in
-    // reads or sets its canvas position in place (no client to reconfigure).
-    let window = match window_by_selector(state, window.as_ref()) {
-        Ok(window) => window,
+/// Resolve a selector to a stage element, **live client first**: a selector
+/// naming both a client and a stand-in must reach the client, and only one
+/// matching nothing live falls back to a stand-in. The order decides which
+/// target an ambiguous `AppId` hits, so every window verb shares this.
+fn element_by_selector(
+    state: &DriftWm,
+    selector: Option<&WindowSelector>,
+) -> Result<StageWindow, String> {
+    match window_by_selector(state, selector) {
+        Ok(window) => Ok(StageWindow::Client(window)),
         Err(e) => {
-            let Some(id) = suspended_by_selector(state, window.as_ref()) else {
+            let Some(id) = suspended_by_selector(state, selector) else {
                 return Err(e);
             };
-            let s = state
+            state
                 .find_suspended(id)
-                .ok_or_else(|| "suspended window is gone".to_string())?;
-            let element = crate::state::StageWindow::Suspended(s.clone());
-            let size = s.size.get();
+                .map(StageWindow::Suspended)
+                .ok_or_else(|| "suspended window is gone".to_string())
+        }
+    }
+}
+
+fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
+    let window = match element_by_selector(state, window.as_ref())? {
+        StageWindow::Client(window) => window,
+        // No client to reconfigure: read or set the stand-in's canvas position
+        // in place, without the re-raise `map_window` would carry.
+        element @ StageWindow::Suspended(_) => {
+            let size = driftwm::stage::StageElement::size(&element);
             return match to {
                 None => {
                     let loc = state.stage.position_of(&element).unwrap_or_default();
@@ -605,6 +622,64 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             Ok(Response::Position { x, y })
         }
     }
+}
+
+fn cmd_resize(
+    window: Option<WindowSelector>,
+    to: Option<(i32, i32)>,
+    state: &mut DriftWm,
+) -> Reply {
+    let element = element_by_selector(state, window.as_ref())?;
+
+    let Some((width, height)) = to else {
+        // Committed size, matching what `msg state` and the state file report,
+        // so the two can't disagree mid-settle.
+        let size = driftwm::stage::StageElement::size(&element);
+        return Ok(Response::Size {
+            width: size.w,
+            height: size.h,
+        });
+    };
+
+    if width <= 0 || height <= 0 {
+        return Err("size must be positive".to_string());
+    }
+    // A pinned window renders at its pin, a fullscreen one fills its output, and
+    // one held back for a deferred adopt is about to be replaced — none of them
+    // hold a canvas rect a resize could write.
+    if !state.is_canvas_window(&element) {
+        return Err(
+            "this window has no canvas size to set: it is pinned, fullscreen, a widget, or not \
+             on screen yet"
+                .into(),
+        );
+    }
+    // A live grab recomputes the rect absolutely from its own start anchors on
+    // every motion tick, so anything written mid-drag is erased by the next one.
+    // The settling tail counts too: `handle_resize_commit` still owes a
+    // top/left edge compensation, and this call clears every witness
+    // `placement_owns_size` would have used to skip it.
+    if state.element_under_interactive_grab(&element) {
+        return Err(
+            "this window is under an interactive move or resize, or still settling one".to_string(),
+        );
+    }
+
+    let (width, height) = crate::state::resize_constraints(&element).clamp(width, height);
+    let current = crate::state::configured_element_size(&element);
+    let loc = state.stage.position_of(&element).unwrap_or_default();
+    // Center-preserving: half the size delta off each axis. The SSD bar sits at
+    // a fixed height above the content, so it cancels out of the difference and
+    // needs no bookkeeping of its own.
+    let loc = Point::from((
+        loc.x + (current.w - width) / 2,
+        loc.y + (current.h - height) / 2,
+    ));
+    // Raise a client, as `move` does; leave a stand-in's z-order alone, as
+    // `move` also does.
+    let raise = matches!(element, StageWindow::Client(_));
+    state.resize_element_to(&element, Size::from((width, height)), loc, raise);
+    Ok(Response::Size { width, height })
 }
 
 /// Runtime per-window opacity. The stored `AppliedWindowRule` is the single

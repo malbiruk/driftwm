@@ -54,6 +54,7 @@ driftwm msg --json focus --id 5
 | [`subscribe`](#driftwm-msg-subscribe) | Stream state snapshots as they change (one JSON line per event with --json) |
 | [`focus`](#driftwm-msg-focus) | Print the focused window, or focus one by `app_id` substring or `--id` |
 | [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (center, Y-up) |
+| [`resize`](#driftwm-msg-resize) | Get a window's size, or resize it to `<width> <height>` |
 | [`close`](#driftwm-msg-close) | Close the focused window, or one by `app_id` substring or `--id` |
 | [`opacity`](#driftwm-msg-opacity) | Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque |
 | [`suspend`](#driftwm-msg-suspend) | Suspend the focused window, or one by `app_id` substring or `--id` |
@@ -134,6 +135,25 @@ Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 ```bash
 driftwm msg move
 driftwm msg move -400 200 --id 5
+```
+
+#### `driftwm msg resize`
+
+```
+driftwm msg resize [OPTIONS] [WIDTH] [HEIGHT]
+```
+
+Get a window's size, or resize it to `<width> <height>`.
+
+Dimensions are the client's own content in canvas units — they exclude the compositor-drawn title bar and border, so a grid laid out from them overlaps by that chrome on server-decorated windows. A request is clamped to the client's declared minimum and maximum (a suspended stand-in has no client, so it clamps to 120x120), and the reply echoes what was configured, not what the client went on to commit. The window keeps its center; a client that only accepts whole character cells lands up to half its rounding off it. Pinned and fullscreen windows are refused, as with `move`.
+
+`--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
+
+- `--id <ID>` — Target this window id
+
+```bash
+driftwm msg resize
+driftwm msg resize 800 600 --id 5
 ```
 
 #### `driftwm msg close`

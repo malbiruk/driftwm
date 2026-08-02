@@ -52,6 +52,10 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         "driftwm msg move",
         &["driftwm msg move", "driftwm msg move -400 200 --id 5"],
     ),
+    (
+        "driftwm msg resize",
+        &["driftwm msg resize", "driftwm msg resize 800 600 --id 5"],
+    ),
     ("driftwm msg close", &["driftwm msg close firefox"]),
     ("driftwm msg opacity", &["driftwm msg opacity 0.85 --id 5"]),
     ("driftwm msg suspend", &["driftwm msg suspend firefox"]),
