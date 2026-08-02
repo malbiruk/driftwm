@@ -768,9 +768,12 @@ pub fn init_udev(
                     data.clear_lock_frames();
                     data.confirm_lock_on_session_pause();
                     // Releases for held keys / cycle modifiers may not be delivered
-                    // when the session is paused.
+                    // when the session is paused. This is the only one of these
+                    // resets a switch we didn't initiate ourselves (`chvt`,
+                    // logind) ever reaches.
                     data.suppressed_keys.clear();
                     data.held_buttons.clear();
+                    data.held_action = None;
                     data.stage.cancel_cycle();
                     data.tap.reset();
                 }

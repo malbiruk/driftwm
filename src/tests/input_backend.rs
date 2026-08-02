@@ -17,8 +17,9 @@ use std::sync::atomic::{AtomicU32, Ordering};
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Device, DeviceCapability, Event, InputBackend, InputEvent,
-    PointerButtonEvent, PointerMotionAbsoluteEvent, PointerMotionEvent, TouchCancelEvent,
-    TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
+    KeyState, KeyboardKeyEvent, Keycode, PointerButtonEvent, PointerMotionAbsoluteEvent,
+    PointerMotionEvent, TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot,
+    TouchUpEvent, UnusedEvent,
 };
 use smithay::utils::{Logical, Point};
 
@@ -68,6 +69,10 @@ impl FakeDevice {
 
     pub fn touchscreen() -> Self {
         Self::new("fake-touchscreen", &[DeviceCapability::Touch])
+    }
+
+    pub fn keyboard() -> Self {
+        Self::new("fake-keyboard", &[DeviceCapability::Keyboard])
     }
 }
 
@@ -145,6 +150,31 @@ macro_rules! impl_absolute_position {
             }
         }
     )+};
+}
+
+/// A key changing state. `keycode` is the evdev `KEY_*` code, the space real
+/// backends report in.
+pub struct FakeKeyEvent {
+    device: FakeDevice,
+    keycode: u32,
+    state: KeyState,
+    time: u32,
+}
+
+impl KeyboardKeyEvent<FakeInput> for FakeKeyEvent {
+    fn key_code(&self) -> Keycode {
+        // The evdev→xkb offset both real backends apply.
+        (self.keycode + 8).into()
+    }
+
+    fn state(&self) -> KeyState {
+        self.state
+    }
+
+    // Seat-wide count of held keys; nothing on the keyboard path reads it.
+    fn count(&self) -> u32 {
+        1
+    }
 }
 
 pub struct FakeButtonEvent {
@@ -270,6 +300,7 @@ impl TouchEvent<FakeInput> for FakeTouchCancelEvent {
 impl TouchCancelEvent<FakeInput> for FakeTouchCancelEvent {}
 
 impl_event!(
+    FakeKeyEvent,
     FakeButtonEvent,
     FakeAbsoluteEvent,
     FakeRelativeEvent,
@@ -282,6 +313,7 @@ impl_absolute_position!(FakeAbsoluteEvent, FakeTouchDownEvent, FakeTouchMotionEv
 
 impl InputBackend for FakeInput {
     type Device = FakeDevice;
+    type KeyboardKeyEvent = FakeKeyEvent;
     type PointerButtonEvent = FakeButtonEvent;
     type PointerMotionAbsoluteEvent = FakeAbsoluteEvent;
     type PointerMotionEvent = FakeRelativeEvent;
@@ -290,7 +322,6 @@ impl InputBackend for FakeInput {
     type TouchCancelEvent = FakeTouchCancelEvent;
     type TouchMotionEvent = FakeTouchMotionEvent;
 
-    type KeyboardKeyEvent = UnusedEvent;
     type PointerAxisEvent = UnusedEvent;
     type GestureSwipeBeginEvent = UnusedEvent;
     type GestureSwipeUpdateEvent = UnusedEvent;
@@ -369,6 +400,27 @@ pub fn pointer_relative_motion(f: &mut Fixture, device: &FakeDevice, delta: Poin
                 time: next_time(),
             },
         });
+}
+
+fn key(f: &mut Fixture, keycode: u32, state: KeyState) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::Keyboard {
+            event: FakeKeyEvent {
+                device: FakeDevice::keyboard(),
+                keycode,
+                state,
+                time: next_time(),
+            },
+        });
+}
+
+/// Press the key with evdev code `keycode` and hold it down.
+pub fn key_press(f: &mut Fixture, keycode: u32) {
+    key(f, keycode, KeyState::Pressed);
+}
+
+pub fn key_release(f: &mut Fixture, keycode: u32) {
+    key(f, keycode, KeyState::Released);
 }
 
 /// The event a button change arrives as, for scenarios that classify an event

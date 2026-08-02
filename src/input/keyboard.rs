@@ -112,8 +112,11 @@ impl DriftWm {
                 if (0x1008FE01..=0x1008FE0C).contains(&raw) {
                     let vt = (raw - 0x1008FE01 + 1) as i32;
                     // VT switch may not deliver releases; reset key/cycle state.
+                    // `held_action` above all: its repeat would go on firing —
+                    // and forcing a redraw per frame — on the VT we just left.
                     state.suppressed_keys.clear();
                     state.held_buttons.clear();
+                    state.held_action = None;
                     state.stage.cancel_cycle();
                     state.tap.reset();
                     if let Some(ref mut session) = state.session

@@ -4,9 +4,12 @@
 //! going in at the top then keeps the event whole, which is what the
 //! device-capability gate on a buffered middle click reads. Covered here: that
 //! gate, the hardcoded click-to-focus fallback that runs when no mouse binding
-//! matched, and the screen→canvas mapping applied to what a device reports.
+//! matched, the screen→canvas mapping applied to what a device reports, and the
+//! key-repeat latch a held binding leaves behind.
 
-use driftwm::config::{BTN_LEFT, BTN_MIDDLE};
+use std::time::Duration;
+
+use driftwm::config::{BTN_LEFT, BTN_MIDDLE, Config};
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
@@ -16,10 +19,12 @@ use crate::state::StageWindow;
 
 use super::client::ClientId;
 use super::input_backend::{
-    FakeDevice, button_event, click, pointer_to, pointer_to_screen, press, touch_down,
-    touch_up_event,
+    FakeDevice, button_event, click, key_press, key_release, pointer_to, pointer_to_screen, press,
+    touch_down, touch_up_event,
 };
-use super::{Fixture, keyboard_focus, map_window, server_surface, window_by_app_id};
+use super::{
+    Fixture, config, keyboard_focus, last_configured, map_window, server_surface, window_by_app_id,
+};
 
 /// Canvas-space center of `window`'s current geometry.
 fn center_of(f: &mut Fixture, window: &Window) -> Point<f64, Logical> {
@@ -217,5 +222,82 @@ fn a_release_is_not_a_reason_to_wake_a_dark_panel() {
     assert!(
         is_interaction_tail(&touch_up_event(0)),
         "a finger lifting must not undo what its landing did"
+    );
+}
+
+/// evdev codes, the space `key_press` reports in.
+const KEY_Z: u32 = 44;
+const KEY_LEFTCTRL: u32 = 29;
+const KEY_LEFTALT: u32 = 56;
+const KEY_F1: u32 = 59;
+
+/// `z` grows the focused window, and holding it repeats with no initial delay
+/// and 10ms between repeats.
+fn held_grow_config() -> Config {
+    config(
+        r#"
+        [input.keyboard]
+        repeat_delay = 0
+        repeat_rate = 100
+        [keybindings]
+        "z" = "grow-window right"
+    "#,
+    )
+}
+
+/// One repeat, waited out rather than faked: `apply_key_repeat` reads the wall
+/// clock, and the config above puts repeats 10ms apart.
+fn repeat_tick(f: &mut Fixture) {
+    std::thread::sleep(Duration::from_millis(15));
+    f.state().apply_key_repeat();
+}
+
+#[test]
+fn releasing_the_key_ends_a_repeated_action() {
+    let mut f = Fixture::with_config(held_grow_config());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+
+    key_press(&mut f, KEY_Z);
+    repeat_tick(&mut f);
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (440, 300),
+        "the press grows once and the held key grows again"
+    );
+
+    key_release(&mut f, KEY_Z);
+    repeat_tick(&mut f);
+
+    assert_eq!(last_configured(&mut f, id, &surface), (440, 300));
+}
+
+/// A VT switch is the case where the release never arrives — it lands on the VT
+/// we left. Left latched, the action goes on resizing the window at the repeat
+/// rate, redrawing every output per frame, on a session nobody is looking at.
+#[test]
+fn a_vt_switch_ends_a_repeated_action() {
+    let mut f = Fixture::with_config(held_grow_config());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+
+    key_press(&mut f, KEY_Z);
+    repeat_tick(&mut f);
+    assert_eq!(last_configured(&mut f, id, &surface), (440, 300));
+
+    // Ctrl+Alt+F1, which xkb turns into XF86Switch_VT_1. No release follows for
+    // any of the three.
+    key_press(&mut f, KEY_LEFTCTRL);
+    key_press(&mut f, KEY_LEFTALT);
+    key_press(&mut f, KEY_F1);
+    repeat_tick(&mut f);
+    repeat_tick(&mut f);
+
+    assert_eq!(
+        last_configured(&mut f, id, &surface),
+        (440, 300),
+        "the held action must not keep firing on the VT we left"
     );
 }
