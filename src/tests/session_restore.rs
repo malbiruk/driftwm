@@ -826,10 +826,9 @@ fn out_of_range_entry_is_dropped_and_not_carried() {
 }
 
 /// A schema-v1 file's `position`/`size` describe the stand-in's bare body (no
-/// chrome). Loading it must convert those numbers to the v2 frame convention
-/// and then deflate them back to the same body, so a v1 record materializes
-/// at exactly the rect it always described — now wearing the chrome every
-/// stand-in draws around it.
+/// chrome). Loading it converts those numbers to the v2 frame convention and
+/// deflates them back to the same body, so a v1 record materializes at exactly
+/// the rect it always described, wearing its chrome around it.
 #[test]
 fn v1_session_entry_converts_body_to_frame_on_load() {
     let tmp = TempDir::new();
@@ -854,12 +853,10 @@ fn v1_session_entry_converts_body_to_frame_on_load() {
 
     // The v1 numbers describe the body directly: content top-left =
     // rule_to_internal(100, 200, (400, 300)) = (100 - 200, -200 - 150) =
-    // (-100, -350). The migration inflates that by the 25px bar and 4px
-    // border into a frame, and `materialize_entry` deflates the frame back
-    // down — an exact round trip, so the stored body and its position land
-    // exactly where the v1 file always described them. Skipping the
-    // migration would instead shrink the body to 392×267 at (-96, -321) (the
-    // frame numbers read as if they were already the body).
+    // (-100, -350). The conversion inflates that by the 25px bar and 4px border
+    // into a frame and `materialize_entry` deflates it straight back. Reading
+    // the v1 numbers as a frame instead would shrink the body to 392×267 at
+    // (-96, -321).
     assert_eq!(
         s.size.get(),
         Size::from((400, 300)),

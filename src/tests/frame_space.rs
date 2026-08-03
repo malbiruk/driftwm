@@ -117,10 +117,9 @@ decoration = "server"
     );
 }
 
-/// Before this conversion existed, `msg move 0 0` and "navigate to this
-/// window" disagreed by half a bar on an SSD window: the IPC path was
-/// content-only while navigation already centered the visual frame. Both
-/// must now land on the same canvas point.
+/// `msg move`'s reported point and where "navigate to this window" parks the
+/// camera are the same canvas point on an SSD window — the visual frame's
+/// center. A content-only IPC path would sit half a bar off.
 #[test]
 fn msg_move_and_navigate_to_window_agree_on_the_frame_center() {
     // An even bar keeps the frame height even too (content 300 + bar 24),

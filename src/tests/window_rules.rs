@@ -82,9 +82,8 @@ size = [320, 240]
 }
 
 /// A `pinned_to_screen` rule's `position` clamps the whole *visual frame* onto
-/// the output, not just the content: before this conversion existed, clamping
-/// the content left an SSD title bar (and border) poking off the screen edge
-/// the clamp was supposed to keep everything inside of.
+/// the output: clamping the content instead leaves the SSD title bar and border
+/// poking off the edge the clamp exists to keep everything inside of.
 #[test]
 fn pinned_rule_position_keeps_the_whole_frame_on_screen() {
     let mut f = Fixture::with_config(config(

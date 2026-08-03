@@ -1770,9 +1770,9 @@ fn fill_on_ssd_window_round_trips_bar_and_border() {
     assert!(f.state().stage.is_fill(&window));
 }
 
-/// Before border subtraction was added to the fit target, a fitted window's
-/// visual frame overflowed the usable area by `2 × border_width` per axis —
-/// the fill equivalent above already deflated by the border, but fit did not.
+/// A fit targets the gap-inset usable area with the window's *visual frame*:
+/// deflating by the bar alone leaves the frame overflowing by `2 × border_width`
+/// per axis.
 #[test]
 fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
     let mut f = Fixture::with_config(config_ssd());

@@ -191,11 +191,9 @@ impl DriftWm {
     /// coordinates like `windows=`, sorted for deterministic output.
     ///
     /// A canvas layer's rect is a visual frame like `windows=`, so one snapshot
-    /// never mixes conventions. The only chrome a layer can wear is a per-rule
-    /// opt-in border — never a title bar, and `[decorations]` is not inherited —
-    /// so `position` is unchanged either way (a border is symmetric and cancels
-    /// out of a center) and `size` gains `2 * border_width`, which is zero for
-    /// every layer that didn't ask for a border.
+    /// never mixes conventions. Its only chrome is the opt-in border
+    /// [`Self::canvas_layer_chrome`] resolves, which cancels out of `position`
+    /// and adds `2 * border_width` to `size`.
     pub fn layer_inventory(&self) -> (Vec<String>, Vec<CanvasLayerInfo>) {
         let mut layers: Vec<String> = Vec::new();
         for output in self.space.outputs() {

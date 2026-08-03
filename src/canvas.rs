@@ -75,17 +75,15 @@ pub fn screen_space_origin(
 /// Convert internal canvas coords (top-left origin, Y-down) to the user-facing
 /// window-rule convention (center, Y-up) used by config rules, the state file, and IPC.
 ///
-/// Chrome-blind: it converts whatever rect it is handed. A window's rect is its
-/// visual frame, so window callers pass one — or use [`content_to_rule`], which
-/// inflates for them.
+/// Chrome-blind: it converts whatever rect it is handed. Window callers want
+/// [`content_to_rule`], which inflates to the visual frame first.
 #[inline]
 pub fn internal_to_rule(loc: Point<i32, Logical>, size: Size<i32, Logical>) -> (i32, i32) {
     (loc.x + size.w / 2, -(loc.y + size.h / 2))
 }
 
-/// Inverse of [`internal_to_rule`], and chrome-blind in the same way: the size
-/// it is handed decides which rect comes back. [`rule_to_content`] is the
-/// window-shaped form.
+/// Inverse of [`internal_to_rule`], and chrome-blind in the same way.
+/// [`rule_to_content`] is the window-shaped form.
 #[inline]
 pub fn rule_to_internal(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, Logical> {
     Point::from((x - size.w / 2, -y - size.h / 2))
@@ -96,11 +94,10 @@ pub fn rule_to_internal(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, 
 ///
 /// Every user-facing size and position — window-rule `size`/`position`, the
 /// state file, `driftwm msg move`/`resize`, the durable session file — describes
-/// the **visual frame**, content plus this chrome, so that a script can lay
-/// windows out without knowing whether each one is server-decorated. The
-/// compositor's own state stays content-space (`stage.position_of` is the content
-/// top-left, `geometry().size` the content size), and each user-facing boundary
-/// converts through here.
+/// the **visual frame**, content plus this chrome, so a script can lay windows
+/// out without knowing which of them are server-decorated. Compositor state
+/// stays content-space (`stage.position_of` is the content top-left,
+/// `geometry().size` the content size); each user-facing boundary converts here.
 ///
 /// A window's *center* is chrome-sensitive only through `bar`: a border is
 /// symmetric, so it cancels. Sizes need both.
@@ -155,7 +152,7 @@ impl Chrome {
 
 /// User-facing coordinates for a window whose content sits at `loc` with content
 /// `size`: its visual frame's center, Y-up. The chrome-aware form of
-/// [`internal_to_rule`], and what window rules, the state file and IPC all speak.
+/// [`internal_to_rule`].
 #[inline]
 pub fn content_to_rule(
     loc: Point<i32, Logical>,
@@ -738,8 +735,6 @@ mod tests {
 
     #[test]
     fn a_border_cancels_out_of_the_frame_center() {
-        // A border is symmetric, so it shifts neither axis of the center — only
-        // the bar does. Sizes are the chrome-sensitive half.
         let loc = Point::<i32, Logical>::from((200, -300));
         let size = vp(640, 480);
         let bare = content_to_rule(loc, size, Chrome { bar: 25, border: 0 });
@@ -764,8 +759,6 @@ mod tests {
 
     #[test]
     fn a_bar_lifts_the_reported_center_by_half_its_height() {
-        // The frame's center sits bar/2 above the content's, so the Y-up rule
-        // coordinate a server-decorated window reports is that much higher.
         let loc = Point::<i32, Logical>::from((0, 0));
         let size = vp(100, 100);
         let (_, bare_y) = content_to_rule(loc, size, Chrome::NONE);
@@ -777,7 +770,6 @@ mod tests {
     fn a_frame_smaller_than_its_chrome_floors_at_one_pixel() {
         let chrome = Chrome { bar: 25, border: 4 };
         assert_eq!(chrome.content_size(vp(4, 20)), vp(1, 1));
-        // Round-tripping a real size is exact in the other direction.
         assert_eq!(
             chrome.content_size(chrome.frame_size(vp(800, 600))),
             vp(800, 600)

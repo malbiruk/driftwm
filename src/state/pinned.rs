@@ -125,9 +125,8 @@ impl DriftWm {
             else {
                 continue;
             };
-            // The chrome the window wears once the exit restores the pin — which
-            // is why `element_chrome` is deliberately fullscreen-blind, since the
-            // window has none right now.
+            // The chrome the window wears once the exit restores the pin: it has
+            // none right now, which is why `element_chrome` is fullscreen-blind.
             let chrome = self.element_chrome(&window);
             let mut os = output_state(&output);
             if let Some(ret) = os.fullscreen_return.as_mut()
@@ -148,11 +147,11 @@ impl DriftWm {
 
 /// Clamp a pin's *visual frame* top-left into an output of `output_size`,
 /// returning the content top-left it implies — the form `PinnedSite::screen_pos`
-/// stores. The whole frame stays on screen, so a rehome can't push a title bar
-/// off the top edge that the original placement kept visible.
+/// stores. Clamping the frame rather than the content is what keeps a rehome
+/// from pushing a title bar off the top edge.
 ///
-/// An output too small for the frame parks the frame's top-left corner at the
-/// origin and lets the rest overflow, matching the placement clamp's `.max(0)`.
+/// An output too small for the frame parks the frame's top-left at the origin and
+/// lets the rest overflow, matching the placement clamp's `.max(0)`.
 pub(crate) fn clamp_pin_frame(
     frame_loc: Point<i32, Logical>,
     content_size: Size<i32, Logical>,

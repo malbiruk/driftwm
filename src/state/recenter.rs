@@ -83,8 +83,7 @@ impl DriftWm {
         );
 
         if let Some(surface) = owed {
-            // The rule point is the visual center outright, so the settle needs
-            // no size to re-derive it — only the Y-up flip.
+            // The rule point is the visual center outright — only the Y-up flip.
             let center = Point::from((x as f64, -y as f64));
             if let Some(pending) = self.pending_recenter.get_mut(&surface.id()) {
                 pending.target_center = center;

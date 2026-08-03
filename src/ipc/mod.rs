@@ -601,9 +601,8 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // derive a position from, so the two can't disagree mid-settle.
             let size = window.geometry().size;
             let loc = state.stage.position_of(&window).unwrap_or_default();
-            // The read arm answers before the canvas guard below, so it is the
-            // one `move` path a fullscreen window reaches — and a fullscreen
-            // window wears no chrome.
+            // The read arm answers before the canvas guard below, so it is the one
+            // `move` path a fullscreen window — which wears no chrome — reaches.
             let chrome = state.reported_chrome(&window);
             let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
             Ok(Response::Position { x, y })
@@ -679,16 +678,16 @@ fn cmd_resize(
     }
 
     // The request names a visual frame; the client's own min/max hints, and
-    // everything downstream of here, are content-space. Deflate, clamp there,
-    // and re-inflate for the echo — the shape `fill_window` already uses.
+    // everything downstream of here, are content-space. Deflate, clamp there, and
+    // re-inflate for the echo.
     let requested = chrome.content_size(Size::from((width, height)));
     let (width, height) =
         crate::state::resize_constraints(&element, chrome).clamp(requested.w, requested.h);
     let current = state.requested_element_size(&element);
     let loc = state.stage.position_of(&element).unwrap_or_default();
-    // Center-preserving: half the size delta off each axis. The chrome is a
-    // constant offset across the resize, so preserving the frame's center is the
-    // same arithmetic as preserving the content's and needs no term of its own.
+    // Center-preserving: half the size delta off each axis. Chrome is a constant
+    // offset across the resize, so holding the frame's center is the same
+    // arithmetic as holding the content's and needs no term of its own.
     let loc = Point::from((
         loc.x + (current.w - width) / 2,
         loc.y + (current.h - height) / 2,

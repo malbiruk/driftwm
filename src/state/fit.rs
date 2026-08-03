@@ -54,9 +54,9 @@ impl DriftWm {
         let usable = self.get_usable_area();
         let gap = self.config.snap_gap;
         let chrome = self.element_chrome(window);
-        // The gap bounds the *visual frame*, so the content inside it gives up
-        // the whole chrome — borders included, as `fill_window` already does.
-        // Bar-only here would overflow the usable area by a border per side.
+        // The gap bounds the *visual frame*, so the content inside it gives up the
+        // whole chrome; deflating by the bar alone overflows the usable area by a
+        // border per side.
         let target_size = chrome.content_size(Size::from((
             usable.size.w - (2.0 * gap) as i32,
             usable.size.h - (2.0 * gap) as i32,

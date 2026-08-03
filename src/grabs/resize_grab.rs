@@ -59,9 +59,9 @@ impl SizeConstraints {
     /// min/max. Its usable-chrome floor ([`MIN_SUSPENDED_SIZE`]) rides in as the
     /// minimum so the shared apply head clamps it exactly like a client minimum.
     ///
-    /// The floor is a floor on the *visible* stand-in, so it is deflated through
-    /// `chrome` into the body space every other minimum lives in: what it exists
-    /// to keep usable — the bar and its close button — is chrome, not body.
+    /// The floor bounds the *visible* stand-in — what it keeps usable, the bar
+    /// and its close button, is chrome — so `chrome` deflates it into the body
+    /// space every other minimum lives in.
     pub fn for_suspended(chrome: Chrome) -> Self {
         Self {
             min: chrome.content_size(Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE))),

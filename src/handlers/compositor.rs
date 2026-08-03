@@ -483,11 +483,10 @@ impl CompositorHandler for DriftWm {
                         && self.pending_size.insert(root.clone())
                     {
                         if let Some(toplevel) = window.toplevel() {
-                            // The rule names a visual frame, so configure the
-                            // content that fits inside it. `content_size` floors
-                            // at 1: a frame smaller than its own chrome would
-                            // otherwise send a zero or negative size, which
-                            // xdg-shell reads as "client picks its own".
+                            // The rule names a visual frame; configure the content
+                            // inside it. The 1px floor matters: xdg-shell reads a
+                            // zero dimension as "client picks its own", so a frame
+                            // smaller than its own chrome would drop the rule.
                             let content = self
                                 .mapping_chrome(&root, &effective)
                                 .content_size(smithay::utils::Size::from((w, h)));
@@ -888,9 +887,9 @@ impl DriftWm {
             return false;
         };
 
-        // First commit: resolve position once surface size is known. Through
-        // the same converter `layer_inventory` reports with, so the rule that
-        // placed a layer and the position read back describe one rect.
+        // First commit: resolve position once surface size is known. Through the
+        // same converter `layer_inventory` reports with, so a rule's position and
+        // the position read back describe one rect.
         if self.canvas_layers[idx].position.is_none() {
             let geo = self.canvas_layers[idx].surface.bbox();
             if geo.size.w > 0 && geo.size.h > 0 {

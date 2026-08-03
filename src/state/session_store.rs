@@ -114,8 +114,8 @@ impl DriftWm {
         // materialized nor carried forward, so a hand-edit or a flipped byte
         // that would panic `Size::from` (debug) or overflow `rule_to_internal`
         // self-heals on the next write instead of crashing every startup.
-        // Validated before the migration below, since that is the convention the
-        // numbers are actually in, and the conversion only adds the chrome.
+        // Validated before the migration below, in the convention the numbers on
+        // disk are actually in.
         let chrome = self.suspended_chrome();
         let entries: Vec<SessionEntry> = envelope
             .entries
@@ -162,10 +162,9 @@ impl DriftWm {
     /// `map_window` raises, so materializing bottom→top reproduces the z-order.
     fn materialize_entry(&mut self, entry: SessionEntry) -> SuspendedId {
         // The record is a visual frame; the stand-in stores the body inside it.
-        // Positioned from the file's own frame size rather than by re-inflating
-        // the body, so a record whose frame is smaller than the chrome — which
-        // `content_size` floors to a 1px body, drawing larger than the record —
-        // still lands its top-left where the record says.
+        // Positioned from the record's own frame size rather than by re-inflating
+        // the body: a frame smaller than its chrome floors to a 1px body, and
+        // re-inflating that would land the top-left somewhere else.
         let chrome = self.suspended_chrome();
         let frame = Size::from((entry.size[0], entry.size[1]));
         let size = chrome.content_size(frame);
@@ -562,9 +561,9 @@ fn now_unix() -> u64 {
 ///
 /// Uniform, with no per-entry branch: every stand-in wears the same bar and the
 /// same default border, whatever its origin. The chrome comes from the config
-/// this boot loaded — a `title_bar_height` changed since the file was written
-/// shifts a restored stand-in by half the difference, which is close enough for
-/// a one-time upgrade.
+/// this boot loaded, so a `title_bar_height` changed since the file was written
+/// shifts a converted stand-in by half the difference — close enough for a
+/// one-time conversion.
 fn body_entry_to_frame(mut entry: SessionEntry, chrome: Chrome) -> SessionEntry {
     let body = Size::from((entry.size[0], entry.size[1]));
     let loc = rule_to_internal(entry.position[0], entry.position[1], body);

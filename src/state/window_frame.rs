@@ -2,12 +2,9 @@
 //! conversions between a content top-left and the visual center of the frame
 //! that chrome surrounds.
 //!
-//! [`DriftWm::element_chrome`] resolves what an element actually wears;
-//! `reported_chrome` is it with fullscreen suppressed, and `mapping_chrome` is a
-//! prediction for the commit that maps a window, before its decoration entry
-//! exists. [`visual_frame_center`] and [`frame_loc_for_center`] are inverses,
-//! shared by navigation, fit, fill, and the fullscreen-exit settle so the
-//! formula cannot drift between them.
+//! [`visual_frame_center`] and [`frame_loc_for_center`] are inverses, shared by
+//! navigation, fit, fill, and the fullscreen-exit settle so the formula cannot
+//! drift between them.
 
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
@@ -48,20 +45,20 @@ impl DriftWm {
     }
 
     /// The chrome an element wears. Every user-facing size and position is
-    /// expressed against this frame rather than the content rect the compositor
-    /// stores — see [`driftwm::canvas::Chrome`].
+    /// expressed against this frame, not the content rect the compositor stores —
+    /// see [`driftwm::canvas::Chrome`].
     ///
-    /// The bar's authority is the decorations map rather than the decoration
-    /// mode a rule or a negotiation *implies*, because a client that calls
-    /// `set_mode` after its first sized commit moves the map without moving that.
-    /// The border has no such split: it resolves from the applied rule and
-    /// config, which is what the render path reads too.
+    /// The bar's authority is the decorations map rather than the decoration mode
+    /// a rule or a negotiation *implies*, because a client that calls `set_mode`
+    /// after its first sized commit moves the map without moving that. The border
+    /// has no such split — rule and config resolve it, as they do for the render
+    /// path.
     ///
     /// Fullscreen is deliberately **not** suppressed here even though the render
-    /// path suppresses it, because most callers want the chrome the window wears
-    /// on the canvas — the fit path in particular has to size against the frame
-    /// the window comes back to. The user-facing reads that can be asked about a
-    /// fullscreen window zero it themselves; see [`Self::reported_chrome`].
+    /// path suppresses it: most callers want the chrome the window wears on the
+    /// canvas, and the fit path has to size against the frame it comes back to.
+    /// The reads that can be asked about a fullscreen window use
+    /// [`Self::reported_chrome`].
     pub fn element_chrome<W: WaylandFocus + WindowExt>(&self, w: &W) -> Chrome {
         if w.is_suspended() {
             return self.suspended_chrome();
@@ -96,9 +93,9 @@ impl DriftWm {
     /// and the entry agree by construction.
     ///
     /// A client that changes its decoration mode in a *later* request moves the
-    /// entry without moving this — and reflows visibly when it does, as it
-    /// already does today. The border needs no prediction: it resolves from the
-    /// applied rule and config alone, which is what every later frame reads.
+    /// entry without moving this, and reflows visibly when it does. The border
+    /// needs no prediction: it resolves from the applied rule and config alone,
+    /// which is what every later frame reads.
     pub(crate) fn mapping_chrome(
         &self,
         surface: &WlSurface,

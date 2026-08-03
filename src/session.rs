@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 /// The current on-disk schema version. A file from an *older* version is read
-/// and converted by the caller (see `SessionStore`'s v1 migration); anything
-/// else — a newer schema this build cannot know, or a garbled number — is
-/// quarantined, so a downgrade never misparses a file it would corrupt.
+/// and converted by the caller; anything else — a newer schema this build cannot
+/// know, or a garbled number — is quarantined, so a downgrade never misparses a
+/// file it would corrupt.
 pub const VERSION: u32 = 2;
 
 /// The oldest schema this build converts on read rather than quarantining.
@@ -50,7 +50,7 @@ pub struct SessionEntry {
     pub origin: Origin,
     /// Whether the suspended window's origin was client-decorated. Every
     /// stand-in is barred; a CSD origin shrank its body under the bar (this
-    /// entry's rect is that shrunken body) so adopt can reassemble the full
+    /// entry frames that shrunken body) so adopt can reassemble the full
     /// geometry. Additive: a file without this field defaults to `false`
     /// (SSD-origin).
     #[serde(default)]
@@ -119,9 +119,8 @@ pub fn default_session_path() -> Option<PathBuf> {
 /// want to recover. A missing file is the normal fresh start.
 ///
 /// An older-but-readable envelope comes back with its own `version` intact, so
-/// the caller can convert its entries before using them. Quarantining those
-/// instead would be safe but would silently drop every suspended window on
-/// upgrade.
+/// the caller can convert its entries before using them; quarantining those
+/// instead would silently drop every suspended window on upgrade.
 pub fn read(path: &Path) -> SessionEnvelope {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
