@@ -53,11 +53,14 @@ impl DriftWm {
     fn compute_fit_geometry(&self, window: &Window) -> FitGeometry {
         let usable = self.get_usable_area();
         let gap = self.config.snap_gap;
-        let bar = self.window_ssd_bar(window);
-        let target_size = Size::from((
+        let chrome = self.window_chrome(window);
+        // The gap bounds the *visual frame*, so the content inside it gives up
+        // the whole chrome — borders included, as `fill_window` already does.
+        // Bar-only here would overflow the usable area by a border per side.
+        let target_size = chrome.content_size(Size::from((
             usable.size.w - (2.0 * gap) as i32,
-            usable.size.h - (2.0 * gap) as i32 - bar,
-        ));
+            usable.size.h - (2.0 * gap) as i32,
+        )));
         let usable_center_x = usable.loc.x as f64 + usable.size.w as f64 / 2.0;
         let usable_center_y = usable.loc.y as f64 + usable.size.h as f64 / 2.0;
         // `window_visual_center` sizes from the last configure, so a fit pressed
@@ -68,10 +71,10 @@ impl DriftWm {
             visual_center.x - usable_center_x,
             visual_center.y - usable_center_y,
         ));
-        let new_loc = Point::from((
+        let new_loc = chrome.content_loc(Point::from((
             target_camera.x as i32 + usable.loc.x + gap as i32,
-            target_camera.y as i32 + usable.loc.y + gap as i32 + bar,
-        ));
+            target_camera.y as i32 + usable.loc.y + gap as i32,
+        )));
         FitGeometry {
             new_loc,
             target_size,
