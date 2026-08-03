@@ -1197,8 +1197,8 @@ Supported fields:
 
 - `app_id` — match: Wayland app_id. X11 apps proxied via xwayland-satellite arrive with app_id set from WM_CLASS instance (typically lowercase). At least one of app_id/title is required; all specified criteria must match.
 - `title` — match: window title.
-- `position` — [x, y] coordinates (window center, Y-up). Canvas coords, or output-relative (origin = output center) when pinned_to_screen.
-- `size` — [width, height] initial window dimensions (one-shot; user/app can resize afterwards, so pair with widget = true to lock it)
+- `position` — [x, y] coordinates (visual-frame center, Y-up). Canvas coords, or output-relative (origin = output center) when pinned_to_screen.
+- `size` — [width, height] initial dimensions of the visual frame — the app's content plus any title bar and border driftwm draws, so the same numbers give the same on-screen rectangle whatever the decoration mode (one-shot; user/app can resize afterwards, so pair with widget = true to lock it)
 - `fullscreen` — true: force this window to open in fullscreen mode
 - `focus_on_open` — false: map the window without focusing it or moving the camera to it. Omit to keep the default focus-on-map behavior. Pairs well with pinned_to_screen for unobtrusive overlays; the window still takes focus later through normal interaction (hover or click). (default: true)
 - `widget` — true: pinned (immovable), below normal windows, excluded from navigation and alt-tab (default: false)

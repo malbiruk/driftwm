@@ -47,7 +47,7 @@ pub enum Request {
     Focus(Option<WindowSelector>),
     /// Move or query a window. `window` `None` targets the focused window; `to`
     /// `None` reads the position instead of setting it. Coordinates are
-    /// window-center, Y-up (the window-rule convention).
+    /// visible-frame center, Y-up (the window-rule convention).
     Move {
         #[serde(default)]
         window: Option<WindowSelector>,
@@ -56,8 +56,10 @@ pub enum Request {
     },
     /// Resize or query a window. `window` `None` targets the focused window;
     /// `to` `None` reads the size instead of setting it. Dimensions are the
-    /// client's own content in canvas units — no title bar, no border — and a
-    /// set is clamped to the client's declared minimum and maximum.
+    /// window's visible frame in canvas units — the client's content plus any
+    /// compositor-drawn title bar and border — and a set is clamped to the
+    /// client's declared minimum and maximum, which apply to the content inside
+    /// that frame.
     Resize {
         #[serde(default)]
         window: Option<WindowSelector>,
@@ -145,14 +147,15 @@ pub enum Response {
     State(Box<StateInfo>),
     DebugCounters(BTreeMap<String, usize>),
     Focused(Option<FocusedWindow>),
-    /// Window-center, Y-up coordinates.
+    /// Visible-frame center, Y-up coordinates.
     Position {
         x: i32,
         y: i32,
     },
-    /// A window's content size. On a set this is what was *requested* of the
-    /// client after clamping, not a size it has necessarily committed — the one
-    /// reply in this protocol echoing a request rather than compositor state.
+    /// A window's visible frame size — content plus title bar and border. On a
+    /// set this is what was *requested* of the client after clamping, not a size
+    /// it has necessarily committed — the one reply in this protocol echoing a
+    /// request rather than compositor state.
     Size {
         width: i32,
         height: i32,
@@ -244,7 +247,9 @@ pub enum Event {
     State(StateInfo),
 }
 
-/// One window in the canvas inventory (`position` = window center, Y-up).
+/// One window in the canvas inventory. `position` and `size` describe the
+/// window's **visible frame** — content plus any compositor-drawn title bar and
+/// border — with `position` its center, Y-up.
 ///
 /// Shared by the IPC [`Response::State`] payload and the
 /// `$XDG_RUNTIME_DIR/driftwm/state` file so the two representations can't drift.
@@ -260,8 +265,8 @@ pub struct WindowInfo {
     pub is_focused: bool,
     pub is_widget: bool,
     /// A compositor-drawn stand-in for a suspended window (no live client).
-    /// `position`/`size` describe its canvas rect; the `id` selector focuses,
-    /// moves, or dismisses it.
+    /// `position`/`size` describe its canvas frame — a stand-in always wears a
+    /// title bar — and the `id` selector focuses, moves, or dismisses it.
     #[serde(default)]
     pub suspended: bool,
 }
@@ -275,9 +280,10 @@ pub struct OutputFullscreen {
     pub title: String,
 }
 
-/// A screen-pinned window in the IPC `state` reply. `position` is the window
-/// center in rule coordinates (output-center origin, Y-up) — the numbers a
-/// `pinned_to_screen` rule's `position` takes; `size` in pixels.
+/// A screen-pinned window in the IPC `state` reply. `position` is the visible
+/// frame's center in rule coordinates (output-center origin, Y-up) — the numbers
+/// a `pinned_to_screen` rule's `position` takes; `size` is that frame, in
+/// pixels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OutputPinned {
     pub id: u64,
@@ -290,8 +296,9 @@ pub struct OutputPinned {
 
 /// A canvas-positioned layer surface, shared by the IPC `state` reply and the
 /// state file's `canvas_layers=` line. `app_id` is the layer-shell namespace;
-/// `position` uses rule coordinates (Y-up, window-centered), like
-/// [`WindowInfo`]. The top-left anchor is frozen at map time while the center
+/// `position` uses rule coordinates (Y-up, frame-centered), like [`WindowInfo`],
+/// and `size` includes the per-rule border a layer can opt into — a layer never
+/// wears a title bar. The top-left anchor is frozen at map time while the center
 /// is derived from the *current* size, so for a surface that grew after
 /// mapping the reported center drifts from the rule that placed it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

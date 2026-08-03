@@ -36,12 +36,25 @@ Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
 still works.
 
-### Sizes
+### Sizes and the visual frame
 
-`resize` dimensions are the client's own content, in the same canvas units as
-`state`'s `size`. They **exclude** the compositor-drawn title bar and border, so
-a script laying out a grid from them overlaps by that chrome on server-decorated
-windows.
+Every size and position here describes the window's **visual frame**: the
+client's content plus the compositor-drawn title bar and border, if it has them.
+So a grid laid out from `state` sizes tiles exactly, whether the windows are
+server-decorated, client-decorated or bare — no script has to know which, and
+none could find out anyway.
+
+Two consequences worth knowing:
+
+- A client's own minimum and maximum sizes describe its *content*, so a `resize`
+  clamped by them comes back as that clamped content plus the chrome. Ask a
+  server-decorated window for a frame smaller than its title bar and you get the
+  smallest frame it can have.
+- `screenshot --window` still captures the drop shadow as well, so its pixel
+  dimensions stay larger than the `resize` reply by the shadow radius.
+
+A fullscreen window has no chrome — the compositor suppresses it — so its frame
+is exactly its content.
 
 A request is clamped to the client's declared minimum and maximum, and the reply
 echoes what was configured — not what the client went on to commit, which is why
@@ -64,11 +77,11 @@ compositor relocates **the grown window itself** (not the neighbour) beside its
 cluster, and pans the camera after it when it is focused and no longer fully
 visible.
 
-Stand-ins differ in two ways. They have no client to declare limits, so
-`resize` clamps them to a fixed 120x120 floor instead. And a stand-in left by a
-client-decorated window stores the body *without* the title bar it draws over
-it, so a `relaunch` after `resize --id <stand-in> 800 600` brings the app back at
-`800 x (600 + title_bar_height)`.
+Stand-ins have no client to declare limits, so `resize` clamps them to a fixed
+120x120 floor instead — a floor on the visible stand-in, which is what the
+`120x120` reply describes. Every stand-in wears a title bar, so `resize --id
+<stand-in> 800 600` leaves a stand-in exactly 800x600 on screen and brings the
+app back at that footprint on `relaunch`.
 
 ### Suspended windows
 
@@ -287,4 +300,6 @@ the `state` reply's per-output `camera` and `zoom`, rounded for the file.
 `layers=` namespaces are the `app_id` a window rule matches a layer surface by.
 A `canvas_layers` entry's `position` is derived from the surface's current size,
 so it can drift from the rule that placed it if the surface resized after
-mapping.
+mapping. Its `size` is a visual frame like every other, but a layer never wears a
+title bar and its border is opt-in per rule, so unless a rule sets `border_width`
+it is just the surface's own extent.

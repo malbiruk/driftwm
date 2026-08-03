@@ -53,7 +53,9 @@ A suspended window differs from a live window in two ways:
   only moves the camera, so it frames a suspended window's cluster like any
   other. And a suspended window *can* be resized — `grow-window`,
   `shrink-window` and `driftwm msg resize` write its size directly, with no
-  client to configure, down to a 120px floor that keeps its chrome usable.
+  client to configure, down to a 120px floor — a floor on the visible stand-in,
+  which is what a `msg resize` reply describes, so 120x120 leaves one exactly
+  that big on screen.
 
 If the window was fullscreen or screen-pinned when suspended, it's returned
 to the canvas first, at its most recent windowed size.
@@ -171,10 +173,14 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 The session lives at `~/.local/state/driftwm/session.json` (respects
 `XDG_STATE_HOME`). It's written through immediately on anything you'd notice
 (suspending, dismissing, relaunching) and debounced (~1s) for continuous
-changes like dragging a suspended window. A file that fails to parse (wrong
-version, corrupted write) or can't be read at all is quarantined next to it as
+changes like dragging a suspended window. A file written by an older driftwm is
+read and converted in place; one from a *newer* version, or that fails to parse
+or can't be read at all, is quarantined next to it as
 `session.json.corrupt.<timestamp>` or `session.json.unreadable.<timestamp>`,
 and startup continues with an empty session.
+
+Each saved window's `position` and `size` describe its stand-in's visual frame,
+the same convention as window rules and `driftwm msg state`.
 
 ## Relaunching & matching
 

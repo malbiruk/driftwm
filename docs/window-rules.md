@@ -84,6 +84,23 @@ app_id    = "/^steam_app_\\d+$/"
 pass_keys = true
 ```
 
+## Coordinates and sizes
+
+`position` and `size` describe a window's **visual frame**: the app's content
+plus the title bar and border driftwm draws around it, if it draws any.
+`position` is that frame's center, with **Y pointing up**.
+
+This is what makes a layout portable. `size = [800, 600]` gives you an 800x600
+window on screen whether it is server-decorated, client-decorated, or bare, and
+two windows placed 800 apart sit flush against each other either way. The same
+numbers come back out of `driftwm msg state` and the
+[state file](ipc.md#state-file), so a rule and a running window always describe
+the same rectangle.
+
+The app itself gets whatever is left inside the frame. With
+`[decorations] default_mode = "server"`, `title_bar_height = 25` and
+`border_width = 2`, a `size = [800, 600]` rule hands the client 796x571.
+
 ## Field reference
 
 Every rule field — its type, default, accepted values, and per-field caveats
@@ -114,8 +131,10 @@ decoration       = "none"
 ```
 
 - **Coordinates are output-relative.** When pinned, `position` is measured from
-  the **output center** (still center-anchored and Y-up): `[0, 0]` centers the
-  window on the monitor, `+Y` is up. Drop `position` to center it.
+  the **output center** (still the visual frame's center, Y-up): `[0, 0]` centers
+  the window on the monitor, `+Y` is up. Drop `position` to center it. A position
+  that would push the window off the monitor is clamped so the whole frame stays
+  visible — a title bar never goes off the top edge.
 - **Off the canvas.** Pinned windows are excluded from navigation, alt-tab,
   snapping, fit/center actions, and canvas screenshots
   (`driftwm msg screenshot`). They remain focusable and closable; SSD windows

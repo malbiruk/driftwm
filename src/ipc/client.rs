@@ -62,9 +62,10 @@ pub enum Msg {
     },
     /// Get a window's size, or resize it to `<width> <height>`.
     ///
-    /// Dimensions exclude the compositor-drawn title bar and border. A request
-    /// is clamped to the client's declared limits, and the reply echoes what was
-    /// configured, not what the client went on to commit. Refused for pinned and
+    /// Dimensions are the visible frame, including any compositor-drawn title
+    /// bar and border. A request is clamped to the client's declared limits —
+    /// which describe the content inside that frame — and the reply echoes what
+    /// was configured, not what the client went on to commit. Refused for pinned and
     /// fullscreen windows as with `move`, and while the window is under an
     /// interactive move or resize.
     ///
