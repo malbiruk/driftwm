@@ -2801,11 +2801,11 @@ fn auto_placement_reserves_no_ground_for_a_hidden_adopt() {
         f.state()
             .auto_anchor_snapshot
             .insert(s, Some(anchor_elem.clone()));
-        let bar = f
+        let chrome = f
             .state()
-            .window_ssd_bar(&StageWindow::Client(placing.clone()));
+            .element_chrome(&StageWindow::Client(placing.clone()));
         f.state()
-            .auto_placement_pos(placing, Size::from((300, 200)), bar)
+            .auto_placement_pos(placing, Size::from((300, 200)), chrome)
     };
 
     let slot = auto_pos(&mut f, &placing).expect("auto placement docks beside the anchor");

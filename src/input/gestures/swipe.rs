@@ -569,7 +569,7 @@ impl DriftWm {
                 self.arm_interactive_move(&s.id);
                 (
                     ClusterMember::Suspended(s.id),
-                    crate::grabs::SizeConstraints::for_suspended(),
+                    crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome()),
                     None,
                 )
             }

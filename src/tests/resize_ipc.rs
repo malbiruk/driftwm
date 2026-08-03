@@ -594,6 +594,7 @@ fn a_stand_in_resize_clamps_marks_the_store_and_bumps_blur() {
     let window_id = f.state().stage.id_of(&element).unwrap().0;
     let generation = f.state().render.blur_geometry_generation;
 
+    let bar = f.state().suspended_chrome().bar;
     assert_eq!(
         resize(&mut f, Some(WindowSelector::Id(window_id)), Some((80, 90))),
         Ok(Response::Size {
@@ -604,11 +605,13 @@ fn a_stand_in_resize_clamps_marks_the_store_and_bumps_blur() {
     );
     assert_eq!(
         f.state().find_suspended(sid).unwrap().size.get(),
-        Size::from((120, 120))
+        Size::from((120, 120 - bar)),
+        "the floor is on the visible stand-in, so the body it stores is that much \
+         shorter than the frame the reply echoes"
     );
     assert_eq!(
         f.state().stage.position_of(&element),
-        Some(Point::from((540, 390))),
+        Some(Point::from((540, 300 + (300 - (120 - bar)) / 2))),
         "the stand-in keeps its center"
     );
     assert!(
@@ -687,12 +690,15 @@ fn a_stand_in_read_reports_its_own_size() {
     let element = stand_in_element(&mut f, sid);
     let window_id = f.state().stage.id_of(&element).unwrap().0;
 
+    let bar = f.state().suspended_chrome().bar;
     assert_eq!(
         resize(&mut f, Some(WindowSelector::Id(window_id)), None),
         Ok(Response::Size {
             width: 400,
-            height: 300
-        })
+            height: 300 + bar
+        }),
+        "the read reports the visible frame, which is the stored body plus the \
+         bar every stand-in wears"
     );
 
     f.state().dismiss_suspended(sid);

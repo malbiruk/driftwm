@@ -483,8 +483,16 @@ impl CompositorHandler for DriftWm {
                         && self.pending_size.insert(root.clone())
                     {
                         if let Some(toplevel) = window.toplevel() {
+                            // The rule names a visual frame, so configure the
+                            // content that fits inside it. `content_size` floors
+                            // at 1: a frame smaller than its own chrome would
+                            // otherwise send a zero or negative size, which
+                            // xdg-shell reads as "client picks its own".
+                            let content = self
+                                .mapping_chrome(&root, &effective)
+                                .content_size(smithay::utils::Size::from((w, h)));
                             toplevel.with_pending_state(|state| {
-                                state.size = Some(smithay::utils::Size::from((w, h)));
+                                state.size = Some(content);
                             });
                             toplevel.send_configure();
                             self.pending_center.insert(root.clone());
@@ -510,14 +518,19 @@ impl CompositorHandler for DriftWm {
                         let out_size = crate::state::output_logical_size(&output);
                         // Clamp the top-left into the output so an off-screen rule
                         // `position` (e.g. [1000, 1000] on a 1080p monitor) still
-                        // lands fully visible. Mirrors `reassign_orphaned_pinned`.
+                        // lands fully visible. The rule's rect is the visual
+                        // frame, so that is what gets clamped — clamping the
+                        // content instead pushes an SSD title bar off the top.
+                        let chrome = self.mapping_chrome(&root, &effective);
+                        let frame_size = chrome.frame_size(geo.size);
                         let top_left =
-                            driftwm::canvas::rule_to_screen_top_left(rx, ry, geo.size, out_size);
-                        let screen_pos: Point<i32, Logical> = (
-                            top_left.x.clamp(0, (out_size.w - geo.size.w).max(0)),
-                            top_left.y.clamp(0, (out_size.h - geo.size.h).max(0)),
+                            driftwm::canvas::rule_to_screen_top_left(rx, ry, frame_size, out_size);
+                        let frame_pos: Point<i32, Logical> = (
+                            top_left.x.clamp(0, (out_size.w - frame_size.w).max(0)),
+                            top_left.y.clamp(0, (out_size.h - frame_size.h).max(0)),
                         )
                             .into();
+                        let screen_pos = chrome.content_loc(frame_pos);
                         // Seed the Space loc to the canvas point this screen
                         // position currently maps to; the per-frame loc-sync
                         // keeps it correct as the camera moves.
@@ -549,10 +562,11 @@ impl CompositorHandler for DriftWm {
                         // Fullscreen / fit windows already sit at their final
                         // location — skip positioning so bar-shifted
                         // centering doesn't override that.
+                        let chrome = self.mapping_chrome(&root, &effective);
                         let pos = if let Some(ref applied) = applied
                             && let Some((x, y)) = applied.position
                         {
-                            let p = driftwm::canvas::rule_to_internal(x, y, geo.size);
+                            let p = driftwm::canvas::rule_to_content(x, y, geo.size, chrome);
                             (p.x, p.y)
                         } else if let Some(parent_surface) = window.parent_surface()
                             && let Some(parent_win) = self.window_for_surface(&parent_surface)
@@ -564,27 +578,18 @@ impl CompositorHandler for DriftWm {
                                 parent_loc.y + parent_size.h / 2 - geo.size.h / 2,
                             )
                         } else {
-                            // Both placement paths need the SSD bar to
-                            // center the *visible frame* (titlebar +
-                            // content) on the target.
-                            let bar_px =
-                                if matches!(effective, driftwm::config::DecorationMode::Server) {
-                                    self.config.decorations.title_bar_height
-                                } else {
-                                    0
-                                };
                             // Fullscreen takes precedence over the auto/cursor/
                             // center placement handled here: a new window must
                             // never land on top of a fullscreen window on its own
                             // output.
-                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, bar_px);
+                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, chrome);
                             place_in_background = bg_pos.is_some();
                             let cursor_pos = if bg_pos.is_none()
                                 && matches!(
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Cursor
                                 ) {
-                                self.cursor_placement_pos(geo.size, bar_px)
+                                self.cursor_placement_pos(geo.size, chrome)
                             } else {
                                 None
                             };
@@ -595,7 +600,7 @@ impl CompositorHandler for DriftWm {
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
                                 ) {
-                                self.auto_placement_pos(&window, geo.size, bar_px)
+                                self.auto_placement_pos(&window, geo.size, chrome)
                             } else {
                                 None
                             };
@@ -604,7 +609,9 @@ impl CompositorHandler for DriftWm {
                                     .active_output()
                                     .and_then(|o| self.space.output_geometry(&o));
                                 if output_geo.is_some() {
-                                    let bar_f = bar_px as f64;
+                                    // A border is symmetric and cancels out of a
+                                    // center; only the bar shifts it.
+                                    let bar_f = chrome.bar as f64;
                                     let vc = self.usable_center_screen();
                                     let cam = self.camera();
                                     let z = self.zoom();
@@ -1257,8 +1264,8 @@ impl DriftWm {
         }
 
         let content_size = window.geometry().size;
-        let bar = self.window_ssd_bar(window);
-        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, bar) else {
+        let chrome = self.window_chrome(window);
+        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, chrome) else {
             return;
         };
         let new_loc = Point::from((x, y));

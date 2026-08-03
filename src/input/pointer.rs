@@ -957,6 +957,8 @@ impl DriftWm {
         // cancel is what stops a flight from moving the camera the anchor is
         // projected through.
         self.arm_interactive_move(&s.id);
+        let suspended_constraints =
+            crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome());
         let (start_screen, start_zoom) = crate::grabs::resize_screen_anchor(&output, pos);
         let grab = ResizeGrab {
             start_data,
@@ -970,7 +972,7 @@ impl DriftWm {
             start_zoom,
             last_clamped_location: pos,
             snap: driftwm::layout::snap::SnapState::default(),
-            constraints: crate::grabs::SizeConstraints::for_suspended(),
+            constraints: suspended_constraints,
             cluster_resize,
             pinned_initial_screen_pos: None,
             touch_start: None,

@@ -34,22 +34,21 @@ impl DriftWm {
     /// `(x, y)` — what `msg move` and the bookmark binding both ask for —
     /// re-aiming any recenter the window still owes rather than dropping it.
     ///
-    /// A rule point *is* a visual center, and the map onto one is
-    /// size-independent: `rule_to_internal` subtracts half the size per axis and
-    /// `visual_frame_center` adds the same half straight back, leaving
-    /// [`rule_point_to_visual_center`]'s `(x, -y - bar/2)` whatever the size. So
-    /// a request that arrives mid-settle can re-aim the owed recenter without
-    /// knowing the size the client is still resizing into, and the settle
-    /// re-derives the location from the size it actually commits. Dropping the
-    /// entry instead would strand the window half the size delta from the
-    /// request with nothing left to correct it.
+    /// A rule point *is* the visual center, and the map onto one is
+    /// size-independent: `rule_to_content` subtracts half the frame per axis and
+    /// `visual_frame_center` adds the same half straight back, leaving `(x, -y)`
+    /// whatever the size. So a request that arrives mid-settle can re-aim the
+    /// owed recenter without knowing the size the client is still resizing into,
+    /// and the settle re-derives the location from the size it actually commits.
+    /// Dropping the entry instead would strand the window half the size delta
+    /// from the request with nothing left to correct it.
     ///
     /// Residual error against the location a same-size direct move would pick is
     /// up to a pixel per axis, and a whole one in half the cases that have any:
-    /// an odd content dimension leaves a ½ in the settle's intermediate, and
-    /// `as i32` truncates toward zero rather than down, so the half is lost
-    /// where that intermediate is positive (a positive `x`, a negative rule `y`)
-    /// and kept where it is negative.
+    /// an odd *frame* dimension (content plus the bar, on y) leaves a ½ in the
+    /// settle's intermediate, and `as i32` truncates toward zero rather than
+    /// down, so the half is lost where that intermediate is positive (a positive
+    /// `x`, a negative rule `y`) and kept where it is negative.
     ///
     /// The re-aimed entry keeps gating `reflow_grown_snapped_window` until that
     /// commit lands, the cost [`Self::drop_owed_recenter`] describes; a client
@@ -76,14 +75,17 @@ impl DriftWm {
         } else {
             window.geometry().size
         };
+        let chrome = self.window_chrome(window);
         self.map_window(
             window.clone(),
-            driftwm::canvas::rule_to_internal(x, y, size),
+            driftwm::canvas::rule_to_content(x, y, size, chrome),
             activate,
         );
 
         if let Some(surface) = owed {
-            let center = super::rule_point_to_visual_center(x, y, self.window_ssd_bar(window));
+            // The rule point is the visual center outright, so the settle needs
+            // no size to re-derive it — only the Y-up flip.
+            let center = Point::from((x as f64, -y as f64));
             if let Some(pending) = self.pending_recenter.get_mut(&surface.id()) {
                 pending.target_center = center;
             }

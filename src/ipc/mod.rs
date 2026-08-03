@@ -577,14 +577,15 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
         // in place, without the re-raise `map_window` would carry.
         element @ StageWindow::Suspended(_) => {
             let size = driftwm::stage::StageElement::size(&element);
+            let chrome = state.element_chrome(&element);
             return match to {
                 None => {
                     let loc = state.stage.position_of(&element).unwrap_or_default();
-                    let (x, y) = driftwm::canvas::internal_to_rule(loc, size);
+                    let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
                     Ok(Response::Position { x, y })
                 }
                 Some((x, y)) => {
-                    let loc = driftwm::canvas::rule_to_internal(x, y, size);
+                    let loc = driftwm::canvas::rule_to_content(x, y, size, chrome);
                     state.stage.set_position(&element, loc);
                     // A stand-in's canvas position is durable — coalesce the
                     // write like a pointer/touch drag does.
@@ -600,7 +601,8 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // derive a position from, so the two can't disagree mid-settle.
             let size = window.geometry().size;
             let loc = state.stage.position_of(&window).unwrap_or_default();
-            let (x, y) = driftwm::canvas::internal_to_rule(loc, size);
+            let chrome = state.window_chrome(&window);
+            let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
             Ok(Response::Position { x, y })
         }
         Some((x, y)) => {
@@ -631,10 +633,12 @@ fn cmd_resize(
 ) -> Reply {
     let element = element_by_selector(state, window.as_ref())?;
 
+    let chrome = state.element_chrome(&element);
+
     let Some((width, height)) = to else {
         // Committed size, matching what `msg state` and the state file report,
         // so the two can't disagree mid-settle.
-        let size = driftwm::stage::StageElement::size(&element);
+        let size = chrome.frame_size(driftwm::stage::StageElement::size(&element));
         return Ok(Response::Size {
             width: size.w,
             height: size.h,
@@ -669,12 +673,17 @@ fn cmd_resize(
         );
     }
 
-    let (width, height) = crate::state::resize_constraints(&element).clamp(width, height);
+    // The request names a visual frame; the client's own min/max hints, and
+    // everything downstream of here, are content-space. Deflate, clamp there,
+    // and re-inflate for the echo — the shape `fill_window` already uses.
+    let requested = chrome.content_size(Size::from((width, height)));
+    let (width, height) =
+        crate::state::resize_constraints(&element, chrome).clamp(requested.w, requested.h);
     let current = state.requested_element_size(&element);
     let loc = state.stage.position_of(&element).unwrap_or_default();
-    // Center-preserving: half the size delta off each axis. The SSD bar sits at
-    // a fixed height above the content, so it cancels out of the difference and
-    // needs no bookkeeping of its own.
+    // Center-preserving: half the size delta off each axis. The chrome is a
+    // constant offset across the resize, so preserving the frame's center is the
+    // same arithmetic as preserving the content's and needs no term of its own.
     let loc = Point::from((
         loc.x + (current.w - width) / 2,
         loc.y + (current.h - height) / 2,
@@ -685,7 +694,11 @@ fn cmd_resize(
     // Absolute: this rect is the whole answer, so there is no promise for a later
     // call to reconcile against.
     state.resize_element_to(&element, Size::from((width, height)), loc, raise, None);
-    Ok(Response::Size { width, height })
+    let echo = chrome.frame_size(Size::from((width, height)));
+    Ok(Response::Size {
+        width: echo.w,
+        height: echo.h,
+    })
 }
 
 /// Runtime per-window opacity. The stored `AppliedWindowRule` is the single

@@ -74,6 +74,9 @@ pub fn screen_space_origin(
 
 /// Convert internal canvas coords (top-left origin, Y-down) to the user-facing
 /// window-rule convention (center, Y-up) used by config rules, the state file, and IPC.
+///
+/// Takes a *visual frame* rect — see [`Chrome`]. Content-space callers convert
+/// first, or use [`content_to_rule`].
 #[inline]
 pub fn internal_to_rule(loc: Point<i32, Logical>, size: Size<i32, Logical>) -> (i32, i32) {
     (loc.x + size.w / 2, -(loc.y + size.h / 2))
@@ -84,6 +87,92 @@ pub fn internal_to_rule(loc: Point<i32, Logical>, size: Size<i32, Logical>) -> (
 #[inline]
 pub fn rule_to_internal(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, Logical> {
     Point::from((x - size.w / 2, -y - size.h / 2))
+}
+
+/// The compositor-drawn chrome around a window's content: the SSD title-bar
+/// strip above it, and a border outside all four sides (outside the bar, too).
+///
+/// Every user-facing size and position — window-rule `size`/`position`, the
+/// state file, `driftwm msg move`/`resize`, the durable session file — describes
+/// the **visual frame**, content plus this chrome, so that a script can lay
+/// windows out without knowing whether each one is server-decorated. The
+/// compositor's own state stays content-space (`stage.position_of` is the content
+/// top-left, `geometry().size` the content size), and each user-facing boundary
+/// converts through here.
+///
+/// A window's *center* is chrome-sensitive only through `bar`: a border is
+/// symmetric, so it cancels. Sizes need both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Chrome {
+    /// SSD title-bar height. Zero for a client-decorated or undecorated window;
+    /// a suspended stand-in always wears one.
+    pub bar: i32,
+    /// Border width on each side.
+    pub border: i32,
+}
+
+impl Chrome {
+    /// No chrome at all — a fullscreen window, or a bare CSD one.
+    pub const NONE: Chrome = Chrome { bar: 0, border: 0 };
+
+    /// The visual frame size a content size occupies.
+    #[inline]
+    pub fn frame_size(self, size: Size<i32, Logical>) -> Size<i32, Logical> {
+        Size::from((
+            size.w + 2 * self.border,
+            size.h + self.bar + 2 * self.border,
+        ))
+    }
+
+    /// The content size inside a visual frame, floored at 1x1: a frame no bigger
+    /// than its own chrome would otherwise deflate to nothing, and a client can
+    /// never be configured with a zero dimension.
+    #[inline]
+    pub fn content_size(self, frame: Size<i32, Logical>) -> Size<i32, Logical> {
+        Size::from((
+            (frame.w - 2 * self.border).max(1),
+            (frame.h - self.bar - 2 * self.border).max(1),
+        ))
+    }
+
+    /// The visual frame's top-left for a content top-left.
+    #[inline]
+    pub fn frame_loc(self, loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        Point::from((loc.x - self.border, loc.y - self.bar - self.border))
+    }
+
+    /// Inverse of [`Chrome::frame_loc`].
+    #[inline]
+    pub fn content_loc(self, frame_loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        Point::from((
+            frame_loc.x + self.border,
+            frame_loc.y + self.bar + self.border,
+        ))
+    }
+}
+
+/// User-facing coordinates for a window whose content sits at `loc` with content
+/// `size`: its visual frame's center, Y-up. The chrome-aware form of
+/// [`internal_to_rule`], and what window rules, the state file and IPC all speak.
+#[inline]
+pub fn content_to_rule(
+    loc: Point<i32, Logical>,
+    size: Size<i32, Logical>,
+    chrome: Chrome,
+) -> (i32, i32) {
+    internal_to_rule(chrome.frame_loc(loc), chrome.frame_size(size))
+}
+
+/// Inverse of [`content_to_rule`]: the content top-left that puts a window of
+/// content `size` wearing `chrome` at the user-facing point `(x, y)`.
+#[inline]
+pub fn rule_to_content(
+    x: i32,
+    y: i32,
+    size: Size<i32, Logical>,
+    chrome: Chrome,
+) -> Point<i32, Logical> {
+    chrome.content_loc(rule_to_internal(x, y, chrome.frame_size(size)))
 }
 
 /// A screen-pinned window's top-left screen position (output-relative, top-left
@@ -615,6 +704,82 @@ mod tests {
     #[test]
     fn rule_coords_center_y_up() {
         assert_eq!(internal_to_rule((0, 0).into(), vp(100, 100)), (50, -50));
+    }
+
+    #[test]
+    fn content_rule_coords_round_trip() {
+        // content -> rule -> content is identity for every chrome, including
+        // odd sizes and odd chrome where the integer halving truncates.
+        for (loc, size) in [
+            ((0, 0), (100, 100)),
+            ((200, -300), (640, 480)),
+            ((-15, 7), (101, 51)),
+        ] {
+            for chrome in [
+                Chrome::NONE,
+                Chrome { bar: 25, border: 0 },
+                Chrome { bar: 0, border: 4 },
+                Chrome { bar: 25, border: 3 },
+                Chrome { bar: 7, border: 1 },
+            ] {
+                let loc = Point::<i32, Logical>::from(loc);
+                let size = vp(size.0, size.1);
+                let (rx, ry) = content_to_rule(loc, size, chrome);
+                assert_eq!(
+                    rule_to_content(rx, ry, size, chrome),
+                    loc,
+                    "{chrome:?} at {loc:?} {size:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_border_cancels_out_of_the_frame_center() {
+        // A border is symmetric, so it shifts neither axis of the center — only
+        // the bar does. Sizes are the chrome-sensitive half.
+        let loc = Point::<i32, Logical>::from((200, -300));
+        let size = vp(640, 480);
+        let bare = content_to_rule(loc, size, Chrome { bar: 25, border: 0 });
+        for border in [1, 2, 4, 17] {
+            assert_eq!(
+                content_to_rule(loc, size, Chrome { bar: 25, border }),
+                bare,
+                "border {border} moved the center"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undecorated_window_keeps_the_bare_rule_coords() {
+        let loc = Point::<i32, Logical>::from((-15, 7));
+        let size = vp(101, 51);
+        assert_eq!(
+            content_to_rule(loc, size, Chrome::NONE),
+            internal_to_rule(loc, size)
+        );
+    }
+
+    #[test]
+    fn a_bar_lifts_the_reported_center_by_half_its_height() {
+        // The frame's center sits bar/2 above the content's, so the Y-up rule
+        // coordinate a server-decorated window reports is that much higher.
+        let loc = Point::<i32, Logical>::from((0, 0));
+        let size = vp(100, 100);
+        let (_, bare_y) = content_to_rule(loc, size, Chrome::NONE);
+        let (_, barred_y) = content_to_rule(loc, size, Chrome { bar: 24, border: 0 });
+        assert_eq!(barred_y - bare_y, 12);
+    }
+
+    #[test]
+    fn a_frame_smaller_than_its_chrome_floors_at_one_pixel() {
+        let chrome = Chrome { bar: 25, border: 4 };
+        assert_eq!(chrome.content_size(vp(4, 20)), vp(1, 1));
+        // Round-tripping a real size is exact in the other direction.
+        assert_eq!(
+            chrome.content_size(chrome.frame_size(vp(800, 600))),
+            vp(800, 600)
+        );
     }
 
     #[test]

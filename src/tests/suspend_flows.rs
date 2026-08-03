@@ -1041,7 +1041,12 @@ fn inventory_reports_suspended_and_focused_convention() {
         .find(|w| w.suspended)
         .expect("stand-in in inventory");
     assert_eq!(sus.app_id, "susapp");
-    assert_eq!(sus.size, [320, 240]);
+    let bar = f.state().suspended_chrome().bar;
+    assert_eq!(
+        sus.size,
+        [320, 240 + bar],
+        "the inventory reports the stand-in's visible frame, not its stored body"
+    );
     assert!(!sus.is_focused);
 
     // Focused: windows[0] and is_focused.

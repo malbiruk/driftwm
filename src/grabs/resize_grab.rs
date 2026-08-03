@@ -19,12 +19,12 @@ use smithay::{
 use smithay::input::pointer::CursorImageStatus;
 
 use crate::state::{ClusterMember, ClusterResizeSnapshot, DriftWm, StageWindow, output_state};
-use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
+use driftwm::canvas::{self, CanvasPos, Chrome, canvas_to_screen};
 use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
-/// Smallest a suspended window may be resized to — keeps the chrome usable.
-/// Folded into the stand-in arm's `SizeConstraints` min so the shared apply
-/// head floors it exactly like a client's declared minimum.
+/// Smallest a suspended window's *visible frame* may be resized to — keeps the
+/// chrome usable. Folded into the stand-in arm's `SizeConstraints` min so the
+/// shared apply head floors it exactly like a client's declared minimum.
 pub const MIN_SUSPENDED_SIZE: i32 = 120;
 
 /// Client-declared size constraints captured once at grab start.
@@ -58,9 +58,13 @@ impl SizeConstraints {
     /// Constraints for a suspended stand-in, which has no client to declare
     /// min/max. Its usable-chrome floor ([`MIN_SUSPENDED_SIZE`]) rides in as the
     /// minimum so the shared apply head clamps it exactly like a client minimum.
-    pub fn for_suspended() -> Self {
+    ///
+    /// The floor is a floor on the *visible* stand-in, so it is deflated through
+    /// `chrome` into the body space every other minimum lives in: what it exists
+    /// to keep usable — the bar and its close button — is chrome, not body.
+    pub fn for_suspended(chrome: Chrome) -> Self {
         Self {
-            min: Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE)),
+            min: chrome.content_size(Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE))),
             max: Size::from((0, 0)),
         }
     }

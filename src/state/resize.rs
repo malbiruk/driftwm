@@ -18,6 +18,7 @@ use smithay::wayland::shell::xdg::XdgToplevelSurfaceData;
 
 use super::{DriftWm, StageWindow};
 use crate::grabs::{ResizeState, SizeConstraints};
+use driftwm::canvas::Chrome;
 use driftwm::config::Direction;
 
 /// A size a non-interactive resize asked a client for, and the committed sizes
@@ -112,11 +113,12 @@ pub(crate) fn owes_a_configured_size(window: &Window) -> bool {
 
 /// What a non-interactive resize clamps a request to: the client's declared
 /// min/max, or the usable-chrome floor for a stand-in that has no client to
-/// declare any.
-pub(crate) fn resize_constraints(element: &StageWindow) -> SizeConstraints {
+/// declare any. Content-space either way — the stand-in's floor is stated
+/// against its visible frame, so `chrome` deflates it back down here.
+pub(crate) fn resize_constraints(element: &StageWindow, chrome: Chrome) -> SizeConstraints {
     match element {
         StageWindow::Client(window) => SizeConstraints::for_window(window),
-        StageWindow::Suspended(_) => SizeConstraints::for_suspended(),
+        StageWindow::Suspended(_) => SizeConstraints::for_suspended(chrome),
     }
 }
 
@@ -375,7 +377,7 @@ impl DriftWm {
         let (ux, uy) = dir.to_unit_vec();
         let dw = (ux.abs() * step as f64).round() as i32;
         let dh = (uy.abs() * step as f64).round() as i32;
-        let clamped = resize_constraints(&element)
+        let clamped = resize_constraints(&element, self.element_chrome(&element))
             .clamp(current.w.saturating_add(dw), current.h.saturating_add(dh));
         // An axis the step leaves alone keeps its size, clamp included: a client
         // is free to declare a `max_size` its current size already violates

@@ -1,6 +1,7 @@
 //! Exact configure sequences as the client sees them — the desync class where
 //! a toolkit acks one configure while the compositor already believes another.
 
+use driftwm::canvas::Chrome;
 use driftwm::config::{Action, Config, DecorationMode, Direction};
 use smithay::input::pointer::MotionEvent;
 use smithay::reexports::wayland_server::Resource;
@@ -2527,15 +2528,15 @@ fn owe_a_fill_exit_recenter(
     key
 }
 
-/// The canvas location a window-rule point maps to for a window of `size` —
-/// what the settle must land on. Derived straight from the rule convention
-/// rather than through the center formula the settle itself runs, so a bar term
-/// dropped or flipped on the way into `target_center` shows up here as a
-/// half-bar offset instead of cancelling out. Exact for the even sizes used
-/// below; an odd one would part company with the settle by the truncation
-/// `map_window_to_rule_point` documents.
-fn rule_point_loc(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, Logical> {
-    driftwm::canvas::rule_to_internal(x, y, size)
+/// The canvas location a window-rule point maps to for a window of content
+/// `size` wearing `chrome` — what the settle must land on. Derived straight from
+/// the rule convention rather than through the center formula the settle itself
+/// runs, so a bar term dropped or flipped on the way into `target_center` shows
+/// up here as a half-bar offset instead of cancelling out. Exact for the even
+/// sizes used below; an odd one would part company with the settle by the
+/// truncation `map_window_to_rule_point` documents.
+fn rule_point_loc(x: i32, y: i32, size: Size<i32, Logical>, chrome: Chrome) -> Point<i32, Logical> {
+    driftwm::canvas::rule_to_content(x, y, size, chrome)
 }
 
 /// Ack the outstanding restore configure and then commit a buffer at a size of
@@ -2589,7 +2590,12 @@ fn ipc_move_mid_fullscreen_exit_settle_lands_where_asked() {
     assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
     assert_eq!(
         f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((400, 300)))),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((400, 300)),
+            Chrome::NONE
+        )),
         "the provisional placement already uses the size the exit configured, \
          not the fullscreen buffer the client is still committing"
     );
@@ -2609,7 +2615,12 @@ fn ipc_move_mid_fullscreen_exit_settle_lands_where_asked() {
     );
     assert_eq!(
         f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((700, 500)))),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
         "the window landed on the point msg move asked for"
     );
 }
@@ -2652,13 +2663,20 @@ fn ipc_move_after_a_client_chosen_settle_uses_committed_size() {
 
     assert_eq!(
         f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((700, 500)))),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
         "the move centered the window on the size it actually committed"
     );
 }
 
-/// The same mid-settle placement with an SSD title bar: the re-aimed center has
-/// to carry the bar offset, or the settle lands the window half a bar off.
+/// The same mid-settle placement with an SSD title bar. A rule point names the
+/// *visual frame's* center, so the settle has to land the content half a bar
+/// below it — carry the bar into the re-aimed center or drop it from the
+/// location, and the window sits half a bar off.
 #[test]
 fn ipc_move_mid_settle_lands_where_asked_with_ssd() {
     let mut f = Fixture::new();
@@ -2686,10 +2704,20 @@ fn ipc_move_mid_settle_lands_where_asked_with_ssd() {
     assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
     settle_at(&mut f, id, &a_surface, (700, 500));
 
+    let chrome = f.state().window_chrome(&a);
     assert_eq!(
-        f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((700, 500)))),
-        "the window landed on the point msg move asked for, bar included"
+        chrome.bar, bar,
+        "the settle used the same bar this test read"
+    );
+    let expected = rule_point_loc(1000, -500, Size::from((700, 500)), chrome);
+    let landed = f.state().stage.position_of(&a).unwrap();
+    assert_eq!(landed.x, expected.x);
+    // The frame is 525 tall here, so its center sits on a half pixel and the
+    // settle's truncation can land one above the direct map — the residual
+    // `map_window_to_rule_point` documents. Dropping the bar would be twelve.
+    assert!(
+        (landed.y - expected.y).abs() <= 1,
+        "landed {landed:?}, the direct map says {expected:?}"
     );
 }
 
@@ -2727,7 +2755,12 @@ fn move_to_bookmark_mid_fit_exit_settle_lands_where_asked() {
     );
     assert_eq!(
         f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((700, 500)))),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
         "the window landed on the bookmark it was moved to"
     );
 }
@@ -2765,7 +2798,12 @@ fn move_to_bookmark_mid_fill_exit_settle_lands_where_asked() {
     );
     assert_eq!(
         f.state().stage.position_of(&a),
-        Some(rule_point_loc(1000, -500, Size::from((700, 500)))),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
         "the window landed on the bookmark it was moved to"
     );
 }

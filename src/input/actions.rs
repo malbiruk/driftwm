@@ -399,7 +399,8 @@ impl DriftWm {
                         // No live client — move the focused suspended stand-in in
                         // place, the durable path `msg move` uses for a stand-in.
                         let element = StageWindow::Suspended(s.clone());
-                        let loc = canvas::rule_to_internal(rx, ry, s.size.get());
+                        let loc =
+                            canvas::rule_to_content(rx, ry, s.size.get(), self.suspended_chrome());
                         self.stage.set_position(&element, loc);
                         self.session_store_mark_dirty();
                     }

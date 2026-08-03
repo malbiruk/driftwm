@@ -221,22 +221,7 @@ pub(super) fn build_canvas_layer_elements(
             (cl.surface.wl_surface().id(), inner_logical, physical_loc)
         };
 
-        // Instance index = number of same-namespace canvas layers before this
-        // one in the Vec. Matches the `existing_count` computed in
-        // `new_layer_surface`, so creation-time and render-time rule lookups
-        // resolve to the same positioned rule.
-        let instance_idx = {
-            let ns = state.canvas_layers[idx].namespace.as_str();
-            state.canvas_layers[..idx]
-                .iter()
-                .filter(|cl| cl.namespace.as_str() == ns)
-                .count()
-        };
-        let applied = state.config.resolve_window_rules_for_layer_instance(
-            state.canvas_layers[idx].namespace.as_str(),
-            "",
-            instance_idx,
-        );
+        let applied = state.canvas_layer_applied_rule(idx);
         let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
 
         let wl_surface = state.canvas_layers[idx].surface.wl_surface().clone();

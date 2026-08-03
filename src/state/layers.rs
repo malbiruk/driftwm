@@ -73,6 +73,36 @@ impl DriftWm {
             .collect()
     }
 
+    /// The window rule applying to the canvas layer at `idx`. Rules resolve per
+    /// *instance* — the count of same-namespace canvas layers ahead of this one
+    /// in the Vec, the same `existing_count` `new_layer_surface` computed — so
+    /// creation-time, render-time and inventory lookups all land on the same
+    /// positioned rule.
+    pub fn canvas_layer_applied_rule(
+        &self,
+        idx: usize,
+    ) -> Option<driftwm::config::AppliedWindowRule> {
+        let cl = self.canvas_layers.get(idx)?;
+        let instance_idx = self.canvas_layers[..idx]
+            .iter()
+            .filter(|other| other.namespace == cl.namespace)
+            .count();
+        self.config
+            .resolve_window_rules_for_layer_instance(&cl.namespace, "", instance_idx)
+    }
+
+    /// The chrome a canvas layer wears. A layer never gets a title bar and does
+    /// not inherit `[decorations]`, so this is the per-rule opt-in border alone.
+    pub fn canvas_layer_chrome(&self, idx: usize) -> driftwm::canvas::Chrome {
+        driftwm::canvas::Chrome {
+            bar: 0,
+            border: self
+                .canvas_layer_applied_rule(idx)
+                .and_then(|r| r.border_width)
+                .unwrap_or(0),
+        }
+    }
+
     /// Indices into `canvas_layers`, topmost first: higher `layer_order`
     /// rules stack above; ties keep the existing first-mapped-on-top order.
     /// Shared by canvas-layer rendering and hit-testing, like
@@ -92,14 +122,9 @@ impl DriftWm {
             .canvas_layers
             .iter()
             .enumerate()
-            .map(|(idx, cl)| {
+            .map(|(idx, _)| {
                 let order = if has_orders {
-                    let instance_idx = self.canvas_layers[..idx]
-                        .iter()
-                        .filter(|other| other.namespace == cl.namespace)
-                        .count();
-                    self.config
-                        .resolve_window_rules_for_layer_instance(&cl.namespace, "", instance_idx)
+                    self.canvas_layer_applied_rule(idx)
                         .and_then(|r| r.layer_order)
                         .unwrap_or(0)
                 } else {

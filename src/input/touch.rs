@@ -413,7 +413,7 @@ impl DriftWm {
                     initial_window_location,
                     initial_window_size,
                     output,
-                    crate::grabs::SizeConstraints::for_suspended(),
+                    crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome()),
                     slots,
                     cluster_resize,
                     None,

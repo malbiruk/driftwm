@@ -12,6 +12,7 @@ use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Size};
 use smithay::wayland::seat::WaylandFocus;
 
+use driftwm::canvas::Chrome;
 use driftwm::window_ext::WindowExt;
 
 use super::{DriftWm, StageWindow};
@@ -41,6 +42,73 @@ impl DriftWm {
         let mode =
             driftwm::config::effective_decoration_mode(None, &self.config.decorations.default_mode);
         driftwm::config::effective_border_width(None, mode, &self.config.decorations)
+    }
+
+    /// The chrome any stage element wears. Every user-facing size and position
+    /// is expressed against this frame rather than the content rect the
+    /// compositor stores — see [`driftwm::canvas::Chrome`].
+    ///
+    /// The authority is what the render path draws: the decorations map for the
+    /// bar (not the decoration mode a rule or a negotiation *implies* — a client
+    /// that calls `set_mode` after its first sized commit moves the map without
+    /// moving either), and nothing at all while fullscreen, where the render path
+    /// suppresses bar, border and shadow alike.
+    pub fn element_chrome(&self, w: &StageWindow) -> Chrome {
+        if self.is_window_fullscreen(w) {
+            return Chrome::NONE;
+        }
+        Chrome {
+            bar: self.window_ssd_bar(w),
+            border: self.element_border_width(w),
+        }
+    }
+
+    /// The chrome a window is about to wear, for the commit that maps it: its
+    /// decoration entry does not exist yet, so the bar is predicted from the
+    /// decoration mode this same commit resolved. `effective == Server` is the
+    /// exact condition that creates the entry further down, so the prediction
+    /// and the entry agree by construction.
+    ///
+    /// A client that changes its decoration mode in a *later* request moves the
+    /// entry without moving this — and reflows visibly when it does, as it
+    /// already does today. The border needs no prediction: it resolves from the
+    /// applied rule and config alone, which is what every later frame reads.
+    pub(crate) fn mapping_chrome(
+        &self,
+        surface: &WlSurface,
+        effective: &driftwm::config::DecorationMode,
+    ) -> Chrome {
+        Chrome {
+            bar: if matches!(effective, driftwm::config::DecorationMode::Server) {
+                self.config.decorations.title_bar_height
+            } else {
+                0
+            },
+            border: self.window_border_width(surface),
+        }
+    }
+
+    /// [`Self::element_chrome`] for a suspended stand-in, which needs no element
+    /// to resolve against: every stand-in draws the same bar and has no surface
+    /// to carry a per-rule border override.
+    pub fn suspended_chrome(&self) -> Chrome {
+        Chrome {
+            bar: self.config.decorations.title_bar_height,
+            border: self.default_border_width(),
+        }
+    }
+
+    /// [`Self::element_chrome`] for a live client window.
+    pub fn window_chrome(&self, window: &Window) -> Chrome {
+        if self.is_window_fullscreen(window) {
+            return Chrome::NONE;
+        }
+        Chrome {
+            bar: self.window_ssd_bar(window),
+            border: window
+                .wl_surface()
+                .map_or(0, |s| self.window_border_width(&s)),
+        }
     }
 
     /// Border width for any stage element: the per-rule width for a client, the
@@ -89,15 +157,6 @@ pub(crate) fn visual_frame_center(
         loc.x as f64 + size.w as f64 / 2.0,
         loc.y as f64 - bar + (size.h as f64 + bar) / 2.0,
     ))
-}
-
-/// The visual center a window-rule point `(x, y)` names, in internal canvas
-/// coords: the rule convention's Y-up flip, plus the half-bar by which a frame's
-/// center sits above its content's. `rule_to_internal` maps the same point to a
-/// content top-left, and feeding this center to [`frame_loc_for_center`] with
-/// the same size and bar lands there too.
-pub(crate) fn rule_point_to_visual_center(x: i32, y: i32, bar: i32) -> Point<f64, Logical> {
-    Point::from((x as f64, -y as f64 - bar as f64 / 2.0))
 }
 
 /// The size a window will have once it acks everything already configured: the

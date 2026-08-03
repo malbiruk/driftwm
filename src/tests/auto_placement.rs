@@ -44,11 +44,11 @@ fn auto_pos(
 ) -> Option<(i32, i32)> {
     let surface = super::server_surface(placing);
     f.state().auto_anchor_snapshot.insert(surface, snapshot);
-    let bar = f
+    let chrome = f
         .state()
-        .window_ssd_bar(&StageWindow::Client(placing.clone()));
+        .element_chrome(&StageWindow::Client(placing.clone()));
     f.state()
-        .auto_placement_pos(placing, Size::from((200, 200)), bar)
+        .auto_placement_pos(placing, Size::from((200, 200)), chrome)
 }
 
 /// Seat `placing` at `pos` and report whether it lands docked gap-adjacent to
