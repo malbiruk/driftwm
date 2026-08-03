@@ -7,7 +7,7 @@ use smithay::{
 use crate::state::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
 use crate::state::{DriftWm, HomeReturn, StageWindow};
 use driftwm::canvas::{self};
-use driftwm::config::{Action, LayoutSwitch, Modifiers};
+use driftwm::config::{Action, LayoutSwitch, Modifiers, TouchpadState};
 use driftwm::window_ext::WindowExt;
 
 /// Use the focused window as the cone-search origin only when it's fully
@@ -658,7 +658,7 @@ impl DriftWm {
                     }
                 }
             }
-            Action::ToggleTouchpad => self.toggle_touchpad(),
+            Action::SetTouchpad(state) => self.set_touchpad(state),
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");
                 self.loop_signal.stop();
@@ -792,33 +792,40 @@ impl DriftWm {
         self.refresh_pointer_focus();
     }
 
-    /// Toggle the touchpad's libinput send-events mode between enabled and
-    /// disabled, on every connected touchpad. The disabled state survives a
+    /// Set every connected touchpad's libinput send-events mode — enabled,
+    /// disabled, or toggled from its current state. The set state survives a
     /// config reload — hotplug/reload configuration (`configure_libinput_device`)
     /// never touches send-events mode.
-    fn toggle_touchpad(&mut self) {
+    fn set_touchpad(&mut self, state: &TouchpadState) {
         let mut found = false;
         for device in &self.input_devices {
             if device.config_tap_finger_count() == 0 {
                 continue;
             }
             found = true;
-            // Only a true DISABLED state toggles back on. DISABLED_ON_EXTERNAL_MOUSE
-            // reads as "not disabled", so the press goes fully off from there too.
-            let target = if device
-                .config_send_events_mode()
-                .contains(smithay::reexports::input::SendEventsMode::DISABLED)
-            {
-                smithay::reexports::input::SendEventsMode::ENABLED
-            } else {
-                smithay::reexports::input::SendEventsMode::DISABLED
+            let target = match state {
+                TouchpadState::On => smithay::reexports::input::SendEventsMode::ENABLED,
+                TouchpadState::Off => smithay::reexports::input::SendEventsMode::DISABLED,
+                TouchpadState::Toggle => {
+                    // Only a true DISABLED state toggles back on.
+                    // DISABLED_ON_EXTERNAL_MOUSE reads as "not disabled", so a
+                    // toggle press goes fully off from there too.
+                    if device
+                        .config_send_events_mode()
+                        .contains(smithay::reexports::input::SendEventsMode::DISABLED)
+                    {
+                        smithay::reexports::input::SendEventsMode::ENABLED
+                    } else {
+                        smithay::reexports::input::SendEventsMode::DISABLED
+                    }
+                }
             };
             if let Err(e) = device.config_send_events_set_mode(target) {
                 tracing::warn!("Failed to set send_events mode on {}: {e:?}", device.name());
             }
         }
         if !found {
-            tracing::info!("toggle-touchpad: no touchpad connected");
+            tracing::info!("toggle-touchpad: no touchpad connected (wanted {state:?})");
         }
     }
 

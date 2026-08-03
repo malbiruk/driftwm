@@ -191,7 +191,19 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "toggle-pin-to-screen" => Ok(Action::TogglePinToScreen),
         "reload-config" => Ok(Action::ReloadConfig),
         "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
-        "toggle-touchpad" => Ok(Action::ToggleTouchpad),
+        "toggle-touchpad" => {
+            let state = match arg {
+                None => TouchpadState::Toggle,
+                Some(a) if a.eq_ignore_ascii_case("on") => TouchpadState::On,
+                Some(a) if a.eq_ignore_ascii_case("off") => TouchpadState::Off,
+                Some(other) => {
+                    return Err(format!(
+                        "toggle-touchpad: expected on, off, or no argument, got '{other}'"
+                    ));
+                }
+            };
+            Ok(Action::SetTouchpad(state))
+        }
         "quit" => Ok(Action::Quit),
         other => Err(format!("unknown action: {other}")),
     }
@@ -602,7 +614,7 @@ mod tests {
             Action::SwitchLayout(_) => "switch-layout",
             Action::ReloadConfig => "reload-config",
             Action::ToggleCursorPan => "toggle-cursor-pan",
-            Action::ToggleTouchpad => "toggle-touchpad",
+            Action::SetTouchpad(_) => "toggle-touchpad",
             Action::Quit => "quit",
         }
     }
@@ -644,6 +656,27 @@ mod tests {
                 "sample {sample:?} parsed to a variant whose name is not {name:?}"
             );
         }
+    }
+
+    #[test]
+    fn toggle_touchpad_parses_with_optional_state() {
+        assert_eq!(
+            parse_action("toggle-touchpad"),
+            Ok(Action::SetTouchpad(TouchpadState::Toggle))
+        );
+        assert_eq!(
+            parse_action("toggle-touchpad on"),
+            Ok(Action::SetTouchpad(TouchpadState::On))
+        );
+        assert_eq!(
+            parse_action("toggle-touchpad OFF"),
+            Ok(Action::SetTouchpad(TouchpadState::Off))
+        );
+        assert_eq!(
+            parse_action(" toggle-touchpad off "),
+            Ok(Action::SetTouchpad(TouchpadState::Off))
+        );
+        assert!(parse_action("toggle-touchpad maybe").is_err());
     }
 
     #[test]

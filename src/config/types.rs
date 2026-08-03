@@ -78,8 +78,19 @@ pub enum Action {
     SwitchLayout(LayoutSwitch),
     ReloadConfig,
     ToggleCursorPan,
-    ToggleTouchpad,
+    SetTouchpad(TouchpadState),
     Quit,
+}
+
+/// Desired touchpad send-events state, as set by `toggle-touchpad`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TouchpadState {
+    /// Flip between enabled and disabled.
+    Toggle,
+    /// Force the touchpad enabled.
+    On,
+    /// Force the touchpad disabled.
+    Off,
 }
 
 impl Action {
@@ -106,7 +117,7 @@ impl Action {
                 | Action::ReloadConfig
                 | Action::SwitchLayout(_)
                 | Action::ToggleCursorPan
-                | Action::ToggleTouchpad
+                | Action::SetTouchpad(_)
                 | Action::SendToOutput(_)
         )
     }
@@ -1253,7 +1264,7 @@ mod tests {
         assert!(Action::ReloadConfig.runs_during_fullscreen());
         assert!(Action::SwitchLayout(LayoutSwitch::Next).runs_during_fullscreen());
         assert!(Action::ToggleCursorPan.runs_during_fullscreen());
-        assert!(Action::ToggleTouchpad.runs_during_fullscreen());
+        assert!(Action::SetTouchpad(TouchpadState::Toggle).runs_during_fullscreen());
         assert!(Action::SendToOutput(Direction::Right).runs_during_fullscreen());
         assert!(!Action::CloseWindow.runs_during_fullscreen());
         assert!(!Action::ZoomIn.runs_during_fullscreen());
