@@ -21,7 +21,7 @@ use smithay::reexports::calloop::timer::{TimeoutAction, Timer};
 use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::seat::WaylandFocus;
 
-use driftwm::canvas::{ScreenPos, internal_to_rule, rule_to_internal, screen_to_canvas};
+use driftwm::canvas::{Chrome, ScreenPos, content_to_rule, rule_to_internal, screen_to_canvas};
 use driftwm::desktop_entry::AppIdentity;
 use driftwm::session::{self, Origin, SessionEntry, SessionEnvelope, SessionOutput};
 use driftwm::window_ext::WindowExt;
@@ -114,10 +114,20 @@ impl DriftWm {
         // materialized nor carried forward, so a hand-edit or a flipped byte
         // that would panic `Size::from` (debug) or overflow `rule_to_internal`
         // self-heals on the next write instead of crashing every startup.
+        // Validated before the migration below, since that is the convention the
+        // numbers are actually in, and the conversion only adds the chrome.
+        let chrome = self.suspended_chrome();
         let entries: Vec<SessionEntry> = envelope
             .entries
             .into_iter()
             .filter(valid_entry_geometry)
+            .map(|entry| {
+                if envelope.version < session::VERSION {
+                    body_entry_to_frame(entry, chrome)
+                } else {
+                    entry
+                }
+            })
             .collect();
         let (materialize, carried) = session::partition_for_restore(entries, |e| {
             self.resolve_restore_windows_for_record(&e.app_id)
@@ -151,8 +161,18 @@ impl DriftWm {
     /// reused across restarts, and nothing in this pass depends on it.
     /// `map_window` raises, so materializing bottom→top reproduces the z-order.
     fn materialize_entry(&mut self, entry: SessionEntry) -> SuspendedId {
-        let size = Size::from((entry.size[0], entry.size[1]));
-        let loc = rule_to_internal(entry.position[0], entry.position[1], size);
+        // The record is a visual frame; the stand-in stores the body inside it.
+        // Positioned from the file's own frame size rather than by re-inflating
+        // the body, so a frame smaller than its chrome (which `content_size`
+        // floors) still lands where the record says.
+        let chrome = self.suspended_chrome();
+        let frame = Size::from((entry.size[0], entry.size[1]));
+        let size = chrome.content_size(frame);
+        let loc = chrome.content_loc(rule_to_internal(
+            entry.position[0],
+            entry.position[1],
+            frame,
+        ));
         let sid = SuspendedId(self.next_suspended_id);
         self.next_suspended_id += 1;
         let identity = AppIdentity {
@@ -327,7 +347,7 @@ impl DriftWm {
             let has_focus = focused.as_ref() == Some(window);
             if let Some(s) = window.suspended() {
                 let loc = self.stage.position_of(window).unwrap_or_default();
-                let mut entry = suspended_entry(s, loc);
+                let mut entry = suspended_entry(s, loc, self.suspended_chrome());
                 // `pending_focus` is `None` whenever anything holds focus, so
                 // the two sources can never flag two entries.
                 entry.focused = has_focus || pending_focus == Some(s.id);
@@ -431,7 +451,10 @@ impl DriftWm {
         let csd = client.wl_surface().is_none_or(|s| self.surface_is_csd(&s));
         let (loc, size) = self.live_window_rect(&client);
         let body = self.standin_body_rect(Rectangle::new(loc, size), csd);
-        let (x, y) = internal_to_rule(body.loc, body.size);
+        // Recorded as the frame the stand-in will wear, like a live suspend's.
+        let chrome = self.suspended_chrome();
+        let frame = chrome.frame_size(body.size);
+        let (x, y) = content_to_rule(body.loc, body.size, chrome);
         let id = *next_id;
         *next_id += 1;
         Some(SessionEntry {
@@ -440,7 +463,7 @@ impl DriftWm {
             desktop_id: identity.desktop_id,
             display_name: identity.display_name,
             position: [x, y],
-            size: [body.size.w, body.size.h],
+            size: [frame.w, frame.h],
             origin: Origin::Quit,
             csd,
             focused: false,
@@ -499,17 +522,18 @@ impl DriftWm {
     }
 }
 
-/// A durable entry for a suspended window at canvas position `loc`.
-fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>) -> SessionEntry {
-    let size = s.size.get();
-    let (x, y) = internal_to_rule(loc, size);
+/// A durable entry for a suspended window at canvas position `loc`, recorded as
+/// the visual frame it wears rather than the body it stores.
+fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>, chrome: Chrome) -> SessionEntry {
+    let frame = chrome.frame_size(s.size.get());
+    let (x, y) = content_to_rule(loc, s.size.get(), chrome);
     SessionEntry {
         id: s.id.0,
         app_id: s.identity.app_id.clone(),
         desktop_id: s.identity.desktop_id.clone(),
         display_name: s.identity.display_name.clone(),
         position: [x, y],
-        size: [size.w, size.h],
+        size: [frame.w, frame.h],
         origin: s.origin,
         csd: s.csd,
         focused: false,
@@ -530,6 +554,24 @@ fn now_unix() -> u64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0)
+}
+
+/// Convert a schema-v1 entry, whose `position`/`size` describe the stand-in's
+/// bare body, into the v2 convention where both describe its visible frame.
+///
+/// Uniform, with no per-entry branch: every stand-in wears the same bar and the
+/// same default border, whatever its origin. The chrome comes from the config
+/// this boot loaded — a `title_bar_height` changed since the file was written
+/// shifts a restored stand-in by half the difference, which is close enough for
+/// a one-time upgrade.
+fn body_entry_to_frame(mut entry: SessionEntry, chrome: Chrome) -> SessionEntry {
+    let body = Size::from((entry.size[0], entry.size[1]));
+    let loc = rule_to_internal(entry.position[0], entry.position[1], body);
+    let frame = chrome.frame_size(body);
+    let (x, y) = content_to_rule(loc, body, chrome);
+    entry.position = [x, y];
+    entry.size = [frame.w, frame.h];
+    entry
 }
 
 /// Whether a saved window's geometry is safe to feed the stage: size components
