@@ -141,6 +141,51 @@ fn suspended_resize_floors_at_min_size() {
     f.state().dismiss_suspended(sid);
 }
 
+/// `MIN_SUSPENDED_SIZE` is a floor on the stand-in's *visible* frame, not its
+/// stored body: with a border configured, an interactive drag (not just the
+/// non-interactive `msg resize` in `resize_ipc.rs`) floors the width further
+/// below 120, since the border eats into the body on top of the bar.
+#[test]
+fn suspended_resize_floors_at_min_size_with_border() {
+    let mut f = Fixture::with_config(
+        Config::from_toml(
+            r#"
+        [decorations]
+        default_mode = "server"
+        border_width = 4
+        [mouse.anywhere]
+        "super+left" = "resize-window"
+    "#,
+        )
+        .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+
+    // Right third of the body → a right-edge resize; drag the edge far left.
+    start_suspended_resize(&mut f, pt(700.0, 450.0));
+    motion(&mut f, pt(400.0, 450.0));
+
+    let s = f.state().find_suspended(sid).unwrap();
+    assert_eq!(
+        s.size.get(),
+        // 120 minus the 4px border on the dragged axis (height is untouched
+        // by a pure right-edge drag): 120 - 2×4 = 112.
+        Size::from((112, 300)),
+        "a shrink past the floor clamps to the border-deflated floor, not the borderless 120"
+    );
+
+    release(&mut f);
+    f.state().dismiss_suspended(sid);
+}
+
 /// A top-left corner drag keeps the opposite (bottom-right) corner fixed: the
 /// position shifts by exactly the size change on each dragged edge.
 #[test]

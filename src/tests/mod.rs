@@ -28,6 +28,7 @@ mod configure_sequences;
 mod cycle_windows;
 mod ext_workspace;
 mod focus_timing;
+mod frame_space;
 mod fullscreen_handoff;
 mod gesture_move;
 mod gesture_resize;

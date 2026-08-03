@@ -825,6 +825,120 @@ fn out_of_range_entry_is_dropped_and_not_carried() {
     }
 }
 
+/// A schema-v1 file's `position`/`size` describe the stand-in's bare body (no
+/// chrome). Loading it must convert those numbers to the v2 frame convention
+/// and then deflate them back to the same body, so a v1 record materializes
+/// at exactly the rect it always described — now wearing the chrome every
+/// stand-in draws around it.
+#[test]
+fn v1_session_entry_converts_body_to_frame_on_load() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"saved_at":0,"outputs":{},"entries":[
+            {"id":1,"app_id":"legacy","desktop_id":"legacy.desktop","display_name":"Legacy",
+             "position":[100,200],"size":[400,300],"origin":"explicit"}]}"#,
+    )
+    .unwrap();
+
+    let mut f =
+        Fixture::with_config(Config::from_toml("[decorations]\nborder_width = 4\n").unwrap());
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    let (s, pos) = (restored[0].0.clone(), restored[0].1);
+
+    // The v1 numbers describe the body directly: content top-left =
+    // rule_to_internal(100, 200, (400, 300)) = (100 - 200, -200 - 150) =
+    // (-100, -350). The migration inflates that by the 25px bar and 4px
+    // border into a frame, and `materialize_entry` deflates the frame back
+    // down — an exact round trip, so the stored body and its position land
+    // exactly where the v1 file always described them. Skipping the
+    // migration would instead shrink the body to 392×267 at (-96, -321) (the
+    // frame numbers read as if they were already the body).
+    assert_eq!(
+        s.size.get(),
+        Size::from((400, 300)),
+        "the stand-in's body is the v1 size verbatim, not shrunk by the chrome"
+    );
+    assert_eq!(pos, Point::from((-100, -350)));
+
+    f.state().dismiss_suspended(s.id);
+}
+
+/// The same visible frame as the v1 file above, but already in the v2
+/// convention: no migration runs (`envelope.version == session::VERSION`), so
+/// landing on the identical body and position proves those really are the
+/// current on-disk numbers, not an artifact of the v1 conversion.
+#[test]
+fn v2_session_entry_round_trips_unchanged() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        bookmarks: BTreeMap::new(),
+        saved_at: 0,
+        entries: vec![SessionEntry {
+            id: 1,
+            app_id: "current".to_string(),
+            desktop_id: "current.desktop".to_string(),
+            display_name: "Current".to_string(),
+            position: [100, 213],
+            size: [408, 333],
+            origin: Origin::Explicit,
+            csd: false,
+            focused: false,
+        }],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f =
+        Fixture::with_config(Config::from_toml("[decorations]\nborder_width = 4\n").unwrap());
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    let (s, pos) = (restored[0].0.clone(), restored[0].1);
+    assert_eq!(s.size.get(), Size::from((400, 300)));
+    assert_eq!(pos, Point::from((-100, -350)));
+
+    f.state().dismiss_suspended(s.id);
+}
+
+/// A version this build doesn't recognize (too new, or garbled) is
+/// quarantined at the `DriftWm::load_session` boundary, not just at the
+/// lower-level `session::read` the lib-crate unit tests already cover:
+/// nothing materializes, and the bad file is renamed aside rather than
+/// silently misread.
+#[test]
+fn unknown_session_version_is_quarantined_on_load() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    std::fs::write(
+        &path,
+        r#"{"version":999,"saved_at":0,"outputs":{},"entries":[]}"#,
+    )
+    .unwrap();
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    assert_eq!(suspended_in_order(&mut f).len(), 0);
+    assert!(
+        !path.exists(),
+        "a future-version file is quarantined, not silently misread"
+    );
+}
+
 /// A `zoom: 0.0` durable seed (hand-edit / corruption) is filtered at load, so
 /// the output connects with its default camera/zoom — no inf/NaN viewport — and
 /// the next serialize writes the live sane value, self-healing across restarts.

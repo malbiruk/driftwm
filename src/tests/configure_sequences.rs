@@ -1770,6 +1770,44 @@ fn fill_on_ssd_window_round_trips_bar_and_border() {
     assert!(f.state().stage.is_fill(&window));
 }
 
+/// Before border subtraction was added to the fit target, a fitted window's
+/// visual frame overflowed the usable area by `2 × border_width` per axis —
+/// the fill equivalent above already deflated by the border, but fit did not.
+#[test]
+fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "fit", (800, 600));
+    let window = window_by_app_id(&mut f, "fit").unwrap();
+    assert_eq!(f.state().window_ssd_bar(&window), 25);
+
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    f.state().fit_window(&window);
+    f.double_roundtrip(id);
+
+    // Usable area is the full 1920×1080 output; inset by the 12px snap gap
+    // gives an 1896×1056 frame budget. The content inside it gives up the
+    // whole chrome, borders included (25px bar + 5px border on every side):
+    // 1896 - 2×5 = 1886 wide, 1056 - 25 - 2×5 = 1021 tall — the same numbers
+    // `fill_on_ssd_window_round_trips_bar_and_border` lands on, since a lone
+    // window's fit and fill both target the whole usable area.
+    let configures = f.client(id).window(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 1886 × 1021"),
+        "fit must deflate the target by border and bar, got:\n{configures}"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((-143, 89))),
+        "fit loc must offset the content by border and bar"
+    );
+}
+
 /// Fill must record its rect as the window's settled footprint. Leaving the
 /// pre-fill rect cached makes every later commit read as "grew past settled" —
 /// a perpetual reflow scan once the fill state is cleared (move-grab start,

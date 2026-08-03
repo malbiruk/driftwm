@@ -676,6 +676,132 @@ fn a_stand_in_resize_does_not_raise_it() {
     f.state().dismiss_suspended(sid);
 }
 
+/// A `set` on an SSD+bordered window configures the client with the frame
+/// deflated by the bar and border, echoes the frame back, and preserves the
+/// window's visual center — the chrome-aware sibling of
+/// `a_set_configures_the_request_and_holds_the_center`.
+#[test]
+fn a_set_speaks_frame_on_an_ssd_bordered_window() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+title_bar_height = 24
+
+[[window_rules]]
+app_id = "term"
+decoration = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "term", (400, 300));
+    let window = window_by_app_id(&mut f, "term").unwrap();
+    assert_eq!(f.state().window_ssd_bar(&window), 24, "precondition: SSD");
+    let center = committed_center(&mut f, &window);
+
+    assert_eq!(
+        resize(&mut f, None, Some((800, 600))),
+        Ok(Response::Size {
+            width: 800,
+            height: 600
+        }),
+        "the echo reports the frame the caller asked for"
+    );
+    // Content is the frame minus the 24px bar and 4px border on every side:
+    // 800 - 2×4 = 792 wide, 600 - 24 - 2×4 = 568 tall. An even bar (rather
+    // than the 25px default) keeps the frame height even too, so the visual
+    // center below lands exactly rather than on the documented half-pixel
+    // residual an odd bar leaves.
+    assert_eq!(last_configured(&mut f, id, &surface), (792, 568));
+
+    adopt_last_configure(&mut f, id, &surface);
+    assert_eq!(
+        committed_center(&mut f, &window),
+        center,
+        "the visual center is preserved across the resize"
+    );
+}
+
+/// The client's declared min/max are content-space; a frame request must
+/// deflate before clamping against them and re-inflate the echo — the
+/// chrome-aware sibling of `a_request_outside_the_clients_limits_is_clamped`.
+#[test]
+fn a_request_outside_the_clients_limits_is_clamped_under_ssd() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "term"
+decoration = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window_with_limits(&mut f, id, "term", (800, 600), (500, 400), (1000, 900));
+
+    // 200×100 deflates to 192×67, below the 500×400 min: clamps there, and
+    // the echo re-inflates it to 508×433 (500+2×4, 400+25+2×4).
+    assert_eq!(
+        resize(&mut f, None, Some((200, 100))),
+        Ok(Response::Size {
+            width: 508,
+            height: 433
+        }),
+    );
+    assert_eq!(last_configured(&mut f, id, &surface), (500, 400));
+
+    // 4000×3000 deflates well past the 1000×900 max: clamps there, echo
+    // re-inflates to 1008×933.
+    assert_eq!(
+        resize(&mut f, None, Some((4000, 3000))),
+        Ok(Response::Size {
+            width: 1008,
+            height: 933
+        }),
+    );
+    assert_eq!(last_configured(&mut f, id, &surface), (1000, 900));
+}
+
+/// The `MIN_SUSPENDED_SIZE` floor is a floor on the stand-in's *visible*
+/// frame: with a border configured, the stored body floors further below 120
+/// than the borderless case (`a_stand_in_resize_clamps_marks_the_store_and_bumps_blur`)
+/// does, since the border eats into the body on top of the bar.
+#[test]
+fn a_stand_in_resize_floor_is_a_frame_with_a_border() {
+    let mut f = Fixture::with_config(config("[decorations]\nborder_width = 4\n"));
+    f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let element = stand_in_element(&mut f, sid);
+    let window_id = f.state().stage.id_of(&element).unwrap().0;
+
+    assert_eq!(
+        resize(&mut f, Some(WindowSelector::Id(window_id)), Some((10, 10))),
+        Ok(Response::Size {
+            width: 120,
+            height: 120
+        }),
+        "the visible floor stays 120 regardless of the border"
+    );
+    assert_eq!(
+        f.state().find_suspended(sid).unwrap().size.get(),
+        // 120 minus the 4px border on both axes, and the 25px bar on height:
+        // 120 - 2×4 = 112, 120 - 25 - 2×4 = 87.
+        Size::from((112, 87)),
+        "the border deflates the stored body further than the borderless floor"
+    );
+
+    f.state().dismiss_suspended(sid);
+}
+
 #[test]
 fn a_stand_in_read_reports_its_own_size() {
     let mut f = Fixture::new();
