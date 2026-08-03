@@ -658,6 +658,7 @@ impl DriftWm {
                     }
                 }
             }
+            Action::ToggleTouchpad => self.toggle_touchpad(),
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");
                 self.loop_signal.stop();
@@ -789,6 +790,36 @@ impl DriftWm {
         }
         // The hit-test path changed (pinned vs canvas); recompute pointer focus.
         self.refresh_pointer_focus();
+    }
+
+    /// Toggle the touchpad's libinput send-events mode between enabled and
+    /// disabled, on every connected touchpad. The disabled state survives a
+    /// config reload — hotplug/reload configuration (`configure_libinput_device`)
+    /// never touches send-events mode.
+    fn toggle_touchpad(&mut self) {
+        let mut found = false;
+        for device in &self.input_devices {
+            if device.config_tap_finger_count() == 0 {
+                continue;
+            }
+            found = true;
+            // Only a true DISABLED state toggles back on. DISABLED_ON_EXTERNAL_MOUSE
+            // reads as "not disabled", so the press goes fully off from there too.
+            let target = if device
+                .config_send_events_mode()
+                .contains(smithay::reexports::input::SendEventsMode::DISABLED)
+            {
+                smithay::reexports::input::SendEventsMode::ENABLED
+            } else {
+                smithay::reexports::input::SendEventsMode::DISABLED
+            };
+            if let Err(e) = device.config_send_events_set_mode(target) {
+                tracing::warn!("Failed to set send_events mode on {}: {e:?}", device.name());
+            }
+        }
+        if !found {
+            tracing::info!("toggle-touchpad: no touchpad connected");
+        }
     }
 
     /// If an overview-return is pending, animate back to it and return true.

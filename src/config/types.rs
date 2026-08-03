@@ -78,6 +78,7 @@ pub enum Action {
     SwitchLayout(LayoutSwitch),
     ReloadConfig,
     ToggleCursorPan,
+    ToggleTouchpad,
     Quit,
 }
 
@@ -105,6 +106,7 @@ impl Action {
                 | Action::ReloadConfig
                 | Action::SwitchLayout(_)
                 | Action::ToggleCursorPan
+                | Action::ToggleTouchpad
                 | Action::SendToOutput(_)
         )
     }
@@ -1251,6 +1253,7 @@ mod tests {
         assert!(Action::ReloadConfig.runs_during_fullscreen());
         assert!(Action::SwitchLayout(LayoutSwitch::Next).runs_during_fullscreen());
         assert!(Action::ToggleCursorPan.runs_during_fullscreen());
+        assert!(Action::ToggleTouchpad.runs_during_fullscreen());
         assert!(Action::SendToOutput(Direction::Right).runs_during_fullscreen());
         assert!(!Action::CloseWindow.runs_during_fullscreen());
         assert!(!Action::ZoomIn.runs_during_fullscreen());
