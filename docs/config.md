@@ -689,8 +689,8 @@ Actions:
 - `close-window` — close the focused window
 - `suspend-window` — close the focused window but leave a suspended window in its place (Enter/click relaunches; needs a .desktop entry); on an already-suspended window, dismisses it
 - `nudge-window <dir>` — move focused window by nudge_step px
-- `grow-window <dir>` — grow the focused window by resize_step px, moving its `<dir>` edge outward while the opposite edge stays put (a diagonal moves both named edges, by resize_step/√2 each); unbound by default
-- `shrink-window <dir>` — the same in reverse: pulls the `<dir>` edge inward, down to the client's declared minimum (1px if it declares none, 120px for a suspended window); unbound by default
+- `grow-window <dir>` — grow focused window by resize_step px, moving its `<dir>` edge outward; the opposite edge stays put
+- `shrink-window <dir>` — shrink focused window by resize_step px, pulling its `<dir>` edge inward; the opposite edge stays put
 - `pan-viewport <dir>` — pan camera by pan_step px
 - `center-window` — center viewport on focused window + reset zoom
 - `focus-center` — focus + center on the window under the pointer + reset zoom
