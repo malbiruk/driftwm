@@ -528,12 +528,8 @@ impl CompositorHandler for DriftWm {
                             chrome.frame_size(geo.size),
                             out_size,
                         );
-                        let screen_pos = crate::state::clamp_pin_frame(
-                            chrome.content_loc(top_left),
-                            geo.size,
-                            out_size,
-                            chrome,
-                        );
+                        let screen_pos =
+                            crate::state::clamp_pin_frame(top_left, geo.size, out_size, chrome);
                         // Seed the Space loc to the canvas point this screen
                         // position currently maps to; the per-frame loc-sync
                         // keeps it correct as the camera moves.

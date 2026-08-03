@@ -63,8 +63,12 @@ impl DriftWm {
         let target_size = output_logical_size(target);
         let chrome = self.element_chrome(window);
         site.output = target.name();
-        site.screen_pos =
-            clamp_pin_frame(site.screen_pos, window.geometry().size, target_size, chrome);
+        site.screen_pos = clamp_pin_frame(
+            chrome.frame_loc(site.screen_pos),
+            window.geometry().size,
+            target_size,
+            chrome,
+        );
         self.stage.set_pin(window, site);
         // Re-anchor the Space loc to the new output now — `sync_pinned_locs`
         // only fires on camera changes, which this rebind doesn't trigger, so
@@ -91,8 +95,12 @@ impl DriftWm {
         for (window, mut site) in orphans {
             let chrome = self.element_chrome(&window);
             site.output = to.name();
-            site.screen_pos =
-                clamp_pin_frame(site.screen_pos, window.geometry().size, to_size, chrome);
+            site.screen_pos = clamp_pin_frame(
+                chrome.frame_loc(site.screen_pos),
+                window.geometry().size,
+                to_size,
+                chrome,
+            );
             self.stage.set_pin(&window, site);
         }
         if moved {
@@ -110,49 +118,50 @@ impl DriftWm {
         for output in self.space.outputs().cloned().collect::<Vec<_>>() {
             // A `fullscreen_return` without a stage entry is a divergence the
             // stage invariants assert against; don't paper over it here.
-            let Some(saved_size) = self
+            let Some((saved_size, window)) = self
                 .stage
                 .fullscreen_on(&output.name())
-                .map(|fs| fs.saved_size)
+                .map(|fs| (fs.saved_size, fs.window.clone()))
             else {
                 continue;
             };
+            // The chrome the window wears once the exit restores the pin — which
+            // is why `element_chrome` is deliberately fullscreen-blind, since the
+            // window has none right now.
+            let chrome = self.element_chrome(&window);
             let mut os = output_state(&output);
             if let Some(ret) = os.fullscreen_return.as_mut()
                 && let Some(site) = ret.pinned.as_mut()
                 && !live.contains(&site.output)
             {
                 site.output = to.name();
-                site.screen_pos.x = site
-                    .screen_pos
-                    .x
-                    .clamp(0, (to_size.w - saved_size.w).max(0));
-                site.screen_pos.y = site
-                    .screen_pos
-                    .y
-                    .clamp(0, (to_size.h - saved_size.h).max(0));
+                site.screen_pos = clamp_pin_frame(
+                    chrome.frame_loc(site.screen_pos),
+                    saved_size,
+                    to_size,
+                    chrome,
+                );
             }
         }
     }
 }
 
-/// Clamp a pin's content top-left so its whole *visual frame* stays on an output
-/// of `output_size` — the same rect a `pinned_to_screen` rule's `position` is
-/// clamped into when the pin is first placed, so a rehome can't push a title bar
-/// off the top edge that the original placement kept on screen.
+/// Clamp a pin's *visual frame* top-left into an output of `output_size`,
+/// returning the content top-left it implies — the form `PinnedSite::screen_pos`
+/// stores. The whole frame stays on screen, so a rehome can't push a title bar
+/// off the top edge that the original placement kept visible.
 ///
-/// An output too small for the frame pins the top-left corner and lets the rest
-/// overflow, matching the placement clamp's `.max(0)`.
+/// An output too small for the frame parks the frame's top-left corner at the
+/// origin and lets the rest overflow, matching the placement clamp's `.max(0)`.
 pub(crate) fn clamp_pin_frame(
-    screen_pos: Point<i32, Logical>,
+    frame_loc: Point<i32, Logical>,
     content_size: Size<i32, Logical>,
     output_size: Size<i32, Logical>,
     chrome: driftwm::canvas::Chrome,
 ) -> Point<i32, Logical> {
     let frame_size = chrome.frame_size(content_size);
-    let frame = chrome.frame_loc(screen_pos);
     chrome.content_loc(Point::from((
-        frame.x.clamp(0, (output_size.w - frame_size.w).max(0)),
-        frame.y.clamp(0, (output_size.h - frame_size.h).max(0)),
+        frame_loc.x.clamp(0, (output_size.w - frame_size.w).max(0)),
+        frame_loc.y.clamp(0, (output_size.h - frame_size.h).max(0)),
     )))
 }

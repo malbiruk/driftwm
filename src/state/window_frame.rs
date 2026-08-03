@@ -2,10 +2,12 @@
 //! conversions between a content top-left and the visual center of the frame
 //! that chrome surrounds.
 //!
-//! [`DriftWm::element_chrome`] is the one resolver; every other accessor here is
-//! a narrower view of it. [`visual_frame_center`] and [`frame_loc_for_center`]
-//! are inverses, shared by navigation, fit, fill, and the fullscreen-exit settle
-//! so the formula cannot drift between them.
+//! [`DriftWm::element_chrome`] resolves what an element actually wears;
+//! `reported_chrome` is it with fullscreen suppressed, and `mapping_chrome` is a
+//! prediction for the commit that maps a window, before its decoration entry
+//! exists. [`visual_frame_center`] and [`frame_loc_for_center`] are inverses,
+//! shared by navigation, fit, fill, and the fullscreen-exit settle so the
+//! formula cannot drift between them.
 
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
@@ -49,9 +51,11 @@ impl DriftWm {
     /// expressed against this frame rather than the content rect the compositor
     /// stores — see [`driftwm::canvas::Chrome`].
     ///
-    /// The authority is the decorations map, not the decoration mode a rule or a
-    /// negotiation *implies*: a client that calls `set_mode` after its first
-    /// sized commit moves the map without moving either.
+    /// The bar's authority is the decorations map rather than the decoration
+    /// mode a rule or a negotiation *implies*, because a client that calls
+    /// `set_mode` after its first sized commit moves the map without moving that.
+    /// The border has no such split: it resolves from the applied rule and
+    /// config, which is what the render path reads too.
     ///
     /// Fullscreen is deliberately **not** suppressed here even though the render
     /// path suppresses it, because most callers want the chrome the window wears
@@ -72,9 +76,9 @@ impl DriftWm {
     /// all while fullscreen, where the compositor suppresses bar, border and
     /// shadow alike, so the window's frame is exactly its content.
     ///
-    /// Only the `move` and `resize` read arms need this — they answer before
-    /// their `is_canvas_window` guards, so they are the only boundary a
-    /// fullscreen window reaches.
+    /// The `move` and `resize` read arms need this: they answer before their
+    /// `is_canvas_window` guards, so a fullscreen window reaches them. Every
+    /// other boundary either rejects one or never sees one.
     pub fn reported_chrome<W: WaylandFocus + WindowExt>(&self, w: &W) -> Chrome
     where
         StageWindow: PartialEq<W>,
