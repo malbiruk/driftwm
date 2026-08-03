@@ -75,12 +75,7 @@ impl DriftWm {
         // with nothing to grow into.
         let cur_size = super::configured_window_size(window);
         let cur_loc = self.stage.position_of(window)?;
-        let current = SnapRect {
-            x_low: cur_loc.x as f64 - bw as f64,
-            x_high: cur_loc.x as f64 + cur_size.w as f64 + bw as f64,
-            y_low: cur_loc.y as f64 - bar as f64 - bw as f64,
-            y_high: cur_loc.y as f64 + cur_size.h as f64 + bw as f64,
-        };
+        let current = super::fit::snap_rect_at(cur_loc, cur_size, bar, bw);
         let inflate = |v: i32, extra: i32| -> f64 { if v > 0 { (v + extra) as f64 } else { 0.0 } };
         let constraints = SizeConstraints::for_window(window);
         let min_size = (

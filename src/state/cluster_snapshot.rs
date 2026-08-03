@@ -407,16 +407,13 @@ impl DriftWm {
                     .map(|(_, r)| r)
             }
             StageWindow::Suspended(s) => {
-                let loc = self.stage.position_of(w)?;
-                let size = s.size.get();
-                let bar = self.window_ssd_bar(w) as f64;
-                let bw = self.default_border_width() as f64;
-                Some(driftwm::layout::snap::SnapRect {
-                    x_low: loc.x as f64 - bw,
-                    x_high: loc.x as f64 + size.w as f64 + bw,
-                    y_low: loc.y as f64 - bar - bw,
-                    y_high: loc.y as f64 + size.h as f64 + bw,
-                })
+                let chrome = self.suspended_chrome();
+                Some(super::fit::snap_rect_at(
+                    self.stage.position_of(w)?,
+                    s.size.get(),
+                    chrome.bar,
+                    chrome.border,
+                ))
             }
         }
     }
