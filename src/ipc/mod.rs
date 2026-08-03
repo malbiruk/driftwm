@@ -601,7 +601,10 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // derive a position from, so the two can't disagree mid-settle.
             let size = window.geometry().size;
             let loc = state.stage.position_of(&window).unwrap_or_default();
-            let chrome = state.window_chrome(&window);
+            // The read arm answers before the canvas guard below, so it is the
+            // one `move` path a fullscreen window reaches — and a fullscreen
+            // window wears no chrome.
+            let chrome = state.reported_chrome(&window);
             let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
             Ok(Response::Position { x, y })
         }
@@ -633,7 +636,9 @@ fn cmd_resize(
 ) -> Reply {
     let element = element_by_selector(state, window.as_ref())?;
 
-    let chrome = state.element_chrome(&element);
+    // Fullscreen-aware because the read arm below answers before the canvas
+    // guard; on the set path the guard rejects a fullscreen window anyway.
+    let chrome = state.reported_chrome(&element);
 
     let Some((width, height)) = to else {
         // Committed size, matching what `msg state` and the state file report,

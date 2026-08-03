@@ -122,7 +122,7 @@ impl DriftWm {
             .into_iter()
             .filter(valid_entry_geometry)
             .map(|entry| {
-                if envelope.version < session::VERSION {
+                if envelope.version == 1 {
                     body_entry_to_frame(entry, chrome)
                 } else {
                     entry
@@ -163,8 +163,9 @@ impl DriftWm {
     fn materialize_entry(&mut self, entry: SessionEntry) -> SuspendedId {
         // The record is a visual frame; the stand-in stores the body inside it.
         // Positioned from the file's own frame size rather than by re-inflating
-        // the body, so a frame smaller than its chrome (which `content_size`
-        // floors) still lands where the record says.
+        // the body, so a record whose frame is smaller than the chrome — which
+        // `content_size` floors to a 1px body, drawing larger than the record —
+        // still lands its top-left where the record says.
         let chrome = self.suspended_chrome();
         let frame = Size::from((entry.size[0], entry.size[1]));
         let size = chrome.content_size(frame);

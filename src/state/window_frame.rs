@@ -1,10 +1,11 @@
-//! Window frame geometry: SSD title-bar height, border widths, and the
+//! Window frame geometry: resolving the [`Chrome`] an element wears, and the
 //! conversions between a content top-left and the visual center of the frame
-//! that strip sits above.
+//! that chrome surrounds.
 //!
-//! [`visual_frame_center`] and [`frame_loc_for_center`] are inverses, shared by
-//! navigation, fit, fill, and the fullscreen-exit settle so the formula cannot
-//! drift between them.
+//! [`DriftWm::element_chrome`] is the one resolver; every other accessor here is
+//! a narrower view of it. [`visual_frame_center`] and [`frame_loc_for_center`]
+//! are inverses, shared by navigation, fit, fill, and the fullscreen-exit settle
+//! so the formula cannot drift between them.
 
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
@@ -44,23 +45,44 @@ impl DriftWm {
         driftwm::config::effective_border_width(None, mode, &self.config.decorations)
     }
 
-    /// The chrome any stage element wears. Every user-facing size and position
-    /// is expressed against this frame rather than the content rect the
-    /// compositor stores — see [`driftwm::canvas::Chrome`].
+    /// The chrome an element wears. Every user-facing size and position is
+    /// expressed against this frame rather than the content rect the compositor
+    /// stores — see [`driftwm::canvas::Chrome`].
     ///
-    /// The authority is what the render path draws: the decorations map for the
-    /// bar (not the decoration mode a rule or a negotiation *implies* — a client
-    /// that calls `set_mode` after its first sized commit moves the map without
-    /// moving either), and nothing at all while fullscreen, where the render path
-    /// suppresses bar, border and shadow alike.
-    pub fn element_chrome(&self, w: &StageWindow) -> Chrome {
-        if self.is_window_fullscreen(w) {
-            return Chrome::NONE;
+    /// The authority is the decorations map, not the decoration mode a rule or a
+    /// negotiation *implies*: a client that calls `set_mode` after its first
+    /// sized commit moves the map without moving either.
+    ///
+    /// Fullscreen is deliberately **not** suppressed here even though the render
+    /// path suppresses it, because most callers want the chrome the window wears
+    /// on the canvas — the fit path in particular has to size against the frame
+    /// the window comes back to. The user-facing reads that can be asked about a
+    /// fullscreen window zero it themselves; see [`Self::reported_chrome`].
+    pub fn element_chrome<W: WaylandFocus + WindowExt>(&self, w: &W) -> Chrome {
+        if w.is_suspended() {
+            return self.suspended_chrome();
         }
         Chrome {
             bar: self.window_ssd_bar(w),
-            border: self.element_border_width(w),
+            border: w.wl_surface().map_or(0, |s| self.window_border_width(&s)),
         }
+    }
+
+    /// [`Self::element_chrome`] as a user-facing surface reports it: nothing at
+    /// all while fullscreen, where the compositor suppresses bar, border and
+    /// shadow alike, so the window's frame is exactly its content.
+    ///
+    /// Only the `move` and `resize` read arms need this — they answer before
+    /// their `is_canvas_window` guards, so they are the only boundary a
+    /// fullscreen window reaches.
+    pub fn reported_chrome<W: WaylandFocus + WindowExt>(&self, w: &W) -> Chrome
+    where
+        StageWindow: PartialEq<W>,
+    {
+        if self.is_window_fullscreen(w) {
+            return Chrome::NONE;
+        }
+        self.element_chrome(w)
     }
 
     /// The chrome a window is about to wear, for the commit that maps it: its
@@ -88,26 +110,13 @@ impl DriftWm {
         }
     }
 
-    /// [`Self::element_chrome`] for a suspended stand-in, which needs no element
-    /// to resolve against: every stand-in draws the same bar and has no surface
-    /// to carry a per-rule border override.
+    /// [`Self::element_chrome`]'s stand-in arm, for the callers that hold no
+    /// element to resolve against: every stand-in draws the same bar and has no
+    /// surface to carry a per-rule border override, so the answer is uniform.
     pub fn suspended_chrome(&self) -> Chrome {
         Chrome {
             bar: self.config.decorations.title_bar_height,
             border: self.default_border_width(),
-        }
-    }
-
-    /// [`Self::element_chrome`] for a live client window.
-    pub fn window_chrome(&self, window: &Window) -> Chrome {
-        if self.is_window_fullscreen(window) {
-            return Chrome::NONE;
-        }
-        Chrome {
-            bar: self.window_ssd_bar(window),
-            border: window
-                .wl_surface()
-                .map_or(0, |s| self.window_border_width(&s)),
         }
     }
 

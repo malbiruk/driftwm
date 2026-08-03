@@ -58,8 +58,8 @@ impl DriftWm {
     }
 
     /// Spawn pos for `placement = "auto"`: snap-place adjacent to a cluster
-    /// already in view. Returns content top-left (shifted down by `bar` so
-    /// the visual frame snaps to the neighbor).
+    /// already in view. Returns a content top-left — stepped in from the frame
+    /// `place_auto` picks, so it is the visual frame that snaps to the neighbor.
     ///
     /// The anchor is the focus snapshotted at `new_toplevel` time while it is
     /// *usable* — an eligible canvas element, visible enough that the user is

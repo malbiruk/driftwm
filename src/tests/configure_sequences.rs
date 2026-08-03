@@ -2704,7 +2704,7 @@ fn ipc_move_mid_settle_lands_where_asked_with_ssd() {
     assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
     settle_at(&mut f, id, &a_surface, (700, 500));
 
-    let chrome = f.state().window_chrome(&a);
+    let chrome = f.state().element_chrome(&a);
     assert_eq!(
         chrome.bar, bar,
         "the settle used the same bar this test read"

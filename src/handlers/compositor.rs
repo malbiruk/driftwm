@@ -7,7 +7,7 @@ use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, StageWind
 use driftwm::window_ext::WindowExt;
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::desktop::layer_map_for_output;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Point, Rectangle};
 use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData};
 use smithay::{
     delegate_compositor, delegate_shm,
@@ -522,15 +522,18 @@ impl CompositorHandler for DriftWm {
                         // frame, so that is what gets clamped — clamping the
                         // content instead pushes an SSD title bar off the top.
                         let chrome = self.mapping_chrome(&root, &effective);
-                        let frame_size = chrome.frame_size(geo.size);
-                        let top_left =
-                            driftwm::canvas::rule_to_screen_top_left(rx, ry, frame_size, out_size);
-                        let frame_pos: Point<i32, Logical> = (
-                            top_left.x.clamp(0, (out_size.w - frame_size.w).max(0)),
-                            top_left.y.clamp(0, (out_size.h - frame_size.h).max(0)),
-                        )
-                            .into();
-                        let screen_pos = chrome.content_loc(frame_pos);
+                        let top_left = driftwm::canvas::rule_to_screen_top_left(
+                            rx,
+                            ry,
+                            chrome.frame_size(geo.size),
+                            out_size,
+                        );
+                        let screen_pos = crate::state::clamp_pin_frame(
+                            chrome.content_loc(top_left),
+                            geo.size,
+                            out_size,
+                            chrome,
+                        );
                         // Seed the Space loc to the canvas point this screen
                         // position currently maps to; the per-frame loc-sync
                         // keeps it correct as the camera moves.
@@ -889,15 +892,16 @@ impl DriftWm {
             return false;
         };
 
-        // First commit: resolve position once surface size is known.
+        // First commit: resolve position once surface size is known. Through
+        // the same converter `layer_inventory` reports with, so the rule that
+        // placed a layer and the position read back describe one rect.
         if self.canvas_layers[idx].position.is_none() {
             let geo = self.canvas_layers[idx].surface.bbox();
             if geo.size.w > 0 && geo.size.h > 0 {
                 let (rx, ry) = self.canvas_layers[idx].rule_position;
-                self.canvas_layers[idx].position = Some(smithay::utils::Point::from((
-                    rx - geo.size.w / 2,
-                    -ry - geo.size.h / 2,
-                )));
+                let chrome = self.canvas_layer_chrome(idx);
+                self.canvas_layers[idx].position =
+                    Some(driftwm::canvas::rule_to_content(rx, ry, geo.size, chrome));
             }
         }
 
@@ -1264,7 +1268,7 @@ impl DriftWm {
         }
 
         let content_size = window.geometry().size;
-        let chrome = self.window_chrome(window);
+        let chrome = self.element_chrome(window);
         let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, chrome) else {
             return;
         };

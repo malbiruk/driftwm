@@ -75,15 +75,17 @@ pub fn screen_space_origin(
 /// Convert internal canvas coords (top-left origin, Y-down) to the user-facing
 /// window-rule convention (center, Y-up) used by config rules, the state file, and IPC.
 ///
-/// Takes a *visual frame* rect — see [`Chrome`]. Content-space callers convert
-/// first, or use [`content_to_rule`].
+/// Chrome-blind: it converts whatever rect it is handed. A window's rect is its
+/// visual frame, so window callers pass one — or use [`content_to_rule`], which
+/// inflates for them.
 #[inline]
 pub fn internal_to_rule(loc: Point<i32, Logical>, size: Size<i32, Logical>) -> (i32, i32) {
     (loc.x + size.w / 2, -(loc.y + size.h / 2))
 }
 
-/// Inverse of [`internal_to_rule`]: window-rule coords (center, Y-up) back to
-/// internal top-left, Y-down canvas coords.
+/// Inverse of [`internal_to_rule`], and chrome-blind in the same way: the size
+/// it is handed decides which rect comes back. [`rule_to_content`] is the
+/// window-shaped form.
 #[inline]
 pub fn rule_to_internal(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, Logical> {
     Point::from((x - size.w / 2, -y - size.h / 2))

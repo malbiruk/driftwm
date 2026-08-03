@@ -75,7 +75,7 @@ impl DriftWm {
         } else {
             window.geometry().size
         };
-        let chrome = self.window_chrome(window);
+        let chrome = self.element_chrome(window);
         self.map_window(
             window.clone(),
             driftwm::canvas::rule_to_content(x, y, size, chrome),

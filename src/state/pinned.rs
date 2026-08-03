@@ -8,6 +8,7 @@
 
 use smithay::desktop::Window;
 use smithay::output::Output;
+use smithay::utils::{Logical, Point, Size};
 
 use super::{DriftWm, StageWindow, output_logical_size, output_state};
 
@@ -60,16 +61,10 @@ impl DriftWm {
             return;
         }
         let target_size = output_logical_size(target);
-        let win_size = window.geometry().size;
+        let chrome = self.element_chrome(window);
         site.output = target.name();
-        site.screen_pos.x = site
-            .screen_pos
-            .x
-            .clamp(0, (target_size.w - win_size.w).max(0));
-        site.screen_pos.y = site
-            .screen_pos
-            .y
-            .clamp(0, (target_size.h - win_size.h).max(0));
+        site.screen_pos =
+            clamp_pin_frame(site.screen_pos, window.geometry().size, target_size, chrome);
         self.stage.set_pin(window, site);
         // Re-anchor the Space loc to the new output now — `sync_pinned_locs`
         // only fires on camera changes, which this rebind doesn't trigger, so
@@ -94,10 +89,10 @@ impl DriftWm {
             .collect();
         let moved = !orphans.is_empty();
         for (window, mut site) in orphans {
-            let win_size = window.geometry().size;
+            let chrome = self.element_chrome(&window);
             site.output = to.name();
-            site.screen_pos.x = site.screen_pos.x.clamp(0, (to_size.w - win_size.w).max(0));
-            site.screen_pos.y = site.screen_pos.y.clamp(0, (to_size.h - win_size.h).max(0));
+            site.screen_pos =
+                clamp_pin_frame(site.screen_pos, window.geometry().size, to_size, chrome);
             self.stage.set_pin(&window, site);
         }
         if moved {
@@ -139,4 +134,25 @@ impl DriftWm {
             }
         }
     }
+}
+
+/// Clamp a pin's content top-left so its whole *visual frame* stays on an output
+/// of `output_size` — the same rect a `pinned_to_screen` rule's `position` is
+/// clamped into when the pin is first placed, so a rehome can't push a title bar
+/// off the top edge that the original placement kept on screen.
+///
+/// An output too small for the frame pins the top-left corner and lets the rest
+/// overflow, matching the placement clamp's `.max(0)`.
+pub(crate) fn clamp_pin_frame(
+    screen_pos: Point<i32, Logical>,
+    content_size: Size<i32, Logical>,
+    output_size: Size<i32, Logical>,
+    chrome: driftwm::canvas::Chrome,
+) -> Point<i32, Logical> {
+    let frame_size = chrome.frame_size(content_size);
+    let frame = chrome.frame_loc(screen_pos);
+    chrome.content_loc(Point::from((
+        frame.x.clamp(0, (output_size.w - frame_size.w).max(0)),
+        frame.y.clamp(0, (output_size.h - frame_size.h).max(0)),
+    )))
 }

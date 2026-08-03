@@ -26,6 +26,7 @@ mod navigation;
 mod output;
 pub mod persistence;
 mod pinned;
+pub(crate) use pinned::clamp_pin_frame;
 mod placement;
 mod recenter;
 mod redraw;

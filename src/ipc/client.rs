@@ -46,7 +46,7 @@ pub enum Msg {
         #[arg(long, conflicts_with = "app_id")]
         id: Option<u64>,
     },
-    /// Get a window's position, or move it to `<x> <y>` (center, Y-up).
+    /// Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
     ///
     /// Pinned and fullscreen windows live in screen space, not on the canvas, so
     /// `move` refuses to reposition them.

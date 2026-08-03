@@ -53,7 +53,7 @@ driftwm msg --json focus --id 5
 | [`state`](#driftwm-msg-state) | Dump camera, zoom, and the window inventory |
 | [`subscribe`](#driftwm-msg-subscribe) | Stream state snapshots as they change (one JSON line per event with --json) |
 | [`focus`](#driftwm-msg-focus) | Print the focused window, or focus one by `app_id` substring or `--id` |
-| [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (center, Y-up) |
+| [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up) |
 | [`resize`](#driftwm-msg-resize) | Get a window's size, or resize it to `<width> <height>` |
 | [`close`](#driftwm-msg-close) | Close the focused window, or one by `app_id` substring or `--id` |
 | [`opacity`](#driftwm-msg-opacity) | Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque |
@@ -124,7 +124,7 @@ driftwm msg focus --id 5
 driftwm msg move [OPTIONS] [X] [Y]
 ```
 
-Get a window's position, or move it to `<x> <y>` (center, Y-up).
+Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
 
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move` refuses to reposition them.
 

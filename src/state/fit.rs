@@ -53,7 +53,7 @@ impl DriftWm {
     fn compute_fit_geometry(&self, window: &Window) -> FitGeometry {
         let usable = self.get_usable_area();
         let gap = self.config.snap_gap;
-        let chrome = self.window_chrome(window);
+        let chrome = self.element_chrome(window);
         // The gap bounds the *visual frame*, so the content inside it gives up
         // the whole chrome — borders included, as `fill_window` already does.
         // Bar-only here would overflow the usable area by a border per side.
