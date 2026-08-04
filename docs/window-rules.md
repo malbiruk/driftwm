@@ -98,8 +98,9 @@ numbers come back out of `driftwm msg state` and the
 the same rectangle.
 
 The app itself gets whatever is left inside the frame. With
-`[decorations] default_mode = "server"`, `title_bar_height = 25` and
-`border_width = 2`, a `size = [800, 600]` rule hands the client 796x571.
+`[decorations] title_bar_height = 25` and `border_width = 2`, a
+`size = [800, 600]` rule that also sets `decoration = "server"` hands the client
+796x571.
 
 ## Field reference
 
