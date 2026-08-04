@@ -227,3 +227,77 @@ fn focus_and_pointer_move_to_survivor() {
     let pointer = f.state().seat.get_pointer().unwrap().current_location();
     assert_eq!((pointer.x, pointer.y), (0.0, 0.0));
 }
+
+/// A pin suspended by fullscreen rebinds by its *visual frame* too. The saved
+/// site is invisible to `pinned_windows()`, so it takes a pass of its own —
+/// clamped as content, the fullscreen exit would restore the pin with its title
+/// bar off the top of the survivor.
+#[test]
+fn a_fullscreen_suspended_pin_rebinds_with_its_whole_frame_on_screen() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+decoration = "server"
+"#,
+    ));
+    // out1 is active, so the pin binds there; the window then fullscreens on
+    // out2, which parks the pin in out2's `fullscreen_return` where the ordinary
+    // orphan pass can't see it.
+    let out1 = f.add_output(1, (1920, 1080));
+    let _out2 = f.add_output(2, (800, 600));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "pin", (320, 240));
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+    let chrome = f.state().element_chrome(&window);
+    assert_eq!(
+        (chrome.bar, chrome.border),
+        (25, 4),
+        "precondition: the pin wears a bar and a border"
+    );
+    assert_eq!(
+        f.state().stage.pin_of(&window).unwrap().output,
+        "HEADLESS-1"
+    );
+
+    let target = f.client(id).output("HEADLESS-2");
+    f.client(id).window(&surface).set_fullscreen(Some(&target));
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.state().stage.fullscreen_output_of(&window),
+        Some("HEADLESS-2")
+    );
+    assert!(
+        f.state().stage.pin_of(&window).is_none(),
+        "precondition: the fullscreen suspended the pin"
+    );
+
+    f.remove_output(&out1);
+
+    let survivor = f.state().space.outputs().next().cloned().unwrap();
+    let saved = crate::state::output_state(&survivor)
+        .fullscreen_return
+        .as_ref()
+        .and_then(|r| r.pinned.clone())
+        .expect("the suspended pin survives the unplug");
+    assert_eq!(saved.output, "HEADLESS-2");
+
+    // Clamped against the pre-fullscreen 320x240 size, so the frame is 328x273
+    // and fits the 800x600 survivor exactly at its bottom-right corner.
+    let frame = chrome.frame_loc(saved.screen_pos);
+    let frame_size = chrome.frame_size(smithay::utils::Size::from((320, 240)));
+    assert!(
+        frame.x >= 0 && frame.y >= 0,
+        "the frame's top-left stays on the survivor, got {frame:?}"
+    );
+    assert_eq!(
+        (frame.x + frame_size.w, frame.y + frame_size.h),
+        (800, 600),
+        "the whole frame stays inside the survivor"
+    );
+}
