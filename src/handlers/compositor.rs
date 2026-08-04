@@ -521,14 +521,18 @@ impl CompositorHandler for DriftWm {
                         // frame, so that is what gets clamped — clamping the
                         // content instead pushes an SSD title bar off the top.
                         let chrome = self.mapping_chrome(&root, &effective);
-                        let top_left = driftwm::canvas::rule_to_screen_top_left(
+                        let frame_top_left = driftwm::canvas::rule_to_screen_top_left(
                             rx,
                             ry,
                             chrome.frame_size(geo.size),
                             out_size,
                         );
-                        let screen_pos =
-                            crate::state::clamp_pin_frame(top_left, geo.size, out_size, chrome);
+                        let screen_pos = crate::state::clamp_pin_frame(
+                            chrome.content_loc(frame_top_left),
+                            geo.size,
+                            out_size,
+                            chrome,
+                        );
                         // Seed the Space loc to the canvas point this screen
                         // position currently maps to; the per-frame loc-sync
                         // keeps it correct as the camera moves.

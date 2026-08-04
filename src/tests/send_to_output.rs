@@ -139,8 +139,8 @@ size = [320, 240]
 
 /// The rehome clamp bounds the *visual frame*, so a server-decorated pin lands
 /// with its title bar and border on screen rather than pushed off the far edge.
-/// On the borderless default the two clamps coincide, so this needs chrome to
-/// carry any signal at all.
+/// A window with no chrome clamps identically either way, so this needs a bar
+/// and a border to carry any signal at all.
 #[test]
 fn a_decorated_pin_rebinds_with_its_whole_frame_on_screen() {
     let mut f = Fixture::with_config(config(

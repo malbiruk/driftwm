@@ -63,12 +63,8 @@ impl DriftWm {
         let target_size = output_logical_size(target);
         let chrome = self.element_chrome(window);
         site.output = target.name();
-        site.screen_pos = clamp_pin_frame(
-            chrome.frame_loc(site.screen_pos),
-            window.geometry().size,
-            target_size,
-            chrome,
-        );
+        site.screen_pos =
+            clamp_pin_frame(site.screen_pos, window.geometry().size, target_size, chrome);
         self.stage.set_pin(window, site);
         // Re-anchor the Space loc to the new output now — `sync_pinned_locs`
         // only fires on camera changes, which this rebind doesn't trigger, so
@@ -95,12 +91,8 @@ impl DriftWm {
         for (window, mut site) in orphans {
             let chrome = self.element_chrome(&window);
             site.output = to.name();
-            site.screen_pos = clamp_pin_frame(
-                chrome.frame_loc(site.screen_pos),
-                window.geometry().size,
-                to_size,
-                chrome,
-            );
+            site.screen_pos =
+                clamp_pin_frame(site.screen_pos, window.geometry().size, to_size, chrome);
             self.stage.set_pin(&window, site);
         }
         if moved {
@@ -134,33 +126,33 @@ impl DriftWm {
                 && !live.contains(&site.output)
             {
                 site.output = to.name();
-                site.screen_pos = clamp_pin_frame(
-                    chrome.frame_loc(site.screen_pos),
-                    saved_size,
-                    to_size,
-                    chrome,
-                );
+                site.screen_pos = clamp_pin_frame(site.screen_pos, saved_size, to_size, chrome);
             }
         }
     }
 }
 
-/// Clamp a pin's *visual frame* top-left into an output of `output_size`,
-/// returning the content top-left it implies — the form `PinnedSite::screen_pos`
-/// stores. Clamping the frame rather than the content is what keeps a rehome
-/// from pushing a title bar off the top edge.
+/// Clamp a pin so its whole *visual frame* stays on an output of `output_size`.
+/// Clamping the frame rather than the content is what keeps a rehome from
+/// pushing a title bar off the top edge.
+///
+/// Takes and returns the content top-left, the form `PinnedSite::screen_pos`
+/// stores, so no caller has to remember which space it is handing over — one
+/// that inflated only the position and not the size would compile and silently
+/// displace the pin by the whole chrome.
 ///
 /// An output too small for the frame parks the frame's top-left at the origin and
 /// lets the rest overflow, matching the placement clamp's `.max(0)`.
 pub(crate) fn clamp_pin_frame(
-    frame_loc: Point<i32, Logical>,
+    screen_pos: Point<i32, Logical>,
     content_size: Size<i32, Logical>,
     output_size: Size<i32, Logical>,
     chrome: driftwm::canvas::Chrome,
 ) -> Point<i32, Logical> {
     let frame_size = chrome.frame_size(content_size);
+    let frame = chrome.frame_loc(screen_pos);
     chrome.content_loc(Point::from((
-        frame_loc.x.clamp(0, (output_size.w - frame_size.w).max(0)),
-        frame_loc.y.clamp(0, (output_size.h - frame_size.h).max(0)),
+        frame.x.clamp(0, (output_size.w - frame_size.w).max(0)),
+        frame.y.clamp(0, (output_size.h - frame_size.h).max(0)),
     )))
 }
