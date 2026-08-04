@@ -7,7 +7,7 @@ use smithay::{
 use crate::state::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
 use crate::state::{DriftWm, HomeReturn, StageWindow};
 use driftwm::canvas::{self};
-use driftwm::config::{Action, LayoutSwitch, Modifiers, TouchpadState};
+use driftwm::config::{Action, LayoutSwitch, Modifiers, TrackpadState};
 use driftwm::window_ext::WindowExt;
 
 /// Use the focused window as the cone-search origin only when it's fully
@@ -658,7 +658,7 @@ impl DriftWm {
                     }
                 }
             }
-            Action::SetTouchpad(state) => self.set_touchpad(state),
+            Action::SetTrackpad(state) => self.set_trackpad(state),
             Action::Quit => {
                 tracing::info!("Quit action triggered — stopping compositor");
                 self.loop_signal.stop();
@@ -792,11 +792,11 @@ impl DriftWm {
         self.refresh_pointer_focus();
     }
 
-    /// Set every connected touchpad's libinput send-events mode — enabled,
+    /// Set every connected trackpad's libinput send-events mode — enabled,
     /// disabled, or toggled from its current state. The set state survives a
     /// config reload — hotplug/reload configuration (`configure_libinput_device`)
     /// never touches send-events mode.
-    fn set_touchpad(&mut self, state: &TouchpadState) {
+    fn set_trackpad(&mut self, state: &TrackpadState) {
         let mut found = false;
         for device in &self.input_devices {
             if device.config_tap_finger_count() == 0 {
@@ -804,9 +804,9 @@ impl DriftWm {
             }
             found = true;
             let target = match state {
-                TouchpadState::On => smithay::reexports::input::SendEventsMode::ENABLED,
-                TouchpadState::Off => smithay::reexports::input::SendEventsMode::DISABLED,
-                TouchpadState::Toggle => {
+                TrackpadState::On => smithay::reexports::input::SendEventsMode::ENABLED,
+                TrackpadState::Off => smithay::reexports::input::SendEventsMode::DISABLED,
+                TrackpadState::Toggle => {
                     // Only a true DISABLED state toggles back on.
                     // DISABLED_ON_EXTERNAL_MOUSE reads as "not disabled", so a
                     // toggle press goes fully off from there too.
@@ -825,7 +825,7 @@ impl DriftWm {
             }
         }
         if !found {
-            tracing::info!("toggle-touchpad: no touchpad connected (wanted {state:?})");
+            tracing::info!("set-trackpad: no trackpad connected (wanted {state:?})");
         }
     }
 

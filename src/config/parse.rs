@@ -191,18 +191,19 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "toggle-pin-to-screen" => Ok(Action::TogglePinToScreen),
         "reload-config" => Ok(Action::ReloadConfig),
         "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
-        "toggle-touchpad" => {
+        "set-trackpad" => {
             let state = match arg {
-                None => TouchpadState::Toggle,
-                Some(a) if a.eq_ignore_ascii_case("on") => TouchpadState::On,
-                Some(a) if a.eq_ignore_ascii_case("off") => TouchpadState::Off,
+                None => return Err("set-trackpad requires on, off, or toggle".to_string()),
+                Some(a) if a.eq_ignore_ascii_case("on") => TrackpadState::On,
+                Some(a) if a.eq_ignore_ascii_case("off") => TrackpadState::Off,
+                Some(a) if a.eq_ignore_ascii_case("toggle") => TrackpadState::Toggle,
                 Some(other) => {
                     return Err(format!(
-                        "toggle-touchpad: expected on, off, or no argument, got '{other}'"
+                        "set-trackpad: expected on, off, or toggle, got '{other}'"
                     ));
                 }
             };
-            Ok(Action::SetTouchpad(state))
+            Ok(Action::SetTrackpad(state))
         }
         "quit" => Ok(Action::Quit),
         other => Err(format!("unknown action: {other}")),
@@ -240,7 +241,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("toggle-cursor-pan", "toggle-cursor-pan"),
     ("toggle-fullscreen", "toggle-fullscreen"),
     ("toggle-pin-to-screen", "toggle-pin-to-screen"),
-    ("toggle-touchpad", "toggle-touchpad"),
+    ("set-trackpad", "set-trackpad toggle"),
     ("zoom-in", "zoom-in"),
     ("zoom-out", "zoom-out"),
     ("zoom-reset", "zoom-reset"),
@@ -614,7 +615,7 @@ mod tests {
             Action::SwitchLayout(_) => "switch-layout",
             Action::ReloadConfig => "reload-config",
             Action::ToggleCursorPan => "toggle-cursor-pan",
-            Action::SetTouchpad(_) => "toggle-touchpad",
+            Action::SetTrackpad(_) => "set-trackpad",
             Action::Quit => "quit",
         }
     }
@@ -659,24 +660,25 @@ mod tests {
     }
 
     #[test]
-    fn toggle_touchpad_parses_with_optional_state() {
+    fn set_trackpad_parses_with_explicit_state() {
         assert_eq!(
-            parse_action("toggle-touchpad"),
-            Ok(Action::SetTouchpad(TouchpadState::Toggle))
+            parse_action("set-trackpad on"),
+            Ok(Action::SetTrackpad(TrackpadState::On))
         );
         assert_eq!(
-            parse_action("toggle-touchpad on"),
-            Ok(Action::SetTouchpad(TouchpadState::On))
+            parse_action("set-trackpad OFF"),
+            Ok(Action::SetTrackpad(TrackpadState::Off))
         );
         assert_eq!(
-            parse_action("toggle-touchpad OFF"),
-            Ok(Action::SetTouchpad(TouchpadState::Off))
+            parse_action(" set-trackpad off "),
+            Ok(Action::SetTrackpad(TrackpadState::Off))
         );
         assert_eq!(
-            parse_action(" toggle-touchpad off "),
-            Ok(Action::SetTouchpad(TouchpadState::Off))
+            parse_action("set-trackpad toGGle"),
+            Ok(Action::SetTrackpad(TrackpadState::Toggle))
         );
-        assert!(parse_action("toggle-touchpad maybe").is_err());
+        assert!(parse_action("set-trackpad maybe").is_err());
+        assert!(parse_action("set-trackpad").is_err());
     }
 
     #[test]
