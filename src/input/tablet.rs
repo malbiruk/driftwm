@@ -75,7 +75,12 @@ impl DriftWm {
         };
 
         // Absolute coordinate from 0.0 to 1.0 mapped to output size
-        let screen_pos = event.position_transformed(output_geo.size);
+        // let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
+
         let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
 
         let serial = SERIAL_COUNTER.next_serial();
@@ -146,7 +151,12 @@ impl DriftWm {
             return;
         };
 
-        let screen_pos = event.position_transformed(output_geo.size);
+        // let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
+
         let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
 
         let serial = SERIAL_COUNTER.next_serial();
