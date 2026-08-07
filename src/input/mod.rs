@@ -338,7 +338,7 @@ impl DriftWm {
             InputEvent::PointerMotionAbsolute { event } => {
                 self.on_pointer_motion_absolute::<I>(event)
             }
-            InputEvent::PointerButton { event } => self.on_pointer_button::<I>(event),
+            InputEvent::PointerButton { event } => self.on_pointer_button::<I, _>(event),
             InputEvent::PointerAxis { event } => self.on_pointer_axis::<I>(event),
             InputEvent::GestureSwipeBegin { event } => self.on_gesture_swipe_begin::<I>(event),
             InputEvent::GestureSwipeUpdate { event } => self.on_gesture_swipe_update::<I>(event),

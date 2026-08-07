@@ -1,8 +1,8 @@
 use smithay::{
     backend::input::{
         AbsolutePositionEvent, ButtonState, Device, DeviceCapability, Event, InputBackend,
-        ProximityState, TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent,
-        TabletToolTipEvent, TabletToolTipState,
+        PointerButtonEvent, ProximityState, TabletToolButtonEvent, TabletToolEvent,
+        TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
     },
     input::pointer::MotionEvent,
     utils::SERIAL_COUNTER,
@@ -11,6 +11,39 @@ use smithay::{
 
 use crate::state::DriftWm;
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
+
+/// Wrapper to route tablet tip events through the standard pointer button logic.
+pub struct TabletTipButtonEvent<I: InputBackend> {
+    event: I::TabletToolTipEvent,
+    state: ButtonState,
+}
+
+impl<I: InputBackend> TabletTipButtonEvent<I> {
+    pub fn new(event: I::TabletToolTipEvent, state: ButtonState) -> Self {
+        Self { event, state }
+    }
+}
+
+impl<I: InputBackend> Event<I> for TabletTipButtonEvent<I> {
+    fn time(&self) -> u64 {
+        <I::TabletToolTipEvent as Event<I>>::time(&self.event)
+    }
+    fn time_msec(&self) -> u32 {
+        <I::TabletToolTipEvent as Event<I>>::time_msec(&self.event)
+    }
+    fn device(&self) -> <I as InputBackend>::Device {
+        <I::TabletToolTipEvent as Event<I>>::device(&self.event)
+    }
+}
+
+impl<I: InputBackend> PointerButtonEvent<I> for TabletTipButtonEvent<I> {
+    fn button_code(&self) -> u32 {
+        0x110 // BTN_LEFT
+    }
+    fn state(&self) -> ButtonState {
+        self.state
+    }
+}
 
 impl DriftWm {
     pub fn on_device_added<I: InputBackend>(&mut self, device: &I::Device) {
@@ -160,35 +193,17 @@ impl DriftWm {
         match event.tip_state() {
             TabletToolTipState::Down => {
                 tool.tip_down(serial, time);
-
-                // Emulate pointer button press for drawing and clicking in normal apps
-                let pointer = self.seat.get_pointer().unwrap();
-                pointer.button(
-                    self,
-                    &smithay::input::pointer::ButtonEvent {
-                        button: 0x110, // BTN_LEFT
-                        state: ButtonState::Pressed,
-                        serial,
-                        time,
-                    },
-                );
-                pointer.frame(self);
+                self.on_pointer_button::<I, _>(TabletTipButtonEvent::new(
+                    event,
+                    ButtonState::Pressed,
+                ));
             }
             TabletToolTipState::Up => {
                 tool.tip_up(time);
-
-                // Emulate pointer button release
-                let pointer = self.seat.get_pointer().unwrap();
-                pointer.button(
-                    self,
-                    &smithay::input::pointer::ButtonEvent {
-                        button: 0x110, // BTN_LEFT
-                        state: ButtonState::Released,
-                        serial,
-                        time,
-                    },
-                );
-                pointer.frame(self);
+                self.on_pointer_button::<I, _>(TabletTipButtonEvent::new(
+                    event,
+                    ButtonState::Released,
+                ));
             }
         }
     }

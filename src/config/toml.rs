@@ -65,7 +65,6 @@ pub(super) struct InputConfig {
     pub trackpad: TrackpadConfig,
     pub mouse: MouseDeviceFileConfig,
     pub touch: TouchDeviceFileConfig,
-    pub tablet: TabletFileConfig,
 }
 
 #[derive(Serialize, Deserialize, Default)]
