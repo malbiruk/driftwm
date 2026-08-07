@@ -162,6 +162,7 @@ impl DriftWm {
         if let Some(tablet) = tablet {
             match event.state() {
                 ProximityState::In => {
+                    self.cursor.hidden_by_touch = false;
                     if let Some((focus_target, relative_pos)) = under {
                         tool.proximity_in(
                             canvas_pos,
