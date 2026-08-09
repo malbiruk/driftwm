@@ -364,7 +364,16 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
 /// doesn't gate them.
 pub fn send_frame_callbacks_fallback(state: &mut crate::state::DriftWm) {
     let time = state.start_time.elapsed();
-    let outputs: Vec<Output> = state.space.outputs().cloned().collect();
+    // Skip the virtual placeholders a full disconnect leaves behind: they have
+    // no DRM surface, so nothing composites and nothing releases the buffers a
+    // serviced client draws into. With every output a placeholder this leaves
+    // no output at all and the heartbeat goes quiet, which is the point.
+    let outputs: Vec<Output> = state
+        .space
+        .outputs()
+        .filter(|o| !state.disconnected_outputs.contains(&o.name()))
+        .cloned()
+        .collect();
 
     // Skip blanked outputs, matching the udev render loop's own skip: a layer
     // commit marks its output dirty unconditionally (unlike a window's), so

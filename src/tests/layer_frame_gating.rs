@@ -411,6 +411,51 @@ fn idle_fallback_skips_a_dpms_off_output() {
     );
 }
 
+/// Unplugging the last output leaves only a virtual placeholder, which has no
+/// DRM surface: nothing composites, so nothing ever releases what clients draw.
+/// Servicing the heartbeat against it makes every client redraw once a second
+/// into buffers that accumulate until VRAM is exhausted and the driver spills
+/// to system memory.
+#[test]
+fn idle_fallback_goes_silent_while_only_placeholders_remain() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let bar = map_layer(&mut f, id, None, zwlr_layer_shell_v1::Layer::Top, "bar");
+    let window = map_window(&mut f, id, "app", (400, 300));
+
+    crate::render::post_render(f.state(), &output); // warm-up
+
+    f.remove_output(&output);
+    assert!(f.state().disconnected_outputs.contains("HEADLESS-1"));
+
+    let bar_frame = request_frame(&mut f, id, &bar);
+    let window_frame = request_frame(&mut f, id, &window);
+    f.state().start_time -= Duration::from_millis(1000);
+    crate::render::send_frame_callbacks_fallback(f.state());
+    f.roundtrip(id);
+
+    assert!(
+        !delivered(&bar_frame),
+        "a layer surface on a placeholder output must not be serviced"
+    );
+    assert!(
+        !delivered(&window_frame),
+        "a window must not be driven to redraw while no output can composite it"
+    );
+
+    // Reconnecting retires the placeholder, and the heartbeat comes back.
+    f.add_output(2, (1920, 1080));
+    f.state().start_time -= Duration::from_millis(1000);
+    crate::render::send_frame_callbacks_fallback(f.state());
+    f.roundtrip(id);
+
+    assert!(
+        delivered(&window_frame),
+        "a live output must resume servicing the heartbeat"
+    );
+}
+
 /// Regression guard for the toplevel loop in `post_render`: windows still gate
 /// purely on canvas-visibility, not on the lock/fullscreen cull predicates.
 #[test]
