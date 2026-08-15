@@ -1892,8 +1892,8 @@ impl DriftWm {
             // bands: a CSD client's shadow overlaps its own resize margin and
             // usually declares no input region, so counting it here would
             // swallow the whole ring. Which also means a menu drawn as a plain
-            // subsurface instead of a popup still reports chrome — the two are
-            // indistinguishable by role.
+            // subsurface instead of a popup still reports chrome — nothing
+            // tells it apart from that shadow.
             if window
                 .surface_under(
                     local,

@@ -161,9 +161,9 @@ impl DriftWm {
     }
 
     /// The stage window owning `surface`, following subsurface parents and then
-    /// the xdg-popup parent chain. `window_for_surface` matches a toplevel's own
-    /// surface only, so it answers `None` for a popup or a subsurface — a caller
-    /// asking "which window is this hit in?" needs this instead.
+    /// the xdg-popup parent chain. `window_for_surface` matches only a
+    /// toplevel's own surface, so it can't resolve a popup or subsurface — this
+    /// does.
     ///
     /// Two `None`s here are answers, not gaps: a popup whose parent isn't set yet
     /// (a layer-shell popup before `get_popup`, or a dead one) has no root to

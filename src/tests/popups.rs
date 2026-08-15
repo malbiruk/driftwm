@@ -24,11 +24,8 @@ fn pt(x: f64, y: f64) -> Point<f64, Logical> {
     Point::from((x, y))
 }
 
-/// Scale a mapped popup's single-pixel buffer up to `size` through its
-/// viewport. Without this the popup's input region is one logical pixel at
-/// whatever corner the positioner placed it, however large the positioner
-/// asked for — smithay sizes a surface from its viewport destination or its
-/// buffer, never from the positioner.
+/// Grow a mapped popup to `size` via its viewport (see
+/// [`super::client::Popup::set_size`]) and settle the commit.
 fn grow_popup(f: &mut Fixture, id: ClientId, surface: &WlSurface, size: (u16, u16)) {
     let popup = f.client(id).popup(surface);
     popup.set_size(size.0, size.1);
@@ -281,11 +278,14 @@ fn resize_band_uncovered_by_the_popup_still_reports_chrome() {
 
     let parent = map_window(&mut f, id, "parent", (400, 300));
     let popup_surface = map_popup(&mut f, id, &parent);
+    // Sized, or the popup covers a single pixel and this asserts nothing about
+    // a popup at all.
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
 
     let window = window_by_app_id(&mut f, "parent").unwrap();
     let win_pos = f.state().stage.position_of(&window).unwrap();
-    // The right band, a full window width away from the popup sitting at the
-    // parent's top-left corner.
+    // The popup is centered on the parent's top-left corner, so it reaches
+    // 100px right of it; the opposite band is a full window width further on.
     let probe = pt(f64::from(win_pos.x) + 404.0, f64::from(win_pos.y) + 150.0);
 
     let hit = f.state().decoration_under(probe).map(|(_, hit)| hit);
@@ -399,10 +399,10 @@ size = [200, 150]
     f.double_roundtrip(id);
 }
 
-/// `pointer_context` counts chrome as on-window through `decoration_under`.
-/// With that disjunct now silent over a popup-covered band, the context has to
-/// rest on the popup-aware `element_under` arm — otherwise every on-window
-/// mouse binding silently swaps for its on-canvas counterpart over a menu.
+/// `decoration_under` stays silent over a popup-covered band (its own popup
+/// pre-check), so `pointer_context` must still resolve on-window there via
+/// the popup-aware `element_under` arm — otherwise every on-window mouse
+/// binding silently swaps for its on-canvas counterpart over a menu.
 #[test]
 fn binding_context_over_a_popup_covered_band_stays_on_window() {
     let mut f = Fixture::new();
@@ -434,11 +434,9 @@ fn binding_context_over_a_popup_covered_band_stays_on_window() {
     f.double_roundtrip(id);
 }
 
-/// `window_for_surface` matches a toplevel's own surface only, so the button
-/// dispatch's "is anything on top of this chrome?" guard read every popup and
-/// subsurface hit as *nothing on top* — a silent no-op. The root-resolving
-/// lookup answers with the window that actually owns the surface, however deep
-/// the popup chain.
+/// `window_for_surface` matches only a toplevel's own surface, so it can't
+/// resolve a popup or subsurface hit to the window it belongs to. This
+/// climbs however deep the popup chain runs to answer that instead.
 #[test]
 fn window_for_surface_root_resolves_popups_to_their_toplevel() {
     let mut f = Fixture::new();
