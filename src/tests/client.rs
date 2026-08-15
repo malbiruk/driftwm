@@ -16,20 +16,38 @@ use smithay::reexports::calloop::EventLoop;
 
 use calloop_wayland_source::WaylandSource;
 use wayland_client::backend::Backend;
+use wayland_client::backend::protocol::ProtocolError;
 use wayland_client::globals::Global;
 use wayland_client::protocol::wl_buffer::{self, WlBuffer};
 use wayland_client::protocol::wl_callback::{self, WlCallback};
 use wayland_client::protocol::wl_compositor::WlCompositor;
 use wayland_client::protocol::wl_display::WlDisplay;
 use wayland_client::protocol::wl_output::{self, WlOutput};
+use wayland_client::protocol::wl_pointer::{self, WlPointer};
+use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
 use wayland_client::protocol::wl_surface::{self, WlSurface};
+use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_manager_v1::ExtSessionLockManagerV1,
+    ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1},
+    ext_session_lock_v1::{self, ExtSessionLockV1},
+};
 use wayland_protocols::ext::workspace::v1::client::{
     ext_workspace_group_handle_v1::{self, ExtWorkspaceGroupHandleV1},
     ext_workspace_handle_v1::{self, ExtWorkspaceHandleV1},
     ext_workspace_manager_v1::{self, ExtWorkspaceManagerV1},
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_confined_pointer_v1::{
+    self, ZwpConfinedPointerV1,
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1::{
+    self, ZwpLockedPointerV1,
+};
+use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_pointer_constraints_v1::{
+    Lifetime, ZwpPointerConstraintsV1,
 };
 use wayland_protocols::wp::single_pixel_buffer::v1::client::wp_single_pixel_buffer_manager_v1::WpSinglePixelBufferManagerV1;
 use wayland_protocols::wp::viewporter::client::wp_viewport::WpViewport;
@@ -74,11 +92,24 @@ pub struct State {
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
     pub viewporter: Option<WpViewporter>,
     pub seat: Option<WlSeat>,
+    /// Bound alongside the seat, so every scenario can observe touch delivery
+    /// without opting in.
+    pub touch: Option<WlTouch>,
+    /// Bound alongside the seat, for the same reason as `touch`.
+    pub pointer: Option<WlPointer>,
+    pub pointer_constraints: Option<ZwpPointerConstraintsV1>,
     pub xdg_activation: Option<XdgActivationV1>,
+    pub ext_session_lock_manager: Option<ExtSessionLockManagerV1>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
     pub popups: Vec<Popup>,
+    pub session_locks: Vec<Lock>,
+    /// Every `wl_touch` event this client has received, oldest first.
+    pub touch_events: Vec<TouchEvent>,
+    /// Surface-local position carried by every `wl_pointer` enter/motion this
+    /// client has received, oldest first.
+    pub pointer_positions: Vec<(f64, f64)>,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -197,6 +228,44 @@ pub struct Popup {
     pub popup_done: bool,
 
     pub configures_looked_at: usize,
+}
+
+/// A client-side `ext_session_lock_v1`, plus the lock surfaces created on it —
+/// a real lock screen makes one per output. `events` records every
+/// `locked`/`finished` this object has received, oldest first.
+pub struct Lock {
+    pub qh: QueueHandle<State>,
+    pub spbm: WpSinglePixelBufferManagerV1,
+    pub lock: ExtSessionLockV1,
+    pub events: Vec<LockEvent>,
+    pub surfaces: Vec<LockSurface>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockEvent {
+    Locked,
+    Finished,
+}
+
+/// A `wl_touch` event, recorded without its payload — these scenarios only
+/// care which events arrived, not their coordinates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TouchEvent {
+    Down,
+    Up,
+    Motion,
+    Frame,
+    Cancel,
+}
+
+pub struct LockSurface {
+    pub qh: QueueHandle<State>,
+    pub spbm: WpSinglePixelBufferManagerV1,
+
+    pub surface: WlSurface,
+    pub lock_surface: ExtSessionLockSurfaceV1,
+    pub viewport: WpViewport,
+    pub configures_received: Vec<(u32, (u32, u32))>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -338,10 +407,17 @@ impl Client {
             spbm: None,
             viewporter: None,
             seat: None,
+            touch: None,
+            pointer: None,
+            pointer_constraints: None,
             xdg_activation: None,
+            ext_session_lock_manager: None,
             windows: Vec::new(),
             layers: Vec::new(),
             popups: Vec::new(),
+            session_locks: Vec::new(),
+            touch_events: Vec::new(),
+            pointer_positions: Vec::new(),
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -356,19 +432,76 @@ impl Client {
         }
     }
 
+    /// Checks for a protocol error before unwrapping the dispatch result:
+    /// calloop's wayland source usually maps a dispatch-step
+    /// `WaylandError::Protocol` to a bare `EPROTO`, which would otherwise panic
+    /// before revealing the interface, code and message the compositor
+    /// actually posted.
     pub fn dispatch(&mut self) {
-        self.event_loop
-            .dispatch(Duration::ZERO, &mut self.state)
-            .unwrap();
+        let result = self.event_loop.dispatch(Duration::ZERO, &mut self.state);
 
         if let Some(error) = self.connection.protocol_error() {
             panic!("{error}");
         }
+
+        result.unwrap();
+    }
+
+    /// Push queued requests to the compositor without reading anything back —
+    /// for a scenario whose next server-side step is expected to kill this
+    /// client, where `Fixture::roundtrip` would dispatch it and panic.
+    pub fn flush(&self) {
+        self.connection.flush().unwrap();
+    }
+
+    /// The protocol error the compositor posted on this client, if any — reads
+    /// it without panicking, unlike [`Self::dispatch`] (and so
+    /// `Fixture::roundtrip`).
+    ///
+    /// Only catches errors posted on a *live* object: one posted on a destroyed
+    /// proxy is never serialized, and reads as a bare socket close (`Io(_)`,
+    /// which maps to `None` here) instead.
+    ///
+    /// Leaves this client's `WaylandSource` errored but still registered in the
+    /// fixture's outer loop, so any later `Fixture::roundtrip`/`dispatch` — even
+    /// for a different client — panics on it. Call `Fixture::kill_client`
+    /// first.
+    pub fn protocol_error(&mut self) -> Option<ProtocolError> {
+        let result = self.event_loop.dispatch(Duration::ZERO, &mut self.state);
+        let error = self.connection.protocol_error();
+        // A dispatch failure that isn't a caught protocol error would
+        // otherwise vanish behind this `None`, leaving a caller's panic with
+        // nothing but its `why` string and no clue what dispatch actually saw.
+        if error.is_none()
+            && let Err(err) = result
+        {
+            eprintln!(
+                "Client::protocol_error: dispatch failed with no protocol error latched: {err}"
+            );
+        }
+        error
     }
 
     pub fn send_sync(&self) -> Arc<SyncData> {
         let data = Arc::new(SyncData::default());
         self.display.sync(&self.qh, data.clone());
+        self.connection.flush().unwrap();
+        data
+    }
+
+    /// Request `wl_surface.frame()` on `surface` and commit it — a request only
+    /// moves from pending to current double-buffered state on commit. Reuses
+    /// the `wl_display.sync` dispatch (`Dispatch<WlCallback, Arc<SyncData>>`)
+    /// since it's the same `wl_callback::Event::Done`.
+    ///
+    /// The commit runs a full commit cycle server-side (marks the output
+    /// dirty, re-arranges the layer map, re-runs keyboard focus for a layer
+    /// surface) — not inert, so probing focus/animation state around a `frame`
+    /// call means probing it across that.
+    pub fn frame(&self, surface: &WlSurface) -> Arc<SyncData> {
+        let data = Arc::new(SyncData::default());
+        surface.frame(&self.qh, data.clone());
+        surface.commit();
         self.connection.flush().unwrap();
         data
     }
@@ -381,6 +514,10 @@ impl Client {
         self.state.window(surface)
     }
 
+    pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
+        self.state.set_opaque_region(surface, rects);
+    }
+
     pub fn create_layer(
         &mut self,
         output: Option<&WlOutput>,
@@ -388,6 +525,17 @@ impl Client {
         namespace: &str,
     ) -> &mut LayerSurface {
         self.state.create_layer(output, layer, namespace.to_owned())
+    }
+
+    pub fn recreate_layer(
+        &mut self,
+        surface: &WlSurface,
+        output: Option<&WlOutput>,
+        layer: zwlr_layer_shell_v1::Layer,
+        namespace: &str,
+    ) -> &mut LayerSurface {
+        self.state
+            .recreate_layer(surface, output, layer, namespace.to_owned())
     }
 
     pub fn layer(&mut self, surface: &WlSurface) -> &mut LayerSurface {
@@ -444,6 +592,87 @@ impl Client {
             .0
             .clone()
     }
+
+    /// Lock the pointer to `surface` with a persistent lifetime. The lock only
+    /// becomes active once the pointer is over the surface.
+    pub fn lock_pointer(&mut self, surface: &WlSurface) -> ZwpLockedPointerV1 {
+        self.state.lock_pointer(surface)
+    }
+
+    /// Confine the pointer to `surface` with a persistent lifetime and no
+    /// region, i.e. to the whole surface. Unlike a lock, the cursor keeps
+    /// moving inside it.
+    pub fn confine_pointer(&mut self, surface: &WlSurface) -> ZwpConfinedPointerV1 {
+        self.state.confine_pointer(surface)
+    }
+
+    /// Send `ext_session_lock_manager_v1.lock`, entering
+    /// `SessionLockHandler::lock` on the compositor. The created lock object
+    /// is tracked as this client's most recent [`Lock`]; its `locked`/
+    /// `finished` events land in [`Client::lock_events`].
+    pub fn lock_session(&mut self) {
+        self.state.lock_session();
+    }
+
+    /// Every `locked`/`finished` event received on this client's most recent
+    /// [`Lock`], oldest first.
+    pub fn lock_events(&mut self) -> &[LockEvent] {
+        &self.state.session_locks.last().unwrap().events
+    }
+
+    /// Create a lock surface for `output` on this client's most recent
+    /// [`Lock`] (`ext_session_lock_v1.get_lock_surface`).
+    pub fn create_lock_surface(&mut self, output: &WlOutput) -> &mut LockSurface {
+        self.state.create_lock_surface(output)
+    }
+
+    /// Destroy this client's most recent [`Lock`] object without unlocking, and
+    /// without disconnecting the client. Legal only while the lock is
+    /// unconfirmed — smithay posts `invalid_destroy` once the locker has been
+    /// consumed. Any lock surfaces made on it stay alive.
+    ///
+    /// The destroyed proxy stays in `session_locks`, and stays its `last()`:
+    /// every other lock accessor here reaches for the most recent lock, so one
+    /// called on this client afterwards silently uses the dead object.
+    pub fn destroy_lock_object(&mut self) {
+        self.state.destroy_lock_object();
+    }
+
+    /// Unlock the session over the wire
+    /// (`ext_session_lock_v1.unlock_and_destroy`), the way a lock screen ends a
+    /// lock it confirmed. Prefer this to calling `DriftWm::unlock` directly:
+    /// only the request clears smithay's own `locked_outputs`.
+    ///
+    /// Like [`Self::destroy_lock_object`], the destroyed proxy stays `last()` in
+    /// `session_locks`, so any lock accessor called on this client afterwards
+    /// silently uses the dead object. The lock surfaces made on it are still
+    /// reachable through [`Self::lock_surface`].
+    pub fn unlock_session(&mut self) {
+        self.state.unlock_session();
+    }
+
+    /// Take a fresh `ext_session_lock_surface_v1` on a `wl_surface` that already
+    /// carried one, on this client's most recent [`Lock`] — a lock screen
+    /// re-locking on the surfaces it kept. The tracked entry is swapped over to
+    /// the new role and moved onto that lock, so both [`Self::lock_surface`] and
+    /// [`Self::last_lock_surface`] return it.
+    pub fn retake_lock_surface(
+        &mut self,
+        surface: &WlSurface,
+        output: &WlOutput,
+    ) -> &mut LockSurface {
+        self.state.retake_lock_surface(surface, output)
+    }
+
+    pub fn lock_surface(&mut self, surface: &WlSurface) -> &mut LockSurface {
+        self.state.lock_surface(surface)
+    }
+
+    /// The lock surface most recently created on this client's most recent
+    /// [`Lock`] — the handle back to one a helper made on the caller's behalf.
+    pub fn last_lock_surface(&mut self) -> &mut LockSurface {
+        self.state.last_lock_surface()
+    }
 }
 
 impl State {
@@ -484,6 +713,20 @@ impl State {
             .unwrap()
     }
 
+    /// Set `surface`'s pending opaque region to the union of `rects`
+    /// (surface-local `(x, y, w, h)`), the same request a real CSD client
+    /// issues to declare which part of its buffer is fully opaque. Takes
+    /// effect on the surface's next commit.
+    pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
+        let compositor = self.compositor.as_ref().unwrap();
+        let region = compositor.create_region(&self.qh, ());
+        for &(x, y, w, h) in rects {
+            region.add(x, y, w, h);
+        }
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
+    }
+
     pub fn create_layer(
         &mut self,
         output: Option<&WlOutput>,
@@ -514,6 +757,33 @@ impl State {
 
         self.layers.push(layer_surface);
         self.layers.last_mut().unwrap()
+    }
+
+    /// Destroy the layer role on `surface` and take a fresh one on the same
+    /// `wl_surface` — what an OSD does when it re-arms. The role is swapped in
+    /// place: a second entry for one `wl_surface` would shadow the first in
+    /// [`State::layer`] and panic the configure dispatch, and a second
+    /// `wp_viewport` on it is a protocol error.
+    pub fn recreate_layer(
+        &mut self,
+        surface: &WlSurface,
+        output: Option<&WlOutput>,
+        layer: zwlr_layer_shell_v1::Layer,
+        namespace: String,
+    ) -> &mut LayerSurface {
+        let shell = self.layer_shell.clone().unwrap();
+        let entry = self
+            .layers
+            .iter_mut()
+            .find(|l| l.surface == *surface)
+            .unwrap();
+        entry.layer_surface.destroy();
+        entry.layer_surface =
+            shell.get_layer_surface(surface, output, layer, namespace, &self.qh, ());
+        entry.configures_received.clear();
+        entry.configures_looked_at = 0;
+        entry.close_requested = false;
+        entry
     }
 
     pub fn layer(&mut self, surface: &WlSurface) -> &mut LayerSurface {
@@ -641,6 +911,119 @@ impl State {
         let token = self.activation_token.clone().unwrap();
         activation.activate(token, target);
     }
+
+    pub fn lock_pointer(&mut self, surface: &WlSurface) -> ZwpLockedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        constraints.lock_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
+    pub fn confine_pointer(&mut self, surface: &WlSurface) -> ZwpConfinedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        constraints.confine_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
+    pub fn lock_session(&mut self) {
+        let manager = self.ext_session_lock_manager.as_ref().unwrap();
+        let lock = manager.lock(&self.qh, ());
+        self.session_locks.push(Lock {
+            qh: self.qh.clone(),
+            spbm: self.spbm.clone().unwrap(),
+            lock,
+            events: Vec::new(),
+            surfaces: Vec::new(),
+        });
+    }
+
+    pub fn create_lock_surface(&mut self, output: &WlOutput) -> &mut LockSurface {
+        let compositor = self.compositor.as_ref().unwrap();
+        let viewporter = self.viewporter.as_ref().unwrap();
+        let lock = self.session_locks.last().unwrap().lock.clone();
+
+        let surface = compositor.create_surface(&self.qh, ());
+        let lock_surface = lock.get_lock_surface(&surface, output, &self.qh, ());
+        let viewport = viewporter.get_viewport(&surface, &self.qh, ());
+
+        let lock_surface = LockSurface {
+            qh: self.qh.clone(),
+            spbm: self.spbm.clone().unwrap(),
+
+            surface,
+            lock_surface,
+            viewport,
+            configures_received: Vec::new(),
+        };
+
+        let lock = self.session_locks.last_mut().unwrap();
+        lock.surfaces.push(lock_surface);
+        lock.surfaces.last_mut().unwrap()
+    }
+
+    /// The role is swapped in place and the entry moved onto the current lock,
+    /// as [`Self::recreate_layer`] does: a second entry for one `wl_surface`
+    /// would shadow the first in [`Self::lock_surface`], handing later helpers
+    /// the dead role proxy, and a second `wp_viewport` on it is a protocol
+    /// error. Destroying the old proxy here is inert when the caller already
+    /// did it — which the orphan scenarios must, since they commit in between.
+    ///
+    /// Must be called on a freshly created lock, after an unlock — not a
+    /// second surface on the *same* still-locked lock. `get_lock_surface`'s
+    /// `DuplicateOutput` guard (`session_lock/lock.rs:59-62`) checks
+    /// `locked_outputs`, which still holds this client's cached `wl_output`
+    /// binding from the first surface, and [`Client::output`] hands back that
+    /// same binding — so a same-lock retake trips the guard and kills the
+    /// client.
+    pub fn retake_lock_surface(
+        &mut self,
+        surface: &WlSurface,
+        output: &WlOutput,
+    ) -> &mut LockSurface {
+        let lock = self.session_locks.last().unwrap().lock.clone();
+        let (index, position) = self
+            .session_locks
+            .iter()
+            .enumerate()
+            .find_map(|(index, l)| {
+                let position = l.surfaces.iter().position(|s| s.surface == *surface)?;
+                Some((index, position))
+            })
+            .unwrap();
+        let mut entry = self.session_locks[index].surfaces.remove(position);
+
+        entry.lock_surface.destroy();
+        entry.lock_surface = lock.get_lock_surface(surface, output, &self.qh, ());
+        entry.configures_received.clear();
+
+        let lock = self.session_locks.last_mut().unwrap();
+        lock.surfaces.push(entry);
+        lock.surfaces.last_mut().unwrap()
+    }
+
+    pub fn lock_surface(&mut self, surface: &WlSurface) -> &mut LockSurface {
+        self.session_locks
+            .iter_mut()
+            .flat_map(|l| l.surfaces.iter_mut())
+            .find(|s| s.surface == *surface)
+            .unwrap()
+    }
+
+    pub fn last_lock_surface(&mut self) -> &mut LockSurface {
+        self.session_locks
+            .last_mut()
+            .unwrap()
+            .surfaces
+            .last_mut()
+            .unwrap()
+    }
+
+    pub fn destroy_lock_object(&mut self) {
+        self.session_locks.last().unwrap().lock.destroy();
+    }
+
+    pub fn unlock_session(&mut self) {
+        self.session_locks.last().unwrap().lock.unlock_and_destroy();
+    }
 }
 
 impl Window {
@@ -679,6 +1062,23 @@ impl Window {
 
     pub fn set_size(&self, w: u16, h: u16) {
         self.viewport.set_destination(i32::from(w), i32::from(h));
+    }
+
+    /// Declare a minimum size, the floor the compositor's `SizeConstraints`
+    /// clamps a resize request to. Applies on the next commit.
+    pub fn set_min_size(&self, w: i32, h: i32) {
+        self.xdg_toplevel.set_min_size(w, h);
+    }
+
+    /// Declare a maximum size, the ceiling `SizeConstraints` clamps to.
+    pub fn set_max_size(&self, w: i32, h: i32) {
+        self.xdg_toplevel.set_max_size(w, h);
+    }
+
+    /// Declare the visible bounds inside the surface: it extends `(x, y)` beyond
+    /// the window at the top-left, the way a client drawing its own shadows does.
+    pub fn set_geometry(&self, x: i32, y: i32, w: i32, h: i32) {
+        self.xdg_surface.set_window_geometry(x, y, w, h);
     }
 
     pub fn set_fullscreen(&self, output: Option<&WlOutput>) {
@@ -870,6 +1270,43 @@ impl Popup {
     }
 }
 
+impl LockSurface {
+    pub fn commit(&self) {
+        self.surface.commit();
+    }
+
+    pub fn ack_last(&self) {
+        let serial = self.configures_received.last().unwrap().0;
+        self.lock_surface.ack_configure(serial);
+    }
+
+    pub fn ack_last_and_commit(&self) {
+        self.ack_last();
+        self.commit();
+    }
+
+    pub fn attach_new_buffer(&self) {
+        let buffer = self.spbm.create_u32_rgba_buffer(0, 0, 0, 0, &self.qh, ());
+        self.surface.attach(Some(&buffer), 0, 0);
+    }
+
+    pub fn attach_null(&self) {
+        self.surface.attach(None, 0, 0);
+    }
+
+    /// Destroy the `ext_session_lock_surface_v1` role, leaving the `wl_surface`
+    /// alive — what a toolkit resetting the surface's role does.
+    pub fn destroy_role(&self) {
+        self.lock_surface.destroy();
+    }
+
+    /// Scale the 1×1 buffer to `(w, h)` via `wp_viewport`, matching a
+    /// `LockSurfaceState` size — the compositor rejects a mismatch.
+    pub fn set_size(&self, w: u32, h: u32) {
+        self.viewport.set_destination(w as i32, h as i32);
+    }
+}
+
 impl Dispatch<WlCallback, Arc<SyncData>> for State {
     fn event(
         _state: &mut Self,
@@ -918,7 +1355,13 @@ impl Dispatch<WlRegistry, ()> for State {
                     state.viewporter = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WlSeat::interface().name {
                     let version = min(version, WlSeat::interface().version);
-                    state.seat = Some(registry.bind(name, version, qh, ()));
+                    let seat: WlSeat = registry.bind(name, version, qh, ());
+                    state.touch = Some(seat.get_touch(qh, ()));
+                    state.pointer = Some(seat.get_pointer(qh, ()));
+                    state.seat = Some(seat);
+                } else if interface == ZwpPointerConstraintsV1::interface().name {
+                    let version = min(version, ZwpPointerConstraintsV1::interface().version);
+                    state.pointer_constraints = Some(registry.bind(name, version, qh, ()));
                 } else if interface == XdgActivationV1::interface().name {
                     let version = min(version, XdgActivationV1::interface().version);
                     state.xdg_activation = Some(registry.bind(name, version, qh, ()));
@@ -929,6 +1372,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == ExtWorkspaceManagerV1::interface().name {
                     let version = min(version, ExtWorkspaceManagerV1::interface().version);
                     state.ext_workspace.manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == ExtSessionLockManagerV1::interface().name {
+                    let version = min(version, ExtSessionLockManagerV1::interface().version);
+                    state.ext_session_lock_manager = Some(registry.bind(name, version, qh, ()));
                 }
 
                 let global = Global {
@@ -1073,6 +1519,19 @@ impl Dispatch<WlCompositor, ()> for State {
         _state: &mut Self,
         _proxy: &WlCompositor,
         _event: <WlCompositor as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<WlRegion, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlRegion,
+        _event: <WlRegion as wayland_client::Proxy>::Event,
         _data: &(),
         _conn: &Connection,
         _qhandle: &QueueHandle<Self>,
@@ -1314,6 +1773,101 @@ impl Dispatch<WlSeat, ()> for State {
     }
 }
 
+impl Dispatch<WlTouch, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlTouch,
+        event: <WlTouch as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let recorded = match event {
+            wl_touch::Event::Down { .. } => TouchEvent::Down,
+            wl_touch::Event::Up { .. } => TouchEvent::Up,
+            wl_touch::Event::Motion { .. } => TouchEvent::Motion,
+            wl_touch::Event::Frame => TouchEvent::Frame,
+            wl_touch::Event::Cancel => TouchEvent::Cancel,
+            _ => unreachable!(),
+        };
+        state.touch_events.push(recorded);
+    }
+}
+
+impl Dispatch<WlPointer, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &WlPointer,
+        event: <WlPointer as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // `enter` carries a position too, so a regression that dropped focus and
+        // re-entered instead of re-motioning would still land one on the client.
+        match event {
+            wl_pointer::Event::Motion {
+                surface_x,
+                surface_y,
+                ..
+            }
+            | wl_pointer::Event::Enter {
+                surface_x,
+                surface_y,
+                ..
+            } => state.pointer_positions.push((surface_x, surface_y)),
+            _ => (),
+        }
+    }
+}
+
+impl Dispatch<ZwpPointerConstraintsV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpPointerConstraintsV1,
+        _event: <ZwpPointerConstraintsV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<ZwpLockedPointerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpLockedPointerV1,
+        event: <ZwpLockedPointerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_locked_pointer_v1::Event::Locked => (),
+            zwp_locked_pointer_v1::Event::Unlocked => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ZwpConfinedPointerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ZwpConfinedPointerV1,
+        event: <ZwpConfinedPointerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwp_confined_pointer_v1::Event::Confined => (),
+            zwp_confined_pointer_v1::Event::Unconfined => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
 impl Dispatch<XdgPositioner, ()> for State {
     fn event(
         _state: &mut Self,
@@ -1354,6 +1908,73 @@ impl Dispatch<XdgPopup, ()> for State {
             }
             xdg_popup::Event::PopupDone => popup.popup_done = true,
             xdg_popup::Event::Repositioned { .. } => (),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ExtSessionLockManagerV1, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &ExtSessionLockManagerV1,
+        _event: <ExtSessionLockManagerV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
+    }
+}
+
+impl Dispatch<ExtSessionLockV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        proxy: &ExtSessionLockV1,
+        event: <ExtSessionLockV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let lock = state
+            .session_locks
+            .iter_mut()
+            .find(|l| l.lock == *proxy)
+            .unwrap();
+
+        match event {
+            ext_session_lock_v1::Event::Locked => lock.events.push(LockEvent::Locked),
+            ext_session_lock_v1::Event::Finished => lock.events.push(LockEvent::Finished),
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<ExtSessionLockSurfaceV1, ()> for State {
+    fn event(
+        state: &mut Self,
+        lock_surface: &ExtSessionLockSurfaceV1,
+        event: <ExtSessionLockSurfaceV1 as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        let lock_surface = state
+            .session_locks
+            .iter_mut()
+            .flat_map(|l| l.surfaces.iter_mut())
+            .find(|s| s.lock_surface == *lock_surface)
+            .unwrap();
+
+        match event {
+            ext_session_lock_surface_v1::Event::Configure {
+                serial,
+                width,
+                height,
+            } => {
+                lock_surface
+                    .configures_received
+                    .push((serial, (width, height)));
+            }
             _ => unreachable!(),
         }
     }

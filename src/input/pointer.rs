@@ -1,4 +1,3 @@
-use std::cell::RefCell;
 use std::time::Duration;
 
 use smithay::{
@@ -14,7 +13,6 @@ use smithay::{
         wayland_protocols::xdg::shell::server::xdg_toplevel,
     },
     utils::{Point, SERIAL_COUNTER},
-    wayland::compositor::with_states,
 };
 
 use smithay::wayland::seat::WaylandFocus;
@@ -22,7 +20,7 @@ use smithay::wayland::seat::WaylandFocus;
 use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab, ResizeState};
+use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
 use crate::input::DecoTarget;
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
@@ -35,16 +33,36 @@ use smithay::reexports::wayland_server::Resource;
 
 impl DriftWm {
     /// Determine the binding context for the current pointer position.
-    pub(super) fn pointer_context(
+    pub(crate) fn pointer_context(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
     ) -> BindingContext {
+        // Every canvas-space walk below skips pinned windows, so a real one under
+        // the pointer needs its own screen-space arm — without it a click on a
+        // pinned window resolves OnCanvas. This is a plain "is anything here"
+        // disjunction, not a cascade: the arms are independent and none of them
+        // outranks another, so their order carries no meaning.
+        //
+        // `has_pinned` gates the conversion because it costs two output-state
+        // locks and this runs per scroll notch and per gesture begin.
+        let over_pinned = self.stage.has_pinned() && {
+            let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
+            self.pinned_window_under(screen_pos, pos).is_some()
+        };
         // SSD chrome and the CSD resize margin sit outside the surface bbox, so
         // `element_under` misses them; count them as OnWindow so on-window bindings
         // apply over the chrome, not just the client surface.
-        let over_window = self.element_under(pos).is_some()
+        //
+        // `decoration_under` reaches a canvas element's resize margin only while
+        // `resize_on_border` is on, so with the option off that band needs its own
+        // ungated arm — otherwise the same ring binds on-window around a pinned
+        // window (whose margin arrives above, ungated) and on-canvas around a
+        // canvas one.
+        let over_window = over_pinned
+            || self.element_under(pos).is_some()
             || self.canvas_layer_under(pos).is_some()
-            || self.decoration_under(pos).is_some();
+            || self.decoration_under(pos).is_some()
+            || (!self.config.resize_on_border && self.resize_margin_under(pos));
         if over_window {
             BindingContext::OnWindow
         } else {
@@ -940,6 +958,13 @@ impl DriftWm {
         } else {
             ClusterResizeSnapshot::empty()
         };
+        // Before the anchor is taken, as at every other resize seed site: the
+        // cancel is what stops a flight from moving the camera the anchor is
+        // projected through.
+        self.arm_interactive_move(&s.id);
+        let suspended_constraints =
+            crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome());
+        let (start_screen, start_zoom) = crate::grabs::resize_screen_anchor(&output, pos);
         let grab = ResizeGrab {
             start_data,
             target: ClusterMember::Suspended(s.id),
@@ -948,16 +973,17 @@ impl DriftWm {
             initial_window_size: size,
             last_window_size: size,
             output,
+            start_screen,
+            start_zoom,
             last_clamped_location: pos,
             snap: driftwm::layout::snap::SnapState::default(),
-            constraints: crate::grabs::SizeConstraints::for_suspended(),
+            constraints: suspended_constraints,
             cluster_resize,
             pinned_initial_screen_pos: None,
             touch_start: None,
             touch_slots: 0,
             locked_ratio: None,
         };
-        self.arm_interactive_move(&s.id);
         pointer.set_grab(self, grab, serial, Focus::Clear);
     }
 
@@ -1210,33 +1236,13 @@ impl DriftWm {
             }
         });
 
-        // Clear fit/fill state — user took manual control
-        self.stage.clear_fit(window);
-        self.stage.clear_fill(window);
-
-        // Store resize state for commit() repositioning
-        with_states(&wl_surface, |states| {
-            states
-                .data_map
-                .get_or_insert(|| RefCell::new(ResizeState::Idle))
-                .replace(ResizeState::Resizing {
-                    edges,
-                    initial_window_location,
-                    initial_window_size,
-                    initial_screen_pos: pinned_initial_screen_pos,
-                    last_committed_size: initial_window_size,
-                });
-        });
-
-        if let Some(toplevel) = window.toplevel() {
-            toplevel.with_pending_state(|state| {
-                state.states.set(xdg_toplevel::State::Resizing);
-                // Mirror the fit-state clear above so the client's view stays
-                // in sync — otherwise its own restore button dispatches an
-                // unmaximize_request that `unfit_window` would silently drop.
-                state.states.unset(xdg_toplevel::State::Maximized);
-            });
-        }
+        self.begin_client_resize(
+            window,
+            &wl_surface,
+            edges,
+            initial_window_size,
+            pinned_initial_screen_pos,
+        );
 
         self.cursor.grab_cursor = true;
         self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
@@ -1259,6 +1265,7 @@ impl DriftWm {
         };
         let constraints = crate::grabs::SizeConstraints::for_window(window);
         let locked_ratio = crate::grabs::locked_ratio_for(window, initial_window_size);
+        let (start_screen, start_zoom) = crate::grabs::resize_screen_anchor(&output, pos);
         let grab = ResizeGrab {
             start_data,
             target: ClusterMember::Client(window.clone()),
@@ -1267,6 +1274,8 @@ impl DriftWm {
             initial_window_size,
             last_window_size: initial_window_size,
             output,
+            start_screen,
+            start_zoom,
             last_clamped_location: pos,
             snap: driftwm::layout::snap::SnapState::default(),
             constraints,
@@ -1298,18 +1307,6 @@ impl DriftWm {
         let pointer = self.seat.get_pointer().unwrap();
         let mut pos = pointer.current_location();
         let source = event.source();
-
-        // Scroll over an opaque suspended window is swallowed: there's no client
-        // to forward it to, and it must not pan/zoom the canvas beneath.
-        if matches!(
-            self.decoration_under(pos),
-            Some((DecoTarget::Suspended(_), _))
-        ) {
-            let frame = AxisFrame::new(Event::time_msec(&event));
-            pointer.axis(self, frame);
-            pointer.frame(self);
-            return;
-        }
 
         // Discrete wheel-notch bindings (wheel-up / wheel-down) run any
         // action once per notch — volume on mod+shift+scroll and the like.
@@ -1426,26 +1423,34 @@ impl DriftWm {
                         let s = self.config.trackpad_speed;
                         let canvas_delta: Point<f64, smithay::utils::Logical> =
                             Point::from((h * s / self.zoom(), v * s / self.zoom()));
-                        self.drift_pan(canvas_delta, Event::time_msec(&event));
-                        let new_pos = pos + canvas_delta;
-                        let serial = SERIAL_COUNTER.next_serial();
-                        // Suspended-aware cascade: a stand-in under the panned
-                        // cursor yields no focus, matching a real motion. Uses
-                        // the pick variant — routing only the obvious motion
-                        // sites would let this re-dispatch restore client focus
-                        // on every scroll event, undoing the pick guard.
-                        let screen_pos =
-                            canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
-                        let under = self.pointer_focus_under_pick(screen_pos, new_pos);
-                        pointer.motion(
-                            self,
-                            under,
-                            &MotionEvent {
-                                location: new_pos,
-                                serial,
-                                time: Event::time_msec(&event),
-                            },
-                        );
+                        let canvas_delta = self.drift_pan(canvas_delta, Event::time_msec(&event));
+                        // Zero means the camera did not move: a fullscreen output
+                        // refusing the pan, a `trackpad_speed` of 0, or no active
+                        // output to pan. The cursor is where it already was, so
+                        // dispatching would only flush a same-position event and
+                        // re-run the hit test — in the fullscreen case, over a
+                        // scene the cull has already removed.
+                        if canvas_delta.x != 0.0 || canvas_delta.y != 0.0 {
+                            let new_pos = pos + canvas_delta;
+                            let serial = SERIAL_COUNTER.next_serial();
+                            // Suspended-aware cascade: a stand-in under the panned
+                            // cursor yields no focus, matching a real motion. Uses
+                            // the pick variant — routing only the obvious motion
+                            // sites would let this re-dispatch restore client focus
+                            // on every scroll event, undoing the pick guard.
+                            let screen_pos =
+                                canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
+                            let under = self.pointer_focus_under_pick(screen_pos, new_pos);
+                            pointer.motion(
+                                self,
+                                under,
+                                &MotionEvent {
+                                    location: new_pos,
+                                    serial,
+                                    time: Event::time_msec(&event),
+                                },
+                            );
+                        }
                     } else if source == AxisSource::Finger {
                         // amount(axis) == Some(0.0) or None → finger lifted, launch momentum
                         self.launch_momentum();
@@ -1491,7 +1496,21 @@ impl DriftWm {
             return;
         }
 
-        // No binding matched — forward scroll to the client
+        // No binding matched — forward scroll to the client, unless the pointer
+        // sits on an opaque suspended window: there's no client to forward to,
+        // and an unbound scroll must not pan/zoom the canvas beneath. The
+        // swallow lives at the tail, not ahead of the binding lookup, so a
+        // bound scroll (an `anywhere` alt+wheel zoom, mod+wheel pan) still
+        // fires over a stand-in like over any window.
+        if matches!(
+            self.decoration_under(pos),
+            Some((DecoTarget::Suspended(_), _))
+        ) {
+            let frame = AxisFrame::new(Event::time_msec(&event));
+            pointer.axis(self, frame);
+            pointer.frame(self);
+            return;
+        }
         let frame = build_client_axis_frame::<I>(&event);
         pointer.axis(self, frame);
         pointer.frame(self);

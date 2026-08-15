@@ -20,11 +20,12 @@ use std::time::{Duration, Instant};
 
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use driftwm::config::{Action, Config, Direction};
+use driftwm::config::{Action, BTN_LEFT, Config, Direction};
 use driftwm::desktop_entry::DesktopEntryCache;
 use driftwm::stage::ElementId;
 
 use smithay::desktop::Window;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use wayland_client::protocol::wl_surface::WlSurface as ClientSurface;
 
 use crate::state::window_animation::AnimSpace;
@@ -32,7 +33,9 @@ use crate::state::{StageWindow, SuspendedId};
 
 use super::client::ClientId;
 use super::real::TempDir;
-use super::{Fixture, map_window, window_by_app_id};
+use super::{
+    Fixture, end_grab, map_window, motion, tick_until_settled, ticks_to_settle, window_by_app_id,
+};
 
 const TICK: Duration = Duration::from_millis(16);
 const MAX_TICKS: usize = 600;
@@ -46,12 +49,8 @@ fn dist(a: Point<f64, Logical>, b: Point<f64, Logical>) -> f64 {
 }
 
 /// Active output at camera origin, zoom 1, with every camera animation quieted so
-/// `output_has_active_animations` reflects only window animations. Moving/syncing
-/// the camera populates the per-output `blur_camera_generation` map (which only
-/// drains on output disconnect), so any caller ends off-baseline — opt out, the
-/// same way the camera-animation suite does.
+/// `output_has_active_animations` reflects only window animations.
 fn reset_view(f: &mut Fixture) {
-    f.skip_baseline_check();
     f.state().with_output_state(|os| {
         os.camera = Point::from((0.0, 0.0));
         os.zoom = 1.0;
@@ -122,25 +121,6 @@ fn seed_resize_capture(f: &mut Fixture, id: ElementId) {
         1,
         "the seeded capture is in the map, so the drop below has something to do"
     );
-}
-
-/// Drive real-time ticks until every window animation prunes, panicking on
-/// non-convergence. Only valid for entries that actually settle (position-only,
-/// resolved requests, open) — an entry holding an outstanding request would spin
-/// to the panic, which is the point of `PAST_HOLD` elsewhere.
-fn tick_until_settled(f: &mut Fixture) {
-    ticks_to_settle(f);
-}
-
-/// As [`tick_until_settled`], returning how many ticks convergence took.
-fn ticks_to_settle(f: &mut Fixture) -> usize {
-    for n in 0..MAX_TICKS {
-        if !f.state().window_animations.is_active() {
-            return n;
-        }
-        f.state().tick_window_animations(TICK);
-    }
-    panic!("window animations did not converge within {MAX_TICKS} ticks");
 }
 
 /// Put a suspended "myapp" stand-in into the pending-relaunch state (the
@@ -676,9 +656,6 @@ fn pinned_entry_chases_in_screen_space_and_survives_a_pan() {
         Config::from_toml("[[window_rules]]\napp_id = \"p\"\npinned_to_screen = true\n").unwrap(),
     );
     let output = f.add_output(1, (1920, 1080));
-    // Panning the camera below populates blur_camera_generation (drains only on
-    // output disconnect) — end off-baseline like the camera-animation suite.
-    f.skip_baseline_check();
     let id = f.add_client();
     let surface = map_window(&mut f, id, "p", (400, 300));
     let window = window_by_app_id(&mut f, "p").unwrap();
@@ -830,6 +807,92 @@ fn output_is_visually_fullscreen_only_after_the_entry_finishes() {
     assert!(
         f.state().is_output_visually_fullscreen(&output),
         "the output is visually fullscreen once the entry converges"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The settled predicate also carries a camera-scoped claim, mirroring the
+/// frozen picture's: the window is mapped at the camera origin, so a viewport
+/// that has drifted off that origin is one the window no longer covers, and
+/// claiming coverage there would cull the canvas out from under it.
+#[test]
+fn a_camera_drifted_off_the_fullscreen_park_is_no_longer_visually_covered() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "precondition: the settled entry covers the output"
+    );
+
+    f.state().with_output_state(|os| os.camera.x += 1.0);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a camera that drifted off the park origin covers nothing"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The park comparison is exact, not epsilon: it writes integers and exactly
+/// 1.0, so even a sub-pixel drift is a real seam to catch, not rounding noise
+/// to tolerate.
+#[test]
+fn a_subpixel_camera_drift_off_the_fullscreen_park_also_ends_coverage() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+
+    f.state().with_output_state(|os| os.camera.x += 0.001);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a hair of drift must not be tolerated as rounding noise"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+}
+
+/// The settled predicate's camera-scoped claim is a conjunction, not just the
+/// camera half of it: a zoom that drifted off 1.0 while the camera stayed
+/// exactly on the park origin must also end the coverage claim — the window is
+/// mapped at zoom 1, so anything else no longer matches what is on screen.
+#[test]
+fn a_zoom_drifted_off_the_fullscreen_park_is_no_longer_visually_covered() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "fs", (800, 600));
+    reset_view(&mut f);
+
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().is_output_visually_fullscreen(&output),
+        "precondition: the settled entry covers the output"
+    );
+
+    f.state().with_output_state(|os| os.zoom += 0.001);
+    assert!(
+        !f.state().is_output_visually_fullscreen(&output),
+        "a zoom that drifted off the park's 1.0 covers nothing, even with the \
+         camera still exactly parked"
     );
 
     f.state().exit_fullscreen_on(&output);
@@ -1176,8 +1239,6 @@ fn per_output_predicate_scopes_to_the_intersecting_output() {
     let mut f = Fixture::new();
     let out1 = f.add_output(1, (1920, 1080));
     let out2 = f.add_output(2, (1280, 720));
-    // Camera writes below populate blur_camera_generation — end off-baseline.
-    f.skip_baseline_check();
     let id = f.add_client();
     map_window(&mut f, id, "a", (400, 300));
     let window = window_by_app_id(&mut f, "a").unwrap();
@@ -2728,7 +2789,7 @@ fn a_frozen_resize_that_moves_off_screen_is_still_drawn() {
 }
 
 /// A resize below the sub-threshold floor carries no request at all — nothing
-/// worth freezing over (`MIN_ANIMATED_RESIZE` in `state::animation`).
+/// worth freezing over (`MIN_ANIMATED_RESIZE` in `state::window_animation`).
 #[test]
 fn a_sub_threshold_resize_carries_no_request() {
     let mut f = Fixture::new();
@@ -2765,9 +2826,9 @@ fn a_sub_threshold_resize_carries_no_request() {
 }
 
 /// The mirror: an exit armed while the *enter* is still frozen must not strip the
-/// chrome off the windowed picture that freeze is holding. Filled first, so the
-/// exit restores to a size the client does not have and the retarget genuinely
-/// carries a request.
+/// chrome off the windowed picture that freeze is holding. Seeded with a restore
+/// size the client never had, so the exit restores to a size that isn't on screen
+/// and the retarget genuinely carries a request.
 #[test]
 fn a_fullscreen_exit_during_the_enter_freeze_keeps_the_windowed_chrome() {
     let mut f = Fixture::new();
@@ -2781,11 +2842,11 @@ fn a_fullscreen_exit_during_the_enter_freeze_keeps_the_windowed_chrome() {
     let eid = element_id(&mut f, &window);
     tick_until_settled(&mut f);
 
-    f.state().fill_window(&window);
-    f.double_roundtrip(id);
-    super::adopt_last_configure(&mut f, id, &surface);
-    f.double_roundtrip(id);
-    tick_until_settled(&mut f);
+    // What a resize settle leaves behind once the client shrinks itself again:
+    // the size the exit will restore to is not the one on screen.
+    f.state()
+        .stage
+        .set_restore_size(&window, Size::from((520, 380)));
 
     f.client(id).window(&surface).set_fullscreen(None);
     f.double_roundtrip(id);
@@ -3868,6 +3929,593 @@ fn cancelling_a_frozen_fit_drops_its_parked_pan() {
     );
 }
 
+/// A drag takes over the geometry of what it grabs, so the entry still chasing
+/// that element toward an earlier destination has to go — otherwise the window
+/// sits motionless under the cursor and rubber-bands over a full leg when the
+/// chase releases. The end happens on the first motion, not at grab install:
+/// the SSD title bar installs a move grab on every left press, including plain
+/// focus clicks.
+#[test]
+fn a_resize_drag_ends_the_entry_it_fights() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+    let eid = element_id(&mut f, &window);
+    tick_until_settled(&mut f);
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&window, serial);
+
+    // A nudge leaves the window travelling toward its new position.
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "precondition: the nudge armed a chase"
+    );
+
+    // The user grabs the right edge before it lands.
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let grab_at = Point::from((pos.x as f64 + 390.0, pos.y as f64 + 150.0));
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "installing the grab alone leaves the chase alone"
+    );
+
+    motion(&mut f, grab_at + Point::from((40.0, 0.0)));
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "the first resizing motion ended the chase it was fighting"
+    );
+    assert!(
+        f.state()
+            .window_animations
+            .geometry_visual_rect(eid)
+            .is_none(),
+        "nothing overrides the live rect any more, so the window tracks the drag"
+    );
+    end_grab(&mut f);
+}
+
+/// The stand-in half of the same rule, through the other grab type.
+#[test]
+fn a_stand_in_drag_ends_the_entry_it_fights() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((200, 200)),
+        Size::from((300, 200)),
+        "n",
+        "N",
+    );
+    let element = standin_element(&mut f, sid);
+
+    // Something displaced it; the slide is still running.
+    f.state()
+        .map_window(element.clone(), Point::from((900, 200)), false);
+    f.state()
+        .animate_element_move_from(&element, Point::from((200, 200)), None);
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "precondition: the slide armed an entry"
+    );
+
+    let grab_at = Point::from((1000.0, 300.0));
+    assert!(f.state().try_start_gesture_move(grab_at, false));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "installing the grab alone leaves the slide alone"
+    );
+
+    motion(&mut f, grab_at + Point::from((60.0, 20.0)));
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "the first moving motion ended the slide it was fighting"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&element),
+        Some(Point::from((960, 220))),
+        "and the stand-in tracks the finger from its stage position"
+    );
+    end_grab(&mut f);
+}
+
+/// Ending an entry is not cancelling one: a fit parks its whole camera move on
+/// the entry it freezes, and only that entry can ever hand it back. A drag takes
+/// the *window* away from the fit, not the viewport — so the pan still lands,
+/// unlike the `cancel_window_animation` above, which drops it deliberately.
+#[test]
+fn a_drag_interrupting_a_fit_still_lands_its_parked_pan() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(window.clone(), Point::from((600, 400)), false);
+    tick_until_settled(&mut f);
+
+    f.state().fit_window(&window);
+    assert!(
+        f.state().camera_target().is_none(),
+        "precondition: the fit parked its pan behind the freeze"
+    );
+
+    // The user drags the window inside the freeze.
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let grab_at = Point::from((pos.x as f64 + 100.0, pos.y as f64 + 100.0));
+    assert!(f.state().try_start_gesture_move(grab_at, false));
+    motion(&mut f, grab_at + Point::from((50.0, 20.0)));
+
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "the drag ended the fit's entry"
+    );
+    assert!(
+        f.state().camera_target().is_some(),
+        "the pan parked on that entry still lands — the drag took the window \
+         away from the fit, not the view"
+    );
+    end_grab(&mut f);
+}
+
+/// The same rule on the other release path. A press with no motion leaves the
+/// entry standing, so the client's own ack is what frees the parked pan — and
+/// the user holding the fitted window is the one who asked for the fit, so it
+/// still lands.
+#[test]
+fn a_fit_lands_its_parked_pan_on_a_commit_under_a_grab_on_its_own_window() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(window.clone(), Point::from((600, 400)), false);
+    let eid = element_id(&mut f, &window);
+    tick_until_settled(&mut f);
+
+    let want_camera = fit_target_camera(&mut f, &window);
+    f.state().fit_window(&window);
+    assert!(
+        f.state().camera_target().is_none(),
+        "precondition: the fit parked its pan behind the freeze"
+    );
+
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let grab_at = Point::from((pos.x as f64 + 100.0, pos.y as f64 + 100.0));
+    assert!(f.state().try_start_gesture_move(grab_at, false));
+    assert!(
+        f.state().window_animations.start_held(eid),
+        "precondition: a press with no motion leaves the freeze standing"
+    );
+
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    f.double_roundtrip(id);
+    f.state().tick_window_animations(TICK);
+
+    let camera_target = f.state().camera_target();
+    assert!(
+        camera_target.is_some_and(|c| dist(c, want_camera) < 1e-6),
+        "the drag holding the fitted window inherits its pan, got \
+         {camera_target:?} want {want_camera:?}"
+    );
+    end_grab(&mut f);
+}
+
+/// A grab on some *other* window is not the fit's heir. Landing the pan under it
+/// would slide the canvas out from under a drag that never asked for it — and it
+/// would land more readily under a grab than with none at all, since the grab
+/// install is what cleared the camera targets `apply_pending_view` treats as a
+/// later action's claim. The pan is only held back, though: it lands once the
+/// unrelated grab lets go.
+#[test]
+fn a_grab_on_another_window_holds_back_a_fits_parked_pan() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", (400, 300));
+    map_window(&mut f, id, "b", (400, 300));
+    let fitted = window_by_app_id(&mut f, "a").unwrap();
+    let other = window_by_app_id(&mut f, "b").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(fitted.clone(), Point::from((600, 400)), false);
+    f.state()
+        .map_window(other.clone(), Point::from((1300, 700)), false);
+    tick_until_settled(&mut f);
+
+    let want_camera = fit_target_camera(&mut f, &fitted);
+    f.state().fit_window(&fitted);
+    assert!(
+        f.state().camera_target().is_none(),
+        "precondition: the fit parked its pan behind the freeze"
+    );
+
+    assert!(
+        f.state()
+            .try_start_gesture_move(Point::from((1400.0, 800.0)), false)
+    );
+
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    f.double_roundtrip(id);
+
+    // Past the whole geometry leg, not just the tick that releases the freeze:
+    // convergence takes a fraction of a second and drops the entry the pan was
+    // parked on, so anything merely *skipped* here is gone for good.
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().camera_target().is_none(),
+        "the pan is held back for as long as an unrelated window is held"
+    );
+
+    end_grab(&mut f);
+
+    let camera_target = f.state().camera_target();
+    assert!(
+        camera_target.is_some_and(|c| dist(c, want_camera) < 1e-6),
+        "the pan was held back, not consumed, got {camera_target:?} want \
+         {want_camera:?}"
+    );
+}
+
+/// The gate has to answer "is a grab live", not "is an interactive move armed":
+/// a client resize installs a grab measuring against the same frozen canvas
+/// anchor and pushes nothing to `interactive_move`, since the surface's own
+/// `ResizeState` is what witnesses it.
+#[test]
+fn a_client_resize_grab_holds_back_a_fits_parked_pan() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", (400, 300));
+    map_window(&mut f, id, "b", (400, 300));
+    let fitted = window_by_app_id(&mut f, "a").unwrap();
+    let other = window_by_app_id(&mut f, "b").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(fitted.clone(), Point::from((600, 400)), false);
+    f.state()
+        .map_window(other.clone(), Point::from((1300, 700)), false);
+    tick_until_settled(&mut f);
+
+    let want_camera = fit_target_camera(&mut f, &fitted);
+    f.state().fit_window(&fitted);
+    assert!(
+        f.state().camera_target().is_none(),
+        "precondition: the fit parked its pan behind the freeze"
+    );
+
+    let pointer = f.state().seat.get_pointer().unwrap();
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    assert!(
+        f.state().start_compositor_resize_with_edge(
+            &pointer,
+            &other,
+            Point::from((1690.0, 850.0)),
+            BTN_LEFT,
+            serial,
+            Some(xdg_toplevel::ResizeEdge::Right),
+            false,
+        ),
+        "precondition: the client resize grab installed"
+    );
+    assert!(
+        f.state().interactive_move.is_empty(),
+        "precondition: and left no interactive-move entry to be found by"
+    );
+
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    f.double_roundtrip(id);
+
+    tick_until_settled(&mut f);
+    assert!(
+        f.state().camera_target().is_none(),
+        "the pan is held back for as long as the resize is held"
+    );
+
+    end_grab(&mut f);
+
+    let camera_target = f.state().camera_target();
+    assert!(
+        camera_target.is_some_and(|c| dist(c, want_camera) < 1e-6),
+        "and lands when the resize lets go, got {camera_target:?} want \
+         {want_camera:?}"
+    );
+}
+
+/// A pan staged for another output cannot reach the grab in the first place —
+/// only the active output's camera warps the pointer. Holding it back would be
+/// pure delay on a monitor the drag is not even on.
+#[test]
+fn a_drag_on_one_output_does_not_hold_back_a_pan_staged_for_another() {
+    let mut f = Fixture::new();
+    let first = f.add_output(1, (1920, 1080));
+    let second = f.add_output(2, (1920, 1080));
+    let id = f.add_client();
+    let surface = map_window(&mut f, id, "a", (400, 300));
+    map_window(&mut f, id, "b", (400, 300));
+    let fitted = window_by_app_id(&mut f, "a").unwrap();
+    let other = window_by_app_id(&mut f, "b").unwrap();
+    reset_view(&mut f);
+    // Both viewports onto the same canvas region — the default, since every
+    // output's camera starts centred on the origin — so the fit's geometry is
+    // the single-output one and only the output it stages for differs.
+    {
+        let mut os = crate::state::output_state(&second);
+        os.camera = Point::from((0.0, 0.0));
+        os.zoom = 1.0;
+    }
+    f.state()
+        .map_window(fitted.clone(), Point::from((600, 400)), false);
+    f.state()
+        .map_window(other.clone(), Point::from((1300, 700)), false);
+    tick_until_settled(&mut f);
+
+    // Fit against the second output, then hand the pointer back to the first.
+    let want_camera = fit_target_camera(&mut f, &fitted);
+    f.state().focused_output = Some(second.clone());
+    f.state().fit_window(&fitted);
+    f.state().focused_output = Some(first.clone());
+
+    assert!(
+        f.state()
+            .try_start_gesture_move(Point::from((1400.0, 800.0)), false)
+    );
+    assert_eq!(
+        f.state().active_output(),
+        Some(first),
+        "precondition: the drag leaves the fitted output inactive"
+    );
+
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    f.double_roundtrip(id);
+    tick_until_settled(&mut f);
+
+    let camera_target = crate::state::output_state(&second).camera_target;
+    assert!(
+        camera_target.is_some_and(|c| dist(c, want_camera) < 1e-6),
+        "the other output's pan lands while the drag is still held, got \
+         {camera_target:?} want {want_camera:?}"
+    );
+    end_grab(&mut f);
+}
+
+/// The take-down waits for a geometry change, not for a motion *event*. A press
+/// that displaces nothing still gets motion: sub-pixel jitter truncates back to
+/// the same integer canvas position, and `warp_pointer` delivers every camera
+/// animation's compensating motion straight into a live grab. Ending on the
+/// event alone put a plain title-bar focus click back in the business of popping
+/// a running entry.
+#[test]
+fn a_move_motion_that_does_not_move_the_window_leaves_the_entry_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((200, 200)),
+        Size::from((300, 200)),
+        "n",
+        "N",
+    );
+    let element = standin_element(&mut f, sid);
+
+    f.state()
+        .map_window(element.clone(), Point::from((900, 200)), false);
+    f.state()
+        .animate_element_move_from(&element, Point::from((200, 200)), None);
+
+    let grab_at = Point::from((1000.0, 300.0));
+    assert!(f.state().try_start_gesture_move(grab_at, false));
+
+    motion(&mut f, grab_at + Point::from((0.4, 0.4)));
+    assert_eq!(
+        f.state().stage.position_of(&element),
+        Some(Point::from((900, 200))),
+        "precondition: sub-pixel motion truncates back to the same position"
+    );
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "a motion that moved nothing has taken nothing away from the slide"
+    );
+
+    motion(&mut f, grab_at + Point::from((60.0, 20.0)));
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "the first motion that does move it ends the slide"
+    );
+    end_grab(&mut f);
+}
+
+/// The resize half of the same rule: a motion too small to change the size sends
+/// no configure, so there is nothing for the entry to be fighting yet.
+#[test]
+fn a_resize_motion_that_does_not_resize_the_window_leaves_the_entry_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    reset_view(&mut f);
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+    tick_until_settled(&mut f);
+    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&window, serial);
+
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "precondition: the nudge armed a chase"
+    );
+
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let grab_at = Point::from((pos.x as f64 + 390.0, pos.y as f64 + 150.0));
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+
+    motion(&mut f, grab_at + Point::from((0.5, 0.0)));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "a motion that drove no new size has taken nothing away from the chase"
+    );
+
+    motion(&mut f, grab_at + Point::from((40.0, 0.0)));
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "the first motion that does drive the size ends the chase"
+    );
+    end_grab(&mut f);
+}
+
+/// A cluster member is repositioned by every tick of the drag exactly as the
+/// primary is, and unlike the primary it is not under `interactive_move` — so an
+/// entry can be armed on it at any time and it has to be taken down on the same
+/// terms. Left running, the member holds its frozen picture still while the drag
+/// moves it, then rubber-bands when the chase releases.
+#[test]
+fn a_cluster_drag_ends_the_entry_a_member_fights() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    let member = StageWindow::Client(window.clone());
+
+    // A stand-in with the client adjacent on its right → one cluster.
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(member.clone(), Point::from((800 + gap, 300)), false);
+    reset_view(&mut f);
+
+    // Something displaced the member; its slide is still running.
+    f.state()
+        .animate_element_move_from(&member, Point::from((800 + gap, 700)), None);
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "precondition: the member carries a chase"
+    );
+
+    // Cluster-drag the stand-in; the member rides the same delta.
+    let grab_at = Point::from((600.0, 450.0));
+    assert!(f.state().try_start_gesture_move(grab_at, true));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "installing the grab alone leaves the member's chase alone"
+    );
+
+    motion(&mut f, grab_at + Point::from((100.0, 50.0)));
+    assert_eq!(
+        f.state().stage.position_of(&member),
+        Some(Point::from((900 + gap, 350))),
+        "precondition: the drag repositioned the member"
+    );
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "a repositioned member is fought on the same terms as the primary"
+    );
+    end_grab(&mut f);
+    f.state().dismiss_suspended(sid);
+}
+
+/// The resize half of the member rule: a cascade shifts its members through the
+/// stage directly, so the take-down rides the shifts the cascade reports rather
+/// than the primary's own configure.
+#[test]
+fn a_cluster_resize_ends_the_entry_a_shifted_member_fights() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    let member = StageWindow::Client(window.clone());
+
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(member.clone(), Point::from((800 + gap, 300)), false);
+    reset_view(&mut f);
+
+    f.state()
+        .animate_element_move_from(&member, Point::from((800 + gap, 700)), None);
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "precondition: the member carries a chase"
+    );
+
+    // Right third of the stand-in → a right-edge resize; the member cascades.
+    let grab_at = Point::from((700.0, 450.0));
+    assert!(f.state().try_start_gesture_resize(grab_at, true));
+    assert_eq!(
+        f.state().window_animations.len(),
+        1,
+        "installing the grab alone leaves the member's chase alone"
+    );
+
+    motion(&mut f, grab_at + Point::from((100.0, 0.0)));
+    assert_eq!(
+        f.state().stage.position_of(&member),
+        Some(Point::from((900 + gap, 300))),
+        "precondition: the cascade shifted the member"
+    );
+    assert_eq!(
+        f.state().window_animations.len(),
+        0,
+        "a shifted member is fought on the same terms as the resized primary"
+    );
+    end_grab(&mut f);
+    f.state().dismiss_suspended(sid);
+}
+
 // A snapped fit's pushed cluster neighbours wait for the window pushing them:
 // `animate_element_move_from`'s `waits_for` parks a follower on whatever entry
 // it names until that entry's own start freeze releases, so the two move as one
@@ -4522,6 +5170,9 @@ fn a_snapped_fit_slides_a_stand_in_cluster_member_and_lands_it_at_its_stage_posi
     let psurface = map_window(&mut f, id, "primary", (300, 300));
     let primary = window_by_app_id(&mut f, "primary").unwrap();
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     f.state()
         .map_window(primary.clone(), Point::from((400, 300)), false);
     let peid = element_id(&mut f, &primary);
@@ -4583,6 +5234,9 @@ fn a_stand_ins_slide_is_not_culled_when_its_target_leaves_every_viewport() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),
@@ -4607,6 +5261,77 @@ fn a_stand_ins_slide_is_not_culled_when_its_target_leaves_every_viewport() {
     assert!(
         f.state().canvas_rect_drawable(culled),
         "but the picture is still on screen mid-slide, so it must still be drawn"
+    );
+}
+
+/// The rect a dismiss fades from is where the stand-in's picture is, not where
+/// its slide was headed. Reading the destination both freezes the departing
+/// chrome at the far end and — when that end is off every viewport — judges the
+/// fade undrawable and skips it, losing an animation whose picture is on screen.
+#[test]
+fn a_dismissed_stand_in_departs_from_its_mid_slide_picture_not_its_destination() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((200, 200)),
+        Size::from((300, 200)),
+        "n",
+        "N",
+    );
+    let element = standin_element(&mut f, sid);
+
+    // Slide across the viewport first and stop partway. Reading at t=0 proves
+    // nothing: the seed is still exactly the from-rect on the first frame, so
+    // the picture and either end coincide.
+    let start = Point::from((200, 200));
+    f.state()
+        .map_window(element.clone(), Point::from((1500, 200)), false);
+    f.state().animate_element_move_from(&element, start, None);
+    for _ in 0..3 {
+        f.state().tick_window_animations(TICK);
+    }
+
+    let midway = f
+        .state()
+        .departing_standin_rect(&element)
+        .expect("the stand-in is still on the stage")
+        .loc;
+    assert!(
+        midway.x > start.x as f64 && midway.x < 1500.0,
+        "the departing rect is the leg's live picture, between where the slide \
+         began and where it is headed: {midway:?}"
+    );
+
+    // Now re-aim it off every viewport, which is where reading the destination
+    // costs the animation outright rather than merely misplacing it.
+    f.state()
+        .map_window(element.clone(), Point::from((60000, 60000)), false);
+    f.state()
+        .animate_element_move_from(&element, Point::from((1500, 200)), None);
+    let destination = Rectangle::new(Point::from((60000, 60000)), Size::from((300, 200)));
+    assert!(
+        !f.state().canvas_rect_drawable(destination),
+        "precondition: the slide is headed off every viewport"
+    );
+
+    let departing = f
+        .state()
+        .departing_standin_rect(&element)
+        .expect("the stand-in is still on the stage")
+        .loc;
+    assert_eq!(
+        departing, midway,
+        "the re-aim carried the picture forward instead of jumping it to either end"
+    );
+    assert!(
+        f.state()
+            .canvas_rect_drawable(Rectangle::new(departing.to_i32_round(), (300, 200).into())),
+        "so the dismiss fades it instead of skipping it as undrawable"
     );
 }
 
@@ -4655,6 +5380,9 @@ fn no_entry_starts_on_a_stand_in_under_an_interactive_grab() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     reset_view(&mut f);
+    // The stand-in below has no client to close it, so it is still on the
+    // stage at teardown — end off-baseline.
+    f.skip_baseline_check();
     let sid = f.state().insert_suspended_for_test(
         1,
         Point::from((200, 200)),

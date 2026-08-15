@@ -8,14 +8,14 @@ JSON, so any language can speak it directly.
 ## `driftwm msg`
 
 Run `driftwm msg <command>` from inside a driftwm session. The commands —
-`camera`, `zoom`, `focus`, `move`, `opacity`, `close`, `suspend`, `relaunch`,
-`layout`, `action`, `bookmark`, `screenshot`, `state`, `subscribe`, and
-`debug-counters` — with their arguments, flags, and JSON reply shapes are
+`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `close`, `suspend`,
+`relaunch`, `layout`, `action`, `bookmark`, `screenshot`, `state`, `subscribe`,
+and `debug-counters` — with their arguments, flags, and JSON reply shapes are
 documented in the generated [CLI reference](cli.md); `driftwm msg <command> --help`
 prints the same for one command. The conventions they share follow below.
 
-`camera`, `zoom`, `focus`, `move`, `opacity`, and `bookmark` read when given no
-arguments and write when given arguments. The others don't follow that rule:
+`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, and `bookmark` read when
+given no arguments and write when given arguments. The others don't follow that rule:
 `action` requires its arguments, `close`/`suspend`/`relaunch` act on the focused
 window when given no selector, and `layout`, `screenshot`, `state`, `subscribe`,
 and `debug-counters` need no arguments at all. A command that fails (bad value,
@@ -33,15 +33,70 @@ Window and camera positions use the same convention as
 point, with **Y pointing up**. `move 0 0` centers the focused window on the
 origin, `camera 0 0` centers the viewport there, and positive `y` is above.
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
-refuses to reposition them.
+refuses to reposition them and `resize` refuses to resize them. Reading either
+still works.
+
+`camera` and `zoom` take the opposite policy. A fullscreen window parks the
+viewport, so **setting** either one exits fullscreen first and then applies,
+rather than refusing. The practical consequence: a script that polls `camera` and
+writes the value back — a follow-the-focus panner, say — will drop a user out of
+a fullscreen video the first time it writes. Reading is always safe; `camera` and
+`zoom` with no argument never disturb fullscreen.
+
+### Sizes and the visual frame
+
+Every size and position here describes the window's **visual frame**: the
+client's content plus the compositor-drawn title bar and border, if it has them.
+So a grid laid out from `state` sizes tiles exactly, whether the windows are
+server-decorated, client-decorated or bare — no script has to know which, and
+none could find out anyway.
+
+Two consequences worth knowing:
+
+- A client's own minimum and maximum sizes describe its *content*, so a `resize`
+  clamped by them comes back as that clamped content plus the chrome. Ask a
+  server-decorated window for a frame smaller than its title bar and you get the
+  smallest frame it can have.
+- `screenshot --window` still captures the drop shadow as well, so its pixel
+  dimensions stay larger than the `resize` reply by the shadow radius.
+
+A fullscreen window has no chrome — the compositor suppresses it — so its frame
+is exactly its content.
+
+A request is clamped to the client's declared minimum and maximum, and the reply
+echoes what was configured — not what the client went on to commit, which is why
+the reply is a request rather than a fact (see [Responses](#responses)). Read it
+back with a bare `resize` once the window has settled to see what it actually
+has. The window keeps its visual center, computed from the size being requested:
+a client that only accepts whole character cells therefore lands up to half its
+rounding off center. That error stays bounded — repeating a request changes
+nothing, and the next one re-derives from the size last asked for.
+`preserve_aspect_ratio` does not apply — it governs interactive resizes only.
+
+`resize` is refused while a window is under an interactive move or resize, since
+the live grab recomputes its rect on every motion tick and would erase the
+result — and for the frame after a drag ends, until the client commits the size
+it was dragged to.
+
+One case discards the centering: if a client commits a size *larger* than the one
+it was asked for and that footprint collides with a snapped neighbour, the
+compositor relocates **the grown window itself** (not the neighbour) beside its
+cluster, and pans the camera after it when it is focused and no longer fully
+visible.
+
+Stand-ins have no client to declare limits, so `resize` clamps them to a fixed
+120x120 floor instead — a floor on the visible stand-in, which is what the
+`120x120` reply describes. Every stand-in wears a title bar, so `resize --id
+<stand-in> 800 600` leaves a stand-in exactly 800x600 on screen and brings the
+app back at that footprint on `relaunch`.
 
 ### Suspended windows
 
 A [suspended window](session.md) — the compositor-drawn stand-in left behind by
 `suspend-window` or `suspend_on_close` — appears in the `windows` inventory with
-its own `id` and `suspended: true`. `focus`, `move`, and `close` (which
-dismisses the stand-in rather than asking a nonexistent client to close) take
-that id like any window's; `suspend <selector>` turns a live window into a
+its own `id` and `suspended: true`. `focus`, `move`, `resize`, and `close`
+(which dismisses the stand-in rather than asking a nonexistent client to close)
+take that id like any window's; `suspend <selector>` turns a live window into a
 stand-in, and `relaunch <selector>` starts its app again.
 
 When a live client and a stand-in share an `app_id`, an app_id selector resolves
@@ -130,6 +185,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 | get / set zoom    | `{"Zoom":null}` / `{"Zoom":0.5}`                                                    |
 | get / set focus   | `{"Focus":null}` / `{"Focus":"alacritty"}` / `{"Focus":5}`                          |
 | get / set move    | `{"Move":{}}` / `{"Move":{"window":5,"to":[100,200]}}` (both optional)              |
+| get / set resize  | `{"Resize":{}}` / `{"Resize":{"window":5,"to":[800,600]}}` (both optional)          |
 | get / set opacity | `{"Opacity":{}}` / `{"Opacity":{"window":5,"value":0.5}}` (both optional)           |
 | close             | `{"Close":null}` / `{"Close":5}` / `{"Close":"alacritty"}`                          |
 | suspend           | `{"Suspend":null}` / `{"Suspend":5}` / `{"Suspend":"alacritty"}`                    |
@@ -151,6 +207,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Layout":"English (US)"}}    // or "us" for {"Layout":{"short":true}}
 {"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}   // or {"Ok":{"Focused":null}}
 {"Ok":{"Position":{"x":100,"y":200}}}
+{"Ok":{"Size":{"width":800,"height":600}}}
 {"Ok":{"Opacity":0.85}}
 {"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}   // bookmark get / set (Y-up)
 {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}     // bookmark list (sorted by name)
@@ -165,11 +222,17 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Err":"no focused window"}
 ```
 
+`Size` is the one reply here that echoes a *request* rather than compositor
+state: on a set it reports the clamped size the client was asked for, which the
+client is free not to commit. Read it back with a bare `{"Resize":{}}` to see
+what the window actually has. Every other setter (`Camera`, `Zoom`, `Position`,
+`Opacity`) echoes state the compositor owns outright.
+
 The `windows` array is the same shape driftwm writes to its [state file](#state-file),
 focused window first — but only while something is focused; with nothing focused
 no entry is promoted, so filter on `is_focused` instead of indexing `windows[0]`.
 Each entry's `id` is a stable per-session window handle — pass it back as a
-selector to `focus`, `move`, `close`, `suspend`, `relaunch`, or
+selector to `focus`, `move`, `resize`, `close`, `suspend`, `relaunch`, or
 `screenshot window`. `suspended` marks a compositor-drawn stand-in rather than a
 live client — see [Suspended windows](#suspended-windows).
 The reply also carries `layout` (full XKB name) and `layout_short` (the
@@ -244,4 +307,6 @@ the `state` reply's per-output `camera` and `zoom`, rounded for the file.
 `layers=` namespaces are the `app_id` a window rule matches a layer surface by.
 A `canvas_layers` entry's `position` is derived from the surface's current size,
 so it can drift from the rule that placed it if the surface resized after
-mapping.
+mapping. Its `size` is a visual frame like every other, but a layer never wears a
+title bar and its border is opt-in per rule, so unless a rule sets `border_width`
+it is just the surface's own extent.

@@ -40,6 +40,42 @@ cargo fmt                # format (CI runs cargo fmt --check)
 
 Use `RUST_LOG=debug cargo run` for smithay/libinput event traces.
 
+### Matching CI before you push
+
+`.github/workflows/ci.yml` is the source of truth. It runs, in order:
+
+```bash
+cargo fmt --check
+cargo check --locked                                    # Cargo.lock in sync
+cargo clippy --all-targets -- -D warnings
+cargo test --no-run
+cargo test -- --include-ignored --skip soak
+cargo test --bin driftwm -- --include-ignored --test-threads=1 soak
+```
+
+`dev/scripts/ci-local` runs exactly those, in that order, so you don't have to
+keep them in your head — `dev/scripts/ci-local clippy` runs a single stage
+(`fmt | lock | clippy | test | soak`).
+
+Two ways a local run drifts from CI, worth knowing however you invoke it:
+
+- **CI lints `--all-targets`.** Plain `cargo clippy`, and `cargo clippy --bin
+  driftwm`, do not compile `#[cfg(test)]` code — so a lint inside `src/tests/`
+  passes locally and fails CI. Clippy checks without linking, so `--all-targets`
+  costs little.
+- **CI runs `--include-ignored`.** A plain `cargo test` skips ignored tests,
+  which is how they rot unnoticed. The soak test additionally wants
+  `--test-threads=1` and the process to itself: it reads fd and RSS plateaus
+  from `/proc/self`, so a neighbouring test holding a socket open lands inside
+  its measurement.
+
+**On a memory-tight machine**, `cargo test` unscoped links all 13 test targets
+at once, and that link step is what exhausts RAM. `CI_LOW_MEM=1
+dev/scripts/ci-local` builds and runs each target separately instead — same
+tests, same flags, one link at a time — and bounds parallelism via `CI_JOBS` /
+`CI_TEST_THREADS` (default 2 each). Off by default; unnecessary on a machine
+with headroom, where CI's own parallel invocations are faster.
+
 Udev backend build deps (Fedora): `libseat-devel libdisplay-info-devel libinput-devel mesa-libgbm-devel`. Cross-distro build checks: `dev/docs/cross-distro-builds.md`.
 
 ## Architecture

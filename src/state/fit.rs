@@ -5,9 +5,7 @@ use smithay::{
     wayland::seat::WaylandFocus,
 };
 
-use super::{
-    DriftWm, PendingRecenter, PendingView, StageWindow, ZoomAnimationAnchor, output_state,
-};
+use super::{DriftWm, PendingView, StageWindow, ZoomAnimationAnchor, output_state};
 use driftwm::config;
 use driftwm::stage::ElementId;
 use driftwm::window_ext::WindowExt;
@@ -17,8 +15,13 @@ use driftwm::window_ext::WindowExt;
 /// `unfit_window_snapped` to describe the primary's pre-op and post-op
 /// geometry, both for the exact per-edge deltas and for the primary's
 /// own entry in the rect list those paths cluster over
-/// (`snap_rects_with_primary`).
-fn snap_rect_at(
+/// (`snap_rects_with_primary`), and by the adopt's owed-rect payoff for a
+/// size the client has been configured with but not yet committed.
+/// Every term is widened before it is added: a non-interactive resize pairs a
+/// size the client asked for — unbounded, since `resize_step` and `msg resize`
+/// both take any `i32` — with a canvas coordinate that can already sit anywhere
+/// in the range, and the sum of the two does not fit in an `i32`.
+pub(super) fn snap_rect_at(
     loc: Point<i32, Logical>,
     size: Size<i32, Logical>,
     bar: i32,
@@ -27,9 +30,9 @@ fn snap_rect_at(
     let bw = border_width as f64;
     driftwm::layout::snap::SnapRect {
         x_low: loc.x as f64 - bw,
-        x_high: (loc.x + size.w) as f64 + bw,
-        y_low: (loc.y - bar) as f64 - bw,
-        y_high: (loc.y + size.h) as f64 + bw,
+        x_high: loc.x as f64 + size.w as f64 + bw,
+        y_low: loc.y as f64 - bar as f64 - bw,
+        y_high: loc.y as f64 + size.h as f64 + bw,
     }
 }
 
@@ -50,11 +53,14 @@ impl DriftWm {
     fn compute_fit_geometry(&self, window: &Window) -> FitGeometry {
         let usable = self.get_usable_area();
         let gap = self.config.snap_gap;
-        let bar = self.window_ssd_bar(window);
-        let target_size = Size::from((
+        let chrome = self.element_chrome(window);
+        // The gap bounds the *visual frame*, so the content inside it gives up the
+        // whole chrome; deflating by the bar alone overflows the usable area by a
+        // border per side.
+        let target_size = chrome.content_size(Size::from((
             usable.size.w - (2.0 * gap) as i32,
-            usable.size.h - (2.0 * gap) as i32 - bar,
-        ));
+            usable.size.h - (2.0 * gap) as i32,
+        )));
         let usable_center_x = usable.loc.x as f64 + usable.size.w as f64 / 2.0;
         let usable_center_y = usable.loc.y as f64 + usable.size.h as f64 / 2.0;
         // `window_visual_center` sizes from the last configure, so a fit pressed
@@ -65,10 +71,10 @@ impl DriftWm {
             visual_center.x - usable_center_x,
             visual_center.y - usable_center_y,
         ));
-        let new_loc = Point::from((
+        let new_loc = chrome.content_loc(Point::from((
             target_camera.x as i32 + usable.loc.x + gap as i32,
-            target_camera.y as i32 + usable.loc.y + gap as i32 + bar,
-        ));
+            target_camera.y as i32 + usable.loc.y + gap as i32,
+        )));
         FitGeometry {
             new_loc,
             target_size,
@@ -99,11 +105,8 @@ impl DriftWm {
             visual_center: center,
         } = self.compute_fit_geometry(window);
 
-        // A fit establishes its own placement, so an exit recenter still owed
-        // from the fullscreen/fill exit that preceded it must not fire: it would
-        // land on the client's next resize and yank the fitted window back to the
-        // pre-exit center (`enter_fullscreen` drops it for the same reason).
-        self.pending_recenter.remove(&wl_surface.id());
+        // A fit establishes its own placement.
+        self.drop_owed_recenter(window);
 
         // A freeze this fit arms of its own accord is the only one allowed to
         // hold its pan back, and a request-carrying (re)start is what bumps the
@@ -147,8 +150,10 @@ impl DriftWm {
         };
         // This fit owns the output's view from here on, whether it parks its pan
         // or applies it below. A pan parked on some other window's freeze was
-        // promised to an action this one has just superseded.
+        // promised to an action this one has just superseded — including one
+        // already released and waiting out a grab.
         self.window_animations.drop_pending_views_on(&output.name());
+        self.deferred_views.remove(&output.name());
         let Some(id) = frozen else {
             let mut os = output_state(&output);
             os.momentum.stop();
@@ -162,12 +167,9 @@ impl DriftWm {
         // of by the fit's own pan, and clearing it also makes the stamp below
         // exact — nothing legitimately moves this camera between here and the
         // release.
+        self.cancel_animations_on(&output);
         let (staged_camera, staged_zoom) = {
-            let mut os = output_state(&output);
-            os.momentum.stop();
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
+            let os = output_state(&output);
             (os.camera, os.zoom)
         };
         self.window_animations.stage_pending_view(
@@ -184,9 +186,9 @@ impl DriftWm {
     }
 
     pub fn unfit_window(&mut self, window: &Window) {
-        let Some(wl_surface) = window.wl_surface() else {
+        if window.wl_surface().is_none() {
             return;
-        };
+        }
 
         let Some(saved_size) = self.stage.take_fit_saved_size(window) else {
             return;
@@ -195,40 +197,20 @@ impl DriftWm {
         // Resize in-place around the preserved visual center. Sized from the last
         // configure, so an unfit dispatched out of a fullscreen exit centers on
         // the restored (fit-sized) window, not the viewport still being reported.
-        // Either branch below settles any recenter that exit left owed.
         let center = self.window_visual_center(window).unwrap_or_default();
         let bar = self.window_ssd_bar(window);
         let new_loc = super::frame_loc_for_center(center, saved_size, bar);
 
-        // Record the current (fit-era) geometry so the commit handler can
-        // tell when the client has actually processed the exit configure,
-        // then re-center using the real post-unfit size.
-        let pre_exit_size = window.geometry().size;
-
         self.animate_window_geometry(window, saved_size, None);
         window.exit_fit_configure(saved_size);
-        self.map_window(window.clone(), new_loc, false);
-
-        if saved_size == pre_exit_size {
-            // The exit configure re-sends the size the client already has, so no
-            // commit with a changed size will arrive to trigger the recenter — the
-            // position restored above is already final, and an entry left owed
-            // would gate the reflow forever. A preceding fullscreen exit can have
-            // owed one already, so drop rather than merely skip.
-            self.pending_recenter.remove(&wl_surface.id());
-            // Refresh the cache the recenter completion would otherwise have
-            // refreshed (`unfill_window` does the same); the fit rect cached by
-            // `fit_window_snapped` is stale now.
-            self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
-        } else {
-            self.pending_recenter.insert(
-                wl_surface.id(),
-                PendingRecenter {
-                    target_center: center,
-                    pre_exit_size,
-                },
-            );
-        }
+        // The fit rect `fit_window_snapped` cached is stale, so refresh.
+        self.establish_exit_placement(
+            &StageWindow::Client(window.clone()),
+            new_loc,
+            saved_size,
+            center,
+            true,
+        );
     }
 
     pub fn toggle_fit_window(&mut self, window: &Window) {
@@ -419,9 +401,9 @@ impl DriftWm {
         for member in &cluster_members {
             self.refresh_stable_snap_rect(member);
         }
-        // Primary's cache is refreshed by `unfit_window` directly when the exit
-        // size is unchanged, otherwise by the pending_recenter completion in
-        // `handlers/compositor.rs` once the client acks the exit configure.
+        // Primary's cache is refreshed by `establish_exit_placement` when the
+        // exit size is unchanged, otherwise by the pending_recenter completion
+        // in `handlers/compositor.rs` once the client acks the exit configure.
     }
 
     /// Snapshot each cluster member's pre-shift canvas position, so the shift

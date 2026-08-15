@@ -213,8 +213,7 @@ type = "tile"
 path = "~/Pictures/tile.png"
 
 # Single image fixed to the viewport (does not scroll or zoom).
-# Cheapest mode: zero per-frame uniform updates, so blur and overlays
-# above stay cached across pans.
+# Cheapest mode: zero per-frame uniform updates.
 [background]
 type = "wallpaper"
 path = "~/Pictures/wallpaper.png"

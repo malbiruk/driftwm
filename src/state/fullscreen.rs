@@ -1,15 +1,24 @@
 use smithay::{
     desktop::Window,
-    reexports::wayland_server::Resource,
+    output::Output,
     utils::{Logical, Point, Rectangle, Size},
     wayland::seat::WaylandFocus,
 };
 
 use super::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
-use super::{DriftWm, FocusTarget, PendingRecenter};
+use super::{DriftWm, FocusTarget, StageWindow};
 use driftwm::window_ext::WindowExt;
 
 impl DriftWm {
+    pub fn is_fullscreen(&self) -> bool {
+        self.active_output()
+            .is_some_and(|o| self.is_output_fullscreen(&o))
+    }
+
+    pub fn is_output_fullscreen(&self, output: &Output) -> bool {
+        self.stage.fullscreen_on(&output.name()).is_some()
+    }
+
     /// Resolve which output a window should fullscreen onto. An already-fullscreen
     /// window re-asserting with no requested output stays on its current output;
     /// otherwise a window-rule `output` wins, then the client-requested output,
@@ -116,14 +125,9 @@ impl DriftWm {
             self.exit_fullscreen_on(&output);
         }
 
-        // A re-fullscreen mid-settle must drop any outstanding exit recenter for
-        // this window (a prior fullscreen/fit/fill exit, or the same-window
-        // cross-output exit just above): otherwise the settle completion fires on
-        // a fullscreen-sized commit and maps the now-fullscreen window to a
-        // recentered position.
-        if let Some(surface) = window.wl_surface() {
-            self.pending_recenter.remove(&surface.id());
-        }
+        // The exit this supersedes can be the same-window cross-output one just
+        // above, not only a prior fullscreen/fit/fill exit.
+        self.drop_owed_recenter(window);
 
         let viewport_size = super::output_logical_size(&output);
         let saved_location = self.stage.position_of(window).unwrap_or_default();
@@ -132,11 +136,18 @@ impl DriftWm {
         let windowed_size = window.geometry().size;
         let pre_pin_site = self.stage.pin_of(window).cloned();
 
-        // If the window is fit, capture the fit-era geometry so exit_fullscreen
-        // restores it back to fit size with the fit state still intact. Otherwise
-        // prefer the restore size over geometry to dodge Chromium's CSD shrink spiral.
-        let saved_size = if self.stage.is_fit(window) {
-            window.geometry().size
+        // Fit and fill membership both survive fullscreen, so the exit has to
+        // hand the window back the rect the stage still believes it holds:
+        // capture a size from the same era as the `saved_location` above, not
+        // the pre-fit/pre-fill `restore_size`, which would pair a stale size
+        // with a current position. Both read the size last *configured*, since
+        // both map to their new position without waiting for the ack: a
+        // fullscreen pressed into that gap still finds committed geometry at
+        // the pre-fit/pre-fill size, at the fitted/filled position. Otherwise
+        // prefer the restore size over geometry to dodge Chromium's CSD shrink
+        // spiral.
+        let saved_size = if self.stage.is_fill(window) || self.stage.is_fit(window) {
+            super::configured_window_size(window)
         } else {
             self.stage
                 .restore_size(window)
@@ -274,23 +285,17 @@ impl DriftWm {
         // cursor is on the fullscreen output. For a fullscreen on a different
         // monitor, don't lock the pointer to a surface it isn't over — the
         // constraint activates naturally when the pointer arrives there.
+        //
+        // Never while locked: the locked input path sends `button` and `axis`
+        // straight at `current_focus()`, so pointing it at the fullscreening app
+        // here would hand that app every click and scroll until the next
+        // physical motion, and activate its cursor lock under the lock screen.
         let on_active_output = self.active_output().as_ref() == Some(&output);
-        if on_active_output && let Some(wl_surface) = window.wl_surface() {
+        if on_active_output
+            && !self.session_lock.is_locked()
+            && let Some(wl_surface) = window.wl_surface()
+        {
             let pointer = self.seat.get_pointer().unwrap();
-            // Deactivate any constraint on the old focused surface
-            if let Some(old) = pointer.current_focus() {
-                smithay::wayland::pointer_constraints::with_pointer_constraint(
-                    &old.0,
-                    &pointer,
-                    |c| {
-                        if let Some(c) = c
-                            && c.is_active()
-                        {
-                            c.deactivate();
-                        }
-                    },
-                );
-            }
             // Keep the cursor at the same on-screen spot across the zoom park:
             // canvas position alone would land elsewhere (or off-output) once
             // zoom != 1. Same geometric-visibility check as
@@ -308,7 +313,39 @@ impl DriftWm {
             } else {
                 canvas_pos
             };
-            let origin = self.stage.position_of(window).unwrap_or_default().to_f64();
+
+            // A client that locked the cursor before fullscreening already holds
+            // pointer focus, so there is nothing to re-seat. Take the relocation
+            // silently and leave the lock standing: dropping it to send the
+            // motion below would hand the client an absolute jump it never made,
+            // which a game reads as camera movement. A confine falls through and
+            // takes the motion instead — that cursor really moves, and nothing
+            // re-seats it afterwards. `warp_pointer` and `flush_pointer_resync`
+            // stay silent for a confine as well, so this is the only site that
+            // separates the two.
+            if self.locked_to(&wl_surface) {
+                pointer.set_location(new_pos);
+                return;
+            }
+
+            // Deactivate any constraint on the old focused surface
+            if let Some(old) = pointer.current_focus() {
+                smithay::wayland::pointer_constraints::with_pointer_constraint(
+                    &old.0,
+                    &pointer,
+                    |c| {
+                        if let Some(c) = c
+                            && c.is_active()
+                        {
+                            c.deactivate();
+                        }
+                    },
+                );
+            }
+            // Surface origin, not the geometry origin the stage positions by:
+            // smithay subtracts it to get surface-local coordinates.
+            let origin =
+                crate::input::window_origin_for_surface(self, &wl_surface).unwrap_or_default();
             pointer.motion(
                 self,
                 Some((FocusTarget(wl_surface.into_owned()), origin)),
@@ -373,36 +410,16 @@ impl DriftWm {
 
         entry.window.exit_fullscreen_configure(entry.saved_size);
 
-        // Restore window position, camera, zoom on the specific output
-        self.map_window(entry.window.clone(), entry.saved_location, false);
-
-        // The client keeps committing viewport-sized frames until it acks the
-        // restore configure and resizes; those stale-sized commits would read as
-        // "grown past settled" in the reflow, so register a settle to hold the
-        // footprint until it resizes. Skip when the committed size already
-        // matches saved_size: no resized commit will arrive and the entry would
-        // gate forever (the recenter would be an identity reposition to
-        // saved_location anyway).
-        //
-        // pre_exit_size is the geometry committed at exit. An enter->exit inside
-        // one frame can leave the client's first fullscreen-sized frame in flight;
-        // if its size differs from saved_size it completes the settle early
-        // against a stale footprint. Fit/fill exits carry the same race.
-        if let Some(surface) = entry.window.wl_surface() {
-            let current_size = entry.window.geometry().size;
-            if current_size != entry.saved_size {
-                let bar = self.window_ssd_bar(&entry.window) as f64;
-                let target_center =
-                    super::visual_frame_center(entry.saved_location, entry.saved_size, bar);
-                self.pending_recenter.insert(
-                    surface.id(),
-                    PendingRecenter {
-                        target_center,
-                        pre_exit_size: current_size,
-                    },
-                );
-            }
-        }
+        // Restore the window's position; the camera and zoom follow below.
+        let bar = self.window_ssd_bar(&entry.window) as f64;
+        let target_center = super::visual_frame_center(entry.saved_location, entry.saved_size, bar);
+        self.establish_exit_placement(
+            &entry.window,
+            entry.saved_location,
+            entry.saved_size,
+            target_center,
+            false,
+        );
 
         // Re-pin if it was pinned before fullscreen, then snap its Space loc
         // back to screen_pos (update_output_from_camera's sync only fires on a
@@ -479,10 +496,13 @@ impl DriftWm {
             let mut os = super::output_state(output);
             os.camera = camera;
             os.zoom = zoom;
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
         }
+        // A coast's delta was measured against the parked viewport; carrying it
+        // onto the restored one flings the camera off a throw the user never
+        // made. This also drops the samples of a pan still in flight, so a
+        // gesture straddling the exit loses its fling rather than launching one
+        // into a viewport it never touched.
+        self.cancel_animations_on(output);
         self.update_output_from_camera();
 
         let pointer = self.seat.get_pointer().unwrap();
@@ -501,6 +521,17 @@ impl DriftWm {
                 self.warp_pointer(new_pos);
             }
         }
+
+        // Exiting fullscreen can restore a hidden bar beneath a stationary
+        // cursor; `pointer_over_layer` and smithay's focus are otherwise only
+        // refreshed by pointer motion, and a stale flag would route the next
+        // press/scroll over the bar to the canvas.
+        self.refresh_pointer_focus();
+        // The re-seat above is the resync, so the one the warp deferred would
+        // only repeat the walk. Cleared here and not in `refresh_pointer_focus`:
+        // the flag doubles as udev's wake-up for a warp that schedules no redraw
+        // of its own, and only this path knows its own exit keeps the loop awake.
+        self.pending_pointer_resync = false;
     }
 
     /// Tear down any fullscreen entry whose window is dead, restoring that
@@ -542,6 +573,109 @@ impl DriftWm {
             return;
         };
         fs.window.enter_fullscreen_configure(new_size);
+    }
+
+    /// Sit a fullscreen window that committed smaller than its output in the
+    /// middle of it, instead of in the top-left corner the park mapped it at:
+    /// unshifted, the remainder it leaves uncovered is an L down the right edge
+    /// and along the bottom rather than even bars.
+    ///
+    /// Moves the *mapped* position, not a render offset: every hit test,
+    /// pointer-constraint origin and cursor hint in the tree derives from
+    /// `stage.position_of`, so moving where the window is drawn without moving
+    /// where it is would leave a fullscreen game's clicks landing an offset away
+    /// from its picture. `set_position` rather than `map_window` — the window is
+    /// already topmost and a re-map is a restack.
+    ///
+    /// Gated on the fullscreen configure no longer being in flight: until the
+    /// client acks, its geometry is still the windowed one, and centring *that*
+    /// would fling a small window to the middle of the output and slide it back
+    /// a frame later, on every fullscreen entry. An early-acking client (GTK4
+    /// acks in its own round trip, then commits its old buffer once more) slips
+    /// one commit through and takes a wrong offset for a frame — bounded, and
+    /// the next commit recomputes. Not gated on the entry animation's
+    /// outstanding request, the tighter witness: a fixed-size client answers the
+    /// fullscreen offer by re-committing the size it already had, which that
+    /// chase reads as no answer at all, so the gate would never open for exactly
+    /// the clients this is for.
+    pub fn recentre_fullscreen_window(&mut self, window: &Window) {
+        let Some(surface) = window.wl_surface() else {
+            return;
+        };
+        let Some(output) = self.find_fullscreen_output_for_surface(&surface) else {
+            return;
+        };
+        let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
+            return;
+        };
+        let stored = entry.centre_offset;
+        let viewport = super::output_logical_size(&output);
+        let size = window.geometry().size;
+        let offset = Point::from((
+            ((viewport.w - size.w) / 2).max(0),
+            ((viewport.h - size.h) / 2).max(0),
+        ));
+        // `offset == stored` first: every commit of a fullscreen game reaches
+        // here, and this settles all but the handful that move anything without
+        // paying for the pending-configure walk.
+        if offset == stored || super::owes_a_configured_size(window) {
+            return;
+        }
+        let element = StageWindow::Client(window.clone());
+        let Some(position) = self.stage.position_of(&element) else {
+            return;
+        };
+        // Back out the offset the position already carries to recover the park,
+        // the same way the parked-camera predicate does.
+        let centred = position - stored + offset;
+        self.stage.set_position(&element, centred);
+        self.stage
+            .set_fullscreen_centre_offset(&output.name(), offset);
+
+        // A constrained cursor travels with the picture it is pinned to. It
+        // cannot follow on its own — a lock freezes it outright, and a confine
+        // only holds it against a region that has just slid out from under it —
+        // so a cursor left behind in the vacated band is a state nothing can
+        // repair: the re-pick below finds no surface there, and the leave it
+        // sends takes the constraint with it, on exactly the fullscreen games
+        // this is for. Clamped into the window as well as shifted, because the
+        // commit that earns an offset usually shrinks the window too, and a
+        // surface-local point past the new edge is no longer over the surface.
+        let pointer = self.seat.get_pointer().unwrap();
+        let constrained_here = pointer
+            .current_focus()
+            .is_some_and(|focus| focus.0 == *surface)
+            && self.pointer_constraint_active();
+        if constrained_here {
+            let moved = pointer.current_location() + (offset - stored).to_f64();
+            let origin = centred.to_f64();
+            let far = origin
+                + Point::from((
+                    (size.w as f64 - 1.0).max(0.0),
+                    (size.h as f64 - 1.0).max(0.0),
+                ));
+            pointer.set_location(Point::from((
+                moved.x.clamp(origin.x, far.x),
+                moved.y.clamp(origin.y, far.y),
+            )));
+        }
+        // The picture moved under a stationary cursor, so smithay's cached focus
+        // and surface origin are stale: without this the client keeps receiving
+        // coordinates from where the window used to be until the user moves the
+        // mouse. The cursor carried above stays over the same surface, so
+        // `refresh_pointer_focus`'s own unchanged-focus guard spares a lock from
+        // the re-seat, and a confine gets the absolute motion it really made.
+        self.refresh_pointer_focus();
+    }
+
+    /// How far the fullscreen window on `output` sits from the origin its park
+    /// put it at. Read it *before* tearing the entry down — the close paths need
+    /// it after they have, which is why they thread it through as a parameter.
+    pub fn fullscreen_centre_of(&self, output: Option<&Output>) -> Point<i32, Logical> {
+        output
+            .and_then(|o| self.stage.fullscreen_on(&o.name()))
+            .map(|entry| entry.centre_offset)
+            .unwrap_or_default()
     }
 
     /// Find which output holds a fullscreen window by its surface.

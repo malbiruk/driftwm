@@ -15,6 +15,7 @@ use smithay::input::touch::{
     GrabStartData as TouchGrabStartData, MotionEvent as TouchMotionEvent, UpEvent,
 };
 use smithay::output::Output;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use smithay::wayland::compositor::with_states;
@@ -23,8 +24,8 @@ use crate::grabs::ResizeState;
 use crate::state::StageWindow;
 
 use super::{
-    Fixture, adopt_last_configure, client_sees_maximized, config, fit_and_frame, map_window,
-    server_surface, window_by_app_id,
+    Fixture, adopt_last_configure, assert_resize_entered, client_sees_maximized, config,
+    fit_and_frame, map_window, seed_fit_and_fill, server_surface, window_by_app_id,
 };
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -557,6 +558,68 @@ size = [400, 300]
     end_swipe(&mut f);
 }
 
+/// The pinned settle compensates per commit, exactly like the canvas one, so a
+/// top-left drag the client acks in several steps holds the pin's right and
+/// bottom screen edges still through every one of them.
+#[test]
+fn a_top_left_pinned_resize_holds_its_opposite_edges_across_every_commit() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [400, 300]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    let csurface = map_window(&mut f, id, "pin", (400, 300));
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+
+    // No rule `position` centers the pin: (1920/2 - 200, 1080/2 - 150). Its
+    // right edge sits at 1160 and its bottom at 690, where they must stay.
+    let site = f.state().stage.pin_of(&window).unwrap().screen_pos;
+    assert_eq!(site, Point::from((760, 390)), "precondition: the pin site");
+
+    // Canvas == screen here; land in the window's top-left ninth.
+    assert!(
+        f.state()
+            .try_start_gesture_resize(pt(site.x as f64 + 50.0, site.y as f64 + 50.0), false)
+    );
+
+    // The grab sits 50px inside the corner, so the corner tracks the cursor at
+    // that offset.
+    for (drag_to, expected) in [
+        (pt(710.0, 390.0), Point::from((660, 340))),
+        (pt(660.0, 340.0), Point::from((610, 290))),
+        (pt(610.0, 290.0), Point::from((560, 240))),
+    ] {
+        motion(&mut f, drag_to);
+        f.double_roundtrip(id);
+        adopt_last_configure(&mut f, id, &csurface);
+        let sp = f.state().stage.pin_of(&window).unwrap().screen_pos;
+        let size = window.geometry().size;
+        assert_eq!(
+            (
+                sp,
+                Point::<i32, Logical>::from((sp.x + size.w, sp.y + size.h))
+            ),
+            (expected, Point::from((1160, 690))),
+            "every commit moves the dragged corner and leaves the opposite one at (1160, 690)"
+        );
+    }
+
+    end_swipe(&mut f);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &csurface);
+    assert_eq!(
+        f.state().stage.pin_of(&window).unwrap().screen_pos,
+        Point::from((560, 240)),
+        "the settle commit at an unchanged size leaves the pin where the drag left it"
+    );
+}
+
 /// A pinned window's stage entry keeps its stale canvas position (only its
 /// screen-space site is live) — the walk must skip past it rather than
 /// stopping there, so `under`, genuinely mapped beneath it, stays reachable.
@@ -796,4 +859,110 @@ fn gesture_resizes_arm_the_relaunch_adoption_guard() {
         );
         f.state().dismiss_suspended(sid);
     }
+}
+
+/// The whole invariant the touch entry point establishes, plain and pinned.
+/// The pinned half calls `build_touch_resize_grab` the way the touch gesture
+/// grab's own pinned branch does — the canvas picker declines pinned windows,
+/// so the gesture helper above can't reach it.
+#[test]
+fn touch_resize_entry_establishes_the_whole_resize_invariant() {
+    {
+        let mut f = Fixture::new();
+        let out = f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        map_window(&mut f, id, "c", (400, 300));
+        let window = window_by_app_id(&mut f, "c").unwrap();
+        f.state()
+            .map_window(StageWindow::Client(window.clone()), INITIAL, true);
+        // Both memberships set, so clearing either is observable.
+        seed_fit_and_fill(&mut f, &window);
+
+        assert!(start_touch_gesture_resize(&mut f, grab_point(), out));
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            initial_size(),
+            None,
+        );
+        lift_finger(&mut f);
+    }
+
+    {
+        let mut f = Fixture::with_config(config(
+            r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [400, 300]
+"#,
+        ));
+        let out = f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        map_window(&mut f, id, "pin", (400, 300));
+        let window = window_by_app_id(&mut f, "pin").unwrap();
+        let site = f.state().stage.pin_of(&window).unwrap().screen_pos;
+        let element = StageWindow::Client(window.clone());
+        seed_fit_and_fill(&mut f, &window);
+
+        let start = TouchGrabStartData {
+            focus: None,
+            slot: slot(),
+            location: pt(site.x as f64 + 390.0, site.y as f64 + 150.0),
+        };
+        assert!(
+            f.state()
+                .build_touch_resize_grab(
+                    &element,
+                    xdg_toplevel::ResizeEdge::Right,
+                    start,
+                    out,
+                    1,
+                    false,
+                )
+                .is_some(),
+            "the pinned branch builds a grab"
+        );
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            initial_size(),
+            Some(site),
+        );
+    }
+}
+
+/// The whole invariant the trackpad entry point establishes. Only the canvas
+/// arm writes it: a pinned window is handed to the pointer path instead, which
+/// `gesture_resize_on_a_pinned_window_takes_the_screen_space_path` pins — so
+/// this arm's `initial_screen_pos` is `None` by construction.
+#[test]
+fn swipe_resize_entry_establishes_the_whole_resize_invariant() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    map_window(&mut f, id, "c", (400, 300));
+    let window = window_by_app_id(&mut f, "c").unwrap();
+    f.state()
+        .map_window(StageWindow::Client(window.clone()), INITIAL, true);
+    // Both memberships set, so clearing either is observable.
+    seed_fit_and_fill(&mut f, &window);
+
+    assert!(f.state().try_start_gesture_resize(grab_point(), false));
+
+    assert_resize_entered(
+        &mut f,
+        &window,
+        xdg_toplevel::ResizeEdge::Right,
+        initial_size(),
+        None,
+    );
+    end_swipe(&mut f);
 }

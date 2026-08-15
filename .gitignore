@@ -1,8 +1,11 @@
 /target
+/vendor
+/.cargo
 /log
 __pycache__
 .venv
 .ruff_cache
 *.tar.gz
+*.tar.xz
 # nix build output symlink
 result

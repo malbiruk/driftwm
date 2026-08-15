@@ -28,6 +28,9 @@ pub(super) struct ConfigFile {
     pub xwayland: XwaylandConfig,
     /// Placement mode for newly mapped windows: `"center"` (default) or `"cursor"`.
     pub window_placement: Option<String>,
+    /// Where a centering navigation parks the focused window in the viewport:
+    /// `"center"` (default), an edge, or a corner.
+    pub focus_placement: Option<String>,
     pub window_rules: Option<Vec<WindowRuleFile>>,
     pub outputs: Option<Vec<OutputRuleFile>>,
 }
@@ -84,6 +87,8 @@ pub(super) struct TrackpadConfig {
     pub accel_profile: Option<String>,
     pub click_method: Option<String>,
     pub disable_while_typing: Option<bool>,
+    pub enable: Option<bool>,
+    pub disable_on_external_mouse: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -128,6 +133,7 @@ pub(super) struct NavigationConfig {
     pub auto_navigate_on_close: Option<bool>,
     pub auto_navigate_on_click: Option<bool>,
     pub nudge_step: Option<i32>,
+    pub resize_step: Option<i32>,
     pub pan_step: Option<f64>,
     pub trackpad_speed: Option<f64>,
     pub mouse_speed: Option<f64>,
@@ -167,7 +173,7 @@ pub(super) struct SessionFileConfig {
     /// Convert client-initiated closes into suspended windows instead of
     /// destroying them. Per-window overridable via a `suspend_on_close` rule.
     pub suspend_on_close: Option<bool>,
-    /// Save eligible windows on graceful shutdown and bring them back as
+    /// Save eligible windows to the durable session and bring them back as
     /// suspended windows on the next launch.
     pub restore_windows: Option<bool>,
     /// Seed each output's camera and zoom from the durable session on the next
@@ -295,7 +301,7 @@ pub(super) struct WindowRuleFile {
     /// suspend). `None` inherits the global setting.
     pub suspend_on_close: Option<bool>,
     /// Override the global `restore_windows` for matched windows, so an app can
-    /// be kept out of (or opted into) the graceful-shutdown save. Independent of
+    /// be kept out of (or opted into) the durable save. Independent of
     /// `suspend_on_close`, which only governs closes. `None` inherits the global
     /// setting.
     pub restore_windows: Option<bool>,
@@ -390,6 +396,7 @@ pub(super) struct OutputRuleFile {
     pub position: Option<::toml::Value>,
     pub mode: Option<String>,
     pub hot_corners: Option<HotCornersFile>,
+    pub focus_placement: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -421,9 +428,13 @@ impl Default for XwaylandConfig {
 }
 
 pub fn config_path() -> std::path::PathBuf {
-    // --config <path> sets DRIFTWM_CONFIG at startup
-    if let Ok(p) = std::env::var("DRIFTWM_CONFIG") {
-        return std::path::PathBuf::from(expand_tilde(&p));
+    // --config <path> sets DRIFTWM_CONFIG at startup; read via var_os so a
+    // non-UTF-8 path still resolves instead of falling through to the default.
+    if let Some(p) = std::env::var_os("DRIFTWM_CONFIG") {
+        return match p.into_string() {
+            Ok(p) => std::path::PathBuf::from(expand_tilde(&p)),
+            Err(p) => std::path::PathBuf::from(p),
+        };
     }
     let config_dir = std::env::var("XDG_CONFIG_HOME").unwrap_or_else(|_| {
         let home = std::env::var("HOME").unwrap_or_else(|_| ".".into());

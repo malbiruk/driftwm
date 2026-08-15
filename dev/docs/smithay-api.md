@@ -381,6 +381,40 @@ Source: `src/backend/drm/compositor/mod.rs` (`use_mode`), `src/backend/drm/surfa
 
 So it never races an in-flight page flip — the kernel serializes atomic commits per CRTC, and the pending frame's fb holds its own reference. niri calls `use_mode` unconditionally at config-apply time with no deferral (`tty.rs`, `on_output_config_changed`) and only handles the `Err`. Deferring/queueing around `frames_pending` before calling it is unnecessary.
 
+## InputBackend (synthetic input)
+
+Source: `src/backend/input/mod.rs`, `src/backend/input/tablet.rs`.
+
+`InputBackend` is **25 associated types and zero methods** — a pure type-level
+description of what a backend can emit. It is declared `pub trait InputBackend:
+Sized`, so it is never object-safe: backends are selected with a type parameter
+(`process_input_event::<I>`), never a `dyn`. Implementing it costs nothing but
+the event types you actually produce:
+
+- **`pub enum UnusedEvent {}`** is uninhabited and carries a blanket impl of
+  *every* event trait (each method is `match *self {}`). Any associated type you
+  don't emit is `= UnusedEvent` with no code written. `SpecialEvent` has no trait
+  bound at all.
+- **`Device: PartialEq + Eq + Hash`** — `id() -> String`, `name() -> String`,
+  `has_capability(DeviceCapability) -> bool`, `usb_id() -> Option<(u32, u32)>`,
+  `syspath() -> Option<PathBuf>`. `DeviceCapability` is `Copy + Eq` but **not
+  `Hash`**, so a device holding a capability list can't derive `Hash` — hash the
+  id instead.
+- **`Event<B>::time()` is MICROseconds**; `time_msec()` is provided and divides
+  by 1000. `device()` returns `B::Device` **by value**, so the device type is
+  usually `Clone`.
+- Marker traits over shared supertraits: `PointerMotionAbsoluteEvent<B>` and
+  `TouchDownEvent<B>` add nothing to `AbsolutePositionEvent<B>` (`x`, `y`,
+  `x_transformed(width)`, `y_transformed(height)`, plus provided `position` /
+  `position_transformed`) and `TouchEvent<B>` (`slot() -> TouchSlot`) — impl the
+  supertrait, then `impl Marker for T {}`.
+- `PointerButtonEvent<B>` needs only `button_code() -> u32` and
+  `state() -> ButtonState`; `button() -> Option<MouseButton>` is provided.
+- `InputEvent<B>` derives `Debug`, which bounds on `B: Debug` — a backend that
+  isn't `Debug` still works, its events just can't be printed.
+
+driftwm's synthetic backend for tests lives in `src/tests/input_backend.rs`.
+
 ## Gotchas
 
 ### Compositor / Protocol Essentials
@@ -390,6 +424,10 @@ So it never races an in-flight page flip — the kernel serializes atomic commit
 - **`ToplevelSurface::send_configure()`** must be called in `new_toplevel` — clients won't render until they receive an initial configure.
 - **`PopupSurface::send_configure()`** must be called in `new_popup` — same as toplevels. Also set geometry from positioner: `surface.with_pending_state(|s| s.geometry = positioner.get_geometry())`.
 - **Cross-app clipboard requires `set_data_device_focus` + `set_primary_focus`** in `SeatHandler::focus_changed()`. Without this, newly focused clients don't receive `wl_data_device.selection` events and can't paste from other apps. Extract client via `dh.get_client(surface.id()).ok()`.
+
+### Protocol Errors
+
+- **`post_error` on an already-destroyed resource kills the client WITHOUT delivering `wl_display.error`.** `send_event` resolves the object argument, gets `Err(InvalidId)` because the destructor already removed it from the object map, and the send result is discarded ("errors are ignored, as the client will be killed anyway") — wayland-backend `rs/server_impl/client.rs`. The socket just EOFs, so client-side it is `WaylandError::Io`, and `Connection::protocol_error()` maps `Io(_) => None`. Tests must not assert on `protocol_error()` for these; the observable symptom is a bare `Broken pipe (os error 32)`.
 
 ### Backend
 
@@ -421,6 +459,7 @@ So it never races an in-flight page flip — the kernel serializes atomic commit
 - **`LayerMap` guard (MutexGuard) must be dropped before calling `keyboard.set_focus()`** — `set_focus` triggers `SeatHandler::focus_changed()` which may need `&mut self`.
 - **Layer surface exclusive focus must be guarded** — only grab keyboard focus when it's not already on this surface. Otherwise every commit from an Exclusive layer surface steals focus back.
 - **`pointer_over_layer` must be reset on layer destroy and fullscreen enter** — stale flag breaks all input until next motion event.
+- **`TouchHandle::is_grabbed()` is true after any `down()`, and `grab_start_data()` is no better** — smithay's touch `DefaultGrab::down` (`input/touch/grab.rs`) installs its own `TouchDownGrab` unconditionally, so `is_grabbed()` can't distinguish "the compositor set a grab" from "a finger is down". `grab_start_data()` is the same tautology under another name: `set_grab` stores *every* grab as `GrabStatus::Active` (`input/touch/mod.rs`) and `grab_start_data()` returns `Some` for any `Active`, so it is `Some` after any `down()` too — it reports the start data of whichever grab is installed, not who installed it. Nothing on `TouchHandle` answers the question; assert on the compositor's own grab bookkeeping instead.
 
 ### Trait Impls / Method Clashes
 
@@ -442,6 +481,28 @@ So it never races an in-flight page flip — the kernel serializes atomic commit
 
 - **`WlrLayerShellHandler::new_layer_surface` takes `wlr_layer::LayerSurface` (protocol type), NOT `desktop::LayerSurface`** — wrap with `desktop::LayerSurface::new(surface, namespace)` before passing to `layer_map_for_output().map_layer()`.
 - **Pointer must ALWAYS stay in canvas coords** — even when over a layer surface. `layer_surface_under()` returns an adjusted focus location so smithay computes correct surface-local coords.
+- **The layer-shell validation `pre_commit_hook` is registered once per `wl_surface` and NEVER removed** (`wlr_layer/handlers.rs`, gated on `if initial`; smithay does not expose its `HookId`). Its error ladder, in order (`wlr_layer/mod.rs`), each posting on `role.surface` and returning: `InvalidSize` for `size.w == 0 && !anchor.anchored_horizontally()`, `InvalidSize` for the vertical twin, `InvalidExclusiveEdge` for an `exclusive_edge` outside `anchor`, then `InvalidSurfaceState` ("must ack the initial configure before attaching buffer") when `has_buffer && role.last_acked.is_none()`. `has_buffer` comes from `SurfaceAttributes::pending().buffer`: `NewBuffer` → true, `Removed` → false, `None` → `had_buffer_before` — and that one is a *different* `pending()`, `LayerSurfaceCachedState::pending().last_acked.is_some()`, not anything on `SurfaceAttributes`.
+- **`zwlr_layer_surface_v1` destroy does not unregister that hook**, and `destroyed` (`wlr_layer/handlers.rs`) zeroes what it validates against — `LayerSurfaceAttributes::reset()` plus `*pending() = *current() = Default::default()` on `LayerSurfaceCachedState`. Every later commit on that `wl_surface` therefore re-runs the ladder against zeroed state and posts on the destroyed proxy. Upstream bug; driftwm neutralises it from an earlier hook (`handlers/compositor.rs` + `LayerDestroyedMarker`).
+- **`destroyed` removes the entry from `known_layers` and drops the lock BEFORE calling `WlrLayerShellHandler::layer_destroyed`** — so `WlrLayerShellState::layer_surfaces()` (`impl DoubleEndedIterator<Item = LayerSurface>`, clones the list) sees only survivors from inside that callback. `PrivateSurfaceData::set_role` permits taking the *same* role twice (`compositor/tree.rs` errors only when the new role differs), so one `wl_surface` can carry two live `ZwlrLayerSurfaceV1` — and since `LayerSurfaceAttributes.surface` is private, `!role.surface.alive()` can't be used to tell them apart.
+- **`LayerSurfaceCachedState`'s `Cacheable::commit` is `*self`** and `CachedState::commit` never resets `pending` (`compositor/cache.rs`) — so anything written into `pending()` survives a commit *and* survives into the next role taken on that `wl_surface`. `get_layer_surface` only sets `pending().layer`; the `destroyed` wipe has already run by then.
+- **A pre-commit-hook write to `LayerSurfaceCachedState::pending()` lands in `current()` too — and `current()` is the half that gets read.** `commit` is `*self` and `merge_into` is `*into = self` (`wlr_layer/mod.rs:191-198`), so the commit that follows the hook copies the poisoned `pending` wholesale over `current`. `LayerMap::arrange` reads `LayerSurface::cached_state()` (`desktop/wayland/layer.rs:309`) → `with_cached_state` → `f(guard.current())` (`wlr_layer/mod.rs:454-462`). Anything a hook forces in must therefore be undone in **both** halves; undoing only `pending()` passes tests only by accident of `arrange` refusing to configure before `initial_configure_sent`.
+- **A future `DrmSyncobjState` would reintroduce this crash on a different object.** Its pre-commit hook is registered at `wp_linux_drm_syncobj_manager_v1.get_surface` (`drm_syncobj/mod.rs`), i.e. *after* driftwm's `new_surface` hooks, so it would see the stripped buffer and post `NoBuffer` ("acquire point without buffer") on a still-live `wp_linux_drm_syncobj_surface_v1`. On top of that, `RendererSurfaceState::update_buffer`'s `Removed` arm calls `reset()` and returns before signalling `release_point`, so the client's release fence would never fire for the stripped commit.
+
+### Session Lock
+
+- **The lock validation `pre_commit_hook` is registered *unconditionally* at `get_lock_surface`** (`session_lock/lock.rs`) — unlike layer shell's `if initial`, so a lock → unlock → lock cycle on the same `wl_surface` stacks a second hook. The `HookId` is discarded, so neither can be removed.
+- **`ExtSessionLockSurfaceV1::destroyed` calls no `SessionLockHandler` method** (`session_lock/surface.rs`) — there is no per-role destroy seam to hook. It runs `LockSurfaceAttributes::reset()` (`server_pending`, `pending_configures`, `last_acked` all cleared) and zeroes both halves of `LockSurfaceCachedState`, while leaving `attributes.surface` pointing at the **dead proxy**. Every later commit on that `wl_surface` therefore posts on a destroyed object.
+- **Its error ladder is asymmetric with layer shell's: the first check is unconditional.** `last_acked.is_none()` → `CommitBeforeFirstAck`, before anything is read about the buffer — so a bare `commit()` on an orphaned role kills the client with no buffer involved at all. Then, on `SurfaceAttributes::pending().buffer`: `NewBuffer` whose logical size (viewport `dst` if set, else buffer size / scale / transform) differs from the acked `state.size` → `DimensionsMismatch`; **`Removed` → `NullBuffer` outright** — lock surfaces are not allowed to unmap, so the layer trick of neutralising a commit by forcing `Removed` is itself fatal here. `None` always passes (it falls through to `had_buffer_before`), and so does a `NewBuffer` whose `buffer_dimensions()` is `None`: the size comparison sits inside `if let Some(buf_size)`.
+- **`pending_configures` empty *and* `last_acked` unset is reachable only through `destroyed`** — the invariant driftwm's `neutralise_orphaned_lock_commit` detects on. `send_configure` pushes onto `pending_configures` before the event goes out, and `ack_configure` retains only `serial > acked` while setting `last_acked = Some`, which then stays `Some`. So live-and-unacked still holds a pending configure, and live-and-acked holds the ack. A role the compositor never configured shows the same shape — hence the second, "we configured this" half of the gate.
+- **A `wl_surface` can carry two live lock roles at once, and destroying the stale one resets the live one's state.** `give_role` succeeds when the role string *matches* (`compositor/tree.rs`), and the `DuplicateOutput` guard compares per-client `wl_output` *resources* (`session_lock/lock.rs`), so a client that binds `wl_output` twice can call `get_lock_surface` on the same `wl_surface` twice. The second call repoints `attributes.surface` and resets nothing; both `ExtSessionLockSurfaceV1`s stay live over one shared `LockSurfaceAttributes`. Destroying the *stale* proxy then runs `destroyed`'s reset while the current role is live and acked — producing the empty shape on a live role. Nothing downstream can tell them apart: `LockSurfaceAttributes::surface` is `pub(crate)`, `LockSurface`'s own handle is private, and `LockSurface::alive()` reports the `wl_surface`, not the role. driftwm's gate therefore latches that surface as orphaned; every commit after that also has its pending buffer taken, so a live lock surface freezes at its last frame (the buffer itself is still released, so the client doesn't stall on it) — which fails safe (session stays locked, nothing leaks, no client is killed) and needs a client-side protocol violation smithay declines to reject.
+- **`get_lock_surface` re-takes cleanly on a `wl_surface` that already had the role.** `give_role` only errors on a *different* role, and the `AlreadyConstructed` check reads `SurfaceAttributes` `pending().buffer` and `current().buffer` — both `None` on a settled surface, since `RendererSurfaceState::update_buffer` takes the current one and `Cacheable::commit` takes the pending one. The re-take only repoints `attributes.surface`; it resets **nothing**, so anything written into `LockSurfaceAttributes` survives into the new role.
+- **smithay sends its own initial configure after `SessionLockHandler::new_surface` returns** (`lock.rs`), but only if the handler left `server_pending` set to a state the role has not already been told. `get_pending_state` starts with `server_pending.take()?` and then drops it anyway when it equals `current_server_state()` — the last pending configure, else the last ack. So a handler that returns early without calling `with_pending_state` leaves the role live and permanently unconfigured, and so does one that re-requests the state a surviving ack already carries.
+- **A future `DrmSyncobjState` would reintroduce the kill on a different object**, exactly as it would for layer shell: its hook registers at `wp_linux_drm_syncobj_manager_v1.get_surface`, i.e. after driftwm's `new_surface` hooks, so it would find the stripped buffer and post `NoBuffer` on a still-live `wp_linux_drm_syncobj_surface_v1`. No `drm_syncobj` today.
+
+### Buffers / `wl_buffer.release`
+
+- **Release-on-*replace* happens in exactly one place, `SurfaceAttributes::merge_into`** (`compositor/handlers.rs`): replacing a pending buffer during the cache merge releases the displaced one unless it's the same `WlBuffer` (`if Some(&buffer) != new_buffer { buffer.release(); }`). `Cacheable::commit` is `buffer: self.buffer.take()` — a plain move. So overwriting `pending().buffer` from a **pre-commit hook** sends no release at all; do it explicitly or a client recycling a small shm pool stalls forever.
+- **Release-on-*drop* is the separate second path: `InnerBuffer::drop` calls `buffer.release()`** (`backend/renderer/utils/wayland.rs`) — which is why `BufferAssignment::Removed` releases the previously committed buffer and `None` does not: `RendererSurfaceState::update_buffer` maps `Removed` → `reset()` → `self.buffer = None`, dropping the last `Arc<InnerBuffer>`. Read the currently held buffer via `states.data_map.get::<RendererSurfaceStateUserData>()` → `RendererSurfaceState::buffer() -> Option<&Buffer>` (`Buffer: PartialEq<WlBuffer>`) to avoid double-releasing one a client re-attached.
 
 ### Decorations
 

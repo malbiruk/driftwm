@@ -96,10 +96,17 @@ impl DriftWm {
         self.render.background_uses_camera = false;
         self.render.background_uses_zoom = false;
         self.render.cached_bg.clear();
-        // Shared animated-blur textures are only touched while `animate_blur`
-        // is on; without this, disabling it would strand two full-output
-        // textures (~66 MB at 4K) until exit.
+        // The shared backdrop is a blur of the background that just changed, at
+        // radius/strength settings that may have changed with it.
         self.render.shared_blur.clear();
+        // Per-window frost is only recomputed when something marks it dirty,
+        // and `blur_radius`/`blur_strength` edits mark nothing: the padding
+        // they feed is clamped, so the cache usually keeps its size and holds
+        // the old frost. Drop the caches so the new settings take effect.
+        self.render.blur_cache.clear();
+        // Sized off that same padding, so the extents it pooled are the old
+        // ones.
+        self.render.blur_scratch.clear();
         self.render.tile_shader = None;
         self.render.tile_mirror_shader = None;
         self.render.wallpaper_shader = None;
@@ -111,6 +118,9 @@ impl DriftWm {
         // live in uniforms. Drop both so edits to those config fields apply.
         self.render.border_cache.clear();
         self.render.shadow_cache.clear();
+        // Outline strips bake the configured colour into their pixels, so a
+        // colour edit must not keep sampling the old buffers.
+        self.render.cached_outlines.clear();
 
         // Validate cursor theme before committing. XCURSOR_* reaches
         // children via child_env (rebuilt by `Config::from_raw`); cursor
@@ -152,13 +162,19 @@ impl DriftWm {
             }
         }
 
-        if new_config.trackpad != self.config.trackpad {
-            self.config.trackpad = new_config.trackpad.clone();
-            let devices = self.input_devices.clone();
-            for mut device in devices {
-                self.configure_libinput_device(&mut device);
-            }
-            tracing::info!("Config reload: trackpad settings applied to all devices");
+        // Decided here because the diff needs the old config.
+        let devices_need_config = new_config.trackpad != self.config.trackpad
+            || new_config.mouse_device != self.config.mouse_device;
+
+        // Config is a seed, same rule as the bookmarks below, and like them
+        // this diffs resolved values: an edit that changes the on/off outcome
+        // re-asserts over a runtime `set-trackpad` override, while any other
+        // trackpad edit leaves it alone. Without the second half, saving an
+        // unrelated line would silently re-enable a trackpad the user turned
+        // off. An edit that resolves to the same mode — say spelling out the
+        // default `enable = true` — is not a change and won't clear it.
+        if new_config.trackpad.send_events != self.config.trackpad.send_events {
+            self.trackpad_send_events = None;
         }
 
         // child_env auto-rebuilds via `Config::from_raw`; process env
@@ -199,6 +215,17 @@ impl DriftWm {
         }
 
         self.config = new_config;
+
+        // Must stay below the swap: `configure_mouse` and `configure_trackpad`
+        // read `self.config`, so running this any earlier applies the settings
+        // being replaced.
+        if devices_need_config {
+            let devices = self.input_devices.clone();
+            for mut device in devices {
+                self.configure_libinput_device(&mut device);
+            }
+            tracing::info!("Config reload: input settings applied to all devices");
+        }
 
         // Invalidate every SSD title bar's cached width so `update()`
         // rebuilds with the new font/height/colors.

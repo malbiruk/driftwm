@@ -16,6 +16,18 @@ use driftwm::window_ext::WindowExt;
 use crate::state::DriftWm;
 
 impl DriftWm {
+    /// Drop the input state that only a release event would otherwise clear,
+    /// for the moments where releases stop being delivered: a VT switch, and a
+    /// session pause. `held_action` above all — its repeat would go on firing,
+    /// and forcing a redraw per frame, on the VT we just left.
+    pub(crate) fn reset_held_input_state(&mut self) {
+        self.suppressed_keys.clear();
+        self.held_buttons.clear();
+        self.held_action = None;
+        self.stage.cancel_cycle();
+        self.tap.reset();
+    }
+
     pub(super) fn on_keyboard<I: InputBackend>(&mut self, event: I::KeyboardKeyEvent) {
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);
@@ -24,7 +36,7 @@ impl DriftWm {
         let keycode_u32: u32 = keycode.into();
 
         // When session is locked, only allow VT switching — forward everything else
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+        if self.session_lock.is_locked() {
             let keyboard = self.seat.get_keyboard().unwrap();
             keyboard.input::<(), _>(
                 self,
@@ -37,11 +49,7 @@ impl DriftWm {
                         let raw = handle.modified_sym().raw();
                         if (0x1008FE01..=0x1008FE0C).contains(&raw) {
                             let vt = (raw - 0x1008FE01 + 1) as i32;
-                            // VT switch may not deliver releases; reset key/cycle state.
-                            state.suppressed_keys.clear();
-                            state.held_buttons.clear();
-                            state.stage.cancel_cycle();
-                            state.tap.reset();
+                            state.reset_held_input_state();
                             if let Some(ref mut session) = state.session
                                 && let Err(e) = session.change_vt(vt)
                             {
@@ -111,11 +119,7 @@ impl DriftWm {
                 let raw = sym.raw();
                 if (0x1008FE01..=0x1008FE0C).contains(&raw) {
                     let vt = (raw - 0x1008FE01 + 1) as i32;
-                    // VT switch may not deliver releases; reset key/cycle state.
-                    state.suppressed_keys.clear();
-                    state.held_buttons.clear();
-                    state.stage.cancel_cycle();
-                    state.tap.reset();
+                    state.reset_held_input_state();
                     if let Some(ref mut session) = state.session
                         && let Err(e) = session.change_vt(vt)
                     {

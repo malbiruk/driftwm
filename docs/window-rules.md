@@ -84,6 +84,24 @@ app_id    = "/^steam_app_\\d+$/"
 pass_keys = true
 ```
 
+## Coordinates and sizes
+
+`position` and `size` describe a window's **visual frame**: the app's content
+plus the title bar and border driftwm draws around it, if it draws any.
+`position` is that frame's center, with **Y pointing up**.
+
+This is what makes a layout portable. `size = [800, 600]` gives you an 800x600
+window on screen whether it is server-decorated, client-decorated, or bare, and
+two windows placed 800 apart sit flush against each other either way. The same
+numbers come back out of `driftwm msg state` and the
+[state file](ipc.md#state-file), so a rule and a running window always describe
+the same rectangle.
+
+The app itself gets whatever is left inside the frame. With
+`[decorations] title_bar_height = 25` and `border_width = 2`, a
+`size = [800, 600]` rule that also sets `decoration = "server"` hands the client
+796x571.
+
 ## Field reference
 
 Every rule field — its type, default, accepted values, and per-field caveats
@@ -95,6 +113,40 @@ semantics guide; the reference is the field dictionary.
 
 Layer-shell surfaces interpret chrome fields differently — see
 [Layer-shell surfaces](#layer-shell-surfaces) below.
+
+### Transparency
+
+`opacity` below 1.0 makes a window see-through, and that carries into fullscreen:
+a translucent fullscreen window shows the **canvas** behind it instead of black.
+"Canvas" means the compositor's own [`[background]`](config.md#background) —
+the built-in dot grid, your shader, or your `tile`/`wallpaper` image — plus any
+canvas layers. Everything else stays hidden: other windows, pinned windows,
+suspended stand-ins, and every layer-shell surface, panels included. It is a
+window onto the plane, not a way to see the rest of your desktop.
+
+That last part decides what a wallpaper daemon looks like through the window.
+swaybg, swww and mpvpaper paint on the `background` wlr-layer, which is a layer
+surface like any other and stays culled — so with `[background] type = "none"`
+and one of those as your wallpaper, a translucent fullscreen window still shows
+black. Point `[background]` at the image or shader instead if you want it
+visible through the window.
+
+Widgets divide along the same line, by the protocol they are built on: a widget
+that is a layer-shell surface placed at canvas coordinates rides the canvas
+layers and shows through, while a widget that is a rule-placed xdg-toplevel is a
+window and stays hidden. Two widgets that look identical on the canvas can
+differ here.
+
+```toml
+[[window_rules]]
+app_id  = "mpv"
+opacity = 0.85
+```
+
+It holds across the fullscreen transitions too, and `driftwm msg opacity` changes
+it live on a window that is already fullscreen. The trade: while a translucent
+window is fullscreen, that output loses direct scan-out, because the compositor
+has to compose the canvas under it every frame. Leave games opaque.
 
 ### Screen-pinned windows
 
@@ -114,8 +166,10 @@ decoration       = "none"
 ```
 
 - **Coordinates are output-relative.** When pinned, `position` is measured from
-  the **output center** (still center-anchored and Y-up): `[0, 0]` centers the
-  window on the monitor, `+Y` is up. Drop `position` to center it.
+  the **output center** (still the visual frame's center, Y-up): `[0, 0]` centers
+  the window on the monitor, `+Y` is up. Drop `position` to center it. A position
+  that would push the window off the monitor is clamped so the whole frame stays
+  visible — a title bar never goes off the top edge.
 - **Off the canvas.** Pinned windows are excluded from navigation, alt-tab,
   snapping, fit/center actions, and canvas screenshots
   (`driftwm msg screenshot`). They remain focusable and closable; SSD windows
@@ -306,8 +360,9 @@ decoration            = "none"
 ```
 
 This applies to interactive resizes only — a mouse-border drag, a resize
-gesture, a touch resize. The `size` rule, fit/fullscreen, and client-driven
-sizes are left alone.
+gesture, a touch resize. The `size` rule, fit/fullscreen, `driftwm msg resize`,
+the `grow-window` / `shrink-window` bindings, and client-driven sizes are left
+alone.
 
 ### Overlay that opens without taking focus
 

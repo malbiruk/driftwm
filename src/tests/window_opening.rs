@@ -121,6 +121,129 @@ position = [100, 200]
     assert_eq!(pos, smithay::utils::Point::from((-220, -440)));
 }
 
+/// A window rule's `size` names the *visual frame*: under a per-window SSD
+/// rule the client is configured with the content that frame encloses, not
+/// the frame itself.
+#[test]
+fn window_rule_size_is_the_visual_frame_under_ssd() {
+    let config = Config::from_toml(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "ssd-rule"
+size = [800, 600]
+decoration = "server"
+"#,
+    )
+    .unwrap();
+
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("ssd-rule");
+    window.commit();
+    f.roundtrip(id);
+
+    // The rule names an 800×600 frame; the initial configure carries the
+    // content it encloses, deflated by the 25px bar and 4px border on every
+    // side: 800 - 2×4 = 792 wide, 600 - 25 - 2×4 = 567 tall. Literal on
+    // purpose.
+    let configures = f.client(id).window(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 792 × 567"),
+        "expected the chrome-deflated content size, got:\n{configures}"
+    );
+}
+
+/// A rule `size` smaller than its own chrome floors the configured content at
+/// 1×1 rather than sending a zero or negative size — xdg-shell reads 0 as
+/// "client picks its own", which would silently drop the rule instead of
+/// shrinking the window.
+#[test]
+fn window_rule_size_smaller_than_its_own_chrome_floors_at_one_pixel() {
+    let config = Config::from_toml(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "tiny-rule"
+size = [4, 4]
+decoration = "server"
+"#,
+    )
+    .unwrap();
+
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("tiny-rule");
+    window.commit();
+    f.roundtrip(id);
+
+    let configures = f.client(id).window(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 1 × 1"),
+        "a frame smaller than its own chrome must floor at 1×1, not vanish to \
+         0×0, got:\n{configures}"
+    );
+}
+
+/// A window rule's `position` centers the *visual frame* — the same rule
+/// convention `size` uses — so an SSD window's content lands stepped in from
+/// the rule point by the bar and border.
+#[test]
+fn window_rule_position_centers_the_frame_under_ssd() {
+    let config = Config::from_toml(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "pos-rule"
+size = [400, 300]
+position = [100, -50]
+decoration = "server"
+"#,
+    )
+    .unwrap();
+
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("pos-rule");
+    window.commit();
+    f.roundtrip(id);
+
+    // Match the deflated content size (400 - 2×4 = 392 wide, 300 - 25 - 2×4 =
+    // 267 tall) so the position configure lands.
+    let window = f.client(id).window(&surface);
+    window.set_size(392, 267);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    let mapped = window_by_app_id(&mut f, "pos-rule").unwrap();
+    let pos = f.state().stage.position_of(&mapped).unwrap();
+    // Rule (100, -50) names the FRAME's center, Y-up. The frame recovers to
+    // exactly 400×300 (392+2×4, 267+25+2×4); frame top-left =
+    // (100 - 400/2, 50 - 300/2) = (-100, -100). Content top-left steps in by
+    // the border and (bar+border): (-100+4, -100+25+4) = (-96, -71). Literal
+    // on purpose.
+    assert_eq!(pos, smithay::utils::Point::from((-96, -71)));
+}
+
 /// Fullscreen round-trip: map a window, request fullscreen (expect an
 /// output-sized Fullscreen configure), then unset it (expect the restored
 /// pre-fullscreen size).

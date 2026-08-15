@@ -1,0 +1,109 @@
+name: Vendored dependencies
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to publish"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.release.tag_name || github.event.inputs.tag }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    # The implicit shell is `bash -e`, which has no pipefail — a failing tar
+    # would hand xz a partial stream and still upload a checksum for it.
+    shell: bash
+
+env:
+  CARGO_TERM_COLOR: always
+  # Keep in sync with ci.yml.
+  DEPS_APT: libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm-dev libxkbcommon-dev libwayland-dev
+
+jobs:
+  vendor:
+    name: vendor & upload
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Resolve version
+        id: ver
+        # Through the environment, not `${{ }}` in the body: a dispatch input is
+        # attacker-controlled text and this job can write to releases.
+        env:
+          RAW_TAG: ${{ github.event.release.tag_name || github.event.inputs.tag }}
+        run: |
+          echo "tag=$RAW_TAG" >> "$GITHUB_OUTPUT"
+          echo "version=${RAW_TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ steps.ver.outputs.tag }}
+
+      # Nothing else reconciles the two, and the asset is named after the tag.
+      - name: Check the tag matches Cargo.toml
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          MANIFEST=$(awk -F'"' '/^version = /{print $2; exit}' Cargo.toml)
+          if [ "$MANIFEST" != "$VERSION" ]; then
+            echo "tag says $VERSION, Cargo.toml says $MANIFEST" >&2
+            exit 1
+          fi
+
+      - name: Install build deps
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ${{ env.DEPS_APT }}
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Vendor dependencies
+        run: |
+          mkdir -p .cargo
+          cargo vendor --locked > .cargo/config.toml
+
+      - name: Pack
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          ASSET="driftwm-$VERSION-vendor.tar.xz"
+          # Own line so a failure here stops the step: tar only warns about an
+          # unparseable --mtime, and a substitution inside a word drops its status.
+          MTIME=$(git log -1 --format=%ct)
+          # Pin the fields tar would otherwise read off the filesystem — mtimes,
+          # ownership, directory order — so repacking a vendor tree gives the
+          # same bytes. -T1 because multi-threaded xz splits the stream by
+          # thread count, which would tie the output to the runner's core count.
+          tar --sort=name --format=gnu --numeric-owner --owner=0 --group=0 \
+              --mtime="@${MTIME:?}" \
+              -cf - .cargo vendor \
+            | xz -9 -T1 > "$ASSET"
+          sha256sum "$ASSET" > "$ASSET.sha256"
+          echo "ASSET=$ASSET" >> "$GITHUB_ENV"
+
+      # Builds what we are about to ship, not what we happen to have on disk.
+      - name: Verify the packed tarball builds offline
+        run: |
+          rm -rf vendor .cargo
+          tar xf "$ASSET"
+          # cargo vendor warmed CARGO_HOME, so an offline build could otherwise
+          # succeed from that cache even with an unusable vendor config.
+          rm -rf ~/.cargo/registry ~/.cargo/git
+          cargo build --offline --locked --release
+
+      - name: Upload to the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.ver.outputs.tag }}
+        # Tarball first: a failure part-way then leaves the release without a
+        # checksum, rather than with one that describes the previous asset.
+        run: |
+          gh release upload "$TAG" "$ASSET" --clobber
+          gh release upload "$TAG" "$ASSET.sha256" --clobber

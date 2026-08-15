@@ -17,21 +17,76 @@ fn set_accel_profile(
     }
 }
 
+fn set_send_events(
+    device: &mut smithay::reexports::input::Device,
+    mode: driftwm::config::SendEvents,
+) {
+    use driftwm::config::SendEvents;
+    let libinput_mode = match mode {
+        SendEvents::Enabled => smithay::reexports::input::SendEventsMode::ENABLED,
+        SendEvents::Disabled => smithay::reexports::input::SendEventsMode::DISABLED,
+        SendEvents::DisabledOnExternalMouse => {
+            smithay::reexports::input::SendEventsMode::DISABLED_ON_EXTERNAL_MOUSE
+        }
+    };
+    if let Err(e) = device.config_send_events_set_mode(libinput_mode) {
+        tracing::warn!("Failed to set send_events on {}: {e:?}", device.name());
+    }
+}
+
+/// Tap support is what tells a trackpad from a mouse here. Both device loops
+/// below must agree on it, or `set-trackpad` and `configure_trackpad` would
+/// target different sets.
+fn is_trackpad(device: &smithay::reexports::input::Device) -> bool {
+    device.config_tap_finger_count() > 0
+}
+
 impl DriftWm {
     /// Configure a libinput device using settings from config.
     /// Trackpads get trackpad settings, mice get mouse settings.
     pub fn configure_libinput_device(&self, device: &mut smithay::reexports::input::Device) {
-        if device.config_tap_finger_count() > 0 {
+        if is_trackpad(device) {
             self.configure_trackpad(device);
         } else if device.has_capability(smithay::reexports::input::DeviceCapability::Pointer) {
             self.configure_mouse(device);
         }
     }
 
+    /// The send-events mode in force: a runtime `set-trackpad` press if there
+    /// has been one this session, otherwise the `[input.trackpad]` seed.
+    pub fn effective_send_events(&self) -> driftwm::config::SendEvents {
+        self.trackpad_send_events
+            .unwrap_or(self.config.trackpad.send_events)
+    }
+
+    /// Push just the send-events mode to every connected trackpad.
+    /// `set-trackpad` changes nothing else, so it doesn't need the full
+    /// `configure_trackpad` pass.
+    pub fn apply_trackpad_send_events(&self) {
+        let mode = self.effective_send_events();
+        let mut found = false;
+        for mut device in self.input_devices.clone() {
+            if is_trackpad(&device) {
+                found = true;
+                set_send_events(&mut device, mode);
+            }
+        }
+        if !found {
+            // Not a dead end — the mode is stored, so a trackpad plugged in
+            // later comes up in it. Worth a breadcrumb all the same, since the
+            // keypress otherwise does nothing visible.
+            tracing::debug!("set-trackpad: no trackpad connected, holding {mode:?}");
+        }
+    }
+
     fn configure_trackpad(&self, device: &mut smithay::reexports::input::Device) {
         let cfg = &self.config.trackpad;
+        // A runtime `set-trackpad` press outranks the config seed, so a
+        // hotplug or VT switch re-applies what the user last chose rather than
+        // reverting to the file.
+        let send_events = self.effective_send_events();
         tracing::info!(
-            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, profile={:?}, click_method={:?}, dwt={})",
+            "Configuring trackpad: {} (tap={}, natural_scroll={}, accel={}, profile={:?}, click_method={:?}, dwt={}, send_events={:?})",
             device.name(),
             cfg.tap_to_click,
             cfg.natural_scroll,
@@ -39,7 +94,10 @@ impl DriftWm {
             cfg.accel_profile,
             cfg.click_method,
             cfg.disable_while_typing,
+            send_events,
         );
+
+        set_send_events(device, send_events);
 
         if let Err(e) = device.config_tap_set_enabled(cfg.tap_to_click) {
             tracing::warn!("Failed to set tap_to_click: {e:?}");

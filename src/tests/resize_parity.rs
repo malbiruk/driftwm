@@ -5,9 +5,9 @@
 //! their existing behavior.
 //!
 //! Client grabs are installed directly via the public `ResizeGrab` struct
-//! literal (seeding `ResizeState::Resizing` the way the xdg-shell handler
-//! would, so `handle_resize_commit` reposition/settle runs instead of
-//! early-returning). Suspended grabs run through the real `try_suspended_button`
+//! literal, over the same `begin_client_resize` the real entry points run, so
+//! `handle_resize_commit` reposition/settle runs instead of early-returning.
+//! Suspended grabs run through the real `try_suspended_button`
 //! button path so the cursor and cluster install exactly as production drives
 //! them — the single-motion precedent in `suspended.rs`.
 //!
@@ -20,25 +20,21 @@ use std::cell::RefCell;
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
 use smithay::input::keyboard::ModifiersState;
-use smithay::input::pointer::{
-    ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent,
-};
-use smithay::output::Output;
+use smithay::input::pointer::{ButtonEvent, CursorIcon, CursorImageStatus, MotionEvent};
 use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use smithay::wayland::compositor::with_states;
 
 use driftwm::config::{BTN_LEFT, Config};
-use driftwm::layout::snap::SnapState;
 use wayland_client::protocol::wl_surface::WlSurface as WlClientSurface;
 
-use crate::grabs::{ResizeGrab, ResizeState, SizeConstraints};
-use crate::state::{ClusterMember, ClusterResizeSnapshot, FocusTarget, StageWindow};
+use crate::grabs::ResizeState;
+use crate::state::{ClusterResizeSnapshot, FocusTarget, StageWindow};
 
 use super::{
-    Fixture, adopt_last_configure, client_sees_maximized, fit_and_frame, map_window,
-    server_surface, window_by_app_id,
+    Fixture, adopt_last_configure, assert_resize_entered, client_sees_maximized, fit_and_frame,
+    install_client_resize_grab, map_window, seed_fit_and_fill, server_surface, window_by_app_id,
 };
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -104,66 +100,6 @@ fn start_suspended_resize(f: &mut Fixture, click: Point<f64, Logical>) {
         .try_suspended_button(&pointer, click, BTN_LEFT, serial, held);
 }
 
-/// Install a live client [`ResizeGrab`] over `window`, seeding the
-/// `ResizeState::Resizing` the xdg-shell handler would have set so
-/// `handle_resize_commit` runs its reposition/settle logic. `start` is the
-/// canvas-space grab origin; the size delta is measured from there.
-fn install_client_resize_grab(
-    f: &mut Fixture,
-    window: &Window,
-    edges: xdg_toplevel::ResizeEdge,
-    start: Point<f64, Logical>,
-    output: Output,
-    cluster: ClusterResizeSnapshot,
-) {
-    let initial_window_location = f
-        .state()
-        .stage
-        .position_of(&StageWindow::Client(window.clone()))
-        .unwrap();
-    let initial_window_size = window.geometry().size;
-
-    let surface = server_surface(window);
-    with_states(&surface, |states| {
-        states
-            .data_map
-            .get_or_insert(|| RefCell::new(ResizeState::Idle))
-            .replace(ResizeState::Resizing {
-                edges,
-                initial_window_location,
-                initial_window_size,
-                initial_screen_pos: None,
-                last_committed_size: initial_window_size,
-            });
-    });
-
-    let grab = ResizeGrab {
-        start_data: GrabStartData {
-            focus: None,
-            button: BTN_LEFT,
-            location: start,
-        },
-        target: ClusterMember::Client(window.clone()),
-        edges,
-        initial_window_location,
-        initial_window_size,
-        last_window_size: initial_window_size,
-        output,
-        last_clamped_location: start,
-        snap: SnapState::default(),
-        constraints: SizeConstraints::for_window(window),
-        cluster_resize: cluster,
-        pinned_initial_screen_pos: None,
-        touch_start: None,
-        touch_slots: 0,
-        locked_ratio: None,
-    };
-
-    let pointer = f.state().seat.get_pointer().unwrap();
-    let serial = SERIAL_COUNTER.next_serial();
-    pointer.set_grab(f.state(), grab, serial, Focus::Clear);
-}
-
 /// Read the server-side `ResizeState` a grab/commit left on `surface`.
 fn resize_state(surface: &WlSurface) -> ResizeState {
     with_states(surface, |states| {
@@ -199,6 +135,51 @@ fn suspended_resize_floors_at_min_size() {
         s.size.get(),
         Size::from((120, 300)),
         "a shrink past the floor clamps to MIN_SUSPENDED_SIZE"
+    );
+
+    release(&mut f);
+    f.state().dismiss_suspended(sid);
+}
+
+/// `MIN_SUSPENDED_SIZE` is a floor on the stand-in's *visible* frame, not its
+/// stored body: with a border configured, an interactive drag (not just the
+/// non-interactive `msg resize` in `resize_ipc.rs`) floors the width further
+/// below 120, since the border eats into the body on top of the bar.
+#[test]
+fn suspended_resize_floors_at_min_size_with_border() {
+    let mut f = Fixture::with_config(
+        Config::from_toml(
+            r#"
+        [decorations]
+        default_mode = "server"
+        border_width = 4
+        [mouse.anywhere]
+        "super+left" = "resize-window"
+    "#,
+        )
+        .unwrap(),
+    );
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((400, 300)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+
+    // Right third of the body → a right-edge resize; drag the edge far left.
+    start_suspended_resize(&mut f, pt(700.0, 450.0));
+    motion(&mut f, pt(400.0, 450.0));
+
+    let s = f.state().find_suspended(sid).unwrap();
+    assert_eq!(
+        s.size.get(),
+        // 120 minus the 4px border on the dragged axis (height is untouched
+        // by a pure right-edge drag): 120 - 2×4 = 112.
+        Size::from((112, 300)),
+        "a shrink past the floor clamps to the border-deflated floor, not the borderless 120"
     );
 
     release(&mut f);
@@ -646,6 +627,80 @@ fn client_resize_configures_repositions_and_settles() {
     );
 }
 
+/// The top/left compensation is measured per commit against the size that
+/// commit replaces, so a drag the client acks in several steps lands exactly
+/// where one grown-from-the-grab-start step would: the opposite edges never
+/// move, however many commits the delta is spread over.
+#[test]
+fn a_top_left_resize_holds_its_opposite_edges_across_every_commit() {
+    let mut f = Fixture::with_config(config_resize_binding());
+    let out = f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    let csurface = map_window(&mut f, id, "c", (400, 300));
+    let window = window_by_app_id(&mut f, "c").unwrap();
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((400, 300)),
+        true,
+    );
+    let ssurface = server_surface(&window);
+
+    // Grab the top-left corner: the right edge sits at 800, the bottom at 600,
+    // and both must stay there for the whole drag.
+    install_client_resize_grab(
+        &mut f,
+        &window,
+        xdg_toplevel::ResizeEdge::TopLeft,
+        pt(400.0, 300.0),
+        out,
+        ClusterResizeSnapshot::empty(),
+    );
+
+    for (drag_to, expected) in [
+        (pt(300.0, 250.0), Point::from((300, 250))),
+        (pt(250.0, 200.0), Point::from((250, 200))),
+        (pt(200.0, 150.0), Point::from((200, 150))),
+    ] {
+        motion(&mut f, drag_to);
+        f.double_roundtrip(id);
+        adopt_last_configure(&mut f, id, &csurface);
+        let pos = f
+            .state()
+            .stage
+            .position_of(&StageWindow::Client(window.clone()))
+            .unwrap();
+        assert_eq!(
+            (
+                pos,
+                pos + Point::from((window.geometry().size.w, window.geometry().size.h))
+            ),
+            (expected, Point::from((800, 600))),
+            "every commit moves the dragged corner and leaves the opposite one at (800, 600)"
+        );
+    }
+
+    release(&mut f);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &csurface);
+    assert!(
+        matches!(resize_state(&ssurface), ResizeState::Idle),
+        "the final commit settles the resize back to Idle"
+    );
+    assert_eq!(
+        f.state()
+            .stage
+            .position_of(&StageWindow::Client(window.clone())),
+        Some(Point::from((200, 150))),
+        "the settle commit at an unchanged size leaves the window where the drag left it"
+    );
+    assert_eq!(
+        f.state().stage.restore_size(&window),
+        Some(Size::from((600, 450))),
+        "and anchors the restore size to the user's final choice"
+    );
+}
+
 /// A client dying mid-resize degrades the grab to a pass-through: the cluster
 /// cascade stops (a neighbor no longer moves) and release cleans up with no
 /// panic.
@@ -934,4 +989,192 @@ fn a_pinned_move_on_an_unpinned_window_reports_failure() {
         !f.state().seat.get_pointer().unwrap().is_grabbed(),
         "no grab was installed"
     );
+}
+
+/// Press the left button over `window` at `loc`, which installs smithay's
+/// `ClickGrab` with the window's surface as its focus — the pointer grab
+/// `check_grab` gates a client's own `xdg_toplevel.resize` on.
+fn press_over(f: &mut Fixture, window: &Window, loc: Point<f64, Logical>) {
+    let ssurface = server_surface(window);
+    let pointer = f.state().seat.get_pointer().unwrap();
+    let focus = Some((FocusTarget(ssurface), Point::from((0.0, 0.0))));
+    pointer.motion(
+        f.state(),
+        focus,
+        &MotionEvent {
+            location: loc,
+            serial: SERIAL_COUNTER.next_serial(),
+            time: 0,
+        },
+    );
+    pointer.button(
+        f.state(),
+        &ButtonEvent {
+            button: BTN_LEFT,
+            state: ButtonState::Pressed,
+            serial: SERIAL_COUNTER.next_serial(),
+            time: 0,
+        },
+    );
+}
+
+/// Config pinning `pin` to the screen at a known size, so the pinned half of
+/// the entry-point tests has a pin site to anchor against.
+fn config_pinned() -> Config {
+    Config::from_toml(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [400, 300]
+"#,
+    )
+    .unwrap()
+}
+
+/// The whole invariant the pointer entry point establishes, plain and pinned.
+/// The four entry points each hand-roll it, so each one is pinned in full here
+/// or in `gesture_resize.rs` — `initial_screen_pos` above all, the field that
+/// decides whether the commit-time reposition moves a canvas location or a pin
+/// site.
+#[test]
+fn pointer_resize_entry_establishes_the_whole_resize_invariant() {
+    {
+        let mut f = Fixture::new();
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        map_window(&mut f, id, "c", (400, 300));
+        let window = window_by_app_id(&mut f, "c").unwrap();
+        f.state().map_window(
+            StageWindow::Client(window.clone()),
+            Point::from((400, 300)),
+            true,
+        );
+        // Both memberships set, so clearing either is observable.
+        seed_fit_and_fill(&mut f, &window);
+
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        assert!(f.state().start_compositor_resize_with_edge(
+            &pointer,
+            &window,
+            pt(790.0, 450.0),
+            BTN_LEFT,
+            serial,
+            Some(xdg_toplevel::ResizeEdge::Right),
+            false,
+        ));
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            Size::from((400, 300)),
+            None,
+        );
+        release(&mut f);
+    }
+
+    {
+        let mut f = Fixture::with_config(config_pinned());
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        map_window(&mut f, id, "pin", (400, 300));
+        let window = window_by_app_id(&mut f, "pin").unwrap();
+        let site = f.state().stage.pin_of(&window).unwrap().screen_pos;
+        seed_fit_and_fill(&mut f, &window);
+
+        let pointer = f.state().seat.get_pointer().unwrap();
+        let serial = SERIAL_COUNTER.next_serial();
+        assert!(f.state().start_compositor_resize_with_edge(
+            &pointer,
+            &window,
+            pt(site.x as f64 + 390.0, site.y as f64 + 150.0),
+            BTN_LEFT,
+            serial,
+            Some(xdg_toplevel::ResizeEdge::Right),
+            false,
+        ));
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            Size::from((400, 300)),
+            Some(site),
+        );
+        release(&mut f);
+    }
+}
+
+/// The same invariant through the client's own `xdg_toplevel.resize`. This arm
+/// interleaves the pieces differently from the other three — the pin lookup
+/// sits between the membership clear and the `ResizeState` seed — so what it
+/// ends up writing is worth pinning independently.
+#[test]
+fn client_resize_request_establishes_the_whole_resize_invariant() {
+    {
+        let mut f = Fixture::new();
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        let csurface = map_window(&mut f, id, "c", (400, 300));
+        let window = window_by_app_id(&mut f, "c").unwrap();
+        f.state().map_window(
+            StageWindow::Client(window.clone()),
+            Point::from((400, 300)),
+            true,
+        );
+        // Both memberships set, so clearing either is observable.
+        seed_fit_and_fill(&mut f, &window);
+
+        press_over(&mut f, &window, pt(790.0, 450.0));
+        f.client(id).window(&csurface).resize(
+            wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge::Right,
+            1,
+        );
+        f.double_roundtrip(id);
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            Size::from((400, 300)),
+            None,
+        );
+        release(&mut f);
+    }
+
+    {
+        let mut f = Fixture::with_config(config_pinned());
+        f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        let id = f.add_client();
+        let csurface = map_window(&mut f, id, "pin", (400, 300));
+        let window = window_by_app_id(&mut f, "pin").unwrap();
+        let site = f.state().stage.pin_of(&window).unwrap().screen_pos;
+        seed_fit_and_fill(&mut f, &window);
+
+        press_over(
+            &mut f,
+            &window,
+            pt(site.x as f64 + 390.0, site.y as f64 + 150.0),
+        );
+        f.client(id).window(&csurface).resize(
+            wayland_protocols::xdg::shell::client::xdg_toplevel::ResizeEdge::Right,
+            1,
+        );
+        f.double_roundtrip(id);
+
+        assert_resize_entered(
+            &mut f,
+            &window,
+            xdg_toplevel::ResizeEdge::Right,
+            Size::from((400, 300)),
+            Some(site),
+        );
+        release(&mut f);
+    }
 }

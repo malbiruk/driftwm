@@ -72,17 +72,29 @@ impl WorkerPool {
         let mut workers = Vec::with_capacity(N_WORKERS);
 
         for worker_id in 0..N_WORKERS {
-            let queue = Arc::clone(&queue);
+            let worker_queue = Arc::clone(&queue);
             let resp_tx = resp_tx.clone();
             let path = path.clone();
             let loop_signal = loop_signal.clone();
-            let source = TiffSource::open(&path)
-                .map_err(|e| format!("tile worker {worker_id}: open: {e}"))?;
-            let handle = std::thread::Builder::new()
-                .name(format!("driftwm-tile-{worker_id}"))
-                .spawn(move || worker_loop(source, queue, resp_tx, loop_signal))
-                .map_err(|e| format!("spawn tile worker {worker_id}: {e}"))?;
-            workers.push(handle);
+            let spawned = TiffSource::open(&path)
+                .map_err(|e| format!("tile worker {worker_id}: open: {e}"))
+                .and_then(|source| {
+                    std::thread::Builder::new()
+                        .name(format!("driftwm-tile-{worker_id}"))
+                        .spawn(move || worker_loop(source, worker_queue, resp_tx, loop_signal))
+                        .map_err(|e| format!("spawn tile worker {worker_id}: {e}"))
+                });
+            match spawned {
+                Ok(handle) => workers.push(handle),
+                Err(e) => {
+                    // Returning the handles to the drop glue would strand the
+                    // workers already spawned: they hold their own `Arc<Queue>`,
+                    // so nothing ever sets `shutdown` and they park on `cv.wait`
+                    // for the process's life, each holding a stack and an fd.
+                    shutdown_and_join(&queue, std::mem::take(&mut workers));
+                    return Err(e);
+                }
+            }
         }
 
         Ok(Self {
@@ -101,20 +113,32 @@ impl WorkerPool {
     pub fn try_recv(&self) -> Option<TileResponse> {
         self.responses.try_recv().ok()
     }
+
+    /// Drop every queued request without shutting the pool down — the workers
+    /// stay parked, ready for the next batch. Used when the cache the requests
+    /// were enqueued for is emptied (fullscreen shrink).
+    pub fn drain_pending(&self) {
+        let mut s = self.queue.state.lock().unwrap();
+        s.pending.clear();
+    }
 }
 
 impl Drop for WorkerPool {
     fn drop(&mut self) {
-        {
-            let mut s = self.queue.state.lock().unwrap();
-            s.shutdown = true;
-            s.pending.clear();
-        }
-        self.queue.cv.notify_all();
-        for handle in self.workers.drain(..) {
-            // join() is bounded: workers exit after their in-flight decode (5-20ms).
-            let _ = handle.join();
-        }
+        shutdown_and_join(&self.queue, std::mem::take(&mut self.workers));
+    }
+}
+
+fn shutdown_and_join(queue: &Arc<Queue>, workers: Vec<JoinHandle<()>>) {
+    {
+        let mut s = queue.state.lock().unwrap();
+        s.shutdown = true;
+        s.pending.clear();
+    }
+    queue.cv.notify_all();
+    for handle in workers {
+        // join() is bounded: workers exit after their in-flight decode (5-20ms).
+        let _ = handle.join();
     }
 }
 

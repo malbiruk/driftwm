@@ -37,6 +37,17 @@ pub fn canvas_to_screen(canvas: CanvasPos, camera: Point<f64, Logical>, zoom: f6
     )))
 }
 
+/// Clamp a screen-local position into an output of `size`. The far bound is one
+/// short of the edge so the result stays an addressable pixel of that output
+/// rather than the first one of whatever sits beyond it.
+#[inline]
+pub fn clamp_to_output(pos: ScreenPos, size: Size<i32, Logical>) -> ScreenPos {
+    ScreenPos(Point::from((
+        pos.0.x.clamp(0.0, size.w as f64 - 1.0),
+        pos.0.y.clamp(0.0, size.h as f64 - 1.0),
+    )))
+}
+
 /// Focus location for a screen-space surface (wlr layer, screen-pinned window):
 /// smithay derives surface-local coords as `location - focus_loc` with the
 /// pointer/touch location in canvas coords, so the surface's screen origin is
@@ -63,16 +74,104 @@ pub fn screen_space_origin(
 
 /// Convert internal canvas coords (top-left origin, Y-down) to the user-facing
 /// window-rule convention (center, Y-up) used by config rules, the state file, and IPC.
+///
+/// Chrome-blind: it converts whatever rect it is handed. Window callers want
+/// [`content_to_rule`], which inflates to the visual frame first.
 #[inline]
 pub fn internal_to_rule(loc: Point<i32, Logical>, size: Size<i32, Logical>) -> (i32, i32) {
     (loc.x + size.w / 2, -(loc.y + size.h / 2))
 }
 
-/// Inverse of [`internal_to_rule`]: window-rule coords (center, Y-up) back to
-/// internal top-left, Y-down canvas coords.
+/// Inverse of [`internal_to_rule`], and chrome-blind in the same way.
+/// [`rule_to_content`] is the window-shaped form.
 #[inline]
 pub fn rule_to_internal(x: i32, y: i32, size: Size<i32, Logical>) -> Point<i32, Logical> {
     Point::from((x - size.w / 2, -y - size.h / 2))
+}
+
+/// The compositor-drawn chrome around a window's content: the SSD title-bar
+/// strip above it, and a border outside all four sides (outside the bar, too).
+///
+/// Every user-facing size and position — window-rule `size`/`position`, the
+/// state file, `driftwm msg move`/`resize`, the durable session file — describes
+/// the **visual frame**, content plus this chrome, so a script can lay windows
+/// out without knowing which of them are server-decorated. Compositor state
+/// stays content-space (`stage.position_of` is the content top-left,
+/// `geometry().size` the content size); each user-facing boundary converts here.
+///
+/// A window's *center* is chrome-sensitive only through `bar`: a border is
+/// symmetric, so it cancels. Sizes need both.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Chrome {
+    /// SSD title-bar height. Zero for a client-decorated or undecorated window;
+    /// a suspended stand-in always wears one.
+    pub bar: i32,
+    /// Border width on each side.
+    pub border: i32,
+}
+
+impl Chrome {
+    /// No chrome at all — a fullscreen window, or a bare CSD one.
+    pub const NONE: Chrome = Chrome { bar: 0, border: 0 };
+
+    /// The visual frame size a content size occupies.
+    #[inline]
+    pub fn frame_size(self, size: Size<i32, Logical>) -> Size<i32, Logical> {
+        Size::from((
+            size.w + 2 * self.border,
+            size.h + self.bar + 2 * self.border,
+        ))
+    }
+
+    /// The content size inside a visual frame, floored at 1x1: a frame no bigger
+    /// than its own chrome would otherwise deflate to nothing, and a client can
+    /// never be configured with a zero dimension.
+    #[inline]
+    pub fn content_size(self, frame: Size<i32, Logical>) -> Size<i32, Logical> {
+        Size::from((
+            (frame.w - 2 * self.border).max(1),
+            (frame.h - self.bar - 2 * self.border).max(1),
+        ))
+    }
+
+    /// The visual frame's top-left for a content top-left.
+    #[inline]
+    pub fn frame_loc(self, loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        Point::from((loc.x - self.border, loc.y - self.bar - self.border))
+    }
+
+    /// Inverse of [`Chrome::frame_loc`].
+    #[inline]
+    pub fn content_loc(self, frame_loc: Point<i32, Logical>) -> Point<i32, Logical> {
+        Point::from((
+            frame_loc.x + self.border,
+            frame_loc.y + self.bar + self.border,
+        ))
+    }
+}
+
+/// User-facing coordinates for a window whose content sits at `loc` with content
+/// `size`: its visual frame's center, Y-up. The chrome-aware form of
+/// [`internal_to_rule`].
+#[inline]
+pub fn content_to_rule(
+    loc: Point<i32, Logical>,
+    size: Size<i32, Logical>,
+    chrome: Chrome,
+) -> (i32, i32) {
+    internal_to_rule(chrome.frame_loc(loc), chrome.frame_size(size))
+}
+
+/// Inverse of [`content_to_rule`]: the content top-left that puts a window of
+/// content `size` wearing `chrome` at the user-facing point `(x, y)`.
+#[inline]
+pub fn rule_to_content(
+    x: i32,
+    y: i32,
+    size: Size<i32, Logical>,
+    chrome: Chrome,
+) -> Point<i32, Logical> {
+    chrome.content_loc(rule_to_internal(x, y, chrome.frame_size(size)))
 }
 
 /// A screen-pinned window's top-left screen position (output-relative, top-left
@@ -137,25 +236,6 @@ pub fn camera_for_center(
     Point::from((
         x - viewport.w as f64 / (2.0 * zoom),
         -y - viewport.h as f64 / (2.0 * zoom),
-    ))
-}
-
-/// Compute the camera position that centers a window at `screen_center` on screen.
-/// `screen_center` is the screen-space point where the window center should appear
-/// (typically the usable area center, accounting for panel exclusive zones).
-pub fn camera_to_center_window(
-    window_loc: Point<i32, Logical>,
-    window_size: Size<i32, Logical>,
-    screen_center: Point<f64, Logical>,
-    zoom: f64,
-    bar: i32,
-) -> Point<f64, Logical> {
-    let window_center_x = window_loc.x as f64 + window_size.w as f64 / 2.0;
-    let bar_f = bar as f64;
-    let window_center_y = window_loc.y as f64 - bar_f + (window_size.h as f64 + bar_f) / 2.0;
-    Point::from((
-        window_center_x - screen_center.x / zoom,
-        window_center_y - screen_center.y / zoom,
     ))
 }
 
@@ -580,10 +660,6 @@ mod tests {
     fn vp(w: i32, h: i32) -> Size<i32, Logical> {
         Size::from((w, h))
     }
-    /// Screen center point for a viewport of given size (no panels).
-    fn vp_center(w: i32, h: i32) -> Point<f64, Logical> {
-        Point::from((w as f64 / 2.0, h as f64 / 2.0))
-    }
 
     #[test]
     fn rule_coords_round_trip() {
@@ -604,6 +680,77 @@ mod tests {
     #[test]
     fn rule_coords_center_y_up() {
         assert_eq!(internal_to_rule((0, 0).into(), vp(100, 100)), (50, -50));
+    }
+
+    #[test]
+    fn content_rule_coords_round_trip() {
+        // content -> rule -> content is identity for every chrome, including
+        // odd sizes and odd chrome where the integer halving truncates.
+        for (loc, size) in [
+            ((0, 0), (100, 100)),
+            ((200, -300), (640, 480)),
+            ((-15, 7), (101, 51)),
+        ] {
+            for chrome in [
+                Chrome::NONE,
+                Chrome { bar: 25, border: 0 },
+                Chrome { bar: 0, border: 4 },
+                Chrome { bar: 25, border: 3 },
+                Chrome { bar: 7, border: 1 },
+            ] {
+                let loc = Point::<i32, Logical>::from(loc);
+                let size = vp(size.0, size.1);
+                let (rx, ry) = content_to_rule(loc, size, chrome);
+                assert_eq!(
+                    rule_to_content(rx, ry, size, chrome),
+                    loc,
+                    "{chrome:?} at {loc:?} {size:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_border_cancels_out_of_the_frame_center() {
+        let loc = Point::<i32, Logical>::from((200, -300));
+        let size = vp(640, 480);
+        let bare = content_to_rule(loc, size, Chrome { bar: 25, border: 0 });
+        for border in [1, 2, 4, 17] {
+            assert_eq!(
+                content_to_rule(loc, size, Chrome { bar: 25, border }),
+                bare,
+                "border {border} moved the center"
+            );
+        }
+    }
+
+    #[test]
+    fn an_undecorated_window_keeps_the_bare_rule_coords() {
+        let loc = Point::<i32, Logical>::from((-15, 7));
+        let size = vp(101, 51);
+        assert_eq!(
+            content_to_rule(loc, size, Chrome::NONE),
+            internal_to_rule(loc, size)
+        );
+    }
+
+    #[test]
+    fn a_bar_lifts_the_reported_center_by_half_its_height() {
+        let loc = Point::<i32, Logical>::from((0, 0));
+        let size = vp(100, 100);
+        let (_, bare_y) = content_to_rule(loc, size, Chrome::NONE);
+        let (_, barred_y) = content_to_rule(loc, size, Chrome { bar: 24, border: 0 });
+        assert_eq!(barred_y - bare_y, 12);
+    }
+
+    #[test]
+    fn a_frame_smaller_than_its_chrome_floors_at_one_pixel() {
+        let chrome = Chrome { bar: 25, border: 4 };
+        assert_eq!(chrome.content_size(vp(4, 20)), vp(1, 1));
+        assert_eq!(
+            chrome.content_size(chrome.frame_size(vp(800, 600))),
+            vp(800, 600)
+        );
     }
 
     #[test]
@@ -760,38 +907,6 @@ mod tests {
         // (210 - 10) * 0.5 = 100, (120 - 20) * 0.5 = 50
         assert!((screen.0.x - 100.0).abs() < 1e-9);
         assert!((screen.0.y - 50.0).abs() < 1e-9);
-    }
-
-    // -- camera_to_center_window tests --
-
-    #[test]
-    fn center_window_zoom_1() {
-        // 200x100 window at (300, 400), 1920x1080 viewport, zoom 1.0
-        let cam = camera_to_center_window(
-            (300, 400).into(),
-            (200, 100).into(),
-            vp_center(1920, 1080),
-            1.0,
-            0,
-        );
-        // window center: (400, 450), viewport center offset: (960, 540)
-        assert!((cam.x - (400.0 - 960.0)).abs() < 1e-9);
-        assert!((cam.y - (450.0 - 540.0)).abs() < 1e-9);
-    }
-
-    #[test]
-    fn center_window_zoomed_out() {
-        // At zoom 0.5, viewport center = viewport_size / (2 * 0.5) = viewport_size
-        let cam = camera_to_center_window(
-            (0, 0).into(),
-            (100, 100).into(),
-            vp_center(1000, 1000),
-            0.5,
-            0,
-        );
-        // window center: (50, 50), viewport center offset at 0.5: (1000, 1000)
-        assert!((cam.x - (50.0 - 1000.0)).abs() < 1e-9);
-        assert!((cam.y - (50.0 - 1000.0)).abs() < 1e-9);
     }
 
     // -- find_nearest tests --

@@ -4,6 +4,7 @@ use smithay::backend::renderer::element::RenderElementStates;
 use smithay::desktop::layer_map_for_output;
 use smithay::input::pointer::CursorImageStatus;
 use smithay::output::Output;
+use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 
 use driftwm::canvas;
 
@@ -12,6 +13,10 @@ use driftwm::canvas;
 /// off-screen starves the client's buffer cycle, disconnecting native Wayland
 /// clients (EGL swap starvation) and stalling Xwayland ones (#141). 995ms (not a
 /// round 1s) matches niri so a per-second client still gets one.
+///
+/// Must stay strictly shorter than the 1s fallback timer in `main.rs`, for the
+/// same `elapsed > throttle` reason — a round 1000ms would make every timer
+/// tick miss. udev-only: winit re-arms at 16ms.
 const FRAME_CALLBACK_THROTTLE: Duration = Duration::from_millis(995);
 
 /// Sync foreign-toplevel protocol state with the current window list.
@@ -270,15 +275,34 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
         );
     }
 
-    // Layer surface frame callbacks
+    // Mirrors the renderer's own cull (nothing draws under a lock frame; only
+    // Overlay survives a fullscreen output) so `drawn => callback` holds.
+    // Recomputed rather than threaded from `compose_frame`: the only unsafe
+    // direction is compose drawing while this culls, and nothing between the two
+    // calls moves a predicate that way. Lock state only advances its confirmation
+    // bookkeeping, staying `Locked`. The fullscreen half reads the output's
+    // camera and zoom, the window's stage position, and the centring offset its
+    // fullscreen entry holds — and everything either backend runs between the two
+    // calls is submit-and-bookkeeping work — scanout, presentation feedback,
+    // capture, protocol refreshes, persistence — none of which writes any of them
+    // (the centring is written from a client commit, which cannot land here).
+    // That property is the check to re-run when adding a call here, not this
+    // list.
+    //
+    // Scoped to its own block: `layer_map_for_output` below re-locks the same
+    // mutex, so holding this one open would deadlock.
     {
+        let lock_frame = state.session_lock.renders_lock_frame();
+        let output_fullscreen = state.is_output_visually_fullscreen(output);
         let layer_map = layer_map_for_output(output);
         for layer_surface in layer_map.layers() {
+            let on_screen =
+                !lock_frame && (!output_fullscreen || layer_surface.layer() == WlrLayer::Overlay);
             layer_surface.send_frame(
                 output,
                 time,
-                Some(Duration::ZERO),
-                frame_callback_filter(output, true),
+                Some(FRAME_CALLBACK_THROTTLE),
+                frame_callback_filter(output, on_screen),
             );
         }
     }
@@ -336,25 +360,53 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
 }
 
 /// Idle-safety net for the off-screen heartbeat (#141): `post_render` only runs
-/// when an output renders (damage-driven under udev), so a fully-idle compositor
-/// would never service a mapped-but-off-screen surface. Sharing
-/// FRAME_CALLBACK_THROTTLE with `post_render` dedups: a surface already serviced
-/// within the interval is skipped, so an active render loop produces no doubles.
-/// Covers canvas-positioned surfaces (toplevels and `widget` layer surfaces),
-/// which pan off-viewport; screen-anchored panels and lock surfaces are excluded
-/// — being screen-fixed, they can't be panned away.
+/// when an output renders, so an idle compositor would never service a
+/// mapped-but-off-screen surface. Shares FRAME_CALLBACK_THROTTLE with
+/// `post_render` so an active render loop isn't double-serviced.
+///
+/// Covers canvas-positioned surfaces (pan off-viewport) and every output's
+/// layer map: since `post_render` now culls screen-anchored panels too (lock
+/// frame, static fullscreen), a panel needs this to keep getting callbacks once
+/// its whole output goes quiet. Lock surfaces are excluded — `post_render`
+/// doesn't gate them.
 pub fn send_frame_callbacks_fallback(state: &mut crate::state::DriftWm) {
     let time = state.start_time.elapsed();
-    // Output is irrelevant: the `|_, _| None` filter never reports a primary
-    // scanout, so only the throttle's overdue path can fire.
-    let Some(output) = state.space.outputs().next().cloned() else {
+    // Skip the virtual placeholders a full disconnect leaves behind: they have
+    // no DRM surface, so nothing composites and nothing releases the buffers a
+    // serviced client draws into. With every output a placeholder this leaves
+    // no output at all and the heartbeat goes quiet, which is the point.
+    let outputs: Vec<Output> = state
+        .space
+        .outputs()
+        .filter(|o| !state.disconnected_outputs.contains(&o.name()))
+        .cloned()
+        .collect();
+
+    // Skip blanked outputs, matching the udev render loop's own skip: a layer
+    // commit marks its output dirty unconditionally (unlike a window's), so
+    // servicing one here would wake a dark screen every second.
+    for layer_output in outputs
+        .iter()
+        .filter(|o| !state.dpms_off_outputs.contains(o))
+    {
+        let layer_map = layer_map_for_output(layer_output);
+        for layer_surface in layer_map.layers() {
+            layer_surface.send_frame(layer_output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| {
+                None
+            });
+        }
+    }
+
+    // Output is irrelevant for the rest: the `|_, _| None` filter never reports
+    // a primary scanout, so only the throttle's overdue path can fire.
+    let Some(output) = outputs.first() else {
         return;
     };
     for window in state.stage.windows().filter_map(|w| w.client()) {
-        window.send_frame(&output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| None);
+        window.send_frame(output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| None);
     }
     for cl in &state.canvas_layers {
         cl.surface
-            .send_frame(&output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| None);
+            .send_frame(output, time, Some(FRAME_CALLBACK_THROTTLE), |_, _| None);
     }
 }

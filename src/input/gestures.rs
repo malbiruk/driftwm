@@ -3,6 +3,7 @@ mod hold;
 mod pinch;
 mod swipe;
 
+use smithay::output::Output;
 use smithay::utils::{Logical, Point};
 
 use driftwm::config::{Action, Direction, ThresholdAction};
@@ -60,13 +61,25 @@ impl DriftWm {
         }
     }
 
+    /// The output a gesture drives: the one it was pinned to at begin, else the
+    /// active one — the same fallback [`Self::gesture_camera_zoom`] reads through.
+    pub(super) fn gesture_output_or_active(&self) -> Option<Output> {
+        self.gesture_output.clone().or_else(|| self.active_output())
+    }
+
+    /// Whether the output this gesture drives has its camera and zoom locked by
+    /// fullscreen. Resolved here rather than at each write site so a gesture's
+    /// raw `output_state` branch and its setter-based fallback can't disagree
+    /// about which output they mean.
+    pub(super) fn gesture_output_fullscreen(&self) -> bool {
+        self.gesture_output_or_active()
+            .is_some_and(|o| self.is_output_fullscreen(&o))
+    }
+
     pub(crate) fn cancel_animations(&mut self) {
-        self.with_output_state(|os| {
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
-            os.momentum.stop();
-        });
+        if let Some(output) = self.active_output() {
+            self.cancel_animations_on(&output);
+        }
     }
 }
 

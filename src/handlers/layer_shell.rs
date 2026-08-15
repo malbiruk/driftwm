@@ -7,7 +7,10 @@ use smithay::{
     wayland::{
         compositor::with_states,
         shell::{
-            wlr_layer::{Layer, LayerSurface, WlrLayerShellHandler, WlrLayerShellState},
+            wlr_layer::{
+                Anchor, Layer, LayerSurface, LayerSurfaceCachedState, WlrLayerShellHandler,
+                WlrLayerShellState,
+            },
             xdg::PopupSurface,
         },
     },
@@ -15,9 +18,12 @@ use smithay::{
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// Toggled in the surface data_map when a layer role is destroyed/recreated.
-/// Our pre-commit hook (registered early in `new_surface`) checks this to
-/// set full anchors before smithay's validation hook runs on orphaned commits.
+/// Set in the surface data_map when a layer role on a `wl_surface` is
+/// destroyed, cleared when it takes a new one. While set, our pre-commit hook
+/// (registered early in `new_surface`) strips this surface's buffers and forces
+/// full anchors, so smithay's validation hook cannot post an error on the
+/// destroyed proxy. The surface is therefore deliberately unmappable until
+/// the next `get_layer_surface`.
 pub(crate) struct LayerDestroyedMarker(pub AtomicBool);
 
 use crate::state::{CanvasLayer, DriftWm};
@@ -45,8 +51,22 @@ impl WlrLayerShellHandler for DriftWm {
         // Clear any stale destroyed marker — the wl_surface may be reused
         // (e.g. swayosd destroys and recreates layer surfaces on the same wl_surface)
         with_states(surface.wl_surface(), |states| {
-            if let Some(marker) = states.data_map.get::<LayerDestroyedMarker>() {
-                marker.0.store(false, Ordering::Relaxed);
+            let was_set = states
+                .data_map
+                .get::<LayerDestroyedMarker>()
+                .is_some_and(|marker| marker.0.swap(false, Ordering::Relaxed));
+            // Nothing else undoes the full anchors the hook wrote:
+            // LayerSurfaceCachedState's Cacheable::commit returns *self and the
+            // cache never resets pending, so they would survive into this role
+            // and size it to the whole output. Reset the anchor alone —
+            // get_layer_surface has already written .layer into the same state.
+            // Both halves: commit is `*self` and merge_into is `*into = self`,
+            // so the orphaned commit poisoned current() too, and current() is
+            // the half LayerMap::arrange reads via LayerSurface::cached_state().
+            if was_set {
+                let mut guard = states.cached_state.get::<LayerSurfaceCachedState>();
+                guard.pending().anchor = Anchor::empty();
+                guard.current().anchor = Anchor::empty();
             }
         });
 
@@ -63,7 +83,11 @@ impl WlrLayerShellHandler for DriftWm {
             .or_else(|| self.active_output());
 
         let Some(resolved_output) = resolved_output else {
-            tracing::warn!("No output available for layer surface");
+            // Dropping it silently would leave the client holding a live role,
+            // waiting on a configure nothing will ever send. Close the contract
+            // so it can retry or give up.
+            tracing::warn!("No output available for layer surface, closing");
+            surface.send_close();
             return;
         };
 
@@ -121,6 +145,33 @@ impl WlrLayerShellHandler for DriftWm {
     fn layer_destroyed(&mut self, surface: LayerSurface) {
         tracing::info!("Layer surface destroyed");
 
+        // Unmap immediately instead of leaving it to post_render's cleanup: a
+        // client that takes a fresh role on the same wl_surface before the
+        // next frame would otherwise get a second map entry behind the dead
+        // one, and since lookups match by wl_surface in map order, its
+        // initial configure would be sent on the destroyed proxy.
+        let mut unmapped_from = None;
+        for output in self.space.outputs() {
+            let mut map = layer_map_for_output(output);
+            // By role, not by `LayerSurface` equality — that compares the
+            // wl_surface alone, which is what put two entries here to begin with.
+            let mapped = map
+                .layers()
+                .find(|l| l.layer_surface().shell_surface() == surface.shell_surface())
+                .cloned();
+            if let Some(layer) = mapped {
+                map.unmap_layer(&layer);
+                unmapped_from = Some(output.clone());
+                break;
+            }
+        }
+
+        // Unmapping re-arranges the surviving layers and gives back the
+        // exclusive zone straight away, so the output owes a frame for it.
+        if let Some(output) = unmapped_from {
+            self.redraws_needed.insert(output);
+        }
+
         // Drop any chrome cache entries this layer accumulated. No-op for
         // screen-anchored layers — they never enter these caches — and for
         // canvas layers without chrome opted in via window rule.
@@ -132,13 +183,10 @@ impl WlrLayerShellHandler for DriftWm {
         self.canvas_layers
             .retain(|cl| cl.surface.wl_surface() != surface.wl_surface());
 
-        // Reset pointer_over_layer — the surface may have been under the pointer.
-        // Next motion event will re-evaluate, but this prevents stale state in between.
-        self.pointer_over_layer = false;
-
-        // Mark this surface so our early pre-commit hook can set full anchors
-        // before smithay's layer-shell validation runs. We can't set anchors here
-        // directly because smithay resets cached state to defaults AFTER this callback.
+        // Mark this surface so our early pre-commit hook can neutralise the
+        // orphaned commits before smithay's layer-shell validation runs. We
+        // can't fix the cached state here directly because smithay resets it to
+        // defaults AFTER this callback.
         with_states(surface.wl_surface(), |states| {
             states
                 .data_map
@@ -150,6 +198,15 @@ impl WlrLayerShellHandler for DriftWm {
                 .0
                 .store(true, Ordering::Relaxed);
         });
+
+        // The surface may have been under the pointer. `pointer_over_layer` and
+        // smithay's pointer focus are only refreshed by real pointer motion, so
+        // without this a layer destroyed under a stationary cursor would route
+        // the next press/scroll to the canvas instead of the layer surface still
+        // beneath it. The layer was unmapped above, so the recompute lands on
+        // whatever is genuinely under the cursor. No-op while locked — `unlock`
+        // re-seats pointer focus anyway.
+        self.refresh_pointer_focus();
 
         // Drop on-demand tracking if it pointed at this surface, then recompute
         // focus — it falls back to the next layer or the focused window.

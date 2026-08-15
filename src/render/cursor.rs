@@ -14,7 +14,8 @@ use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use super::elements::OutputRenderElements;
 
 /// Build the cursor render element(s) for the current frame.
-/// `camera` and `zoom` are from the output being rendered.
+/// `camera` and `zoom` are from the output being rendered; both go unused
+/// while the session is locked.
 /// Returns `OutputRenderElements` — either xcursor memory buffers or client surface elements.
 pub fn build_cursor_elements(
     state: &mut crate::state::DriftWm,
@@ -34,8 +35,15 @@ pub fn build_cursor_elements(
         return vec![];
     }
     let pointer = state.seat.get_pointer().unwrap();
-    let canvas_pos = pointer.current_location();
-    let screen_pos = canvas_to_screen(CanvasPos(canvas_pos), camera, zoom).0;
+    let pointer_pos = pointer.current_location();
+    // For the length of a lock the stored location is already screen-space —
+    // see `SessionLockHandler::lock`. Transforming it again would offset the
+    // cursor by the camera and scale it by the zoom.
+    let screen_pos = if state.session_lock.is_locked() {
+        pointer_pos
+    } else {
+        canvas_to_screen(CanvasPos(pointer_pos), camera, zoom).0
+    };
     let physical_pos: Point<f64, Physical> = screen_pos.to_physical_precise_round(scale);
 
     let status = state.cursor.cursor_status.clone();

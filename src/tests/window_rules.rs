@@ -81,6 +81,92 @@ size = [320, 240]
     assert_eq!(pinned[0].size, [320, 240]);
 }
 
+/// A `pinned_to_screen` rule's `position` clamps the whole *visual frame* onto
+/// the output: clamping the content instead leaves the SSD title bar and border
+/// poking off the edge the clamp exists to keep everything inside of.
+#[test]
+fn pinned_rule_position_keeps_the_whole_frame_on_screen() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+position = [0, 540]
+size = [320, 240]
+decoration = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    // The rule forces a 320×240 frame; match the deflated content (320 - 2×4
+    // = 312 wide, 240 - 25 - 2×4 = 207 tall) so the pin configure lands.
+    map_window(&mut f, id, "pin", (312, 207));
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+
+    let site = f.state().stage.pin_of(&window).cloned().unwrap();
+    // Rule center (0, 540) on a 1920×1080 output puts the frame's unclamped
+    // top-left at screen (800, -120) — half the 240px frame sits above the
+    // top edge. Clamping the frame (not the content) pins that top-left's y
+    // at 0; x is already on screen and unclamped. Content steps in from the
+    // clamped frame top-left by the border and (bar+border):
+    // (800+4, 0+25+4) = (804, 29). Literal on purpose.
+    assert_eq!(site.screen_pos, smithay::utils::Point::from((804, 29)));
+}
+
+/// A screen-pinned SSD+bordered window reports its `position`/`size` in the
+/// `state` reply in rule coordinates (the visual frame, matching what the
+/// rule set), and an identical rule targeting a second window lands it at
+/// exactly the same screen site — proving the reported numbers round-trip
+/// back through a rule. `pinned_inventory_reports_rule_coords` above only has
+/// signal on the CSD/borderless default; this is the SSD variant.
+#[test]
+fn pinned_inventory_reports_rule_coords_under_ssd_and_round_trips() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "pin-a"
+pinned_to_screen = true
+position = [200, -150]
+size = [320, 240]
+decoration = "server"
+
+[[window_rules]]
+app_id = "pin-b"
+pinned_to_screen = true
+position = [200, -150]
+size = [320, 240]
+decoration = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "pin-a", (312, 207));
+    let a = window_by_app_id(&mut f, "pin-a").unwrap();
+
+    let (_fullscreen, pinned) = f.state().screen_space_inventory();
+    assert_eq!(pinned.len(), 1);
+    assert_eq!(pinned[0].position, [200, -150]);
+    assert_eq!(pinned[0].size, [320, 240]);
+
+    map_window(&mut f, id, "pin-b", (312, 207));
+    let b = window_by_app_id(&mut f, "pin-b").unwrap();
+
+    let site_a = f.state().stage.pin_of(&a).cloned().unwrap();
+    let site_b = f.state().stage.pin_of(&b).cloned().unwrap();
+    assert_eq!(
+        site_a.screen_pos, site_b.screen_pos,
+        "two rules naming the same reported frame coords land on the same screen site"
+    );
+}
+
 /// A `pinned_to_screen` rule with an `output` pins to that display initially,
 /// not the active output; the rule `position` resolves against the chosen one.
 #[test]
@@ -320,6 +406,95 @@ size = [320, 240]
     assert!(f.state().stage.pin_of(&hud).is_some());
     assert!(is_activated(&normal));
     assert!(!is_activated(&hud));
+}
+
+/// A CSD toplevel's committed opaque region gets its four corners carved out
+/// at the *rule's own* `corner_radius`, not the global `[decorations]` one —
+/// otherwise a per-window override changes what's drawn but not where the
+/// background shows through, and the two visibly disagree.
+#[test]
+fn csd_corner_carve_uses_the_rules_own_radius() {
+    use smithay::utils::Rectangle;
+    use smithay::wayland::compositor::{RectangleKind, SurfaceAttributes, with_states};
+
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+corner_radius = 8
+
+[[window_rules]]
+app_id = "rounded"
+corner_radius = 40
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "rounded", (400, 300));
+    f.client(id)
+        .set_opaque_region(&surface, &[(0, 0, 400, 300)]);
+    f.client(id).window(&surface).commit();
+    f.roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "rounded").unwrap();
+    let carved: Vec<Rectangle<i32, smithay::utils::Logical>> =
+        with_states(&server_surface(&window), |states| {
+            let mut guard = states.cached_state.get::<SurfaceAttributes>();
+            guard
+                .current()
+                .opaque_region
+                .as_ref()
+                .expect("opaque region survives the carve")
+                .rects
+                .iter()
+                .filter(|(kind, _)| matches!(kind, RectangleKind::Subtract))
+                .map(|(_, r)| *r)
+                .collect()
+        });
+
+    // r = rule corner_radius (40) + 2 = 42, one subtract rect per corner —
+    // the global corner_radius (8) would carve 10×10 corners instead.
+    assert_eq!(carved.len(), 4, "expected one carved rect per corner");
+    for rect in carved {
+        assert_eq!(rect.size, (42, 42).into());
+    }
+}
+
+/// `decoration = "none"` is a pass-through promise: the compositor must not
+/// touch the client's opaque region at all, global or per-rule radius alike.
+#[test]
+fn decoration_none_skips_the_csd_corner_carve() {
+    use smithay::wayland::compositor::{SurfaceAttributes, with_states};
+
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "plain"
+decoration = "none"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_window(&mut f, id, "plain", (400, 300));
+    f.client(id)
+        .set_opaque_region(&surface, &[(0, 0, 400, 300)]);
+    f.client(id).window(&surface).commit();
+    f.roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "plain").unwrap();
+    let rect_count = with_states(&server_surface(&window), |states| {
+        let mut guard = states.cached_state.get::<SurfaceAttributes>();
+        guard
+            .current()
+            .opaque_region
+            .as_ref()
+            .map(|r| r.rects.len())
+            .unwrap_or(0)
+    });
+
+    // Only the client's own single `Add` rect — no carved-out corners.
+    assert_eq!(rect_count, 1);
 }
 
 #[test]

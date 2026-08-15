@@ -112,6 +112,27 @@ macro_rules! forward_pointer_grab_methods {
 }
 pub(crate) use forward_pointer_grab_methods;
 
+/// Map `element` at `pos` on behalf of a drag, ending the animation entry the
+/// drag is taking its geometry away from — but only when the map actually moves
+/// it.
+///
+/// Neither at grab install nor on the first motion event: the SSD title bar
+/// installs a `MoveGrab` on every left press, and `warp_pointer` delivers a
+/// camera animation's compensating motion straight into a live grab, so either
+/// would take down an entry that nothing has displaced yet. Waiting for the
+/// geometry to actually change costs one frame of the drag and the entry
+/// fighting each other, which beats popping a plain focus click's open fade.
+pub(crate) fn drag_map_window(
+    data: &mut crate::state::DriftWm,
+    element: crate::state::StageWindow,
+    pos: smithay::utils::Point<i32, smithay::utils::Logical>,
+) {
+    if data.stage.position_of(&element) != Some(pos) {
+        data.end_element_animation(&element);
+    }
+    data.map_window(element, pos, false);
+}
+
 mod move_grab;
 mod navigate_grab;
 mod pan_grab;
@@ -125,7 +146,7 @@ pub use navigate_grab::NavigateGrab;
 pub use pan_grab::PanGrab;
 pub use resize_grab::{
     ResizeGrab, ResizeState, SizeConstraints, has_bottom, has_left, has_right, has_top,
-    locked_ratio_for,
+    locked_ratio_for, resize_screen_anchor,
 };
 pub use screen_space_click::ScreenSpaceClickGrab;
 pub use touch_gesture_grab::TouchGestureGrab;

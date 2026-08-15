@@ -35,6 +35,38 @@ fn map_inserts_on_top_and_remap_raises() {
 }
 
 #[test]
+fn entries_mirror_windows_with_position_and_pin() {
+    let (mut stage, windows) = stage_with(4);
+    // Z-order that differs from creation order, so a reordering accessor can't
+    // pass by accident.
+    stage.raise(&windows[1]);
+    stage.set_pin(
+        &windows[2],
+        PinnedSite {
+            output: "DP-1".to_string(),
+            screen_pos: Point::from((3, 4)),
+        },
+    );
+
+    assert_eq!(
+        stage.entries().map(|e| e.window).collect::<Vec<_>>(),
+        stage.windows().collect::<Vec<_>>()
+    );
+    assert_eq!(stage.entries().len(), stage.windows().len());
+    assert_eq!(
+        stage.entries().rev().map(|e| e.window).collect::<Vec<_>>(),
+        stage.windows().rev().collect::<Vec<_>>()
+    );
+
+    for e in stage.entries() {
+        assert_eq!(Some(e.position), stage.position_of(e.window));
+        assert_eq!(e.pinned, stage.is_pinned(e.window));
+    }
+    // The pin actually reached an entry, so the check above isn't all-false.
+    assert!(stage.entries().any(|e| e.pinned));
+}
+
+#[test]
 fn map_assigns_stable_unique_ids() {
     let (mut stage, windows) = stage_with(2);
     let id0 = stage.id_of(&windows[0]).unwrap();
@@ -523,7 +555,7 @@ mod harness {
     use crate::layout::cluster::{self, ResizeClassification, Side};
     use crate::layout::snap::SnapRect;
     use crate::stage::mock::{SentConfigure, TestWindow};
-    use crate::stage::{PinnedSite, Stage, StageElement};
+    use crate::stage::{FillSaved, PinnedSite, Stage, StageElement};
     use crate::window_ext::WindowExt;
 
     const OUTPUTS: [&str; 3] = ["OUT-0", "OUT-1", "OUT-2"];
@@ -1428,6 +1460,9 @@ mod harness {
                     if self.stage.fullscreen_on(&key).is_some() {
                         self.exit_fullscreen(&key);
                     }
+                    // The real fit/fill arms read the size last *configured*;
+                    // this harness has no pending-configure state to model, so
+                    // it stands in with the committed size and covers fit only.
                     let saved_size = if self.stage.is_fit(&w) {
                         StageElement::size(&w)
                     } else {
@@ -1499,7 +1534,6 @@ mod harness {
                     if w.is_widget()
                         || self.stage.is_fullscreen(&w)
                         || self.stage.is_pinned(&w)
-                        || self.stage.is_fit(&w)
                         || !self.stage.contains(&w)
                     {
                         return;
@@ -1508,8 +1542,34 @@ mod harness {
                         self.stage.take_fill_saved(&w);
                     } else {
                         let pos = self.stage.position_of(&w).unwrap_or_default();
-                        let size = StageElement::size(&w);
-                        self.stage.set_fill(&w, pos, size);
+                        // A fill on a fit window inherits its pre-fit size and
+                        // clears the fit, so `Op::ToggleFit`'s pre-fit-restore
+                        // assertion must stop expecting a saved size here.
+                        let size = self
+                            .stage
+                            .fit_saved_size(&w)
+                            .unwrap_or_else(|| StageElement::size(&w));
+                        // There is no camera or output in the harness, so the
+                        // viewport rect and its output name are stand-ins: any
+                        // non-degenerate rect satisfies the invariant, and this
+                        // fill leaves the window where it already sits.
+                        self.stage.set_fill(
+                            &w,
+                            FillSaved {
+                                pre_fill_position: pos,
+                                pre_fill_size: size,
+                                viewport_bounds: SnapRect {
+                                    x_low: 0.0,
+                                    x_high: 1920.0,
+                                    y_low: 0.0,
+                                    y_high: 1080.0,
+                                },
+                                viewport_output: "harness".to_string(),
+                                filled_at: pos,
+                            },
+                        );
+                        self.stage.clear_fit(&w);
+                        self.fit_expect.remove(&w.label());
                     }
                 }
                 Op::ResizeGrabEnd { idx, w: nw, h: nh } => {

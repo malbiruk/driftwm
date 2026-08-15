@@ -20,7 +20,7 @@ pub enum Msg {
     /// inventories, layer-shell namespaces, and each output's viewport. Every
     /// window entry carries the stable `id` other commands take as a selector.
     ///
-    /// Reply: `{"Ok":{"State":{"camera":[..],"zoom":1.0,"windows":[..],"outputs":[..]}}}`.
+    /// `--json` reply: `{"Ok":{"State":{"camera":[..],"zoom":1.0,"windows":[..],"outputs":[..]}}}`.
     State,
     /// Stream state snapshots as they change (one JSON line per event with --json).
     ///
@@ -39,19 +39,19 @@ pub enum Msg {
     /// Focusing pans the camera to the window unless it is already fully
     /// visible. Widgets cannot be focused.
     ///
-    /// Reply: `{"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}` (or `{"Ok":{"Focused":null}}`).
+    /// `--json` reply: `{"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}` (or `{"Ok":{"Focused":null}}`).
     Focus {
         app_id: Option<String>,
         /// Target this window id.
         #[arg(long, conflicts_with = "app_id")]
         id: Option<u64>,
     },
-    /// Get a window's position, or move it to `<x> <y>` (center, Y-up).
+    /// Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
     ///
     /// Pinned and fullscreen windows live in screen space, not on the canvas, so
     /// `move` refuses to reposition them.
     ///
-    /// Reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
+    /// `--json` reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
     #[command(allow_negative_numbers = true)]
     Move {
         x: Option<i32>,
@@ -60,11 +60,28 @@ pub enum Msg {
         #[arg(long)]
         id: Option<u64>,
     },
+    /// Get a window's size, or resize it to `<width> <height>`.
+    ///
+    /// Dimensions are the visible frame, including any compositor-drawn title
+    /// bar and border. A request is clamped to the client's declared limits —
+    /// which describe the content inside that frame — and the reply echoes what
+    /// was configured, not what the client went on to commit. Refused for pinned and
+    /// fullscreen windows as with `move`, and while the window is under an
+    /// interactive move or resize.
+    ///
+    /// `--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
+    Resize {
+        width: Option<i32>,
+        height: Option<i32>,
+        /// Target this window id.
+        #[arg(long)]
+        id: Option<u64>,
+    },
     /// Close the focused window, or one by `app_id` substring or `--id`.
     ///
     /// Errors when nothing matches.
     ///
-    /// Reply: `{"Ok":"Ok"}`.
+    /// `--json` reply: `{"Ok":"Ok"}`.
     Close {
         app_id: Option<String>,
         /// Target this window id.
@@ -77,7 +94,7 @@ pub enum Msg {
     /// or the compositor restarts. Out-of-range values are rejected. Default
     /// `1`.
     ///
-    /// Reply: `{"Ok":{"Opacity":0.85}}`.
+    /// `--json` reply: `{"Ok":{"Opacity":0.85}}`.
     Opacity {
         value: Option<f64>,
         /// Target this window id.
@@ -90,7 +107,7 @@ pub enum Msg {
     /// and a compositor-drawn stand-in holds its place, to be brought back with
     /// `relaunch`, `Enter`, or a click.
     ///
-    /// Reply: `{"Ok":"Ok"}`.
+    /// `--json` reply: `{"Ok":"Ok"}`.
     Suspend {
         app_id: Option<String>,
         /// Target this window id.
@@ -105,7 +122,7 @@ pub enum Msg {
     /// an `app_id` substring never resolves to a live client. Errors when
     /// nothing matches.
     ///
-    /// Reply: `{"Ok":"Ok"}`.
+    /// `--json` reply: `{"Ok":"Ok"}`.
     Relaunch {
         app_id: Option<String>,
         /// Target this window id.
@@ -116,15 +133,21 @@ pub enum Msg {
     ///
     /// Panning is animated, and takes both coordinates or neither.
     ///
-    /// Reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
+    /// A fullscreen window parks the viewport, so setting a position exits
+    /// fullscreen first rather than refusing as `move` does — a script that
+    /// writes the camera in a loop will drop the user out of a fullscreen video.
+    /// Reading never disturbs it.
+    ///
+    /// `--json` reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
     #[command(allow_negative_numbers = true)]
     Camera { x: Option<f64>, y: Option<f64> },
     /// Get the zoom level, or set it with `<level>`.
     ///
     /// Setting is animated and clamped: out to fit-all, in to native resolution
-    /// (no magnification).
+    /// (no magnification). As with `camera`, setting a level on a fullscreen
+    /// output exits fullscreen first rather than refusing; reading is safe.
     ///
-    /// Reply: `{"Ok":{"Zoom":0.5}}`.
+    /// `--json` reply: `{"Ok":{"Zoom":0.5}}`.
     Zoom { level: Option<f64> },
     /// List bookmarks, get or set one by `<name>`, or delete with `--delete`.
     ///
@@ -133,7 +156,7 @@ pub enum Msg {
     /// stores a position only, never zoom — jump to one with the
     /// `go-to-bookmark` action or a `mod+<n>` keybinding.
     ///
-    /// Reply: `{"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}` (get/set), or
+    /// `--json` reply: `{"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}` (get/set), or
     /// `{"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}` (list), or `{"Ok":"Ok"}` (delete).
     #[command(allow_negative_numbers = true)]
     Bookmark {
@@ -150,7 +173,7 @@ pub enum Msg {
     },
     /// Print the active keyboard layout (full XKB name, e.g. `English (US)`).
     ///
-    /// Reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
+    /// `--json` reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
     Layout {
         /// Print the configured code for the active group instead (e.g. `us`, `ru`).
         #[arg(long)]
@@ -169,7 +192,7 @@ pub enum Msg {
     /// The socket is a full control surface: `action` can `exec`/`spawn`, `quit`,
     /// and `reload-config`. It is safe only because the socket is `0600`.
     ///
-    /// Reply: `{"Ok":"Ok"}`.
+    /// `--json` reply: `{"Ok":"Ok"}`.
     #[command(allow_negative_numbers = true)]
     Action {
         /// Action and arguments, exactly as written in config (e.g. `nudge-window up`).
@@ -191,7 +214,7 @@ pub enum Msg {
     /// a coarse pyramid level, softening at extreme `--scale`. Captures tile
     /// internally but cap at 16384 px/side.
     ///
-    /// Reply: `{"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}`.
+    /// `--json` reply: `{"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}`.
     Screenshot {
         #[command(subcommand)]
         target: Option<ShotTarget>,
@@ -210,7 +233,7 @@ pub enum Msg {
     /// (output-keyed counters follow output lifetimes instead and can persist
     /// across hotplug).
     ///
-    /// Reply: `{"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}`.
+    /// `--json` reply: `{"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}`.
     DebugCounters,
 }
 
@@ -221,7 +244,7 @@ pub enum ShotTarget {
     ///
     /// Composed alone on transparency, so overlapping windows never appear;
     /// pinned and fullscreen windows capture like any other (a fullscreen window
-    /// has no chrome). Reply shape is the shared `Screenshot` reply above.
+    /// has no chrome). `--json` reply shape is the shared `Screenshot` reply above.
     Window {
         app_id: Option<String>,
         /// Target this window id.
@@ -231,7 +254,7 @@ pub enum ShotTarget {
     /// The bounding box of all non-widget windows.
     ///
     /// A scene with the canvas background plus every window's chrome, framed with
-    /// a `[zoom] fit_padding` margin. Reply shape is the shared `Screenshot`
+    /// a `[zoom] fit_padding` margin. `--json` reply shape is the shared `Screenshot`
     /// reply above.
     All,
     /// A rectangle — `X Y W H` (canvas coords, center/Y-up) or slurp's native
@@ -239,7 +262,7 @@ pub enum ShotTarget {
     /// drops in directly. Treated as output-screen pixels with `--from-screen`.
     ///
     /// Captures a scene (canvas background plus window chrome) over the rectangle.
-    /// Reply shape is the shared `Screenshot` reply above.
+    /// `--json` reply shape is the shared `Screenshot` reply above.
     #[command(allow_negative_numbers = true)]
     Region {
         /// Four ints `X Y W H`, or slurp's `X,Y WxH` (quoted or not).
@@ -355,6 +378,22 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
                 _ => return Err("move needs both <x> and <y>".to_string()),
             };
             Request::Move {
+                window: id.map(WindowSelector::Id),
+                to,
+            }
+        }
+        Msg::Resize { width, height, id } => {
+            let to = match (width, height) {
+                (None, None) => None,
+                (Some(w), Some(h)) => {
+                    if *w <= 0 || *h <= 0 {
+                        return Err("resize needs a positive <width> and <height>".to_string());
+                    }
+                    Some((*w, *h))
+                }
+                _ => return Err("resize needs both <width> and <height>".to_string()),
+            };
+            Request::Resize {
                 window: id.map(WindowSelector::Id),
                 to,
             }
@@ -501,14 +540,15 @@ fn stream_events(
 
 fn print_response(response: Response) {
     match response {
-        Response::Camera { x, y } => println!("camera {x} {y}"),
-        Response::Zoom(zoom) => println!("zoom {zoom}"),
+        Response::Camera { x, y } => println!("{x} {y}"),
+        Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }
         Response::Focused(None) => println!("(none)"),
         Response::Position { x, y } => println!("{x} {y}"),
+        Response::Size { width, height } => println!("{width} {height}"),
         Response::Opacity(value) => println!("{value}"),
         Response::Bookmark { x, y } => println!("{x} {y}"),
         Response::Bookmarks(bookmarks) => {
@@ -719,6 +759,51 @@ mod tests {
             to_request(&Msg::Move {
                 x: Some(1),
                 y: None,
+                id: None
+            })
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn resize_maps_id_and_dimensions() {
+        assert_eq!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: Some(600),
+                id: Some(3)
+            })
+            .unwrap(),
+            Request::Resize {
+                window: Some(WindowSelector::Id(3)),
+                to: Some((800, 600))
+            }
+        );
+        assert_eq!(
+            to_request(&Msg::Resize {
+                width: None,
+                height: None,
+                id: None
+            })
+            .unwrap(),
+            Request::Resize {
+                window: None,
+                to: None
+            }
+        );
+        // A lone dimension is an error, as is a non-positive one.
+        assert!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: None,
+                id: None
+            })
+            .is_err()
+        );
+        assert!(
+            to_request(&Msg::Resize {
+                width: Some(800),
+                height: Some(0),
                 id: None
             })
             .is_err()

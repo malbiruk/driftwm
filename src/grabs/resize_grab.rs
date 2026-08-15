@@ -19,12 +19,12 @@ use smithay::{
 use smithay::input::pointer::CursorImageStatus;
 
 use crate::state::{ClusterMember, ClusterResizeSnapshot, DriftWm, StageWindow, output_state};
-use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
+use driftwm::canvas::{self, CanvasPos, Chrome, canvas_to_screen};
 use driftwm::layout::snap::{SnapState, snap_resize_edges};
 
-/// Smallest a suspended window may be resized to — keeps the chrome usable.
-/// Folded into the stand-in arm's `SizeConstraints` min so the shared apply
-/// head floors it exactly like a client's declared minimum.
+/// Smallest a suspended window's *visible frame* may be resized to — keeps the
+/// chrome usable. Folded into the stand-in arm's `SizeConstraints` min so the
+/// shared apply head floors it exactly like a client's declared minimum.
 pub const MIN_SUSPENDED_SIZE: i32 = 120;
 
 /// Client-declared size constraints captured once at grab start.
@@ -58,9 +58,13 @@ impl SizeConstraints {
     /// Constraints for a suspended stand-in, which has no client to declare
     /// min/max. Its usable-chrome floor ([`MIN_SUSPENDED_SIZE`]) rides in as the
     /// minimum so the shared apply head clamps it exactly like a client minimum.
-    pub fn for_suspended() -> Self {
+    ///
+    /// The floor bounds the *visible* stand-in — what it keeps usable, the bar
+    /// and its close button, is chrome — so `chrome` deflates it into the body
+    /// space every other minimum lives in.
+    pub fn for_suspended(chrome: Chrome) -> Self {
         Self {
-            min: Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE)),
+            min: chrome.content_size(Size::from((MIN_SUSPENDED_SIZE, MIN_SUSPENDED_SIZE))),
             max: Size::from((0, 0)),
         }
     }
@@ -146,22 +150,20 @@ pub enum ResizeState {
     Idle,
     Resizing {
         edges: xdg_toplevel::ResizeEdge,
-        initial_window_location: Point<i32, Logical>,
-        initial_window_size: Size<i32, Logical>,
         /// `Some` ⟹ pinned window: top/left-edge repositioning adjusts
         /// the pin site's `screen_pos` (output-relative) instead of the
         /// canvas loc.
         initial_screen_pos: Option<Point<i32, Logical>>,
-        /// Size the last processed commit settled at. `handle_resize_commit`
-        /// bumps the blur generation only when a commit changes this, so a
-        /// continuously-repainting client under a held-still border doesn't
-        /// re-blur every frosted window each repaint frame.
+        /// Size the last processed commit settled at. The settle compensates
+        /// the dragged edge against this rather than against the grab-start
+        /// size, so nothing here needs the grab's origin. It also gates the
+        /// blur bump: `handle_resize_commit` bumps only when a commit changes
+        /// this, so a continuously-repainting client under a held-still border
+        /// doesn't re-blur every frosted window each repaint frame.
         last_committed_size: Size<i32, Logical>,
     },
     WaitingForLastCommit {
         edges: xdg_toplevel::ResizeEdge,
-        initial_window_location: Point<i32, Logical>,
-        initial_window_size: Size<i32, Logical>,
         initial_screen_pos: Option<Point<i32, Logical>>,
         last_committed_size: Size<i32, Logical>,
     },
@@ -180,6 +182,15 @@ pub struct ResizeGrab {
     pub initial_window_size: Size<i32, Logical>,
     pub last_window_size: Size<i32, Logical>,
     pub output: Output,
+    /// Grab-start cursor position in *screen* space, paired with the zoom it was
+    /// taken at. The resize applies measure the drag against these instead of a
+    /// frozen canvas point, so a camera flight armed after the grab installed
+    /// slides the canvas under a still anchor instead of reading as drag input.
+    /// The move grab deliberately does the opposite — a held window rides the
+    /// viewport. Build both with [`resize_screen_anchor`] on the grab's own
+    /// output, which is not always the active one.
+    pub start_screen: Point<f64, Logical>,
+    pub start_zoom: f64,
     pub last_clamped_location: Point<f64, Logical>,
     pub snap: SnapState,
     /// Declared min/max size, read once at grab start. Used to clamp
@@ -209,6 +220,22 @@ pub struct ResizeGrab {
     /// Snapshotted from the window's size at grab start. Always `None` for a
     /// stand-in (the rule lookup needs a surface).
     pub locked_ratio: Option<f64>,
+}
+
+/// Project a canvas-space grab origin onto `output`'s screen space, returning it
+/// with that output's zoom — the seed for [`ResizeGrab::start_screen`] and
+/// [`ResizeGrab::start_zoom`]. `output` must be the one the grab will carry: a
+/// grab over a screen-pinned window takes the pin's output, and the anchor read
+/// through any other one lands hundreds of pixels off.
+pub fn resize_screen_anchor(
+    output: &Output,
+    location: Point<f64, Logical>,
+) -> (Point<f64, Logical>, f64) {
+    let (camera, zoom) = {
+        let os = output_state(output);
+        (os.camera, os.zoom)
+    };
+    (canvas_to_screen(CanvasPos(location), camera, zoom).0, zoom)
 }
 
 /// Check if `edges` includes a horizontal/vertical component via raw bit values.
@@ -261,7 +288,10 @@ impl PointerGrab<DriftWm> for ResizeGrab {
 
         if self.pinned_initial_screen_pos.is_some() {
             if let StageWindow::Client(window) = &element {
-                let clamped = self.apply_pinned_resize(window, event.location);
+                let (clamped, resized) = self.apply_pinned_resize(window, event.location);
+                if resized {
+                    data.end_element_animation(&element);
+                }
                 let clamped_event = MotionEvent {
                     location: clamped,
                     serial: event.serial,
@@ -321,7 +351,16 @@ impl PointerGrab<DriftWm> for ResizeGrab {
             // persist its settled size on the session-store debounce instead,
             // and balance the grab-target entry its install armed (a client's
             // resize is witnessed by the surface's own `ResizeState`).
-            ClusterMember::Client(_) => self.finalize(),
+            ClusterMember::Client(_) => {
+                self.finalize();
+                // A client resize is on no grab-target list, so nothing above
+                // hands back a view move this grab held off — the stand-in arm's
+                // disarm does that for itself.
+                data.flush_deferred_views();
+                // The settled size (and the commit-time reposition that follows
+                // it) is durable — persist it on the session-store debounce.
+                data.session_store_mark_dirty();
+            }
             ClusterMember::Suspended(id) => {
                 data.disarm_interactive_move(id);
                 data.session_store_mark_dirty();
@@ -387,8 +426,6 @@ impl ResizeGrab {
                 };
                 cell.replace(ResizeState::WaitingForLastCommit {
                     edges: self.edges,
-                    initial_window_location: self.initial_window_location,
-                    initial_window_size: self.initial_window_size,
                     initial_screen_pos: self.pinned_initial_screen_pos,
                     last_committed_size,
                 });
@@ -414,6 +451,7 @@ impl ResizeGrab {
         pinned_initial_screen_pos: Option<Point<i32, Logical>>,
         locked_ratio: Option<f64>,
     ) -> Self {
+        let (start_screen, start_zoom) = resize_screen_anchor(&output, touch_start.location);
         Self {
             start_data: GrabStartData {
                 focus: None,
@@ -426,6 +464,8 @@ impl ResizeGrab {
             initial_window_size,
             last_window_size: initial_window_size,
             output,
+            start_screen,
+            start_zoom,
             last_clamped_location: touch_start.location,
             snap: SnapState::default(),
             constraints,
@@ -440,14 +480,15 @@ impl ResizeGrab {
     /// Screen-pinned resize step: size delta in output-relative screen space,
     /// no snap / cluster. Top/left-edge repositioning of `screen_pos` happens
     /// at commit (handle_resize_commit), mirroring the canvas path. Returns the
-    /// clamped canvas-space location the caller forwards. Shared by the pointer
-    /// and touch resize paths; pinned resize is client-only, so `window` is
-    /// always the resolved client.
+    /// clamped canvas-space location the caller forwards, and whether this step
+    /// actually drove the size — the caller ends a fought animation off that
+    /// (see `drag_map_window`). Shared by the pointer and touch resize paths;
+    /// pinned resize is client-only, so `window` is always the resolved client.
     fn apply_pinned_resize(
         &mut self,
         window: &Window,
         location: Point<f64, Logical>,
-    ) -> Point<f64, Logical> {
+    ) -> (Point<f64, Logical>, bool) {
         let (camera, zoom) = {
             let os = crate::state::output_state(&self.output);
             (os.camera, os.zoom)
@@ -462,8 +503,7 @@ impl ResizeGrab {
         self.last_clamped_location =
             canvas::screen_to_canvas(canvas::ScreenPos(clamped_screen), camera, zoom).0;
 
-        let start_screen = canvas_to_screen(CanvasPos(self.start_data.location), camera, zoom).0;
-        let delta = clamped_screen - start_screen;
+        let delta = clamped_screen - self.start_screen;
 
         let mut new_w = self.initial_window_size.w;
         let mut new_h = self.initial_window_size.h;
@@ -480,7 +520,8 @@ impl ResizeGrab {
         (new_w, new_h) = self.bend_to_locked_ratio(new_w, new_h);
         let (new_w, new_h) = self.constraints.clamp(new_w, new_h);
         let new_size = Size::from((new_w, new_h));
-        if new_size != self.last_window_size {
+        let resized = new_size != self.last_window_size;
+        if resized {
             self.last_window_size = new_size;
             if let Some(toplevel) = window.toplevel() {
                 toplevel.with_pending_state(|state| {
@@ -490,7 +531,7 @@ impl ResizeGrab {
                 toplevel.send_pending_configure();
             }
         }
-        self.last_clamped_location
+        (self.last_clamped_location, resized)
     }
 
     /// Bend `(w, h)` onto the locked aspect ratio if the window carries one,
@@ -519,7 +560,20 @@ impl ResizeGrab {
         element: &StageWindow,
         location: Point<f64, Logical>,
     ) {
-        let delta = location - self.start_data.location;
+        let (camera, zoom) = {
+            let os = output_state(&self.output);
+            (os.camera, os.zoom)
+        };
+        // Measured screen-to-screen against a frozen screen anchor, then scaled
+        // back to canvas units by the zoom the grab started at. The live zoom
+        // would rescale the whole drag whenever a zoom flight moved it, which is
+        // the same defect one axis over.
+        let screen_delta =
+            canvas_to_screen(CanvasPos(location), camera, zoom).0 - self.start_screen;
+        let delta = Point::<f64, Logical>::from((
+            screen_delta.x / self.start_zoom,
+            screen_delta.y / self.start_zoom,
+        ));
 
         let mut new_w = self.initial_window_size.w;
         let mut new_h = self.initial_window_size.h;
@@ -550,7 +604,6 @@ impl ResizeGrab {
         // Snap active resize edges to nearby windows. Skipped under a locked
         // ratio: snapping one axis would fight the ratio-derived axis.
         if data.config.snap_enabled && self.locked_ratio.is_none() {
-            let zoom = output_state(&self.output).zoom;
             #[allow(clippy::mutable_key_type)]
             let excludes = self.cluster_resize.exclude_set(&data.stage);
             let (others, self_bar, self_bw) = data.snap_targets(element, &excludes);
@@ -582,7 +635,7 @@ impl ResizeGrab {
         // neighbors. Treat a ratio-locked resize as single-window. Shifts run
         // every tick (not gated on size change): a member dying mid-tick can
         // reflow the cascade while the primary's size holds constant.
-        let members_moved = if self.locked_ratio.is_none() {
+        let moved_members = if self.locked_ratio.is_none() {
             self.cluster_resize.apply_member_shifts(
                 &mut data.stage,
                 element,
@@ -592,8 +645,15 @@ impl ResizeGrab {
                 data.config.snap_gap,
             )
         } else {
-            false
+            Vec::new()
         };
+        // A member is not under `interactive_move` — only the grab's own target
+        // is — so nothing stopped an entry from being armed on it, and the shift
+        // above has just taken its geometry away from that entry.
+        let members_moved = !moved_members.is_empty();
+        for member in moved_members {
+            data.end_element_animation(&member);
+        }
 
         let new_size = Size::from((new_w, new_h));
         // Computed before the per-arm tail, which updates `last_window_size`:
@@ -601,6 +661,9 @@ impl ResizeGrab {
         // below would never fire.
         let size_progressed = new_size != self.last_window_size;
         if size_progressed {
+            // The drag owns the geometry from the first tick that moves it, not
+            // from the first motion event — see `drag_map_window`.
+            data.end_element_animation(element);
             self.last_window_size = new_size;
             match element {
                 StageWindow::Client(window) => {
@@ -690,7 +753,10 @@ impl TouchGrab<DriftWm> for ResizeGrab {
         };
         if self.pinned_initial_screen_pos.is_some() {
             if let StageWindow::Client(window) = &element {
-                let clamped = self.apply_pinned_resize(window, event.location);
+                let (clamped, resized) = self.apply_pinned_resize(window, event.location);
+                if resized {
+                    data.end_element_animation(&element);
+                }
                 let clamped_event = TouchMotionEvent {
                     slot: event.slot,
                     location: clamped,

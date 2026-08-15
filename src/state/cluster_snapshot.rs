@@ -147,11 +147,11 @@ impl ClusterResizeSnapshot {
     /// cluster. Writes go through the stage (the map_window contract, inlined
     /// here because the grab owns this snapshot, not `DriftWm`).
     ///
-    /// Returns whether a member's *live* position actually changed this call
+    /// Returns the members whose *live* position actually changed this call
     /// (compared before each re-map, excluding the primary's z-raise re-map) —
-    /// the interactive-resize blur bump consumes this to catch a mid-tick
-    /// reflow on a size-constant tick. "Shifts non-empty" would over-report,
-    /// bumping every tick of a held cascade.
+    /// the interactive-resize blur bump and the animation take-down consume
+    /// this. "Shifts non-empty" would over-report, bumping every tick of a held
+    /// cascade.
     #[allow(clippy::too_many_arguments)]
     pub fn apply_member_shifts(
         &mut self,
@@ -161,15 +161,15 @@ impl ClusterResizeSnapshot {
         new_w: i32,
         new_h: i32,
         gap: f64,
-    ) -> bool {
+    ) -> Vec<StageWindow> {
         if self.members.is_empty() {
-            return false;
+            return Vec::new();
         }
         let width_delta = new_w - initial_size.w;
         let height_delta = new_h - initial_size.h;
         let shifts = self.compute_shifts(stage, width_delta, height_delta, gap);
 
-        let mut moved = false;
+        let mut moved = Vec::new();
         for (i, (dx, dy)) in &shifts {
             let m = &self.members[*i];
             let Some(element) = m.window.resolve(stage) else {
@@ -179,7 +179,7 @@ impl ClusterResizeSnapshot {
             stage.clear_fill(&element);
             let new_pos = m.initial_pos + Point::from((*dx, *dy));
             if stage.position_of(&element) != Some(new_pos) {
-                moved = true;
+                moved.push(element.clone());
             }
             stage.map(element, new_pos);
         }
@@ -394,22 +394,26 @@ impl DriftWm {
         if self.is_pinned(w) || self.is_window_fullscreen(w) {
             return None;
         }
+        // A window held back for a deferred adopt is not drawn where it sits, so
+        // it must not be snapped to, clustered with, or navigated against there
+        // either — every relation built on this rect would be a relation to
+        // something the user cannot see.
+        if self.hidden_by_deferred_adopt(w) {
+            return None;
+        }
         match w {
             StageWindow::Client(c) => {
                 window_snap_rect(&self.stage, &self.decorations, &self.config.decorations, c)
                     .map(|(_, r)| r)
             }
             StageWindow::Suspended(s) => {
-                let loc = self.stage.position_of(w)?;
-                let size = s.size.get();
-                let bar = self.window_ssd_bar(w) as f64;
-                let bw = self.default_border_width() as f64;
-                Some(driftwm::layout::snap::SnapRect {
-                    x_low: loc.x as f64 - bw,
-                    x_high: loc.x as f64 + size.w as f64 + bw,
-                    y_low: loc.y as f64 - bar - bw,
-                    y_high: loc.y as f64 + size.h as f64 + bw,
-                })
+                let chrome = self.suspended_chrome();
+                Some(super::fit::snap_rect_at(
+                    self.stage.position_of(w)?,
+                    s.size.get(),
+                    chrome.bar,
+                    chrome.border,
+                ))
             }
         }
     }
@@ -423,11 +427,13 @@ impl DriftWm {
     }
 
     /// Snapshot `w`'s current `SnapRect` into `stable_snap_rects`. Call on
-    /// settled events: initial map, grab end, post-unfit recenter, fit/
-    /// unfit-snapped cluster members. Fit/unfit primaries are cached by
-    /// those paths directly (configure not yet acked, so `geometry().size`
-    /// would be wrong here). The cached rect outlives mid-teardown geometry
-    /// changes and is consulted by `first_spatially_related_in_history`.
+    /// settled events: initial map, grab end, post-unfit recenter, a deferred
+    /// adopt's reveal, the commit that settles a relaunch adopt to the size it
+    /// configured, fit/unfit-snapped cluster members. Fit/unfit primaries are
+    /// cached by those paths directly (configure not yet acked, so
+    /// `geometry().size` would be wrong here). The cached rect outlives
+    /// mid-teardown geometry changes and is consulted by
+    /// `first_spatially_related_in_history`.
     pub fn refresh_stable_snap_rect(&mut self, w: &StageWindow) {
         let Some(rect) = self.snap_rect_for(w) else {
             return;
@@ -438,6 +444,27 @@ impl DriftWm {
             return;
         };
         self.stable_snap_rects.insert(surface.id(), rect);
+    }
+
+    /// Cache `window`'s stable snap rect at a rect it has been *configured* into
+    /// rather than one built from `geometry()`, for the paths that place a
+    /// window optimistically — a non-interactive resize, an adopt's owed-rect
+    /// payoff. Their `geometry()` is still the pre-ack size, so
+    /// [`Self::refresh_stable_snap_rect`] would pair the new position with the
+    /// old dimensions.
+    pub fn cache_stable_snap_rect(
+        &mut self,
+        window: &Window,
+        loc: Point<i32, Logical>,
+        size: Size<i32, Logical>,
+    ) {
+        let Some(surface) = window.wl_surface() else {
+            return;
+        };
+        let bar = self.window_ssd_bar(window);
+        let bw = self.window_border_width(&surface);
+        self.stable_snap_rects
+            .insert(surface.id(), super::fit::snap_rect_at(loc, size, bar, bw));
     }
 
     /// Snapshot the focused element's cluster for a move drag: each member with
@@ -663,17 +690,8 @@ fn window_snap_rect(
         applied.as_ref().and_then(|r| r.decoration.as_ref()),
         &decoration_config.default_mode,
     );
-    let bw =
-        driftwm::config::effective_border_width(applied.as_ref(), mode, decoration_config) as f64;
-    Some((
-        surface,
-        driftwm::layout::snap::SnapRect {
-            x_low: loc.x as f64 - bw,
-            x_high: loc.x as f64 + size.w as f64 + bw,
-            y_low: loc.y as f64 - bar as f64 - bw,
-            y_high: loc.y as f64 + size.h as f64 + bw,
-        },
-    ))
+    let bw = driftwm::config::effective_border_width(applied.as_ref(), mode, decoration_config);
+    Some((surface, super::fit::snap_rect_at(loc, size, bar, bw)))
 }
 
 #[cfg(test)]

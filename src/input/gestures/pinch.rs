@@ -109,8 +109,15 @@ impl DriftWm {
                 initial_zoom,
                 min_zoom,
             } => {
+                let (initial_zoom, min_zoom) = (*initial_zoom, *min_zoom);
+                // Fullscreen locks the camera and zoom (see `set_camera_on`); the
+                // pinch just goes inert for the rest of the gesture.
+                if self.gesture_output_fullscreen() {
+                    return;
+                }
+
                 let scaled = 1.0 + (scale - 1.0) * self.config.zoom_trackpad_speed;
-                let new_zoom = (*initial_zoom * scaled).clamp(*min_zoom, canvas::MAX_ZOOM);
+                let new_zoom = (initial_zoom * scaled).clamp(min_zoom, canvas::MAX_ZOOM);
 
                 let (cur_zoom, cur_camera) = self.gesture_camera_zoom();
                 if new_zoom != cur_zoom {
@@ -175,9 +182,15 @@ impl DriftWm {
 
         match state {
             GestureState::PinchZoom { .. } => {
+                // The park pins zoom at exactly 1.0, so there is no drift left to
+                // snap — whatever this gesture zoomed to before fullscreen landed
+                // was overwritten by the park, not preserved. Skipping the write
+                // keeps the snap from reaching for a pointer position and camera
+                // that belong to the locked viewport.
+                let inert = self.gesture_output_fullscreen();
                 let (cur_zoom, cur_camera) = self.gesture_camera_zoom();
                 let snapped = canvas::snap_zoom(cur_zoom);
-                if snapped != cur_zoom {
+                if !inert && snapped != cur_zoom {
                     let pointer = self.seat.get_pointer().unwrap();
                     let pos = pointer.current_location();
                     let screen_pos = canvas_to_screen(CanvasPos(pos), cur_camera, cur_zoom).0;

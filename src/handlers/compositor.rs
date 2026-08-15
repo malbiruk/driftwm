@@ -1,12 +1,16 @@
 use std::cell::RefCell;
+use std::sync::atomic::Ordering;
 
 use crate::decorations::DecorationKey;
 use crate::grabs::{ResizeState, has_left, has_top};
+use crate::handlers::LockRoleMarker;
 use crate::handlers::layer_shell::LayerDestroyedMarker;
-use crate::state::{ClientState, DriftWm, FocusTarget, PendingRecenter, StageWindow};
+use crate::state::{ClientState, DriftWm, FocusTarget, NavZoom, PendingRecenter, StageWindow};
 use driftwm::window_ext::WindowExt;
+use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::desktop::layer_map_for_output;
-use smithay::utils::{Logical, Point, Rectangle};
+use smithay::utils::{Point, Rectangle, SERIAL_COUNTER};
+use smithay::wayland::session_lock::{LockSurfaceConfigure, LockSurfaceData, LockSurfaceState};
 use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData};
 use smithay::{
     delegate_compositor, delegate_shm,
@@ -53,7 +57,14 @@ impl CompositorHandler for DriftWm {
         // (`reap_dead_fullscreen` below still tears the entry down).
         if let Some(window) = self.window_for_surface(surface) {
             let fs_output = self.find_fullscreen_output_for_surface(surface);
-            self.snapshot_closing_window(&window, surface, fs_output.as_ref(), false);
+            let fullscreen_centre = self.fullscreen_centre_of(fs_output.as_ref());
+            self.snapshot_closing_window(
+                &window,
+                surface,
+                fs_output.as_ref(),
+                fullscreen_centre,
+                false,
+            );
         }
         self.cleanup_surface_state(surface);
         // lock_surfaces is keyed by output — sweep values.
@@ -69,8 +80,12 @@ impl CompositorHandler for DriftWm {
         surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) {
         // Registered before get_layer_surface installs smithay's validation
-        // hook, so this fires first. For destroyed layer surfaces, sets full
-        // anchors so size validation passes on the orphaned final commit.
+        // hook, so this fires first. smithay never unregisters that hook, so
+        // every commit after a layer role is destroyed still runs it against
+        // the state `destroyed` zeroed, posting errors on the dead proxy.
+        // Neutralise those commits: full anchors satisfy size validation, and
+        // dropping the buffer satisfies the ack-before-attach check — which
+        // is what killed clients that re-arm an OSD.
         add_pre_commit_hook::<DriftWm, _>(surface, |_state, _dh, surface| {
             with_states(surface, |states| {
                 if states
@@ -81,7 +96,49 @@ impl CompositorHandler for DriftWm {
                     let mut guard = states.cached_state.get::<LayerSurfaceCachedState>();
                     guard.pending().anchor =
                         Anchor::TOP | Anchor::BOTTOM | Anchor::LEFT | Anchor::RIGHT;
+                    drop(guard);
+                    // Removed rather than None: it also drives
+                    // on_commit_buffer_handler through RendererSurfaceState::reset,
+                    // which drops — and so releases — the buffer committed
+                    // before the destroy. None would leak that one.
+                    //
+                    // Chained, not bound to a variable: holding this guard
+                    // while we lock the renderer state below would take the
+                    // two locks in the reverse order on_commit_buffer_handler
+                    // uses.
+                    let discarded = states
+                        .cached_state
+                        .get::<SurfaceAttributes>()
+                        .pending()
+                        .buffer
+                        .replace(BufferAssignment::Removed);
+                    if let Some(BufferAssignment::NewBuffer(buffer)) = discarded {
+                        // Nothing else releases what we discard here:
+                        // release-on-replace lives in SurfaceAttributes'
+                        // merge_into, which runs on the cache merge, not on a
+                        // hook write. A client recycling a one-buffer shm pool
+                        // would wait forever.
+                        //
+                        // Skip the buffer the renderer is still holding —
+                        // reset() above already releases it, so releasing it
+                        // again here would double-release a buffer the client
+                        // re-attached. This still misses one case, a same
+                        // buffer queued behind a transaction blocker
+                        // releasing it again later, but a doubled release
+                        // isn't a protocol error.
+                        let held_by_renderer = states
+                            .data_map
+                            .get::<RendererSurfaceStateUserData>()
+                            .is_some_and(|data| {
+                                data.lock().unwrap().buffer().is_some_and(|b| b == buffer)
+                            });
+                        if !held_by_renderer {
+                            buffer.release();
+                        }
+                    }
                 }
+
+                neutralise_orphaned_lock_commit(states);
             });
         });
 
@@ -156,22 +213,37 @@ impl CompositorHandler for DriftWm {
         // leaving black artifacts where damage tracking skips redraws.
         // ARGB only — XRGB is handled in RoundedCornerElement::opaque_regions.
         // Skipped for `decoration = "none"` (pass-through promise).
-        let csd_corner_carve = !self
+        if !self
             .decorations
             .contains_key(&DecorationKey::Surface(surface.id()))
-            && {
-                let applied = driftwm::config::applied_rule(surface);
+        {
+            with_states(surface, |states| {
+                // Every commit of every surface lands here, and only toplevels
+                // can carve — bail before the rule read so subsurfaces, popups,
+                // layer surfaces and cursors pay a single data_map lookup.
+                if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
+                    return;
+                }
+                // `applied_rule` re-enters `with_states`, whose private-data
+                // mutex this closure already holds — read the rule off the
+                // states in hand instead.
+                let applied = states
+                    .data_map
+                    .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                    .and_then(|m| m.lock().ok())
+                    .map(|guard| guard.clone());
                 let mode = driftwm::config::effective_decoration_mode(
                     applied.as_ref().and_then(|r| r.decoration.as_ref()),
                     &self.config.decorations.default_mode,
                 );
-                !matches!(mode, driftwm::config::DecorationMode::None)
-            };
-        if csd_corner_carve {
-            with_states(surface, |states| {
-                if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
+                if matches!(mode, driftwm::config::DecorationMode::None) {
                     return;
                 }
+                let corner_radius = driftwm::config::effective_corner_radius(
+                    applied.as_ref(),
+                    mode,
+                    &self.config.decorations,
+                );
                 let mut guard = states.cached_state.get::<SurfaceAttributes>();
                 let attrs = guard.current();
                 if let Some(ref mut region) = attrs.opaque_region {
@@ -184,7 +256,7 @@ impl CompositorHandler for DriftWm {
                     else {
                         return;
                     };
-                    let r = self.config.decorations.corner_radius + 2;
+                    let r = corner_radius + 2;
                     if bounds.size.w > 2 * r && bounds.size.h > 2 * r {
                         let (x, y, w, h) =
                             (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
@@ -220,24 +292,52 @@ impl CompositorHandler for DriftWm {
             });
         }
 
-        // Confirm session lock on the lock surface's first buffer commit.
-        if let crate::state::SessionLock::Pending(_) = &self.session_lock {
-            let is_lock_surface = self
+        // Enter `Locked` only once every output's lock surface has committed,
+        // not the first — avoids a blank flash while others still show the
+        // desktop. Only a lock surface returns early here: any other surface
+        // still owes its initial configure, and a client that never gets one
+        // hangs forever.
+        if let crate::state::SessionLock::Pending {
+            ref mut ready_outputs,
+            ..
+        } = self.session_lock
+            && let Some(output) = self
+                .lock_surfaces
+                .iter()
+                .find(|(_, ls)| ls.wl_surface() == surface)
+                .map(|(o, _)| o.clone())
+        {
+            ready_outputs.insert(output);
+
+            let all_ready = self.lock_surfaces.keys().all(|o| ready_outputs.contains(o));
+            if all_ready {
+                // Must precede the replace below — this only clears the timer
+                // while `self.session_lock` still reads `Pending`.
+                self.cancel_pending_deadline();
+                let old =
+                    std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Unlocked);
+                if let crate::state::SessionLock::Pending { locker, .. } = old {
+                    self.enter_locked(locker);
+                }
+            }
+            return;
+        }
+
+        // The deadline can reach `Locked` before the client has made any lock
+        // surface, and the arm above no longer matches once it has — so this is
+        // what hands a late one the keyboard. `is_locked`, not
+        // `renders_lock_frame`: the two differ only over a `Pending`, and the
+        // arm above answers every `Pending` lock-surface commit and returns, so
+        // nothing reaches here to tell them apart. Stated for whoever widens
+        // this next — the question it asks is who owns the keyboard, not what
+        // the outputs paint.
+        if self.session_lock.is_locked()
+            && self
                 .lock_surfaces
                 .values()
-                .any(|ls| ls.wl_surface() == surface);
-            if is_lock_surface {
-                // locker.lock() consumes — take it out of the enum.
-                let old =
-                    std::mem::replace(&mut self.session_lock, crate::state::SessionLock::Locked);
-                if let crate::state::SessionLock::Pending(locker) = old {
-                    locker.lock();
-                    tracing::info!("Session lock confirmed");
-                    let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-                    self.set_keyboard_focus(Some(FocusTarget(surface.clone())), serial);
-                }
-                return;
-            }
+                .any(|ls| ls.wl_surface() == surface)
+        {
+            self.focus_lock_surface();
         }
 
         if !is_sync_subsurface(surface) {
@@ -261,11 +361,64 @@ impl CompositorHandler for DriftWm {
                     // suspended window: it takes that window's slot instead of
                     // being placed fresh. Resolved (and the token stash
                     // consumed) here so it precedes all placement below.
-                    let adopted_sid = if has_size {
+                    let mut adopted_sid = if has_size {
                         self.adoption_target(&root, &window)
                     } else {
                         None
                     };
+                    // Taking a stand-in the user is dragging would destroy it
+                    // under the grab driving it. Place the window normally
+                    // instead — a coherent state it can sit in indefinitely —
+                    // and move it into the slot once the grab lets go.
+                    if let Some(sid) = adopted_sid
+                        && self.adopt_fights_a_grab(&window, sid)
+                    {
+                        self.defer_adoption(&root, sid, crate::state::AdoptOrigin::FirstCommit);
+                        // Asymmetric on purpose: clearing `adopted_sid` lets the
+                        // chain below place the window, while `hidden_for_adopt`
+                        // below keeps the arms that establish a *membership*
+                        // off — pinning it or sending it fullscreen for the
+                        // duration is exactly what the flush's carve-outs would
+                        // then dismiss the stand-in for.
+                        adopted_sid = None;
+                    }
+                    // Read off the stash rather than off the branch above: a
+                    // rule that forces a size configures and runs this whole
+                    // block again on the follow-up commit, and by then the
+                    // token stash is spent and the identity fallback may have
+                    // lapsed. A pass that re-derived the deferral from the
+                    // match would miss it and run the whole non-adopted tail:
+                    // the membership arms, and `navigate_to_window`'s camera
+                    // flight — the exact flight the deferral exists to avoid,
+                    // warping the pointer into the grab that is still live, and
+                    // the focus and activation a window nobody can see must not
+                    // hold. The rest of that route runs on every pass either
+                    // way, since it keys off `adopted_sid` alone: the snap-rect
+                    // refresh at the normal placement (which finds no rect to
+                    // write while the window is hidden, and which the adopt
+                    // clears in any case) and a second open animation, replayed
+                    // at the reveal.
+                    let hidden_for_adopt = self.root_hidden_by_deferred_adopt(&root);
+                    if hidden_for_adopt {
+                        // The client's own startup fullscreen/fit goes too, on
+                        // every pass: `pending_center` is set again between
+                        // passes, so a request arriving there queues rather than
+                        // applying. Unlike the immediate adopt's drop
+                        // (which trades the request for the slot the window does
+                        // end up in), a deferred adopt may never land — a client
+                        // that asked before its first buffer then keeps the plain
+                        // window it was given. The suppressed
+                        // `pinned_to_screen`/`fullscreen` *rules* share that
+                        // fate: this is the last placement pass they get, so a
+                        // deferral the flush discards (relaunch TTL swept under
+                        // the grab) leaves the window plain with nothing left to
+                        // re-apply them. What survives is a request the client
+                        // makes *after* the last pass, once it is a running app
+                        // rather than a starting one: nothing here can reach that
+                        // one, and the reveal hands it over.
+                        self.pending_fullscreen.remove(&root);
+                        self.pending_fit.remove(&root);
+                    }
 
                     // Capture preferred size once; later updated only on
                     // user resize-grab completion. Adoption sets its own
@@ -384,8 +537,15 @@ impl CompositorHandler for DriftWm {
                         && self.pending_size.insert(root.clone())
                     {
                         if let Some(toplevel) = window.toplevel() {
+                            // The rule names a visual frame; configure the content
+                            // inside it. The 1px floor matters: xdg-shell reads a
+                            // zero dimension as "client picks its own", so a frame
+                            // smaller than its own chrome would drop the rule.
+                            let content = self
+                                .mapping_chrome(&root, &effective)
+                                .content_size(smithay::utils::Size::from((w, h)));
                             toplevel.with_pending_state(|state| {
-                                state.size = Some(smithay::utils::Size::from((w, h)));
+                                state.size = Some(content);
                             });
                             toplevel.send_configure();
                             self.pending_center.insert(root.clone());
@@ -393,7 +553,8 @@ impl CompositorHandler for DriftWm {
                         } else {
                             self.pending_size.remove(&root);
                         }
-                    } else if applied.as_ref().is_some_and(|a| a.pinned_to_screen)
+                    } else if !hidden_for_adopt
+                        && applied.as_ref().is_some_and(|a| a.pinned_to_screen)
                         && has_size
                         && !is_fullscreen
                         && let Some(output) = applied
@@ -410,14 +571,22 @@ impl CompositorHandler for DriftWm {
                         let out_size = crate::state::output_logical_size(&output);
                         // Clamp the top-left into the output so an off-screen rule
                         // `position` (e.g. [1000, 1000] on a 1080p monitor) still
-                        // lands fully visible. Mirrors `reassign_orphaned_pinned`.
-                        let top_left =
-                            driftwm::canvas::rule_to_screen_top_left(rx, ry, geo.size, out_size);
-                        let screen_pos: Point<i32, Logical> = (
-                            top_left.x.clamp(0, (out_size.w - geo.size.w).max(0)),
-                            top_left.y.clamp(0, (out_size.h - geo.size.h).max(0)),
-                        )
-                            .into();
+                        // lands fully visible. The rule's rect is the visual
+                        // frame, so that is what gets clamped — clamping the
+                        // content instead pushes an SSD title bar off the top.
+                        let chrome = self.mapping_chrome(&root, &effective);
+                        let frame_top_left = driftwm::canvas::rule_to_screen_top_left(
+                            rx,
+                            ry,
+                            chrome.frame_size(geo.size),
+                            out_size,
+                        );
+                        let screen_pos = crate::state::clamp_pin_frame(
+                            chrome.content_loc(frame_top_left),
+                            geo.size,
+                            out_size,
+                            chrome,
+                        );
                         // Seed the Space loc to the canvas point this screen
                         // position currently maps to; the per-frame loc-sync
                         // keeps it correct as the camera moves.
@@ -449,10 +618,11 @@ impl CompositorHandler for DriftWm {
                         // Fullscreen / fit windows already sit at their final
                         // location — skip positioning so bar-shifted
                         // centering doesn't override that.
+                        let chrome = self.mapping_chrome(&root, &effective);
                         let pos = if let Some(ref applied) = applied
                             && let Some((x, y)) = applied.position
                         {
-                            let p = driftwm::canvas::rule_to_internal(x, y, geo.size);
+                            let p = driftwm::canvas::rule_to_content(x, y, geo.size, chrome);
                             (p.x, p.y)
                         } else if let Some(parent_surface) = window.parent_surface()
                             && let Some(parent_win) = self.window_for_surface(&parent_surface)
@@ -464,27 +634,18 @@ impl CompositorHandler for DriftWm {
                                 parent_loc.y + parent_size.h / 2 - geo.size.h / 2,
                             )
                         } else {
-                            // Both placement paths need the SSD bar to
-                            // center the *visible frame* (titlebar +
-                            // content) on the target.
-                            let bar_px =
-                                if matches!(effective, driftwm::config::DecorationMode::Server) {
-                                    self.config.decorations.title_bar_height
-                                } else {
-                                    0
-                                };
                             // Fullscreen takes precedence over the auto/cursor/
                             // center placement handled here: a new window must
                             // never land on top of a fullscreen window on its own
                             // output.
-                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, bar_px);
+                            let bg_pos = self.fullscreen_background_pos(&window, geo.size, chrome);
                             place_in_background = bg_pos.is_some();
                             let cursor_pos = if bg_pos.is_none()
                                 && matches!(
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Cursor
                                 ) {
-                                self.cursor_placement_pos(geo.size, bar_px)
+                                self.cursor_placement_pos(geo.size, chrome)
                             } else {
                                 None
                             };
@@ -495,21 +656,41 @@ impl CompositorHandler for DriftWm {
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
                                 ) {
-                                self.auto_placement_pos(&window, geo.size, bar_px)
+                                self.auto_placement_pos(&window, geo.size, chrome)
                             } else {
                                 None
                             };
                             let placed = bg_pos.or(cursor_pos).or(auto_pos).unwrap_or_else(|| {
-                                let output_geo = self
+                                let output = self
                                     .active_output()
-                                    .and_then(|o| self.space.output_geometry(&o));
-                                if output_geo.is_some() {
-                                    let bar_f = bar_px as f64;
-                                    let vc = self.usable_center_screen();
+                                    .filter(|o| self.space.output_geometry(o).is_some());
+                                if let Some(output) = output {
+                                    // Seed under the align point, not the usable
+                                    // center, so the spawn doesn't visibly slide
+                                    // to the edge. The align point takes the zoom
+                                    // the navigate lands at while the canvas
+                                    // conversion keeps the current one: that makes
+                                    // the two agree exactly when they already
+                                    // match (the common case, and the only one
+                                    // where no-pan is reachable — a zoom change
+                                    // animates the camera regardless), and leaves
+                                    // the `Center` default untouched at every zoom.
+                                    let target_zoom = self.navigation_target_zoom(
+                                        &output,
+                                        self.config.zoom_reset_on_new_window,
+                                    );
+                                    let align = self.align_point_on(
+                                        &output,
+                                        chrome.frame_size(geo.size),
+                                        target_zoom,
+                                    );
+                                    // A border is symmetric and cancels out of a
+                                    // center; only the bar shifts it.
+                                    let bar_f = chrome.bar as f64;
                                     let cam = self.camera();
                                     let z = self.zoom();
-                                    let cx = (cam.x + vc.x / z).round() as i32 - geo.size.w / 2;
-                                    let cy = (cam.y + bar_f / 2.0 + vc.y / z).round() as i32
+                                    let cx = (cam.x + align.x / z).round() as i32 - geo.size.w / 2;
+                                    let cy = (cam.y + bar_f / 2.0 + align.y / z).round() as i32
                                         - geo.size.h / 2;
                                     (cx, cy)
                                 } else {
@@ -527,8 +708,12 @@ impl CompositorHandler for DriftWm {
                         // Background-placed windows never activate: keep the
                         // fullscreen window focused and on top. Activation rides
                         // the batched configure below instead of a standalone hint.
+                        // A deferred adopt is not on screen yet, so it takes the
+                        // hint at its reveal instead — same shape as
+                        // `focus_on_open = false`.
                         let activate = !place_in_background
                             && !suppress_focus_on_open
+                            && !hidden_for_adopt
                             && applied.as_ref().is_none_or(|a| !a.widget);
                         self.map_window(window.clone(), pos.into(), false);
                         if activate {
@@ -616,6 +801,7 @@ impl CompositorHandler for DriftWm {
                                 .insert(DecorationKey::Surface(root.id()), deco);
                         }
                         if adopted_sid.is_none()
+                            && !hidden_for_adopt
                             && applied.as_ref().is_some_and(|a| a.fullscreen == Some(true))
                         {
                             self.pending_fullscreen.entry(root.clone()).or_insert(None);
@@ -628,7 +814,10 @@ impl CompositorHandler for DriftWm {
                         let deferred_fit_or_fs = self.pending_fit.contains(&root)
                             || self.pending_fullscreen.contains_key(&root);
                         // Adopted windows keep the suspended rect and z-slot —
-                        // never navigate the camera or raise on adopt.
+                        // never navigate the camera or raise on adopt. A window
+                        // still waiting on a deferred adopt needs no term of its
+                        // own: the primitives below refuse to pan, raise or
+                        // focus one whatever route reaches them.
                         if !is_widget
                             && !suppress_focus_on_open
                             && !is_fullscreen
@@ -648,7 +837,7 @@ impl CompositorHandler for DriftWm {
                                 let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                                 self.raise_and_focus(&window, serial);
                             } else {
-                                self.navigate_to_window(&window, reset);
+                                self.navigate_to_window(&window, NavZoom::from_reset(reset));
                             }
                         }
 
@@ -669,6 +858,9 @@ impl CompositorHandler for DriftWm {
                             // the body size the client hasn't acked yet, so it
                             // establishes a stable rect on its next settle.
                             self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
+                            // The resize settled: its size — and any top/left reposition above
+                            // — is durable, so persist it on the session-store debounce.
+                            self.session_store_mark_dirty();
                             // Scale+fade the window in. A window opening straight
                             // into fullscreen/fit runs both in this same commit,
                             // so this entry is never drawn: the geometry entry
@@ -676,12 +868,7 @@ impl CompositorHandler for DriftWm {
                             // destination rect instead.
                             self.start_window_open_animation(&window);
 
-                            if let Some(client_output) = self.pending_fullscreen.remove(&root) {
-                                let target = self.resolve_fullscreen_output(&root, client_output);
-                                self.enter_fullscreen(&window, target);
-                            } else if self.pending_fit.remove(&root) {
-                                self.decoration_fit(&window);
-                            }
+                            self.apply_queued_geometry_request(&root);
                         }
                     } else if !has_size {
                         self.pending_center.insert(root.clone());
@@ -708,6 +895,10 @@ impl CompositorHandler for DriftWm {
                         self.pending_recenter.remove(&root.id());
                     }
                 }
+
+                self.recentre_fullscreen_window(&window);
+
+                self.settle_adopted_stable_rect(&window, &root);
 
                 self.reflow_grown_snapped_window(&window, &root);
             }
@@ -758,6 +949,102 @@ fn ensure_initial_configure(
     }
 }
 
+/// Defuse a commit that lands on a destroyed `ext_session_lock_surface_v1`.
+///
+/// smithay registers its lock validation hook at `get_lock_surface` and never
+/// removes it, while the role's `destroyed` resets `last_acked` and leaves the
+/// dead proxy in the attributes — so every later commit on that `wl_surface`
+/// fails the hook's first, unconditional check and posts on an object that is
+/// already gone, which kills the client without ever reaching the wire. A
+/// toolkit that resets a surface's role (`attach(nullptr); commit()`) walks
+/// into this on an ordinary unlock.
+///
+/// There is no destroy seam to mark, so the orphan is recognised from state
+/// shape: for a role driftwm configured, `pending_configures` empty *and*
+/// `last_acked` unset is reachable only through `destroyed` — live-and-unacked
+/// still holds the configure we sent, live-and-acked holds the ack.
+///
+/// One residual: a client that calls `get_lock_surface` twice on one
+/// `wl_surface` gets two live roles over shared attributes (`give_role` accepts
+/// a repeat of the same role, and smithay's duplicate-output guard compares
+/// per-client `wl_output` resources, so a second binding dodges it). Destroying
+/// the *stale* proxy then runs the reset on attributes the *current* role is
+/// using, and we latch this surface as orphaned while its role is live. The
+/// role's proxy is unreachable from here — `LockSurfaceAttributes::surface` is
+/// `pub(crate)` and `LockSurface` keeps its handle private — so liveness can't
+/// be tested to rule it out. Once the latch trips, every later commit on that
+/// surface — live role or not — also has its pending buffer taken below, so a
+/// live lock surface freezes at its last frame (the buffer itself is still
+/// released, so the client doesn't stall on it). It fails safe: the session
+/// stays locked, nothing leaks, no client is killed. Getting there needs a
+/// client-side protocol violation smithay declines to reject.
+fn neutralise_orphaned_lock_commit(states: &smithay::wayland::compositor::SurfaceData) {
+    let Some(marker) = states.data_map.get::<LockRoleMarker>() else {
+        return;
+    };
+    if !marker.configured.load(Ordering::Relaxed) {
+        return;
+    }
+    let Some(attributes) = states.data_map.get::<LockSurfaceData>() else {
+        return;
+    };
+
+    let mut attributes = attributes.lock().unwrap();
+    let orphaned = marker.orphaned.load(Ordering::Relaxed)
+        || (attributes.pending_configures.is_empty() && attributes.last_acked.is_none());
+    if !orphaned {
+        return;
+    }
+    marker.orphaned.store(true, Ordering::Relaxed);
+
+    // Answer the fatal first check. The serial is arbitrary — a configure that
+    // was never sent can never be acked, since `ack_configure` only matches
+    // against `pending_configures`.
+    if attributes.last_acked.is_none() {
+        attributes.last_acked = Some(LockSurfaceConfigure {
+            state: LockSurfaceState::default(),
+            serial: SERIAL_COUNTER.next_serial(),
+        });
+    }
+    drop(attributes);
+
+    // Both buffer assignments can be fatal past that check: `Removed` posts
+    // `NullBuffer` outright — unlike layer shell, which reads it as an unmap —
+    // and a `NewBuffer` with readable dimensions fails the dimensions check
+    // against the sizeless synthetic configure above. `None` is the only
+    // assignment the hook lets through unconditionally, so take the buffer
+    // whatever it is.
+    //
+    // Chained, not bound to a variable: holding this guard while we lock the
+    // renderer state below would take the two locks in the reverse order
+    // on_commit_buffer_handler uses.
+    let discarded = states
+        .cached_state
+        .get::<SurfaceAttributes>()
+        .pending()
+        .buffer
+        .take();
+    if let Some(BufferAssignment::NewBuffer(buffer)) = discarded {
+        // Nothing else releases what we discard here: release-on-replace lives
+        // in SurfaceAttributes' merge_into, which runs on the cache merge, not
+        // on a hook write.
+        //
+        // Skip the buffer the renderer is still holding, but for a different
+        // reason than the layer branch above: `None` never drives
+        // RendererSurfaceState::reset, so nothing releases it now. It goes back
+        // on the `wl_surface`'s destruction or on the next role's first mapped
+        // frame, both of which drop the renderer's last reference. Releasing it
+        // here instead would double-release a buffer the client re-attached.
+        let held_by_renderer = states
+            .data_map
+            .get::<RendererSurfaceStateUserData>()
+            .is_some_and(|data| data.lock().unwrap().buffer().is_some_and(|b| b == buffer));
+        if !held_by_renderer {
+            buffer.release();
+        }
+    }
+}
+
 impl DriftWm {
     /// Returns true if the surface belonged to a canvas layer.
     fn handle_canvas_layer_commit(
@@ -777,15 +1064,16 @@ impl DriftWm {
             return false;
         };
 
-        // First commit: resolve position once surface size is known.
+        // First commit: resolve position once surface size is known. Through the
+        // same converter `layer_inventory` reports with, so a rule's position and
+        // the position read back describe one rect.
         if self.canvas_layers[idx].position.is_none() {
             let geo = self.canvas_layers[idx].surface.bbox();
             if geo.size.w > 0 && geo.size.h > 0 {
                 let (rx, ry) = self.canvas_layers[idx].rule_position;
-                self.canvas_layers[idx].position = Some(smithay::utils::Point::from((
-                    rx - geo.size.w / 2,
-                    -ry - geo.size.h / 2,
-                )));
+                let chrome = self.canvas_layer_chrome(idx);
+                self.canvas_layers[idx].position =
+                    Some(driftwm::canvas::rule_to_content(rx, ry, geo.size, chrome));
             }
         }
 
@@ -879,63 +1167,82 @@ impl DriftWm {
                 .borrow()
         });
 
-        let (
-            edges,
-            initial_window_location,
-            initial_window_size,
-            initial_screen_pos,
-            last_committed_size,
-        ) = match resize_state {
+        let (edges, initial_screen_pos, last_committed_size) = match resize_state {
             ResizeState::Resizing {
                 edges,
-                initial_window_location,
-                initial_window_size,
                 initial_screen_pos,
                 last_committed_size,
             }
             | ResizeState::WaitingForLastCommit {
                 edges,
-                initial_window_location,
-                initial_window_size,
                 initial_screen_pos,
                 last_committed_size,
-            } => (
-                edges,
-                initial_window_location,
-                initial_window_size,
-                initial_screen_pos,
-                last_committed_size,
-            ),
-            ResizeState::Idle => return,
+            } => (edges, initial_screen_pos, last_committed_size),
+            ResizeState::Idle => {
+                // A step/IPC resize (`msg resize`, grow/shrink) never arms
+                // `ResizeState` — it writes a `PendingResize` and a plain sized
+                // configure — so its answering commit is the only seam where the
+                // durable size actually lands. Mark it like the grab path's
+                // settle does, so a crash after the request restores the new
+                // size, not the pre-resize one.
+                if self
+                    .pending_resizes
+                    .get(&surface.id())
+                    .is_some_and(|r| r.is_live(window))
+                {
+                    self.session_store_mark_dirty();
+                }
+                return;
+            }
         };
 
         let current_geo = window.geometry();
 
-        // Compute from initial position to avoid cumulative drift.
-        if let Some(initial_screen_pos) = initial_screen_pos {
+        // Compensate incrementally from wherever the window is now, against the
+        // size this commit replaces. The only job here is to hold the opposite
+        // edge still across one size change; deriving the position absolutely
+        // from the grab start would also undo anything that placed the window
+        // between the release and this commit (a fill, a fit, an exit, an IPC
+        // move), and the settle can be owed indefinitely.
+        //
+        // A placement that changed the size as well as the position owns both,
+        // and the delta is then measured against a size the resize never asked
+        // for — so skip the compensation and let the placement stand. Each
+        // witness is exact: `begin_client_resize` clears fit and fill at entry,
+        // so either membership here landed after the grab started, and an owed
+        // recenter is how the three exits record having configured a different
+        // size. The map itself stays unconditional — it doubles as the resize's
+        // z-raise.
+        let placement_owns_size = self.stage.is_fill(window)
+            || self.stage.is_fit(window)
+            || self.is_window_fullscreen(window)
+            || self.pending_recenter.contains_key(&surface.id());
+
+        if initial_screen_pos.is_some() {
             // Pinned: top/left-edge resize moves `screen_pos` so the opposite
             // edge stays fixed. The Space loc is re-synced here directly because
             // the per-frame loc-sync only fires on camera changes.
-            let mut new_sp = initial_screen_pos;
-            if has_top(edges) {
-                new_sp.y = initial_screen_pos.y + (initial_window_size.h - current_geo.size.h);
-            }
-            if has_left(edges) {
-                new_sp.x = initial_screen_pos.x + (initial_window_size.w - current_geo.size.w);
-            }
-            let output_name = self.stage.pin_of(window).map(|site| site.output.clone());
-            if let Some(name) = output_name {
+            if let Some(site) = self.stage.pin_of(window).cloned() {
+                let mut new_sp = site.screen_pos;
+                if !placement_owns_size {
+                    if has_top(edges) {
+                        new_sp.y = site.screen_pos.y + (last_committed_size.h - current_geo.size.h);
+                    }
+                    if has_left(edges) {
+                        new_sp.x = site.screen_pos.x + (last_committed_size.w - current_geo.size.w);
+                    }
+                }
                 self.stage.set_pin(
                     window,
                     driftwm::stage::PinnedSite {
-                        output: name.clone(),
+                        output: site.output.clone(),
                         screen_pos: new_sp,
                     },
                 );
                 // Output gone: keep the screen_pos update, skip only the
                 // loc re-anchor — the tail below must still run to reset
                 // ResizeState.
-                if let Some(output) = self.output_by_name(&name) {
+                if let Some(output) = self.output_by_name(&site.output) {
                     let (camera, zoom) = {
                         let os = crate::state::output_state(&output);
                         (os.camera, os.zoom)
@@ -950,15 +1257,20 @@ impl DriftWm {
                     self.map_window(window.clone(), canvas, false);
                 }
             }
-        } else {
-            let mut new_loc = initial_window_location;
-            if has_top(edges) {
-                new_loc.y =
-                    initial_window_location.y + (initial_window_size.h - current_geo.size.h);
-            }
-            if has_left(edges) {
-                new_loc.x =
-                    initial_window_location.x + (initial_window_size.w - current_geo.size.w);
+        } else if let Some(current_pos) = self.stage.position_of(window) {
+            // `if let`, not an early return on `None`: the tail below has to run
+            // whatever happens here, or `WaitingForLastCommit` is stranded and
+            // every later commit re-runs the settle. The map stays unconditional
+            // inside it — it doubles as the resize's z-raise, and skipping it
+            // when the delta is zero would silently drop that raise.
+            let mut new_loc = current_pos;
+            if !placement_owns_size {
+                if has_top(edges) {
+                    new_loc.y = current_pos.y + (last_committed_size.h - current_geo.size.h);
+                }
+                if has_left(edges) {
+                    new_loc.x = current_pos.x + (last_committed_size.w - current_geo.size.w);
+                }
             }
             self.map_window(window.clone(), new_loc, false);
         }
@@ -986,6 +1298,14 @@ impl DriftWm {
                     .replace(ResizeState::Idle);
             });
             self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
+            // The grab's `unset` is too early for this: a client resize is
+            // witnessed by the surface's own `ResizeState`, which only reaches
+            // `Idle` on the commit above, so scheduling at release would flush
+            // into a still-live grab and simply defer again. A resize that nets
+            // no size change has nothing to configure, so this hook waits on
+            // whatever the client commits next — up to the relaunch TTL, whose
+            // end state is the documented stale duplicate.
+            self.schedule_deferred_adoptions();
         } else if size_changed {
             // Still resizing: carry the new committed size forward so the next
             // commit compares against it (write-back only on change).
@@ -995,13 +1315,43 @@ impl DriftWm {
                     .get_or_insert(|| RefCell::new(ResizeState::Idle))
                     .replace(ResizeState::Resizing {
                         edges,
-                        initial_window_location,
-                        initial_window_size,
                         initial_screen_pos,
                         last_committed_size: current_geo.size,
                     });
             });
         }
+    }
+
+    /// Pay off the stable snap rect an adopt deferred, on the first commit whose
+    /// geometry is the size the adopt configured. Until then the window has no
+    /// stable rect at all, which is what keeps `reflow_grown_snapped_window`
+    /// (whose whole premise is a footprint that grew past a settled one) off a
+    /// client still drawing its pre-adopt size.
+    fn settle_adopted_stable_rect(
+        &mut self,
+        window: &smithay::desktop::Window,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        let Some(&adopt_size) = self.pending_adopt_settle.get(&surface.id()) else {
+            return;
+        };
+        // A commit within a pixel of `adopt_size` is a size the reflow's grow
+        // test could never act on, so count it as settled rather than hold the
+        // debt over a rounding difference.
+        const EPS: i32 = 1;
+        let size = window.geometry().size;
+        if (size.w - adopt_size.w).abs() > EPS || (size.h - adopt_size.h).abs() > EPS {
+            return;
+        }
+        let client = StageWindow::Client(window.clone());
+        // A window with no canvas footprint (pinned / fullscreen) has no rect to
+        // record, and clearing the debt against a write that never lands would
+        // leave it with no stable rect at all. Keep owing until it has one.
+        if self.snap_rect_for(&client).is_none() {
+            return;
+        }
+        self.pending_adopt_settle.remove(&surface.id());
+        self.refresh_stable_snap_rect(&client);
     }
 
     /// A snapped window that resizes *itself* larger — not via a resize grab —
@@ -1067,22 +1417,8 @@ impl DriftWm {
         // configured carries a stale footprint — a window exiting fullscreen
         // keeps committing viewport-sized frames until it acks the restore
         // configure. Reflowing off that stale size would relocate the window, so
-        // wait for the settle. The owed resize is a pending configure with a real
-        // (non-zero) size that differs from what's committed; the compositor's
-        // benign zero-size ("client picks its own size") configures never gate.
-        let current_size = window.geometry().size;
-        let owed_resize = with_states(surface, |states| {
-            states
-                .data_map
-                .get::<XdgToplevelSurfaceData>()
-                .map(|d| {
-                    d.lock().unwrap().pending_configures().iter().any(|c| {
-                        matches!(c.state.size, Some(s) if s.w > 0 && s.h > 0 && s != current_size)
-                    })
-                })
-                .unwrap_or(false)
-        });
-        if owed_resize {
+        // wait for the settle.
+        if crate::state::owes_a_configured_size(window) {
             return;
         }
 
@@ -1119,8 +1455,8 @@ impl DriftWm {
         }
 
         let content_size = window.geometry().size;
-        let bar = self.window_ssd_bar(window);
-        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, bar) else {
+        let chrome = self.element_chrome(window);
+        let Some((x, y)) = self.place_adjacent_to(&anchor, window, content_size, chrome) else {
             return;
         };
         let new_loc = Point::from((x, y));
@@ -1138,7 +1474,7 @@ impl DriftWm {
         if self.focused_window().as_ref() == Some(window)
             && !self.window_visible_at_least(window, FULLY_VISIBLE)
         {
-            self.navigate_to_window(window, false);
+            self.navigate_to_window(window, NavZoom::Keep);
         }
     }
 }

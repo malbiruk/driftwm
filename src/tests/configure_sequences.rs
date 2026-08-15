@@ -1,14 +1,18 @@
 //! Exact configure sequences as the client sees them — the desync class where
 //! a toolkit acks one configure while the compositor already believes another.
 
-use driftwm::config::{Action, Config, DecorationMode};
+use driftwm::canvas::Chrome;
+use driftwm::config::{Action, BTN_LEFT, Config, DecorationMode, Direction};
 use smithay::input::pointer::MotionEvent;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
+use smithay::wayland::shell::wlr_layer::Layer;
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+use crate::ipc::protocol::{Request, Response, WindowSelector};
 use crate::state::StageWindow;
 
-use super::{Fixture, adopt_last_configure, window_by_app_id};
+use super::{Fixture, TICK, adopt_last_configure, client_sees_maximized, settle, window_by_app_id};
 
 /// Map one toplevel with a buffer at `size`, settle, and drain the configure
 /// cursor so tests only see what happens next.
@@ -39,6 +43,47 @@ fn origin_view(f: &mut Fixture) {
         os.zoom = 1.0;
         os.camera = Point::from((0.0, 0.0));
     });
+}
+
+/// Park the viewport at `camera`/`zoom` with nothing in flight. Mapping a
+/// window arms a navigation, so any test that later runs an animation to a
+/// standstill has to disarm that first or it settles somewhere else.
+fn park_view(f: &mut Fixture, camera: Point<f64, Logical>, zoom: f64) {
+    f.state().with_output_state(|os| {
+        os.camera = camera;
+        os.camera_target = None;
+        os.zoom = zoom;
+        os.zoom_target = None;
+        os.zoom_animation_anchor = None;
+    });
+}
+
+/// A canvas point in screen coords at the given view: `(canvas - camera) * zoom`.
+fn screen_pos_of(
+    loc: Point<f64, Logical>,
+    camera: Point<f64, Logical>,
+    zoom: f64,
+) -> Point<f64, Logical> {
+    Point::from(((loc.x - camera.x) * zoom, (loc.y - camera.y) * zoom))
+}
+
+/// Where the window's center sits on screen at the given view.
+fn center_screen_of(
+    f: &mut Fixture,
+    window: &smithay::desktop::Window,
+    camera: Point<f64, Logical>,
+    zoom: f64,
+) -> Point<f64, Logical> {
+    let loc = f.state().stage.position_of(window).unwrap();
+    let size = window.geometry().size;
+    screen_pos_of(
+        Point::from((
+            loc.x as f64 + size.w as f64 / 2.0,
+            loc.y as f64 + size.h as f64 / 2.0,
+        )),
+        camera,
+        zoom,
+    )
 }
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -381,6 +426,10 @@ fn unfit_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_
     // 1920×1080, so this hits the equal-size branch.
     f.state().toggle_fit_window(&window);
     assert!(!f.state().stage.is_fit(&window));
+    assert!(
+        !f.state().pending_recenter.contains_key(&root.id()),
+        "the equal-size branch settles in place, so it must drop the owed recenter"
+    );
     f.double_roundtrip(id);
     adopt_last_configure(&mut f, id, &surface);
 
@@ -409,6 +458,839 @@ fn unfit_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_
         f.state().stage.position_of(&window),
         Some(dragged_to),
         "the resize must not teleport the window back toward the fullscreen exit's stale center"
+    );
+}
+
+/// The fill twin of the test above: `unfill_window`'s equal-size branch must
+/// drop a recenter already owed, not merely skip inserting its own.
+///
+/// The two saved sizes disagree because they are captured in different eras:
+/// the fill records the pre-fill size, the fullscreen entry the filled one. The
+/// exit therefore restores a size the client does not have — it is still
+/// committing fullscreen-sized frames — and leaves a recenter owed, while the
+/// unfill (pre-fill size and still-fullscreen-sized geometry both being the
+/// output's 1920×1080) settles in place through the equal-size branch. Left
+/// untouched, that stale entry fires on the next differing-size commit (a
+/// resize) and discards the drag in between.
+///
+/// The resize interleave is what makes this route distinct from the twin below
+/// rather than what makes it work: the fill lands between a resize release and
+/// its settle commit, and the settle re-anchors `restore_size` under it.
+#[test]
+fn unfill_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_not_teleport() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen below moves the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect, so it can never
+    // return to the pre-output baseline.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    // Mapped at exactly the output's logical size — what makes the fill's
+    // saved (pre-fill) size and the fullscreen-sized geometry coincide later.
+    let surface = map_settled(&mut f, id, "a", (1920, 1080));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((0, 0)), false);
+
+    // Resize from the right edge and release, but hold the client's final
+    // commit back: the settle that re-anchors `restore_size` is still owed.
+    let grab_at = pt(1900.0, 540.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(-100.0, 0.0));
+    end_swipe(&mut f);
+
+    // Fill into that gap: the fill's restore point is still the pre-resize
+    // 1920×1080.
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+
+    // The client's next commit adopts the fill *and* settles the resize, which
+    // anchors `restore_size` to the size the user ended on.
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert_eq!(
+        f.state().stage.restore_size(&window),
+        Some(Size::from((1896, 1056))),
+        "precondition: the settle re-anchored restore_size to the filled size"
+    );
+
+    // Fullscreen, and adopt the viewport size.
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert!(
+        f.state().stage.is_fullscreen(&window),
+        "precondition: fullscreen"
+    );
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: fill membership survives fullscreen"
+    );
+
+    // Exit fullscreen but never ack the restore configure: it restores the
+    // filled 1896×1056, which the client does not have, so a recenter is left
+    // owed.
+    let cw = f.client(id).window(&surface);
+    cw.unset_fullscreen();
+    f.double_roundtrip(id);
+    let root = super::server_surface(&window);
+    assert!(
+        f.state().pending_recenter.contains_key(&root.id()),
+        "precondition: the fullscreen exit left a recenter owed"
+    );
+
+    // Unfill before that recenter ever settles: the fill's saved (pre-fill)
+    // size and the window's current (still fullscreen-sized) geometry are both
+    // 1920×1080, so this hits the equal-size branch.
+    f.state().toggle_fill_window(&window);
+    assert!(!f.state().stage.is_fill(&window));
+    assert!(
+        !f.state().pending_recenter.contains_key(&root.id()),
+        "the equal-size branch settles in place, so it must drop the owed recenter"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    // The user drags the window elsewhere.
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let center = pt(pos.x as f64 + 960.0, pos.y as f64 + 540.0);
+    assert!(f.state().try_start_gesture_move(center, false));
+    motion(&mut f, center + pt(100.0, 30.0));
+    end_swipe(&mut f);
+    let dragged_to = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(
+        dragged_to,
+        pos + Point::from((100, 30)),
+        "precondition: the drag landed at its natural destination"
+    );
+
+    // The user then resizes it from its right edge.
+    let grab_at = pt(dragged_to.x as f64 + 1900.0, dragged_to.y as f64 + 540.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(100.0, 0.0));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    end_swipe(&mut f);
+
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(dragged_to),
+        "the resize must not teleport the window back toward the fullscreen exit's stale center"
+    );
+}
+
+/// A resize settle only has to hold the *opposite* edge still across one size
+/// change. Anything that placed the window between the release and the settling
+/// commit — here a fill, but equally a fit, an exit, an IPC move or a bookmark
+/// jump — owns the position, and the settle must compensate from there rather
+/// than from where the grab started.
+#[test]
+fn a_fill_between_a_resize_release_and_its_settle_keeps_its_placement() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (1920, 1080));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((0, 0)), false);
+
+    // Resize from the right edge and release, but hold the client's final
+    // commit back: the settle is still owed.
+    let grab_at = pt(1900.0, 540.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(-100.0, 0.0));
+    end_swipe(&mut f);
+
+    // Fill into that gap.
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+
+    // The client's next commit adopts the fill *and* settles the resize.
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    let filled = Point::from((12, 12));
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(filled),
+        "the settle must compensate from the filled position, not restore the grab start"
+    );
+    // The cache is the other half: the settle refreshes it, so a wrong position
+    // there and a wrong position on the stage agree with each other and nothing
+    // downstream can tell.
+    let root = super::server_surface(&window);
+    let cached = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    assert_eq!(
+        (cached.x_low, cached.y_low, cached.x_high, cached.y_high),
+        (12.0, 12.0, 1908.0, 1068.0),
+        "and the refreshed snap rect is the fill's frame"
+    );
+}
+
+/// The same interleave on a top-left drag, which is the only shape that reaches
+/// the compensation at all — the right-edge case above leaves both arms unfired.
+/// A placement that changed the size as well as the position owns both, so the
+/// held-edge delta is not the resize's to apply: measured against the fill's
+/// size it is the whole width of the screen.
+#[test]
+fn a_fill_between_a_top_left_resize_release_and_its_settle_keeps_its_placement() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (500, 400));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((300, 200)), false);
+
+    // Drag the top-left corner outward and let the client commit the dragged
+    // size, so the settle's `last_committed_size` is the size the hand ended on
+    // rather than the one it started from.
+    let grab_at = pt(320.0, 220.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(-100.0, -100.0));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((200, 100))),
+        "precondition: the drag held the bottom-right corner still"
+    );
+    end_swipe(&mut f);
+
+    // Fill into the gap before the client's settling commit.
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    let filled = Point::from((12, 12));
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(filled),
+        "the fill owns both the size and the position, so the settle compensates \
+         for nothing"
+    );
+    let root = super::server_surface(&window);
+    let cached = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    assert_eq!(
+        (cached.x_low, cached.y_low, cached.x_high, cached.y_high),
+        (12.0, 12.0, 1908.0, 1068.0),
+        "and the refreshed snap rect is the fill's frame"
+    );
+}
+
+/// A fullscreen taken in the same gap. Its placement is the output itself, so a
+/// settle that shifts it by the difference between the drag's size and the
+/// viewport's drags the fullscreen window off the screen it is meant to fill.
+#[test]
+fn a_fullscreen_between_a_resize_release_and_its_settle_stays_on_its_output() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen moves the camera, which seeds a per-output blur generation
+    // that only clears on output disconnect.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (500, 400));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((300, 200)), false);
+
+    let grab_at = pt(320.0, 220.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(-100.0, -100.0));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    end_swipe(&mut f);
+
+    // Fullscreen before the settling commit, then let the client's adoption of
+    // the fullscreen configure be that commit.
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((0, 0))),
+        "precondition: the fullscreen placed the window on the output origin"
+    );
+
+    adopt_last_configure(&mut f, id, &surface);
+    assert!(
+        f.state().stage.is_fullscreen(&window),
+        "precondition: the client adopted the fullscreen configure"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((0, 0))),
+        "the fullscreen owns the geometry, so the settle leaves the window on \
+         the output instead of shifting it by the viewport's size"
+    );
+}
+
+/// The same equal-size branch, reached with nothing but fill → fullscreen →
+/// exit → unfill — the shorter and likelier production route.
+///
+/// Nothing here is ever acked, so the client sits at its pre-fill size
+/// throughout. The fill saves that size while the fullscreen entry saves the
+/// filled one, so the two disagree with no resize settle to split them: the
+/// exit restores the filled size, which the client does not have, and leaves a
+/// recenter owed, while the unfill restores the size the client has been
+/// sitting at all along and settles in place.
+#[test]
+fn unfill_after_a_plain_fullscreen_exit_drops_the_stale_recenter() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen below moves the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect, so it can never
+    // return to the pre-output baseline.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    // Small enough that the fill genuinely grows it, and the size the client
+    // stays at for the whole sequence.
+    let surface = map_settled(&mut f, id, "a", (400, 80));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((0, 0)), false);
+
+    // Fill, and leave the client on its pre-fill size: the fill's saved size is
+    // that raw 400×80, while the fullscreen enter below captures the filled one.
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().stage.is_fullscreen(&window),
+        "precondition: fullscreen"
+    );
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: fill membership survives fullscreen"
+    );
+
+    // Exit fullscreen: it restores the filled size, which the client never
+    // acked, so a recenter is left owed.
+    let cw = f.client(id).window(&surface);
+    cw.unset_fullscreen();
+    f.double_roundtrip(id);
+    let root = super::server_surface(&window);
+    assert!(
+        f.state().pending_recenter.contains_key(&root.id()),
+        "precondition: the fullscreen exit left a recenter owed"
+    );
+
+    // Unfill: the fill's saved 400×80 is the size the client still has, so this
+    // hits the equal-size branch.
+    f.state().toggle_fill_window(&window);
+    assert!(!f.state().stage.is_fill(&window));
+    assert!(
+        !f.state().pending_recenter.contains_key(&root.id()),
+        "the equal-size branch settles in place, so it must drop the owed recenter"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    // The user drags the window elsewhere.
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let center = pt(pos.x as f64 + 200.0, pos.y as f64 + 40.0);
+    assert!(f.state().try_start_gesture_move(center, false));
+    motion(&mut f, center + pt(100.0, 30.0));
+    end_swipe(&mut f);
+    let dragged_to = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(
+        dragged_to,
+        pos + Point::from((100, 30)),
+        "precondition: the drag landed at its natural destination"
+    );
+
+    // The user then resizes it from its right edge.
+    let grab_at = pt(dragged_to.x as f64 + 390.0, dragged_to.y as f64 + 40.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(100.0, 0.0));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    end_swipe(&mut f);
+
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(dragged_to),
+        "the resize must not teleport the window back toward the fullscreen exit's stale center"
+    );
+}
+
+/// The fullscreen twin of the two tests above: `exit_fullscreen_on`'s
+/// equal-size branch must drop a recenter already owed, not merely skip
+/// inserting its own.
+///
+/// No keybind is involved. A fit the client acks, then fullscreen — the entry
+/// saves the fit-era size. The client unmaximizes before acking the fullscreen
+/// configure, and that unfit is a differing-size exit, so it registers a
+/// recenter, aimed at the center of the *fullscreen* rect the window currently
+/// occupies. The client then unfullscreens, still without acking: the geometry
+/// it commits is the fit-era size the entry saved, so the exit takes the
+/// equal-size branch and restores the position outright. Left untouched, the
+/// unfit's recenter survives, lies inert while the committed size is unchanged,
+/// then fires on the next differing-size commit — a resize — and discards both
+/// the exit's placement and the drag in between.
+#[test]
+fn fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_not_teleport() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen below moves the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect, so it can never
+    // return to the pre-output baseline.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    // Fit, and adopt the fit size as a real client would — enter_fullscreen
+    // below reads the fit-era geometry as its own return size.
+    f.state().toggle_fit_window(&window);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert!(f.state().stage.is_fit(&window), "precondition: fit");
+
+    // Fullscreen, never acked: the committed geometry stays fit-era.
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().stage.is_fullscreen(&window),
+        "precondition: fullscreen"
+    );
+
+    // Unmaximize, still without acking. Fit membership survives fullscreen, so
+    // this runs a real unfit, and the pre-fit size it restores differs from the
+    // fit-era geometry the client still commits — a recenter is left owed.
+    let cw = f.client(id).window(&surface);
+    cw.unset_maximized();
+    f.double_roundtrip(id);
+    let root = super::server_surface(&window);
+    assert!(
+        !f.state().stage.is_fit(&window),
+        "precondition: the unfit ran"
+    );
+    assert!(
+        f.state().pending_recenter.contains_key(&root.id()),
+        "precondition: the unfit left a recenter owed"
+    );
+
+    // Unfullscreen, still without acking: the fit-era geometry the client
+    // commits is the size the entry saved, so this is the equal-size branch.
+    let cw = f.client(id).window(&surface);
+    cw.unset_fullscreen();
+    f.double_roundtrip(id);
+    assert!(!f.state().stage.is_fullscreen(&window));
+    assert!(
+        !f.state().pending_recenter.contains_key(&root.id()),
+        "the exit restored the window's position outright, so it must drop the \
+         recenter that would later undo it"
+    );
+    adopt_last_configure(&mut f, id, &surface);
+
+    // The user drags the window elsewhere.
+    let pos = f.state().stage.position_of(&window).unwrap();
+    let center = pt(pos.x as f64 + 948.0, pos.y as f64 + 528.0);
+    assert!(f.state().try_start_gesture_move(center, false));
+    motion(&mut f, center + pt(100.0, 30.0));
+    end_swipe(&mut f);
+    let dragged_to = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(
+        dragged_to,
+        pos + Point::from((100, 30)),
+        "precondition: the drag landed at its natural destination"
+    );
+
+    // The user then resizes it from its right edge.
+    let grab_at = pt(dragged_to.x as f64 + 1890.0, dragged_to.y as f64 + 528.0);
+    assert!(f.state().try_start_gesture_resize(grab_at, false));
+    motion(&mut f, grab_at + pt(100.0, 0.0));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    end_swipe(&mut f);
+
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(dragged_to),
+        "the resize must not teleport the window back toward the unfit's stale center"
+    );
+}
+
+/// The fit and fill exits refresh the cached snap rect their own entries
+/// overwrote. The fullscreen exit has nothing to refresh: `enter_fullscreen`
+/// never caches a rect, so the cached one is still the pre-fullscreen rect the
+/// exit hands the window back. Moving the window without settling it is what
+/// makes that no-op observable — re-deriving the entry from the restored
+/// position is not the exit's business.
+#[test]
+fn fullscreen_exit_leaves_the_cached_snap_rect_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen below moves the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    let root = super::server_surface(&window);
+
+    // Move without settling: the cache keeps the rect from the initial map.
+    f.state()
+        .map_window(window.clone(), Point::from((700, 500)), false);
+    let cached = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    let live = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(window.clone()))
+        .unwrap();
+    assert_ne!(
+        (cached.x_low, cached.y_low),
+        (live.x_low, live.y_low),
+        "precondition: the cached rect is stale against the live position"
+    );
+
+    // Fullscreen and back without ever acking: the geometry the client commits
+    // is the size the entry saved, so the exit restores the position outright.
+    let cw = f.client(id).window(&surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    assert!(
+        f.state().stage.is_fullscreen(&window),
+        "precondition: fullscreen"
+    );
+    let cw = f.client(id).window(&surface);
+    cw.unset_fullscreen();
+    f.double_roundtrip(id);
+    assert!(!f.state().stage.is_fullscreen(&window));
+
+    let after = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    assert_eq!(
+        (after.x_low, after.y_low, after.x_high, after.y_high),
+        (cached.x_low, cached.y_low, cached.x_high, cached.y_high),
+        "the fullscreen exit must leave the cached snap rect as it found it"
+    );
+}
+
+/// The other side of the test above: a snapped fit *does* cache a rect of its
+/// own, so its exit has to put the cache back in agreement with the window it
+/// restored. Left alone, the window's cluster identity stays the viewport-sized
+/// fit rect it no longer occupies.
+#[test]
+fn unfit_refreshes_the_snap_rect_its_fit_cached() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fit moves the camera, which seeds a per-output blur generation that only
+    // clears on output disconnect.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let _surface = map_settled(&mut f, id, "a", (400, 300));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    let root = super::server_surface(&window);
+    let element = StageWindow::Client(window.clone());
+
+    // Snapped fit, never acked: the cache holds the fit rect while the
+    // window still commits — and still occupies — its pre-fit size.
+    f.state().fit_window_snapped(&window);
+    let cached = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    let live = f.state().visual_frame_rect(&element).unwrap();
+    assert_ne!(
+        (cached.x_high - cached.x_low, cached.y_high - cached.y_low),
+        (live.x_high - live.x_low, live.y_high - live.y_low),
+        "precondition: the fit cached a rect of its own"
+    );
+
+    // Unfit, still unacked: the pre-fit size the exit restores is the size the
+    // client has all along, so it settles in place.
+    f.state().unfit_window_snapped(&window);
+
+    let after = *f.state().stable_snap_rects.get(&root.id()).unwrap();
+    let live = f.state().visual_frame_rect(&element).unwrap();
+    assert_eq!(
+        (after.x_low, after.y_low, after.x_high, after.y_high),
+        (live.x_low, live.y_low, live.x_high, live.y_high),
+        "the fit exit must leave the cached rect agreeing with the restored window"
+    );
+}
+
+/// `unfit_window` maps the window to a location truncated out of the visual
+/// center it preserves, and records that center *un-truncated* for the settle
+/// to finish on. Re-deriving the recorded center from the mapped location
+/// instead loses up to half a pixel per axis, which the settle's own truncation
+/// then turns into a whole one: with an odd restore width the two disagree by
+/// 1 px.
+#[test]
+fn unfit_settles_on_the_untruncated_center() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fit moves the camera, which seeds a per-output blur generation that only
+    // clears on output disconnect.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    // Odd width: the location the unfit restores to is half a pixel off the
+    // center it restores around.
+    let surface = map_settled(&mut f, id, "a", (801, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    // Fit and adopt: the center the unfit preserves is the fit rect's.
+    f.state().toggle_fit_window(&window);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    let fit_pos = f.state().stage.position_of(&window).unwrap();
+    let (fit_w, fit_h) = f
+        .client(id)
+        .window(&surface)
+        .configures_received
+        .last()
+        .unwrap()
+        .1
+        .size;
+    let center_x = fit_pos.x as f64 + fit_w as f64 / 2.0;
+    let center_y = fit_pos.y as f64 + fit_h as f64 / 2.0;
+
+    // Unfit — the fit-era size the client still commits differs from the 801
+    // restore, so a recenter is owed — then let the client settle at an even
+    // width, which fires it.
+    f.state().toggle_fit_window(&window);
+    f.double_roundtrip(id);
+    let cw = f.client(id).window(&surface);
+    cw.set_size(800, 600);
+    cw.attach_new_buffer();
+    cw.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((
+            (center_x - 400.0) as i32,
+            (center_y - 300.0) as i32
+        ))),
+        "the settle must land on the center the unfit recorded, not on the one \
+         its truncated restore location describes"
+    );
+}
+
+/// Fill membership survives fullscreen deliberately, so the exit has to hand
+/// the window back the *filled* rect — position and size together. The size it
+/// saves has to come from the same era as the position it saves: a pre-fill
+/// `restore_size` paired with the current (filled) location brings the window
+/// back shrunken in the filled area's top-left corner, still believing it is
+/// filled.
+///
+/// The unfill afterwards is the other half — the pre-fill rect must still be
+/// where it goes home to.
+#[test]
+fn fullscreen_exit_restores_the_filled_rect_and_unfill_still_goes_home() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    // Fullscreen below moves the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect, so it can never
+    // return to the pre-output baseline.
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    // An ordinary window: clear of `MIN_RESTORE_FLOOR` on both axes, and not the
+    // output's own size, so the pre-fill and filled rects can't coincide.
+    let surface = map_settled(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    let pre_fill_loc = Point::from((200, 150));
+    f.state().map_window(window.clone(), pre_fill_loc, false);
+    origin_view(&mut f);
+    let pre_fill = (pre_fill_loc, Size::from((800, 600)));
+
+    // Fill, and let the client adopt the filled size as a real one would.
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    let filled = (
+        f.state().stage.position_of(&window).unwrap(),
+        window.geometry().size,
+    );
+    assert_ne!(
+        filled, pre_fill,
+        "precondition: the fill both moved and grew the window"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: fill membership survives fullscreen"
+    );
+
+    f.state().exit_fullscreen_on(&output);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    assert_eq!(
+        (
+            f.state().stage.position_of(&window).unwrap(),
+            window.geometry().size
+        ),
+        filled,
+        "the exit restores the whole filled rect, not a pre-fill size at the filled corner"
+    );
+    assert!(
+        f.state().stage.is_fill(&window),
+        "and the window is still filled"
+    );
+
+    // Unfill from there still goes home to the pre-fill rect.
+    f.state().toggle_fill_window(&window);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    assert!(!f.state().stage.is_fill(&window));
+    assert_eq!(
+        (
+            f.state().stage.position_of(&window).unwrap(),
+            window.geometry().size
+        ),
+        pre_fill,
+        "unfill restores the pre-fill position and size"
+    );
+}
+
+/// The same restore when fullscreen beats the client's ack of the fill
+/// configure — two keypresses inside one frame. Committed geometry is still the
+/// pre-fill size there, so reading it would resurrect the very era mismatch the
+/// test above pins; the size last *configured* is what the filled position pairs
+/// with.
+#[test]
+fn fullscreen_exit_restores_the_filled_rect_when_it_beats_the_fill_ack() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((200, 150)), false);
+    origin_view(&mut f);
+
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+    let filled_loc = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(
+        window.geometry().size,
+        Size::from((800, 600)),
+        "precondition: the client has not acked the fill configure yet"
+    );
+
+    // Fullscreen straight through the un-acked fill, then back.
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    f.state().exit_fullscreen_on(&output);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    // Usable 1920×1080 minus a 12px gap on every side, no SSD bar or border on a
+    // default CSD window — the same rect `fill_grows_to_usable_minus_gap` pins.
+    assert_eq!(
+        (
+            f.state().stage.position_of(&window).unwrap(),
+            window.geometry().size
+        ),
+        (filled_loc, Size::from((1896, 1056))),
+        "the exit restores the filled rect the fill configured, not the size the client still had"
+    );
+    assert!(
+        f.state().stage.is_fill(&window),
+        "and the window is still filled"
+    );
+}
+
+/// The fit twin of the test above. `fit_window` maps to the fit position in the
+/// same breath as it sends the fit configure, so a fullscreen pressed into that
+/// gap finds committed geometry at the pre-fit size — pairing it with the fit
+/// position would hand the exit a rect the window never held.
+#[test]
+fn fullscreen_exit_restores_the_fit_rect_when_it_beats_the_fit_ack() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((200, 150)), false);
+    origin_view(&mut f);
+
+    f.state().fit_window(&window);
+    assert!(f.state().stage.is_fit(&window), "precondition: the fit ran");
+    let fit_loc = f.state().stage.position_of(&window).unwrap();
+    assert_eq!(
+        window.geometry().size,
+        Size::from((800, 600)),
+        "precondition: the client has not acked the fit configure yet"
+    );
+
+    // Fullscreen straight through the un-acked fit, then back.
+    f.state().enter_fullscreen(&window, Some(output.clone()));
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    f.state().exit_fullscreen_on(&output);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    // Usable 1920×1080 minus a 12px gap on every side, no SSD bar or border on a
+    // default CSD window — the same rect the fit configured.
+    assert_eq!(
+        (
+            f.state().stage.position_of(&window).unwrap(),
+            window.geometry().size
+        ),
+        (fit_loc, Size::from((1896, 1056))),
+        "the exit restores the fit rect the fit configured, not the size the client still had"
+    );
+    assert!(
+        f.state().stage.is_fit(&window),
+        "and the window is still fit"
     );
 }
 
@@ -554,22 +1436,254 @@ fn fill_shrinks_out_of_overlap_with_neighbor() {
     assert!(f.state().stage.is_fill(&a));
 }
 
+/// Fit `window` and run the handoff to a standstill — ack, tick past the
+/// resize freeze the fit parked its pan behind, then let the camera settle
+/// onto the fit's target. The fill tests below need the camera and window to
+/// agree to the pixel, so nothing short of a genuine settle will do.
+fn fit_and_settle(
+    f: &mut Fixture,
+    window: &smithay::desktop::Window,
+    id: super::client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+) {
+    f.state().fit_window(window);
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, surface);
+    f.double_roundtrip(id);
+    f.state().tick_window_animations(TICK);
+    settle(f);
+}
+
+/// A fit window's rect spans nearly the whole usable area, so any other
+/// window in view overlaps it. Fill must shrink the fit window out of that
+/// overlap instead of refusing to touch a fit (maximized) window.
 #[test]
-fn fill_on_fit_window_is_noop() {
+fn fill_on_fit_window_with_a_neighbor_fires() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
     let id = f.add_client();
 
-    let _surface = map_settled(&mut f, id, "fit", (800, 600));
-    let window = window_by_app_id(&mut f, "fit").unwrap();
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
 
-    f.state().toggle_fit_window(&window);
-    assert!(f.state().stage.is_fit(&window));
+    fit_and_settle(&mut f, &a, id, &a_surface);
+    assert!(f.state().stage.is_fit(&a), "precondition: fit");
+    assert!(
+        client_sees_maximized(&mut f, id, &a_surface),
+        "precondition: the fit told the client it is maximized"
+    );
+    let fit_loc = f.state().stage.position_of(&a).unwrap();
+    let fit_size = crate::state::configured_window_size(&a);
 
-    // A maximized-by-fit window is fit's business; fill leaves it untouched.
+    // A wall inside the fit rect's left half, spanning most of its height:
+    // pulling A's left edge past it is the least-travel escape, and the wall
+    // then caps regrowth at the same edge.
+    let _b_surface = map_settled(&mut f, id, "b", (300, 800));
+    let b = window_by_app_id(&mut f, "b").unwrap();
+    f.state().map_window(
+        b.clone(),
+        Point::from((fit_loc.x + 200, fit_loc.y + 100)),
+        false,
+    );
+
+    f.state().fill_window(&a);
+    f.double_roundtrip(id);
+
+    let gap = f.state().config.snap_gap as i32;
+    let a_loc = f.state().stage.position_of(&a).unwrap();
+    let b_loc = f.state().stage.position_of(&b).unwrap();
+    let b_w = b.geometry().size.w;
+    let (w, _h) = f
+        .client(id)
+        .window(&a_surface)
+        .configures_received
+        .last()
+        .unwrap()
+        .1
+        .size;
+    // A's left content edge ends exactly a gap past B's right edge, and its
+    // right edge stays where the fit put it — nothing over there to retreat
+    // from.
+    assert_eq!(a_loc.x, b_loc.x + b_w + gap);
+    assert_eq!(a_loc.x + w, fit_loc.x + fit_size.w);
+    assert!(!f.state().stage.is_fit(&a));
+    assert!(f.state().stage.is_fill(&a));
+    assert!(
+        !client_sees_maximized(&mut f, id, &a_surface),
+        "fill must clear the client's Maximized state"
+    );
+}
+
+/// With nothing else in view, and the camera genuinely settled on the fit's
+/// own target (not merely animating toward it), a fit window already fills
+/// its usable space — fill must leave it untouched.
+///
+/// The exact no-op needs the fit's truncated canvas rect and its untruncated
+/// camera to land on the same integers, which needs every input to that
+/// centering half-pixel-free: even pre-fit dimensions, an even usable area, an
+/// integral snap gap, no SSD bar. See
+/// `fill_on_lone_fit_window_nudges_it_when_the_fit_left_a_subpixel_gap` for
+/// what one half-pixel does instead.
+#[test]
+fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    fit_and_settle(&mut f, &window, id, &surface);
+    assert!(f.state().stage.is_fit(&window), "precondition: fit");
+    assert!(
+        client_sees_maximized(&mut f, id, &surface),
+        "precondition: the fit told the client it is maximized"
+    );
+    let before_loc = f.state().stage.position_of(&window).unwrap();
+    let before_size = crate::state::configured_window_size(&window);
+
     f.state().fill_window(&window);
+    f.double_roundtrip(id);
+
+    assert_eq!(f.state().stage.position_of(&window), Some(before_loc));
+    assert_eq!(crate::state::configured_window_size(&window), before_size);
+    assert!(
+        f.state().stage.is_fit(&window),
+        "an inert fill must leave fit membership alone"
+    );
     assert!(!f.state().stage.is_fill(&window));
-    assert!(f.state().stage.is_fit(&window));
+    assert!(
+        client_sees_maximized(&mut f, id, &surface),
+        "an inert fill must not touch the client's Maximized state"
+    );
+}
+
+/// The odd-dimension twin of the test above — and empirically not a no-op.
+/// `fit_window` maps the window at `target_camera.x as i32` while animating
+/// the camera onto the untruncated value, and `compute_fill_geometry` reads
+/// that camera back as an exact `f64`. An odd pre-fit width/height gives the
+/// pre-fit visual center — and so `target_camera` — a `.5` fraction on that
+/// axis, so the fit leaves the window half a pixel off the usable area it was
+/// meant to fill. With no neighbor to blame, fill closes that gap on its own:
+/// it nudges the window, drops fit membership, and clears the client's
+/// Maximized state.
+///
+/// This characterises a known defect. When `fit_window` stops truncating
+/// `target_camera`, this test becomes a duplicate of the even-dims inert test
+/// above and should be deleted rather than re-aimed.
+///
+/// `as i32` truncates toward zero, so which way the half-pixel lands follows
+/// the sign of `target_camera` — the fit here is off-center enough that x is
+/// negative and y positive, so the two axes are nudged opposite ways.
+#[test]
+fn fill_on_lone_fit_window_nudges_it_when_the_fit_left_a_subpixel_gap() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (801, 601));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    fit_and_settle(&mut f, &window, id, &surface);
+    assert!(f.state().stage.is_fit(&window), "precondition: fit");
+    let before_loc = f.state().stage.position_of(&window).unwrap();
+    let before_size = crate::state::configured_window_size(&window);
+
+    f.state().fill_window(&window);
+    f.double_roundtrip(id);
+
+    let loc = f.state().stage.position_of(&window).unwrap();
+    assert_ne!(loc, before_loc, "the sub-pixel gap must be taken up");
+    assert!(
+        (loc.x - before_loc.x).abs() <= 1 && (loc.y - before_loc.y).abs() <= 1,
+        "taking it up must cost at most a pixel per axis, moved {before_loc:?} → {loc:?}"
+    );
+    assert_eq!(
+        crate::state::configured_window_size(&window),
+        before_size,
+        "half a pixel at each end leaves the size alone"
+    );
+    assert!(!f.state().stage.is_fit(&window));
+    assert!(f.state().stage.is_fill(&window));
+    assert!(
+        !client_sees_maximized(&mut f, id, &surface),
+        "the nudge clears the client's Maximized state too"
+    );
+}
+
+/// A fill taken straight out of fit inherits the *pre-fit* size as its
+/// restore point — not `restore_size`, and not the fit's own viewport-
+/// spanning size — paired with the position that size occupied, not the fit
+/// rect's top-left. Unfilling must land back on the whole pre-fit rect.
+#[test]
+fn unfill_after_fill_on_fit_restores_the_pre_fit_rect() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(a.clone(), Point::from((400, 300)), false);
+    // The fit preserves the visual center, so the restore point the fill
+    // derives from the fit rect is this position again.
+    let pre_fit_loc = f.state().stage.position_of(&a).unwrap();
+
+    fit_and_settle(&mut f, &a, id, &a_surface);
+    let fit_loc = f.state().stage.position_of(&a).unwrap();
+    f.client(id).window(&a_surface).format_recent_configures();
+
+    // A neighbor inside the fit rect forces a real (non-no-op) fill.
+    let _b_surface = map_settled(&mut f, id, "b", (300, 800));
+    let b = window_by_app_id(&mut f, "b").unwrap();
+    f.state().map_window(
+        b.clone(),
+        Point::from((fit_loc.x + 200, fit_loc.y + 100)),
+        false,
+    );
+
+    f.state().fill_window(&a);
+    assert!(
+        f.state().stage.is_fill(&a),
+        "precondition: the fill on the fit window ran"
+    );
+    adopt_last_configure(&mut f, id, &a_surface);
+    f.client(id).window(&a_surface).format_recent_configures();
+
+    f.state().toggle_fill_window(&a);
+    f.double_roundtrip(id);
+    let configures = f.client(id).window(&a_surface).format_recent_configures();
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    assert!(!f.state().stage.is_fill(&a));
+    assert!(
+        !f.state().stage.is_fit(&a),
+        "the fill dropped fit membership and the unfill must not resurrect it"
+    );
+    assert!(
+        configures.contains("size: 800 × 600"),
+        "unfill must restore the pre-fit size, not the fit's viewport-spanning \
+         size, got:\n{configures}"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(pre_fit_loc),
+        "and the pre-fit position, not the fit rect's corner"
+    );
+    assert!(
+        !client_sees_maximized(&mut f, id, &a_surface),
+        "a restored window is not maximized"
+    );
 }
 
 #[test]
@@ -697,6 +1811,44 @@ fn fill_on_ssd_window_round_trips_bar_and_border() {
     assert!(f.state().stage.is_fill(&window));
 }
 
+/// A fit targets the gap-inset usable area with the window's *visual frame*:
+/// deflating by the bar alone leaves the frame overflowing by `2 × border_width`
+/// per axis.
+#[test]
+fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "fit", (800, 600));
+    let window = window_by_app_id(&mut f, "fit").unwrap();
+    assert_eq!(f.state().window_ssd_bar(&window), 25);
+
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    f.state().fit_window(&window);
+    f.double_roundtrip(id);
+
+    // Usable area is the full 1920×1080 output; inset by the 12px snap gap
+    // gives an 1896×1056 frame budget. The content inside it gives up the
+    // whole chrome, borders included (25px bar + 5px border on every side):
+    // 1896 - 2×5 = 1886 wide, 1056 - 25 - 2×5 = 1021 tall — the same numbers
+    // `fill_on_ssd_window_round_trips_bar_and_border` lands on, since a lone
+    // window's fit and fill both target the whole usable area.
+    let configures = f.client(id).window(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 1886 × 1021"),
+        "fit must deflate the target by border and bar, got:\n{configures}"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&window),
+        Some(Point::from((-143, 89))),
+        "fit loc must offset the content by border and bar"
+    );
+}
+
 /// Fill must record its rect as the window's settled footprint. Leaving the
 /// pre-fill rect cached makes every later commit read as "grew past settled" —
 /// a perpetual reflow scan once the fill state is cleared (move-grab start,
@@ -763,6 +1915,651 @@ fn fill_records_settled_footprint() {
         f.state().stage.position_of(&a),
         Some(filled_loc),
         "a redraw commit after clear_fill must not translate the filled window"
+    );
+}
+
+/// Fill "a" into the free space left of the usable area's right edge, with "b"
+/// flush against the left edge spanning its height. The filled rect stops a
+/// neighbor's width short of the left edge, so centering it would slide "b" half
+/// off screen — the case `center-window` must not center. Returns the filled
+/// window, its surface, and the camera/zoom the fill was computed in.
+fn fill_beside_left_neighbor(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+) -> (
+    smithay::desktop::Window,
+    wayland_client::protocol::wl_surface::WlSurface,
+    Point<f64, Logical>,
+    f64,
+) {
+    let a_surface = map_settled(f, id, "a", (800, 600));
+    let _b_surface = map_settled(f, id, "b", (400, 1056));
+    let a = window_by_app_id(f, "a").unwrap();
+    let b = window_by_app_id(f, "b").unwrap();
+
+    park_view(f, Point::from((0.0, 0.0)), 1.0);
+    let gap = f.state().config.snap_gap as i32;
+    f.state().map_window(b, Point::from((gap, gap)), false);
+    f.state()
+        .map_window(a.clone(), Point::from((800, 300)), false);
+
+    f.state().toggle_fill_window(&a);
+    assert!(f.state().stage.is_fill(&a), "precondition: the fill ran");
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, &a_surface);
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    (a, a_surface, camera, zoom)
+}
+
+/// Map a top-anchored panel claiming an exclusive zone, shrinking the output's
+/// usable area for real — the layer commit arranges the map, so
+/// `non_exclusive_zone` actually changes (an output mode change alone leaves it
+/// stale).
+fn map_top_panel(f: &mut Fixture, id: super::client::ClientId, height: u32) {
+    let created = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "panel");
+    let surface = created.surface.clone();
+    created.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((1920, height)),
+        anchor: Some(
+            zwlr_layer_surface_v1::Anchor::Top
+                | zwlr_layer_surface_v1::Anchor::Left
+                | zwlr_layer_surface_v1::Anchor::Right,
+        ),
+        exclusive_zone: Some(height as i32),
+        ..Default::default()
+    });
+    created.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(1920, height as u16);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+}
+
+/// Focus `window` and run `center-window` to a standstill. Callers need
+/// `skip_baseline_check`: settling a camera animation seeds a per-output blur
+/// generation that only clears on output disconnect, so it can never return to
+/// the pre-output baseline.
+fn center_window_and_settle(f: &mut Fixture, window: &smithay::desktop::Window) {
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(window, serial);
+    f.state().execute_action(&Action::CenterWindow);
+    settle(f);
+}
+
+/// Assert `window` settled at the usable viewport center — plain centering, the
+/// fallback whenever no fill view can be restored.
+///
+/// Centers on `geometry().size`, so it only agrees with production centering for
+/// CSD windows: the real thing centers the *visual* frame, SSD bar included.
+fn assert_centered(f: &mut Fixture, window: &smithay::desktop::Window) {
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    let center = center_screen_of(f, window, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        (center.x - vc.x).abs() < 1e-6 && (center.y - vc.y).abs() < 1e-6,
+        "the window settles at the viewport center: {center:?} vs {vc:?}"
+    );
+}
+
+/// `center-window` on a filled window returns the camera and zoom to the view
+/// the fill was computed in instead of centering it. Fill deliberately stops
+/// short of the viewport bounds, so centering the result slides the neighbor it
+/// grew up against half off screen.
+#[test]
+fn center_window_restores_a_filled_windows_view() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    let filled_loc = f.state().stage.position_of(&a).unwrap();
+    let filled_loc = Point::from((filled_loc.x as f64, filled_loc.y as f64));
+    let fill_screen = screen_pos_of(filled_loc, fill_camera, fill_zoom);
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "the camera returned to the view the fill ran in: {camera:?} vs {fill_camera:?}"
+    );
+    assert!((zoom - fill_zoom).abs() < 1e-9, "and so did the zoom");
+    let settled_screen = screen_pos_of(filled_loc, camera, zoom);
+    assert!(
+        (settled_screen.x - fill_screen.x).abs() < 1e-6
+            && (settled_screen.y - fill_screen.y).abs() < 1e-6,
+        "so the filled window is back where the fill left it on screen: \
+         {settled_screen:?} vs {fill_screen:?}"
+    );
+
+    // And is deliberately *not* centered — its center sits right of the
+    // viewport's by half the neighbor it stopped against.
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "restoring the view is not centering the window: {center:?} vs {vc:?}"
+    );
+}
+
+/// The same restore through `center-window`'s other arm: with nothing focused
+/// it centers the element nearest the viewport center instead, and that arm has
+/// to carry the same policy — every other `center-window` test focuses its
+/// target first, so nothing else covers it.
+#[test]
+fn center_window_with_nothing_focused_restores_the_nearest_filled_windows_view() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    // Right of both windows, and "a" is the nearer of the two from there —
+    // the fill grew it toward this side, away from its left-edge neighbor.
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().set_window_focus(None, serial);
+    assert!(
+        f.state().focused_element().is_none(),
+        "precondition: nothing focused, so the nearest-element arm runs"
+    );
+
+    f.state().execute_action(&Action::CenterWindow);
+    settle(&mut f);
+
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "the fallback arm returned to the view the fill ran in: {camera:?} vs {fill_camera:?}"
+    );
+    assert!((zoom - fill_zoom).abs() < 1e-9, "and so did the zoom");
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "which is a different view from centering it: {center:?} vs {vc:?}"
+    );
+}
+
+/// The restored zoom overrides `center-window`'s zoom reset. `MAX_ZOOM` is 1.0,
+/// so a window filled at zoom 0.5 is genuinely twice the usable width — snapping
+/// back to 1.0 would leave it overflowing the screen.
+#[test]
+fn center_window_restores_the_fill_zoom_instead_of_resetting_it() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "fill", (800, 600));
+    let window = window_by_app_id(&mut f, "fill").unwrap();
+
+    // Even numbers and zoom 0.5 keep the screen→canvas conversion exact.
+    park_view(&mut f, Point::from((5000.0, 5000.0)), 0.5);
+    f.state()
+        .map_window(window.clone(), Point::from((6000, 6000)), false);
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    let fill_camera = f.state().camera();
+
+    park_view(&mut f, Point::from((0.0, 0.0)), 1.0);
+    center_window_and_settle(&mut f, &window);
+
+    assert!(
+        (f.state().zoom() - 0.5).abs() < 1e-9,
+        "the fill zoom is restored, not reset to 1.0: {}",
+        f.state().zoom()
+    );
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "and the camera with it: {camera:?} vs {fill_camera:?}"
+    );
+}
+
+/// The `MAX_ZOOM + 1e-9` slack in the zoom reject. `viewport_bounds` is the
+/// difference of two `screen_to_canvas` results, so from a camera that isn't a
+/// whole number the stored width comes out a fraction of an ulp shy of the
+/// usable width and the derived zoom lands just *past* `MAX_ZOOM`. Rejecting on
+/// that would make the restore fire or not depending on where the camera
+/// happened to be sitting when the fill ran.
+#[test]
+fn a_fill_camera_off_the_integer_grid_still_restores() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (800, 600));
+    let _b_surface = map_settled(&mut f, id, "b", (400, 1056));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Only the width feeds the `MAX_ZOOM` check, so the camera's y stays whole
+    // and the vertical framing exact.
+    let fill_camera = Point::from((1000.008, -988.0));
+    park_view(&mut f, fill_camera, 1.0);
+    // `fill_beside_left_neighbor`'s framing, shifted into this camera's canvas:
+    // "b" pinned to the left edge so the fill stops short of it and the
+    // centering fallback would land the camera ~200px away.
+    let origin = Point::from((1000, -988));
+    let gap = f.state().config.snap_gap as i32;
+    f.state()
+        .map_window(b, origin + Point::from((gap, gap)), false);
+    f.state()
+        .map_window(a.clone(), origin + Point::from((800, 300)), false);
+
+    f.state().toggle_fill_window(&a);
+    assert!(f.state().stage.is_fill(&a), "precondition: the fill ran");
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    let saved = f.state().stage.fill_saved(&a).unwrap();
+    let stored_w = saved.viewport_bounds.x_high - saved.viewport_bounds.x_low;
+    assert!(
+        1920.0 / stored_w > driftwm::canvas::MAX_ZOOM,
+        "precondition: the fractional camera pushed the derived zoom past \
+         MAX_ZOOM — stored width {stored_w}"
+    );
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "a sub-ulp overshoot past MAX_ZOOM still restores: {camera:?} vs {fill_camera:?}"
+    );
+    let zoom = f.state().zoom();
+    assert!((zoom - 1.0).abs() < 1e-9);
+
+    // Which is a different view from centering — otherwise the assertions above
+    // could not tell the restore from the fallback.
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "the restore is distinguishable from centering: {center:?} vs {vc:?}"
+    );
+}
+
+/// Regression guard: a window that isn't filled is still centered, zoom reset
+/// included.
+#[test]
+fn center_window_on_an_unfilled_window_still_centers_and_resets_zoom() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let _surface = map_settled(&mut f, id, "a", (800, 600));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    park_view(&mut f, Point::from((0.0, 0.0)), 1.0);
+    f.state()
+        .map_window(a.clone(), Point::from((3000, 2000)), false);
+
+    park_view(&mut f, Point::from((0.0, 0.0)), 0.6);
+    center_window_and_settle(&mut f, &a);
+
+    assert!(
+        (f.state().zoom() - 1.0).abs() < 1e-9,
+        "an ordinary center resets zoom to 1.0"
+    );
+    assert_centered(&mut f, &a);
+}
+
+/// Every interactive move funnels through `clear_fill`, which takes the stored
+/// view with it — the window no longer sits in the framing it describes.
+#[test]
+fn a_move_drops_the_stored_fill_view() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, _fill_camera, _fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+    assert!(
+        !f.state().stage.is_fill(&a),
+        "precondition: the move cleared fill membership"
+    );
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    assert!((f.state().zoom() - 1.0).abs() < 1e-9);
+    assert_centered(&mut f, &a);
+}
+
+/// A panel taking an exclusive zone changes the usable area's aspect ratio, so
+/// the stored rect no longer inverts to a view that shows it — fall back to
+/// plain centering rather than jumping to a framing that no longer holds.
+#[test]
+fn a_usable_area_change_falls_back_to_centering() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, _fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+    let filled_loc = f.state().stage.position_of(&a).unwrap();
+
+    map_top_panel(&mut f, id, 100);
+    assert_eq!(
+        f.state().get_usable_area().size,
+        Size::from((1920, 980)),
+        "precondition: the panel shrank the usable area"
+    );
+    assert!(
+        f.state().stage.is_fill(&a),
+        "precondition: the window is still filled"
+    );
+    // Pins which guard does the rejecting: if the layer arrange ever nudged the
+    // window, `filled_at` would reject first and this would silently stop
+    // exercising the aspect check while still passing.
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(filled_loc),
+        "precondition: the arrange left the window where the fill did"
+    );
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() > 1.0 || (camera.y - fill_camera.y).abs() > 1.0,
+        "the stale framing must not be restored: {camera:?} vs {fill_camera:?}"
+    );
+    assert_centered(&mut f, &a);
+}
+
+/// A directional step centers a filled window like any other, deliberately:
+/// `center-nearest` is the one navigation that preserves the user's zoom, and a
+/// restore would make one filled window's zoom stick to every later step of the
+/// traversal.
+#[test]
+fn center_nearest_still_centers_a_filled_window() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, _fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+    let b = window_by_app_id(&mut f, "b").unwrap();
+
+    // Off the fill view at a zoom it never ran at, but with the left-edge
+    // neighbor still fully on screen — below that it stops qualifying as the
+    // directional search's anchor and the step starts from the viewport center.
+    park_view(&mut f, Point::from((-100.0, -50.0)), 0.8);
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&b, serial);
+    f.state()
+        .execute_action(&Action::CenterNearest(Direction::Right));
+    settle(&mut f);
+
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() > 1.0 || (camera.y - fill_camera.y).abs() > 1.0,
+        "the fill's framing is not what a directional step lands on: \
+         {camera:?} vs {fill_camera:?}"
+    );
+    assert!(
+        (f.state().zoom() - 0.8).abs() < 1e-9,
+        "and the zoom it started from is untouched: {}",
+        f.state().zoom()
+    );
+    assert_centered(&mut f, &a);
+}
+
+/// Fill membership legitimately survives a couple of paths that move the window
+/// (the fullscreen restore floor, the `pending_recenter` settle). The stored
+/// framing describes where the window used to be, so the restore rejects on
+/// position and centers instead — otherwise the camera lands somewhere the
+/// window no longer is.
+#[test]
+fn a_moved_but_still_filled_window_falls_back_to_centering() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, _fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    // Relocate on the stage directly, as the fullscreen restore floor does —
+    // no `clear_fill` on that path.
+    let filled_loc = f.state().stage.position_of(&a).unwrap();
+    f.state()
+        .map_window(a.clone(), filled_loc + Point::from((300, 200)), false);
+    assert!(
+        f.state().stage.is_fill(&a),
+        "precondition: fill membership survived the move"
+    );
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() > 1.0 || (camera.y - fill_camera.y).abs() > 1.0,
+        "the framing the window has left must not be restored: {camera:?} vs {fill_camera:?}"
+    );
+    assert_centered(&mut f, &a);
+}
+
+/// The viewport rect is the usable area of the output it was measured against,
+/// and nothing else. Inverted through a second, identically-sized monitor it
+/// yields a camera for a viewport nobody looked through — and the aspect check
+/// passes by construction, so only the recorded output name can reject it.
+#[test]
+fn a_fill_recorded_on_another_output_does_not_restore() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, _fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    // Same size on purpose: identical shape is exactly the case shape alone
+    // cannot tell apart.
+    let out2 = f.add_output(2, (1920, 1080));
+    assert!(
+        f.state().stage.is_fill(&a),
+        "precondition: the second monitor left fill membership alone"
+    );
+    f.state().focused_output = Some(out2);
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &a);
+
+    let camera = f.state().camera();
+    assert!(
+        (camera.x - fill_camera.x).abs() > 1.0 || (camera.y - fill_camera.y).abs() > 1.0,
+        "another output's framing must not be replayed here: {camera:?} vs {fill_camera:?}"
+    );
+    assert_centered(&mut f, &a);
+}
+
+/// `focus-center` frames whatever is under the pointer, so it hits filled
+/// windows for the same reason `center-window` does — resetting to zoom 1.0
+/// would leave one filled at a lower zoom overflowing the screen.
+#[test]
+fn focus_center_restores_a_filled_windows_view() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    // Pan off the fill view but not off the window, so the pointer can still
+    // rest on it the way `focus-center` requires.
+    park_view(&mut f, fill_camera + Point::from((300.0, 200.0)), fill_zoom);
+    let loc = f.state().stage.position_of(&a).unwrap();
+    let size = a.geometry().size;
+    f.state().warp_pointer(Point::from((
+        loc.x as f64 + size.w as f64 / 2.0,
+        loc.y as f64 + size.h as f64 / 2.0,
+    )));
+    f.state().execute_action(&Action::FocusCenter);
+    settle(&mut f);
+
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "focus-center returned to the view the fill ran in: {camera:?} vs {fill_camera:?}"
+    );
+    assert!((zoom - fill_zoom).abs() < 1e-9, "and so did the zoom");
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "which is a different view from centering it: {center:?} vs {vc:?}"
+    );
+}
+
+/// A pick is by definition below `zoom_interact_min`, so it always re-frames
+/// from zoomed out — the case where snapping back to 1.0 leaves a window filled
+/// at a lower zoom hanging off the screen.
+#[test]
+fn a_pick_restores_a_filled_windows_view() {
+    let mut config = Config::default();
+    config.zoom_interact_min = 0.5;
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+    let filled_loc = f.state().stage.position_of(&a).unwrap();
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 0.3);
+    let press = Point::from((filled_loc.x as f64 + 10.0, filled_loc.y as f64 + 10.0));
+    f.state()
+        .arm_pick(crate::state::PickTarget::Client(a.clone()), press, BTN_LEFT);
+    f.state().resolve_pick(BTN_LEFT);
+    settle(&mut f);
+
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "the pick returned to the view the fill ran in: {camera:?} vs {fill_camera:?}"
+    );
+    assert!(
+        (zoom - fill_zoom).abs() < 1e-9,
+        "carrying the viewport back above the threshold at the fill's own zoom"
+    );
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "which is a different view from centering it: {center:?} vs {vc:?}"
+    );
+}
+
+/// Nothing stops `fill-window` from running below `zoom_interact_min`, and that
+/// view is one no click can reach through. Restoring it would land the pick back
+/// in pick mode — the click still not reaching the client, and the next click on
+/// the same window replaying the same view — so the pick resets instead.
+#[test]
+fn a_pick_onto_a_sub_threshold_fill_still_leaves_pick_mode() {
+    let mut config = Config::default();
+    config.zoom_interact_min = 0.8;
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "fill", (800, 600));
+    let window = window_by_app_id(&mut f, "fill").unwrap();
+
+    // Fill at zoom 0.5, under the threshold. Even numbers keep the
+    // screen→canvas conversion exact, so the stored view is exactly 0.5.
+    park_view(&mut f, Point::from((5000.0, 5000.0)), 0.5);
+    f.state()
+        .map_window(window.clone(), Point::from((6000, 6000)), false);
+    f.state().toggle_fill_window(&window);
+    assert!(
+        f.state().stage.is_fill(&window),
+        "precondition: the fill ran"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 0.3);
+    let filled_loc = f.state().stage.position_of(&window).unwrap();
+    // Pins which guard does the rejecting: a lost fill or a `filled_at` mismatch
+    // would reject the restore before the threshold is ever consulted, and the
+    // assertion below would pass without exercising it.
+    assert_eq!(
+        f.state().stage.fill_saved(&window).map(|s| s.filled_at),
+        Some(filled_loc),
+        "precondition: the window is still filled, and where the fill put it"
+    );
+    let press = Point::from((filled_loc.x as f64 + 10.0, filled_loc.y as f64 + 10.0));
+    f.state().arm_pick(
+        crate::state::PickTarget::Client(window.clone()),
+        press,
+        BTN_LEFT,
+    );
+    f.state().resolve_pick(BTN_LEFT);
+    settle(&mut f);
+
+    assert!(
+        !f.state().pick_mode(),
+        "the pick carried the viewport back above zoom_interact_min: zoom {} vs {}",
+        f.state().zoom(),
+        f.state().config.zoom_interact_min
+    );
+    assert_centered(&mut f, &window);
+}
+
+/// The deferred touch center *is* `Action::CenterWindow` — the recognizer emits
+/// it only when the configured tap action is that, delayed past the double-tap
+/// window — so leaving it out would make one action behave two ways depending on
+/// the input device.
+#[test]
+fn the_deferred_touch_center_restores_a_filled_windows_view() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    let (a, _a_surface, fill_camera, fill_zoom) = fill_beside_left_neighbor(&mut f, id);
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    f.state()
+        .schedule_pending_center(a.clone(), std::time::Duration::from_millis(10));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    f.pump(5);
+    settle(&mut f);
+
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    assert!(
+        (camera.x - fill_camera.x).abs() < 1e-6 && (camera.y - fill_camera.y).abs() < 1e-6,
+        "the tap returned to the view the fill ran in: {camera:?} vs {fill_camera:?}"
+    );
+    assert!((zoom - fill_zoom).abs() < 1e-9, "and so did the zoom");
+    let center = center_screen_of(&mut f, &a, camera, zoom);
+    let vc = f.state().usable_center_screen();
+    assert!(
+        center.x - vc.x > 100.0,
+        "which is a different view from centering it: {center:?} vs {vc:?}"
     );
 }
 
@@ -1204,5 +3001,826 @@ fn background_window_fullscreen_configure_is_activated() {
     assert!(
         fs_line.contains("Activated"),
         "b's fullscreen configure must carry Activated, got:\n{configures}"
+    );
+}
+
+/// Fullscreen `surface`'s window, let the client adopt the viewport-sized
+/// buffer, then exit and never ack the restore configure — leaving the exit
+/// recenter registered and outstanding. Returns the surface's id, the
+/// `pending_recenter` key.
+fn owe_an_exit_recenter(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+    window: &smithay::desktop::Window,
+) -> smithay::reexports::wayland_server::backend::ObjectId {
+    f.client(id).window(surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, surface);
+    f.client(id).window(surface).unset_fullscreen();
+    f.double_roundtrip(id);
+
+    let key = super::server_surface(window).id();
+    assert!(
+        f.state().pending_recenter.contains_key(&key),
+        "precondition: the fullscreen exit left a recenter owed"
+    );
+    key
+}
+
+/// Two windows, both mid fullscreen-exit settle, and a placement action on one
+/// of them. Returns `(a, a_key, b_key)` — the action's target, its
+/// `pending_recenter` key, and the bystander's.
+///
+/// Every arm that establishes a new placement drops the target's owed recenter;
+/// none of them may reach the bystander's. A one-window scenario cannot tell
+/// "removed the right key" from "removed every key", and a wrong key is the
+/// whole hazard.
+fn two_owed_recenters(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+) -> (
+    smithay::desktop::Window,
+    smithay::reexports::wayland_server::backend::ObjectId,
+    smithay::reexports::wayland_server::backend::ObjectId,
+) {
+    let a_surface = map_settled(f, id, "a", (400, 300));
+    let b_surface = map_settled(f, id, "b", (400, 300));
+    let a = window_by_app_id(f, "a").unwrap();
+    let b = window_by_app_id(f, "b").unwrap();
+
+    let a_key = owe_an_exit_recenter(f, id, &a_surface, &a);
+    let b_key = owe_an_exit_recenter(f, id, &b_surface, &b);
+    assert!(
+        f.state().pending_recenter.contains_key(&a_key),
+        "precondition: a's entry survived b's fullscreen round-trip"
+    );
+
+    // Park them apart and pin the camera, so the placement actions below have
+    // room to work with and neither window obstructs the other.
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state().map_window(a.clone(), Point::from((0, 0)), false);
+    f.state()
+        .map_window(b.clone(), Point::from((4000, 4000)), false);
+    (a, a_key, b_key)
+}
+
+/// A fit establishes its own placement, so it drops the recenter its window
+/// owes — and only that window's.
+#[test]
+fn fit_drops_the_fitted_windows_owed_recenter_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    // Fullscreen and fit move the camera, which seeds a per-output blur
+    // generation that only clears on output disconnect.
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+    let (a, a_key, b_key) = two_owed_recenters(&mut f, id);
+
+    f.state().fit_window(&a);
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&a_key),
+        "the fit dropped the recenter that would have yanked it off the fit"
+    );
+    assert!(
+        f.state().pending_recenter.contains_key(&b_key),
+        "the other window's owed recenter is none of the fit's business"
+    );
+}
+
+/// A fill places the window absolutely, so it drops the recenter its window
+/// owes — and only that window's.
+#[test]
+fn fill_drops_the_filled_windows_owed_recenter_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+    let (a, a_key, b_key) = two_owed_recenters(&mut f, id);
+
+    f.state().fill_window(&a);
+    assert!(f.state().stage.is_fill(&a), "precondition: the fill ran");
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&a_key),
+        "the fill dropped the recenter that would have dragged it off the fill"
+    );
+    assert!(
+        f.state().pending_recenter.contains_key(&b_key),
+        "the other window's owed recenter is none of the fill's business"
+    );
+}
+
+/// A nudge is the window's new position, so it drops the recenter that would
+/// undo it — and only that window's.
+#[test]
+fn nudge_drops_the_nudged_windows_owed_recenter_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+    let (a, a_key, b_key) = two_owed_recenters(&mut f, id);
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state()
+        .execute_action(&Action::NudgeWindow(Direction::Right));
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&a_key),
+        "the nudge dropped the recenter that would have undone it"
+    );
+    assert!(
+        f.state().pending_recenter.contains_key(&b_key),
+        "the other window's owed recenter is none of the nudge's business"
+    );
+}
+
+/// A bookmark move asks for a visual center, so instead of dropping the
+/// recenter its window owes it re-aims it at the bookmark — and touches no
+/// other window's.
+#[test]
+fn move_to_bookmark_reaims_the_moved_windows_owed_recenter_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+    let (a, a_key, b_key) = two_owed_recenters(&mut f, id);
+
+    let b_center = f.state().pending_recenter[&b_key].target_center;
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state().bookmarks.insert("b".into(), [300.0, -200.0]);
+    f.state()
+        .execute_action(&Action::MoveToBookmark("b".into()));
+
+    assert_eq!(
+        f.state()
+            .pending_recenter
+            .get(&a_key)
+            .map(|p| p.target_center),
+        Some(Point::from((300.0, 200.0))),
+        "the bookmark move re-aimed the owed recenter at the bookmark"
+    );
+    assert_eq!(
+        f.state()
+            .pending_recenter
+            .get(&b_key)
+            .map(|p| p.target_center),
+        Some(b_center),
+        "the other window's owed recenter is none of the bookmark move's business"
+    );
+}
+
+/// Pinning decides where the window lives from now on, so it drops the recenter
+/// that would re-place it afterwards — and only that window's.
+#[test]
+fn pin_toggle_drops_the_pinned_windows_owed_recenter_alone() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+    let (a, a_key, b_key) = two_owed_recenters(&mut f, id);
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state().execute_action(&Action::TogglePinToScreen);
+    assert!(f.state().is_pinned(&a), "precondition: the pin took");
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&a_key),
+        "the pin dropped the recenter that would have re-placed the window"
+    );
+    assert!(
+        f.state().pending_recenter.contains_key(&b_key),
+        "the other window's owed recenter is none of the pin's business"
+    );
+}
+
+/// Fit `surface`'s window, let the client adopt the fit-sized buffer, then unfit
+/// and never ack the restore configure — the fit-exit twin of
+/// [`owe_an_exit_recenter`]. Returns the `pending_recenter` key.
+fn owe_a_fit_exit_recenter(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+    window: &smithay::desktop::Window,
+) -> smithay::reexports::wayland_server::backend::ObjectId {
+    f.state().fit_window(window);
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, surface);
+    f.state().unfit_window(window);
+    f.double_roundtrip(id);
+
+    let key = super::server_surface(window).id();
+    assert!(
+        f.state().pending_recenter.contains_key(&key),
+        "precondition: the fit exit left a recenter owed"
+    );
+    key
+}
+
+/// Fill `surface`'s window, let the client adopt the filled buffer, then unfill
+/// and never ack the restore configure. Returns the `pending_recenter` key.
+fn owe_a_fill_exit_recenter(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+    window: &smithay::desktop::Window,
+) -> smithay::reexports::wayland_server::backend::ObjectId {
+    f.state().fill_window(window);
+    assert!(
+        f.state().stage.is_fill(window),
+        "precondition: the fill was not a no-op"
+    );
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, surface);
+    f.state().unfill_window(window);
+    f.double_roundtrip(id);
+
+    let key = super::server_surface(window).id();
+    assert!(
+        f.state().pending_recenter.contains_key(&key),
+        "precondition: the fill exit left a recenter owed"
+    );
+    key
+}
+
+/// The canvas location a window-rule point maps to for a window of content
+/// `size` wearing `chrome` — what the settle must land on. Derived straight from
+/// the rule convention rather than through the center formula the settle itself
+/// runs, so a bar term dropped or flipped on the way into `target_center` shows
+/// up here as a half-bar offset instead of cancelling out. Exact for the even
+/// sizes used below; an odd one would part company with the settle by the
+/// truncation `map_window_to_rule_point` documents.
+fn rule_point_loc(x: i32, y: i32, size: Size<i32, Logical>, chrome: Chrome) -> Point<i32, Logical> {
+    driftwm::canvas::rule_to_content(x, y, size, chrome)
+}
+
+/// Ack the outstanding restore configure and then commit a buffer at a size of
+/// the client's own choosing, which is its right — the only settle that can tell
+/// a recenter re-aimed at the request from one merely dropped, since any size the
+/// compositor could have guessed at placement time is the one it configured.
+fn settle_at(
+    f: &mut Fixture,
+    id: super::client::ClientId,
+    surface: &wayland_client::protocol::wl_surface::WlSurface,
+    size: (u16, u16),
+) {
+    f.client(id).window(surface).ack_last();
+    let window = f.client(id).window(surface);
+    window.set_size(size.0, size.1);
+    window.attach_new_buffer();
+    window.commit();
+    f.double_roundtrip(id);
+}
+
+/// `msg move` dispatched while a window is still settling out of a fullscreen
+/// exit must land it on the requested point once the client resizes. Its
+/// committed buffer is still viewport-sized, so placing against that size lands
+/// it half the size delta away on each axis; the owed recenter is re-aimed at
+/// the request rather than dropped, so the settle corrects it.
+#[test]
+fn ipc_move_mid_fullscreen_exit_settle_lands_where_asked() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let key = owe_an_exit_recenter(&mut f, id, &a_surface, &a);
+    assert_eq!(
+        a.geometry().size,
+        Size::from((1920, 1080)),
+        "precondition: the client still commits the fullscreen buffer"
+    );
+
+    let ipc_id = f.state().stage.id_of(&a).unwrap().0;
+    let reply = crate::ipc::dispatch(
+        Request::Move {
+            window: Some(WindowSelector::Id(ipc_id)),
+            to: Some((1000, -500)),
+        },
+        f.state(),
+    );
+    assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((400, 300)),
+            Chrome::NONE
+        )),
+        "the provisional placement already uses the size the exit configured, \
+         not the fullscreen buffer the client is still committing"
+    );
+
+    // The client settles at a size of its own choosing, not the 400x300 the
+    // restore configure asked for.
+    settle_at(&mut f, id, &a_surface, (700, 500));
+    assert_eq!(
+        a.geometry().size,
+        Size::from((700, 500)),
+        "precondition: the settle ran against the client's own size"
+    );
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&key),
+        "the settle consumed the re-aimed recenter"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
+        "the window landed on the point msg move asked for"
+    );
+}
+
+/// Once the settle is done nothing is owed, and it's the size the exit
+/// configured that is stale: a client that settled at a size of its own is
+/// described only by its committed geometry. Placing against the configured size
+/// here would miss by half their difference with no settle left to correct it.
+#[test]
+fn ipc_move_after_a_client_chosen_settle_uses_committed_size() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let key = owe_an_exit_recenter(&mut f, id, &a_surface, &a);
+    settle_at(&mut f, id, &a_surface, (700, 500));
+    assert!(
+        !f.state().pending_recenter.contains_key(&key),
+        "precondition: the settle completed, so nothing is owed"
+    );
+    assert_eq!(
+        a.geometry().size,
+        Size::from((700, 500)),
+        "precondition: the client kept its own size over the configured 400x300"
+    );
+
+    let ipc_id = f.state().stage.id_of(&a).unwrap().0;
+    let reply = crate::ipc::dispatch(
+        Request::Move {
+            window: Some(WindowSelector::Id(ipc_id)),
+            to: Some((1000, -500)),
+        },
+        f.state(),
+    );
+    assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
+
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
+        "the move centered the window on the size it actually committed"
+    );
+}
+
+/// The same mid-settle placement with an SSD title bar. A rule point names the
+/// *visual frame's* center, so the settle has to land the content half a bar
+/// below it — carry the bar into the re-aimed center or drop it from the
+/// location, and the window sits half a bar off.
+#[test]
+fn ipc_move_mid_settle_lands_where_asked_with_ssd() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    super::give_ssd(&mut f, &a);
+    let bar = f.state().window_ssd_bar(&a);
+    assert!(bar > 0, "precondition: the window carries a title bar");
+
+    owe_an_exit_recenter(&mut f, id, &a_surface, &a);
+
+    let ipc_id = f.state().stage.id_of(&a).unwrap().0;
+    let reply = crate::ipc::dispatch(
+        Request::Move {
+            window: Some(WindowSelector::Id(ipc_id)),
+            to: Some((1000, -500)),
+        },
+        f.state(),
+    );
+    assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
+    settle_at(&mut f, id, &a_surface, (700, 500));
+
+    let chrome = f.state().element_chrome(&a);
+    assert_eq!(
+        chrome.bar, bar,
+        "the settle used the same bar this test read"
+    );
+    let expected = rule_point_loc(1000, -500, Size::from((700, 500)), chrome);
+    let landed = f.state().stage.position_of(&a).unwrap();
+    assert_eq!(landed.x, expected.x);
+    // The frame is 525 tall here, so its center sits on a half pixel and the
+    // settle's truncation can land one above the direct map — the residual
+    // `map_window_to_rule_point` documents. Dropping the bar would be twelve.
+    assert!(
+        (landed.y - expected.y).abs() <= 1,
+        "landed {landed:?}, the direct map says {expected:?}"
+    );
+}
+
+/// The bookmark binding mid fit-exit settle: a fit exit needs the same recenter
+/// compensation a fullscreen exit gets, or the window lands against the
+/// still-committed fit size with no recenter left to correct it.
+#[test]
+fn move_to_bookmark_mid_fit_exit_settle_lands_where_asked() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let key = owe_a_fit_exit_recenter(&mut f, id, &a_surface, &a);
+    assert_ne!(
+        a.geometry().size,
+        Size::from((400, 300)),
+        "precondition: the client still commits the fit-sized buffer"
+    );
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state().bookmarks.insert("b".into(), [1000.0, -500.0]);
+    f.state()
+        .execute_action(&Action::MoveToBookmark("b".into()));
+
+    settle_at(&mut f, id, &a_surface, (700, 500));
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&key),
+        "the settle consumed the re-aimed recenter"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
+        "the window landed on the bookmark it was moved to"
+    );
+}
+
+/// The bookmark binding mid fill-exit settle — the other exit the
+/// fullscreen-only compensation never covered.
+#[test]
+fn move_to_bookmark_mid_fill_exit_settle_lands_where_asked() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    let key = owe_a_fill_exit_recenter(&mut f, id, &a_surface, &a);
+    assert_ne!(
+        a.geometry().size,
+        Size::from((400, 300)),
+        "precondition: the client still commits the filled buffer"
+    );
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state().bookmarks.insert("b".into(), [1000.0, -500.0]);
+    f.state()
+        .execute_action(&Action::MoveToBookmark("b".into()));
+
+    settle_at(&mut f, id, &a_surface, (700, 500));
+
+    assert!(
+        !f.state().pending_recenter.contains_key(&key),
+        "the settle consumed the re-aimed recenter"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        Some(rule_point_loc(
+            1000,
+            -500,
+            Size::from((700, 500)),
+            Chrome::NONE
+        )),
+        "the window landed on the bookmark it was moved to"
+    );
+}
+
+/// A move re-anchors the window, so it invalidates the restore point a fill
+/// saved — an unfill afterwards would otherwise yank it back to where it was
+/// filled from.
+#[test]
+fn ipc_move_clears_the_fill_restore_point() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state().fill_window(&a);
+    assert!(f.state().stage.is_fill(&a), "precondition: the fill took");
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+
+    let ipc_id = f.state().stage.id_of(&a).unwrap().0;
+    let reply = crate::ipc::dispatch(
+        Request::Move {
+            window: Some(WindowSelector::Id(ipc_id)),
+            to: Some((1000, -500)),
+        },
+        f.state(),
+    );
+    assert!(matches!(reply, Ok(Response::Position { x: 1000, y: -500 })));
+    assert!(
+        !f.state().stage.is_fill(&a),
+        "the move dropped the fill restore point it invalidated"
+    );
+}
+
+/// A screen-pinned or fullscreen window has no canvas position, so `msg move`
+/// refuses to write one rather than silently no-op'ing or displacing the park.
+#[test]
+fn ipc_move_refuses_pinned_and_fullscreen_windows() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    let a_surface = map_settled(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state().set_camera(Point::from((0.0, 0.0)));
+    f.state()
+        .map_window(a.clone(), Point::from((100, 100)), false);
+    let ipc_id = f.state().stage.id_of(&a).unwrap().0;
+    let move_it = |f: &mut Fixture| {
+        crate::ipc::dispatch(
+            Request::Move {
+                window: Some(WindowSelector::Id(ipc_id)),
+                to: Some((1000, -500)),
+            },
+            f.state(),
+        )
+    };
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.state().execute_action(&Action::TogglePinToScreen);
+    assert!(f.state().is_pinned(&a), "precondition: the pin took");
+    assert!(move_it(&mut f).is_err(), "a pinned window refuses the move");
+
+    f.state().execute_action(&Action::TogglePinToScreen);
+    let cw = f.client(id).window(&a_surface);
+    cw.set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &a_surface);
+    assert!(
+        f.state().stage.is_fullscreen(&a),
+        "precondition: fullscreen"
+    );
+    let parked = f.state().stage.position_of(&a);
+
+    assert!(
+        move_it(&mut f).is_err(),
+        "a fullscreen window refuses the move"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&a),
+        parked,
+        "and stays parked at its camera origin"
+    );
+}
+
+/// A panel that destroys its layer role and takes a fresh one on the same
+/// `wl_surface` gets an initial configure for the new role. Left in the output's
+/// map, the dead role is what the recreate's first commit finds — lookups match
+/// by `wl_surface` in map order — so the configure goes out on the destroyed
+/// proxy while marking the shared attributes as configured, and the client waits
+/// forever for a size it will never hear.
+#[test]
+fn a_recreated_layer_role_gets_its_own_initial_configure() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    let surface = layer.surface.clone();
+    // Unanchored, so the compositor can't derive a size from anchor edges: every
+    // commit needs a non-zero requested size or smithay kills the client.
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // The destroy wipes the role's cached state, so the size has to be
+    // requested again before this commit.
+    let layer =
+        f.client(id)
+            .recreate_layer(&surface, None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    let configures = f.client(id).layer(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 400 × 300"),
+        "the recreated role must be configured in its own right, got:\n{configures}"
+    );
+    assert_eq!(
+        f.state().layers_on_sorted(&output, Layer::Overlay).len(),
+        1,
+        "and the dead role must not linger in the map, where it would still \
+         claim an exclusive zone and sit above the live one for focus"
+    );
+}
+
+/// An orphaned commit that also attaches a buffer hits smithay's
+/// ack-before-attach check on the destroyed role (see
+/// `dev/docs/smithay-api.md`'s Layer Shell section) — an OSD re-arming
+/// (destroy + recreate the role on the same `wl_surface`) commits a buffer
+/// in between and used to get killed.
+///
+/// Without the fix, this doesn't fail on a caught protocol error —
+/// `post_error` on a destroyed proxy is never serialized (its id is already
+/// gone from the wire's object map), so the client only sees the socket EOF.
+/// That surfaces as `Client::dispatch`'s `self.event_loop.dispatch(...)
+/// .unwrap()` (`src/tests/client.rs:359-362`) panicking with a bare
+/// `Broken pipe (os error 32)` — not a `protocol_error()`, which maps
+/// `Io(_)` to `None` and so never sees it either way. Don't assert on it.
+#[test]
+fn an_orphaned_layer_commit_with_a_buffer_does_not_kill_the_client() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    let surface = layer.surface.clone();
+    // Unanchored, so the compositor can't derive a size from anchor edges: every
+    // commit needs a non-zero requested size or smithay kills the client.
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // Destroy the role but leave the wl_surface alive, as an OSD re-arming does.
+    f.client(id).layer(&surface).layer_surface.destroy();
+    f.double_roundtrip(id);
+
+    // An orphaned commit that also attaches a buffer — no live role to ack or
+    // configure it.
+    let layer = f.client(id).layer(&surface);
+    layer.attach_new_buffer();
+    layer.commit();
+    f.double_roundtrip(id);
+
+    // The client survives: map an unrelated plain toplevel afterwards and
+    // confirm it actually reaches the compositor, not just that the call
+    // returned.
+    map_settled(&mut f, id, "still-alive", (400, 300));
+    assert!(
+        window_by_app_id(&mut f, "still-alive").is_some(),
+        "the client must survive the orphaned buffered commit"
+    );
+}
+
+/// The buffer-stripping fix above has its own poison: `LayerSurfaceCachedState`
+/// never resets `pending` on commit, so the full anchors our hook writes to
+/// neutralise the orphaned commit survive into the *next* role taken on the
+/// same `wl_surface`. Anchored on all four edges, the recreated role would be
+/// sized to the whole output regardless of what it requests — an OSD re-arming
+/// would survive the crash only to render fullscreen. The fix must reset the
+/// anchor when the new role is taken.
+#[test]
+fn a_role_recreated_after_an_orphaned_buffered_commit_is_not_poisoned_to_full_output_size() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    let surface = layer.surface.clone();
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // Destroy the role, then an orphaned commit that attaches a buffer — this
+    // is what writes the full anchors into the shared cached state.
+    f.client(id).layer(&surface).layer_surface.destroy();
+    f.double_roundtrip(id);
+    let layer = f.client(id).layer(&surface);
+    layer.attach_new_buffer();
+    layer.commit();
+    f.double_roundtrip(id);
+
+    // Recreate the role on the same wl_surface and request a small size again,
+    // as the destroy wipes the role's own cached state either way.
+    // (recreate_layer opens by destroying the proxy it tracks — already dead
+    // from the destroy above, so that call is inert; it is not a second
+    // destroy the compositor sees.)
+    let layer =
+        f.client(id)
+            .recreate_layer(&surface, None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+
+    let configures = f.client(id).layer(&surface).format_recent_configures();
+    assert!(
+        configures.contains("size: 400 × 300"),
+        "the recreated role must be configured at its own requested size, got:\n{configures}"
+    );
+    assert!(
+        !configures.contains("1920 × 1080"),
+        "not resurrected full anchors sizing it to the whole output, got:\n{configures}"
+    );
+}
+
+/// A layer surface that arrives with no output to host it is closed, not
+/// dropped. The role stays live either way, so a client that hears nothing sits
+/// on a surface it must not commit to and waits on a configure that is never
+/// coming; `closed` is the only thing that lets it retry or exit.
+#[test]
+fn a_layer_surface_with_no_output_is_closed() {
+    let mut f = Fixture::new();
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "panel");
+    let surface = layer.surface.clone();
+    f.double_roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    assert!(
+        layer.close_requested,
+        "an unhostable layer surface must be told to close"
+    );
+    assert!(
+        layer.configures_received.is_empty(),
+        "and must not be configured for an output it was never given"
     );
 }

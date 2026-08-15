@@ -67,6 +67,9 @@ pub fn init_winit(
         data.render.blur_down_shader = blur_down;
         data.render.blur_up_shader = blur_up;
         data.render.blur_mask_shader = blur_mask;
+        // The blur's wrap mode is a property of the GL context, and this is a
+        // new one.
+        data.render.blur_wrap_mode = None;
         data.backend = Some(backend);
     }
 
@@ -144,6 +147,7 @@ pub fn init_winit(
             });
 
             if stop {
+                data.session_store_cancel_debounce();
                 data.loop_signal.stop();
                 return TimeoutAction::Drop;
             }
@@ -170,6 +174,11 @@ pub fn init_winit(
 
             // --- Edge auto-pan (window drag near viewport edges) ---
             data.apply_edge_pan();
+
+            // Winit has one output; udev's per-output tick calls this per output instead.
+            if let Some(animated) = data.active_output() {
+                data.disarm_view_flight_on_fullscreen(&animated);
+            }
 
             // --- Zoom animation (before camera so recomputed target is used) ---
             data.apply_zoom_animation(dt);

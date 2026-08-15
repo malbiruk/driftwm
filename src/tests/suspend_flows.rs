@@ -986,10 +986,25 @@ fn suspend_clears_fill_state_through_adoption() {
     let (surface, target) = map_at(&mut f, id, "myapp", (400, 300), (200, 200));
     origin_view(&mut f);
 
-    // A filled window: a saved pre-fill rect on its stage entry.
-    f.state()
-        .stage
-        .set_fill(&target, Point::from((10, 10)), Size::from((100, 100)));
+    // A filled window: a saved pre-fill rect on its stage entry. The viewport
+    // rect is a non-degenerate stand-in — the conversion clears the whole field.
+    let loc = f.state().stage.position_of(&target).unwrap();
+    let output = f.state().active_output().expect("output").name();
+    f.state().stage.set_fill(
+        &target,
+        driftwm::stage::FillSaved {
+            pre_fill_position: Point::from((10, 10)),
+            pre_fill_size: Size::from((100, 100)),
+            viewport_bounds: driftwm::layout::snap::SnapRect {
+                x_low: 0.0,
+                x_high: 1920.0,
+                y_low: 0.0,
+                y_high: 1080.0,
+            },
+            viewport_output: output,
+            filled_at: loc,
+        },
+    );
     assert!(f.state().stage.is_fill(&target));
 
     // Client self-close converts under the flag; the conversion clears fill.
@@ -1041,7 +1056,12 @@ fn inventory_reports_suspended_and_focused_convention() {
         .find(|w| w.suspended)
         .expect("stand-in in inventory");
     assert_eq!(sus.app_id, "susapp");
-    assert_eq!(sus.size, [320, 240]);
+    let bar = f.state().suspended_chrome().bar;
+    assert_eq!(
+        sus.size,
+        [320, 240 + bar],
+        "the inventory reports the stand-in's visible frame, not its stored body"
+    );
     assert!(!sus.is_focused);
 
     // Focused: windows[0] and is_focused.

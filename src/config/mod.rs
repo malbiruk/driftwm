@@ -27,8 +27,8 @@ use defaults::{
 };
 use parse_helpers::{
     Warnings, clamp_warn, collect_warn, non_negative, parse_backend_config,
-    parse_decoration_config, parse_effects_config, parse_output_outline, parse_output_rule,
-    parse_window_rule, positive_or_default,
+    parse_decoration_config, parse_effects_config, parse_focus_placement, parse_output_outline,
+    parse_output_rule, parse_window_rule, positive_or_default,
 };
 use toml::{ConfigFile, expand_tilde};
 
@@ -137,9 +137,9 @@ pub struct SessionConfig {
     /// leaves a suspended window behind instead of destroying the window.
     /// Overridable per window rule. Read at close time, so hot-reload applies.
     pub suspend_on_close: bool,
-    /// When true, eligible windows are serialized on graceful shutdown (keybind
-    /// quit or SIGTERM/SIGHUP) and materialized as suspended windows on the next
-    /// launch. Read at use, so hot-reload applies.
+    /// When true, eligible windows are serialized into the rolling durable save
+    /// and materialized as suspended windows on the next launch. Read at use, so
+    /// hot-reload applies.
     pub restore_windows: bool,
     /// When true, each output's camera and zoom are seeded from the durable
     /// session on the next launch. Read at load time, so a mid-session flip
@@ -167,6 +167,8 @@ pub struct Config {
     pub drift: f64,
     /// Pixels per keyboard nudge (Mod+Shift+Arrow).
     pub nudge_step: i32,
+    /// Pixels per grow-window / shrink-window step (no default binding).
+    pub resize_step: i32,
     /// Pixels per keyboard pan (Mod+Ctrl+Arrow).
     pub pan_step: f64,
     /// Keyboard repeat delay (ms) and rate (keys/sec).
@@ -254,6 +256,7 @@ pub struct Config {
     pub xwayland_enabled: bool,
     pub xwayland_path: String,
     pub window_placement: WindowPlacement,
+    pub focus_placement: FocusPlacement,
     pub env: HashMap<String, String>,
     /// Pre-merged env passed to spawned child processes via `Command::envs()`.
     /// Layers (later wins): toolkit defaults → XCURSOR_* → user `[env]`. Built
@@ -449,6 +452,20 @@ impl Config {
         (cfg, warnings)
     }
 
+    /// Validate the config file at `path` without applying it. `Err` is a hard
+    /// read or parse failure; `Ok` carries the non-fatal value warnings. A missing
+    /// file is not a failure: the compositor runs on built-in defaults.
+    pub fn check_from(path: &std::path::Path) -> Result<Vec<String>, String> {
+        let contents = match std::fs::read_to_string(path) {
+            Ok(contents) => contents,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(vec![]),
+            Err(e) => return Err(format!("config: failed to read {}: {e}", path.display())),
+        };
+        Self::from_toml_collect(&contents)
+            .map(|(_, warnings)| warnings)
+            .map_err(|e| format!("config error: {e}"))
+    }
+
     /// Build a Config from a parsed (but unvalidated) ConfigFile.
     /// Never touches process env — child env is built into `child_env` and
     /// applied via `Command::envs()` per spawn.
@@ -487,6 +504,17 @@ impl Config {
                 warn_and_collect!("config: unknown window_placement '{other}', using center");
                 WindowPlacement::Center
             }
+        };
+
+        let focus_placement = match raw.focus_placement.as_deref() {
+            None => FocusPlacement::Center,
+            Some(s) => match parse_focus_placement(s) {
+                Some(p) => p,
+                None => {
+                    warn_and_collect!("config: unknown focus_placement '{s}', using center");
+                    FocusPlacement::Center
+                }
+            },
         };
 
         let mut disable_keys = false;
@@ -768,6 +796,16 @@ impl Config {
                 // `"none"` means "use the libinput device default", same as unset.
                 click_method: t.click_method.clone().filter(|m| m.as_str() != "none"),
                 disable_while_typing: t.disable_while_typing.unwrap_or(true),
+                // `enable = false` wins: a trackpad the user turned off outright
+                // shouldn't come back the moment the mouse is unplugged.
+                send_events: match (
+                    t.enable.unwrap_or(true),
+                    t.disable_on_external_mouse.unwrap_or(false),
+                ) {
+                    (false, _) => SendEvents::Disabled,
+                    (true, true) => SendEvents::DisabledOnExternalMouse,
+                    (true, false) => SendEvents::Enabled,
+                },
             }
         };
 
@@ -1050,6 +1088,11 @@ impl Config {
                 "navigation.nudge_step",
                 &mut errors,
             ),
+            resize_step: non_negative(
+                raw.navigation.resize_step.unwrap_or(20),
+                "navigation.resize_step",
+                &mut errors,
+            ),
             pan_step: non_negative(
                 raw.navigation.pan_step.unwrap_or(100.0),
                 "navigation.pan_step",
@@ -1182,6 +1225,7 @@ impl Config {
             xwayland_enabled: raw.xwayland.enabled,
             xwayland_path: expand_tilde(&raw.xwayland.path),
             window_placement,
+            focus_placement,
             output_configs,
             bindings,
             tap_bindings,
@@ -1856,6 +1900,95 @@ mod tests {
     }
 
     #[test]
+    fn focus_placement_absent_defaults_to_center() {
+        let config = Config::from_toml("").unwrap();
+        assert_eq!(config.focus_placement, FocusPlacement::Center);
+    }
+
+    #[test]
+    fn focus_placement_top_level_all_variants_parse() {
+        let cases = [
+            ("center", FocusPlacement::Center),
+            ("top", FocusPlacement::Top),
+            ("bottom", FocusPlacement::Bottom),
+            ("left", FocusPlacement::Left),
+            ("right", FocusPlacement::Right),
+            ("top-left", FocusPlacement::TopLeft),
+            ("top-right", FocusPlacement::TopRight),
+            ("bottom-left", FocusPlacement::BottomLeft),
+            ("bottom-right", FocusPlacement::BottomRight),
+        ];
+        for (input, expected) in cases {
+            let toml_str = format!(r#"focus_placement = "{input}""#);
+            let config = Config::from_toml(&toml_str).unwrap();
+            assert_eq!(config.focus_placement, expected, "input: {input}");
+        }
+    }
+
+    #[test]
+    fn unknown_top_level_focus_placement_warns_and_falls_back_to_center() {
+        let toml_str = r#"focus_placement = "diagonal""#;
+        let (config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        assert_eq!(config.focus_placement, FocusPlacement::Center);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("focus_placement") && w.contains("diagonal")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
+    fn output_focus_placement_center_overrides_non_center_top_level() {
+        let toml_str = r#"
+            focus_placement = "top"
+
+            [[outputs]]
+            name = "eDP-1"
+            focus_placement = "center"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.focus_placement, FocusPlacement::Top);
+        assert_eq!(
+            config.output_configs[0].focus_placement,
+            Some(FocusPlacement::Center)
+        );
+    }
+
+    #[test]
+    fn output_focus_placement_absent_inherits_top_level() {
+        let toml_str = r#"
+            [[outputs]]
+            name = "eDP-1"
+        "#;
+        let config = Config::from_toml(toml_str).unwrap();
+        assert_eq!(config.output_configs[0].focus_placement, None);
+    }
+
+    #[test]
+    fn invalid_output_focus_placement_keeps_other_fields_and_warns() {
+        let toml_str = r#"
+            [[outputs]]
+            name = "eDP-1"
+            scale = 2.0
+            mode = "1920x1080"
+            focus_placement = "diagonal"
+        "#;
+        let (config, warnings) = Config::from_toml_collect(toml_str).unwrap();
+        assert_eq!(config.output_configs.len(), 1);
+        let oc = &config.output_configs[0];
+        assert_eq!(oc.scale, Some(2.0));
+        assert_eq!(oc.mode, OutputMode::Size(1920, 1080));
+        assert_eq!(oc.focus_placement, None);
+        assert!(
+            warnings
+                .iter()
+                .any(|w| w.contains("focus_placement") && w.contains("diagonal")),
+            "got: {warnings:?}"
+        );
+    }
+
+    #[test]
     fn remember_layout_per_window_parses_from_toml() {
         let toml_str = r#"
             [input.keyboard]
@@ -2522,5 +2655,81 @@ mod tests {
             !warnings.iter().any(|w| w.contains("will never fire")),
             "got: {warnings:?}"
         );
+    }
+
+    /// Self-cleaning unique temp directory (mirrors the helpers in
+    /// `desktop_entry` and `session`, which this module can't reach).
+    struct TempDir {
+        path: std::path::PathBuf,
+    }
+
+    impl TempDir {
+        fn new() -> Self {
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            static COUNTER: AtomicUsize = AtomicUsize::new(0);
+            let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let path = std::env::temp_dir().join(format!(
+                "driftwm-config-check-test-{}-{n}",
+                std::process::id()
+            ));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+    }
+
+    impl Drop for TempDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn check_from_missing_file_is_ok_with_no_warnings() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("does-not-exist.toml");
+        let warnings = Config::check_from(&path).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn check_from_malformed_toml_is_err() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("config.toml");
+        std::fs::write(&path, "this is not [ valid toml").unwrap();
+        assert!(Config::check_from(&path).is_err());
+    }
+
+    #[test]
+    fn check_from_unknown_top_level_key_is_err() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("config.toml");
+        // There is no `[general]` table; `deny_unknown_fields` rejects it.
+        std::fs::write(&path, "[general]\n").unwrap();
+        assert!(Config::check_from(&path).is_err());
+    }
+
+    #[test]
+    fn check_from_valid_config_is_ok_with_no_warnings() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("config.toml");
+        std::fs::write(&path, "mod_key = \"alt\"\nfocus_follows_mouse = true\n").unwrap();
+        let warnings = Config::check_from(&path).unwrap();
+        assert!(warnings.is_empty());
+    }
+
+    #[test]
+    fn check_from_unreadable_path_is_err() {
+        let tmp = TempDir::new();
+        // A directory reads as EISDIR, not NotFound — that is a hard failure.
+        assert!(Config::check_from(&tmp.path).is_err());
+    }
+
+    #[test]
+    fn check_from_bad_value_is_ok_with_warnings() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("config.toml");
+        std::fs::write(&path, "mod_key = \"bogus\"\n").unwrap();
+        let warnings = Config::check_from(&path).unwrap();
+        assert!(!warnings.is_empty());
     }
 }

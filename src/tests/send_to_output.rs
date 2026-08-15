@@ -1,8 +1,9 @@
 //! `send-to-output` relocates the focused window to the adjacent output with
 //! output-native semantics: a fullscreen window re-fullscreens on the target, a
 //! pinned window keeps its screen position (clamped) and rebinds its pin, and a
-//! normal window keeps the canvas-center placement. Outputs tile left-to-right
-//! by add order, so the second-added output sits to the right of the first.
+//! normal window lands on the target's `focus_placement` point. Outputs tile
+//! left-to-right by add order, so the second-added output sits to the right of
+//! the first.
 
 use smithay::utils::{Point, Size};
 
@@ -135,6 +136,56 @@ size = [320, 240]
     // x -> min(800, 800-320)=480, y -> min(420, 600-240)=360.
     assert_eq!(site.screen_pos, Point::from((480, 360)));
     assert!(f.state().is_pinned(&window));
+}
+
+/// The rehome clamp bounds the *visual frame*, so a server-decorated pin lands
+/// with its title bar and border on screen rather than pushed off the far edge.
+/// A window with no chrome clamps identically either way, so this needs a bar
+/// and a border to carry any signal at all.
+#[test]
+fn a_decorated_pin_rebinds_with_its_whole_frame_on_screen() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+border_width = 4
+
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+decoration = "server"
+size = [328, 289]
+"#,
+    ));
+    let _out1 = f.add_output(1, (1920, 1080));
+    let _out2 = f.add_output(2, (800, 600));
+    let id = f.add_client();
+
+    // The rule sizes the frame, so the client gets 328-2*4 by 289-25-2*4.
+    map_window(&mut f, id, "pin", (320, 240));
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+    let chrome = f.state().element_chrome(&window);
+    assert_eq!(
+        (chrome.bar, chrome.border),
+        (25, 4),
+        "precondition: the pin wears a bar and a border"
+    );
+
+    f.state()
+        .execute_action(&Action::SendToOutput(Direction::Right));
+
+    let site = f.state().stage.pin_of(&window).cloned().unwrap();
+    assert_eq!(site.output, "HEADLESS-2");
+    // The window still commits 320x240 (it has not acked the rule's configure),
+    // so its frame is 328x273 and the clamp parks that frame's bottom-right
+    // corner exactly on the target's far edge.
+    let frame = chrome.frame_loc(site.screen_pos);
+    assert_eq!(frame, Point::from((472, 327)));
+    let frame_size = chrome.frame_size(Size::from((320, 240)));
+    assert_eq!(
+        (frame.x + frame_size.w, frame.y + frame_size.h),
+        (800, 600),
+        "the whole frame stays inside the target output"
+    );
 }
 
 /// With a single output there's nowhere to send to, but the fullscreen guard
@@ -274,11 +325,15 @@ fn stand_in_moves_to_target_output() {
 
     let s = f.state().find_suspended(sid).unwrap();
     // out2's usable center in canvas coords: camera (5000,5000) + (640,360).
+    // It's the *visual frame* that centers, so the content sits half a title bar
+    // lower than the content-only center — the same convention every navigation
+    // and the new-window seed use.
+    let bar = f.state().config.decorations.title_bar_height;
     assert_eq!(
         f.state()
             .stage
             .position_of(&StageWindow::Suspended(s.clone())),
-        Some(Point::from((5440, 5210))),
+        Some(Point::from((5440, 5210 + bar / 2))),
         "the stand-in centers on the target output's usable area"
     );
     assert_eq!(

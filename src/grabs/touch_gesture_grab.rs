@@ -209,6 +209,7 @@ impl TouchGestureGrab {
             };
             let serial = SERIAL_COUNTER.next_serial();
             data.raise_and_focus(&window, serial);
+            data.arm_interactive_move(&window);
             handle.set_grab(self, data, seq, grab);
             return true;
         }
@@ -386,6 +387,11 @@ impl TouchGestureGrab {
     /// via `zoom_touch_speed`, clamp it, and re-anchor the camera at the screen
     /// anchor so the point under the fingers stays put.
     fn apply_zoom(&self, data: &mut DriftWm, scale: f64, anchor: Point<f64, Logical>) {
+        // Fullscreen locks the camera and zoom (see `set_camera_on`); a pinch
+        // that started before the fullscreen just goes inert.
+        if data.is_output_fullscreen(&self.output) {
+            return;
+        }
         let zoom = output_state(&self.output).zoom;
         let new_zoom = (zoom * (1.0 + (scale - 1.0) * data.config.zoom_touch_speed))
             .clamp(data.min_zoom(), canvas::MAX_ZOOM);
@@ -412,7 +418,19 @@ impl TouchGestureGrab {
         let (camera, zoom) = self.camera_zoom();
         let canvas = screen_to_canvas(ScreenPos(focus_at), camera, zoom).0;
         let serial = SERIAL_COUNTER.next_serial();
-        let under = data.element_under_raw(canvas).map(|(w, _)| w.clone());
+        // Pinned windows hit-test in screen space and the canvas walk skips
+        // them, so check them first. Unlike the move and resize siblings a
+        // pinned widget is not excluded: a tap only raises and focuses, and
+        // every other widget this function reaches gets the same treatment.
+        //
+        // `focus_at` is screen space against `self.output`, captured at grab
+        // start, while `pinned_element_under` filters pins by the *active*
+        // output. They agree because touch-down sets the active output to the
+        // one under the finger; a pointer motion to another output between the
+        // finger's down and up would break that.
+        let under = data
+            .pinned_element_under(focus_at)
+            .or_else(|| data.element_under_raw(canvas).map(|(w, _)| w.clone()));
         if let Some(window) = &under {
             data.raise_and_focus(window, serial);
         }

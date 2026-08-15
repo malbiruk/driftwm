@@ -112,6 +112,9 @@ pub struct ShaderChunkCache {
     /// LOD switch reveals a small viewport-bounded set once, so it gets the
     /// larger one-shot `LOD_SWITCH_BAKE_BUDGET` instead.
     last_target_lod: Option<u32>,
+    /// [`Self::shrink`] already ran for the current fullscreen session. The
+    /// caller fires it per frame, not once on entry.
+    shrunk: bool,
 }
 
 impl ShaderChunkCache {
@@ -137,7 +140,39 @@ impl ShaderChunkCache {
             pending: false,
             degraded: false,
             last_target_lod: None,
+            shrunk: false,
         }
+    }
+
+    /// Free the sharp per-LOD bakes while a fullscreen window occludes the
+    /// canvas, keeping the coarsest-LOD cover — that cover is the never-blank
+    /// floor (the role `fallback_texture` plays on the TIFF path), so the exit
+    /// frame draws a resident background and refines from it at `BAKE_BUDGET`
+    /// instead of baking a cold cache.
+    ///
+    /// Retaining bakes across fullscreen is only safe because `bake_px` is fixed
+    /// at construction from the output scale, and on udev every scale or
+    /// transform change routes through `RenderCache::remove_output`, which drops
+    /// the whole cache. The winit backend does not: its `Resized` arm installs a
+    /// new mode and fractional scale without dropping the cache, so a nested
+    /// session moved between displays of different DPI keeps a stale-resolution
+    /// cover.
+    pub fn shrink(&mut self) {
+        if self.shrunk {
+            return;
+        }
+        self.shrunk = true;
+        let coarsest = self.n_lods() - 1;
+        self.chunks.retain(|(lod, _, _), _| *lod == coarsest);
+        self.chunk_elements
+            .retain(|(lod, _, _), _| *lod == coarsest);
+        self.vram_bytes = retain_lod_meta(&mut self.chunk_meta, coarsest);
+        // Left true, this marks the output dirty every vblank for the whole
+        // fullscreen session — and nothing runs to clear it, since the bake
+        // loop that owns the flag is skipped while fullscreen.
+        self.pending = false;
+        // `last_target_lod` survives so the exit frame claims BAKE_BUDGET rather
+        // than the one-shot LOD_SWITCH_BAKE_BUDGET a cold cache would.
     }
 
     fn n_lods(&self) -> u32 {
@@ -288,6 +323,9 @@ impl ShaderChunkCache {
         #[cfg(feature = "profile-with-tracy")]
         let _span = tracy_client::span!("ShaderChunkCache::render_elements");
 
+        // Only reached on a frame that draws the canvas, so the next shrink has
+        // fresh work to do.
+        self.shrunk = false;
         self.frame_counter = self.frame_counter.wrapping_add(1);
         let frame = self.frame_counter;
 
@@ -471,6 +509,20 @@ impl ShaderChunkCache {
     }
 }
 
+/// Drop every chunk finer than `keep_lod` from `meta` and return the byte total
+/// of what stayed. Split out as a pure function so the recount is unit-testable
+/// without GLES. Recounting rather than zeroing is load-bearing: entries survive
+/// this, and a counter that under-reports them lets `evict_lru_to_budget`
+/// `saturating_sub` its way to a permanent floor of 0, after which the budget
+/// stops being enforced at all.
+pub(crate) fn retain_lod_meta(
+    meta: &mut HashMap<(u32, i32, i32), ChunkMeta>,
+    keep_lod: u32,
+) -> u64 {
+    meta.retain(|(lod, _, _), _| *lod == keep_lod);
+    meta.values().map(|m| m.bytes).sum()
+}
+
 /// Top-left canvas position of chunk `(cx, cy)` at a given chunk span.
 pub(crate) fn chunk_origin(cx: i32, cy: i32, chunk_canvas_size: i32) -> Point<i32, Logical> {
     Point::from((cx * chunk_canvas_size, cy * chunk_canvas_size))
@@ -560,5 +612,61 @@ mod tests {
     #[test]
     fn visible_zero_chunk_size() {
         assert!(visible_chunks(rect(0, 0, 100, 100), 0).is_empty());
+    }
+
+    fn meta(bytes: u64) -> ChunkMeta {
+        ChunkMeta {
+            bytes,
+            last_touched_frame: 0,
+        }
+    }
+
+    #[test]
+    fn retain_lod_meta_keeps_only_the_given_lod() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(100)),
+            ((1, 0, 0), meta(200)),
+            ((2, 0, 0), meta(300)),
+        ]
+        .into_iter()
+        .collect();
+        retain_lod_meta(&mut m, 2);
+        assert_eq!(m.keys().collect::<Vec<_>>(), vec![&(2, 0, 0)]);
+    }
+
+    #[test]
+    fn retain_lod_meta_returns_the_sum_of_what_survives() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = [
+            ((0, 0, 0), meta(100)),
+            ((2, 0, 0), meta(300)),
+            ((2, 1, 0), meta(50)),
+        ]
+        .into_iter()
+        .collect();
+        let total = retain_lod_meta(&mut m, 2);
+        assert_eq!(
+            total, 350,
+            "must be the sum of the surviving entries' bytes"
+        );
+        // The whole point: entries survive, so a zeroed counter would
+        // permanently under-report the cache and break budget enforcement.
+        assert_ne!(total, 0);
+    }
+
+    #[test]
+    fn retain_lod_meta_all_finer_than_keep_empties_the_map_and_returns_zero() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> =
+            [((0, 0, 0), meta(100)), ((1, 0, 0), meta(200))]
+                .into_iter()
+                .collect();
+        let total = retain_lod_meta(&mut m, 5);
+        assert_eq!(total, 0);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn retain_lod_meta_empty_map_returns_zero() {
+        let mut m: HashMap<(u32, i32, i32), ChunkMeta> = HashMap::new();
+        assert_eq!(retain_lod_meta(&mut m, 0), 0);
     }
 }

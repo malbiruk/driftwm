@@ -64,8 +64,14 @@ impl Server {
         // The per-iteration duties main.rs's run-closure performs, minus
         // rendering. `write_state_file_if_dirty` is intentionally not driven —
         // production only calls it from the render loops, and a test must
-        // never write $XDG_RUNTIME_DIR/driftwm/state.
+        // never write $XDG_RUNTIME_DIR/driftwm/state. Anything else added to
+        // that closure has to be mirrored here, or a pump stops standing in for
+        // a loop iteration and whatever was added goes untested.
         self.state.refresh_and_flush_clients();
+        // The deadline sweeps take an injected `now` and each scenario drives
+        // them itself; this one reads no clock, so a pump is the tick.
+        self.state.sweep_deferred_adoptions();
+        self.state.session_store_watch_cameras();
 
         // Every pump cross-checks stage/Space parity (debug builds only, which
         // includes test builds). A violation means some mutation bypassed the

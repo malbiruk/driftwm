@@ -14,14 +14,19 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-/// The current on-disk schema version. A file with any other version is treated
-/// as unreadable (quarantined), so a downgrade never misparses a newer schema.
-pub const VERSION: u32 = 1;
+/// The current on-disk schema version. A file from an *older* version is read
+/// and converted by the caller; anything else — a newer schema this build cannot
+/// know, or a garbled number — is quarantined, so a downgrade never misparses a
+/// file it would corrupt.
+pub const VERSION: u32 = 2;
+
+/// The oldest schema this build converts on read rather than quarantining.
+pub const MIN_READABLE_VERSION: u32 = 1;
 
 /// Why a durable entry exists, which decides whether it materializes on restore.
-/// `Explicit` (a live suspend) always comes back; `Quit` (serialized at
-/// graceful shutdown) only when `restore_windows` resolves on for its app — the
-/// global default, or a window rule keyed on the record's `app_id`.
+/// `Explicit` (a live suspend) always comes back; `Quit` (a window that was
+/// still open at the last save) only when `restore_windows` resolves on for its
+/// app — the global default, or a window rule keyed on the record's `app_id`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Origin {
@@ -29,8 +34,11 @@ pub enum Origin {
     Quit,
 }
 
-/// One saved window. `position` is in Y-up rule coordinates (window center),
-/// matching the window-rules / state-file convention.
+/// One saved window. `position` and `size` describe the stand-in's **visual
+/// frame** — body plus the title bar every stand-in wears, plus borders — with
+/// `position` its center in Y-up rule coordinates, matching the window-rules and
+/// state-file convention. Schema v1 stored the bare body instead; those entries
+/// are converted on read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEntry {
     pub id: u64,
@@ -42,7 +50,7 @@ pub struct SessionEntry {
     pub origin: Origin,
     /// Whether the suspended window's origin was client-decorated. Every
     /// stand-in is barred; a CSD origin shrank its body under the bar (this
-    /// entry's rect is that shrunken body) so adopt can reassemble the full
+    /// entry frames that shrunken body) so adopt can reassemble the full
     /// geometry. Additive: a file without this field defaults to `false`
     /// (SSD-origin).
     #[serde(default)]
@@ -103,11 +111,16 @@ pub fn default_session_path() -> Option<PathBuf> {
     Some(state_home.join("driftwm").join("session.json"))
 }
 
-/// Read and parse the session file. An unparseable file (or a version
-/// mismatch) is quarantined to `session.json.corrupt.<unix-ts>`, an unreadable
-/// one to `session.json.unreadable.<unix-ts>`; both return an empty envelope —
-/// a bad file never crashes startup and never silently overwrites a file a
-/// human might want to recover. A missing file is the normal fresh start.
+/// Read and parse the session file. An unparseable file (or a version outside
+/// `MIN_READABLE_VERSION..=VERSION`) is quarantined to
+/// `session.json.corrupt.<unix-ts>`, an unreadable one to
+/// `session.json.unreadable.<unix-ts>`; both return an empty envelope — a bad
+/// file never crashes startup and never silently overwrites a file a human might
+/// want to recover. A missing file is the normal fresh start.
+///
+/// An older-but-readable envelope comes back with its own `version` intact, so
+/// the caller can convert its entries before using them; quarantining those
+/// instead would silently drop every suspended window on upgrade.
 pub fn read(path: &Path) -> SessionEnvelope {
     let content = match std::fs::read_to_string(path) {
         Ok(content) => content,
@@ -124,7 +137,7 @@ pub fn read(path: &Path) -> SessionEnvelope {
         }
     };
     match serde_json::from_str::<SessionEnvelope>(&content) {
-        Ok(envelope) if envelope.version == VERSION => envelope,
+        Ok(envelope) if (MIN_READABLE_VERSION..=VERSION).contains(&envelope.version) => envelope,
         _ => {
             quarantine(path, "corrupt");
             SessionEnvelope::empty()
@@ -133,8 +146,8 @@ pub fn read(path: &Path) -> SessionEnvelope {
 }
 
 /// Atomically write the envelope: serialize to a sibling `.tmp`, then rename
-/// over the target. `fsync` flushes the file before the rename (the shutdown
-/// write); steady-state writes skip it to stay off the blocking path.
+/// over the target. `fsync` flushes the file before the rename, at the cost of
+/// blocking the caller.
 pub fn write(path: &Path, envelope: &SessionEnvelope, fsync: bool) -> std::io::Result<()> {
     use std::io::Write as _;
 

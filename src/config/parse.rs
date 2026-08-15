@@ -114,6 +114,20 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
             Ok(Action::NudgeWindow(dir))
         }
+        // Reached only from a keybinding: the mouse and gesture parsers match
+        // these as continuous actions before ever falling through here.
+        "resize-window" | "resize-window-snapped" => Err(format!(
+            "{name} is a drag action for mouse, gesture and touch bindings — on a keybinding use \
+             grow-window <dir> or shrink-window <dir>"
+        )),
+        "grow-window" => {
+            let dir = parse_direction(arg.ok_or("grow-window requires a direction")?)?;
+            Ok(Action::GrowWindow(dir))
+        }
+        "shrink-window" => {
+            let dir = parse_direction(arg.ok_or("shrink-window requires a direction")?)?;
+            Ok(Action::ShrinkWindow(dir))
+        }
         "pan-viewport" => {
             let dir = parse_direction(arg.ok_or("pan-viewport requires a direction")?)?;
             Ok(Action::PanViewport(dir))
@@ -191,6 +205,20 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "toggle-pin-to-screen" => Ok(Action::TogglePinToScreen),
         "reload-config" => Ok(Action::ReloadConfig),
         "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
+        "set-trackpad" => {
+            let state = match arg {
+                None => return Err("set-trackpad requires on, off, or toggle".to_string()),
+                Some(a) if a.eq_ignore_ascii_case("on") => TrackpadState::On,
+                Some(a) if a.eq_ignore_ascii_case("off") => TrackpadState::Off,
+                Some(a) if a.eq_ignore_ascii_case("toggle") => TrackpadState::Toggle,
+                Some(other) => {
+                    return Err(format!(
+                        "set-trackpad: expected on, off, or toggle, got '{other}'"
+                    ));
+                }
+            };
+            Ok(Action::SetTrackpad(state))
+        }
         "quit" => Ok(Action::Quit),
         other => Err(format!("unknown action: {other}")),
     }
@@ -212,6 +240,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("fit-window-snapped", "fit-window-snapped"),
     ("focus-center", "focus-center"),
     ("go-to-bookmark", "go-to-bookmark 1"),
+    ("grow-window", "grow-window up"),
     ("home-toggle", "home-toggle"),
     ("move-to-bookmark", "move-to-bookmark 1"),
     ("nudge-window", "nudge-window up"),
@@ -221,6 +250,8 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("send-cursor-to-output", "send-cursor-to-output up"),
     ("send-to-output", "send-to-output up"),
     ("set-bookmark", "set-bookmark 1"),
+    ("set-trackpad", "set-trackpad toggle"),
+    ("shrink-window", "shrink-window up"),
     ("spawn", "spawn foo"),
     ("suspend-window", "suspend-window"),
     ("switch-layout", "switch-layout next"),
@@ -576,6 +607,8 @@ mod tests {
             Action::CloseWindow => "close-window",
             Action::SuspendWindow => "suspend-window",
             Action::NudgeWindow(_) => "nudge-window",
+            Action::GrowWindow(_) => "grow-window",
+            Action::ShrinkWindow(_) => "shrink-window",
             Action::PanViewport(_) => "pan-viewport",
             Action::CenterWindow => "center-window",
             Action::CenterNearest(_) => "center-nearest",
@@ -600,6 +633,7 @@ mod tests {
             Action::SwitchLayout(_) => "switch-layout",
             Action::ReloadConfig => "reload-config",
             Action::ToggleCursorPan => "toggle-cursor-pan",
+            Action::SetTrackpad(_) => "set-trackpad",
             Action::Quit => "quit",
         }
     }
@@ -641,6 +675,28 @@ mod tests {
                 "sample {sample:?} parsed to a variant whose name is not {name:?}"
             );
         }
+    }
+
+    #[test]
+    fn set_trackpad_parses_with_explicit_state() {
+        assert_eq!(
+            parse_action("set-trackpad on"),
+            Ok(Action::SetTrackpad(TrackpadState::On))
+        );
+        assert_eq!(
+            parse_action("set-trackpad OFF"),
+            Ok(Action::SetTrackpad(TrackpadState::Off))
+        );
+        assert_eq!(
+            parse_action(" set-trackpad off "),
+            Ok(Action::SetTrackpad(TrackpadState::Off))
+        );
+        assert_eq!(
+            parse_action("set-trackpad toGGle"),
+            Ok(Action::SetTrackpad(TrackpadState::Toggle))
+        );
+        assert!(parse_action("set-trackpad maybe").is_err());
+        assert!(parse_action("set-trackpad").is_err());
     }
 
     #[test]

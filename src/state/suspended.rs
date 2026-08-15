@@ -25,7 +25,7 @@ use driftwm::window_ext::WindowExt;
 
 use crate::decorations::DecorationKey;
 use crate::grabs::ResizeState;
-use crate::state::{ClusterMember, DriftWm, StageWindow, SuspendedId, SuspendedWindow};
+use crate::state::{DriftWm, NavZoom, StageWindow, SuspendedId, SuspendedWindow};
 use crate::surface_tree::focus_belongs_to_toplevel;
 
 /// A close whose `toplevel_destroyed` should convert into a suspended window,
@@ -74,6 +74,48 @@ const RELAUNCH_TTL: Duration = Duration::from_secs(30);
 /// (Signal A), ahead of the normal serial-gated activation path.
 pub struct RelaunchMarker(pub SuspendedId);
 
+/// Which path stashed a deferred adopt, which decides how much of the carve-out
+/// list still applies when it lands. The activation path meets an already-placed
+/// window, so every carve-out is a live question about where that window ended
+/// up. The first-commit path resolves adoption *ahead* of window rules, so an
+/// adopt stashed there has already beaten them and only a membership acquired
+/// during the deferral can still call it off — the placement block keeps the
+/// membership arms off for as long as the stash holds the surface, so that
+/// membership can only come from the client or the user.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum AdoptOrigin {
+    FirstCommit,
+    Activation,
+}
+
+/// Why a hidden window is being put back on screen, which decides how much of
+/// the placement tail the hiding withheld it still gets.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum RevealCause {
+    /// The grab let go and the adopt lands in this same dispatch: it teleports
+    /// the window, draws its own arrival, and re-seats focus itself.
+    Adopt,
+    /// The grab let go but the adopt can no longer land, so the window stays
+    /// where it was placed — the release is still the moment the user is
+    /// waiting for it to arrive.
+    Released,
+    /// Nothing released: the stash was reclaimed under a user who has been
+    /// working elsewhere, for as long as the relaunch deadline.
+    Abandoned,
+}
+
+/// One adopt a live grab held back. Four things drain it — the grab-release
+/// flush, the per-frame liveness sweep, `cleanup_surface_state`, and a second
+/// deferral superseding it — and every one of the first three goes through
+/// [`DriftWm::reveal_deferred_adopt`], because a first-commit entry is also
+/// what keeps its window off the screen.
+pub struct DeferredAdopt {
+    /// The relaunched window's root surface.
+    pub root: WlSurface,
+    pub sid: SuspendedId,
+    pub origin: AdoptOrigin,
+}
+
 /// One in-flight relaunch. The suspended window holds no pending state — this
 /// is the single owner.
 pub struct PendingRelaunch {
@@ -113,9 +155,10 @@ impl DriftWm {
     }
 
     /// Focus + raise a suspended window and, if it isn't already fully on
-    /// screen, pan the active output's camera to center it (no zoom change).
-    /// Backs `msg focus <id>` on a suspended window — the centering actions want
-    /// `center_on_suspended` instead, which always centers.
+    /// screen, pan the active output's camera to bring it to the
+    /// `focus_placement` point (no zoom change). Backs `msg focus <id>` on a
+    /// suspended window — the centering actions want `center_on_suspended`
+    /// instead, which pans unconditionally.
     pub fn reveal_suspended(&mut self, id: SuspendedId) {
         self.focus_and_raise_suspended(id);
         let Some(s) = self.find_suspended(id) else {
@@ -131,9 +174,10 @@ impl DriftWm {
         self.center_camera_on_suspended(&s, &output, zoom);
     }
 
-    /// Focus + raise a suspended window and center the active output's camera on
-    /// it unconditionally — the stand-in counterpart of `navigate_to_window`;
-    /// `reset_zoom` matches its meaning there.
+    /// Focus + raise a suspended window and pan the active output's camera to
+    /// bring it to the `focus_placement` point unconditionally — the stand-in
+    /// counterpart of `navigate_to_window`; `reset_zoom` is that call's
+    /// [`NavZoom::Reset`] vs [`NavZoom::Keep`].
     pub fn center_on_suspended(&mut self, id: SuspendedId, reset_zoom: bool) {
         self.focus_and_raise_suspended(id);
         let Some(s) = self.find_suspended(id) else {
@@ -153,21 +197,10 @@ impl DriftWm {
         target_zoom: f64,
     ) {
         let element = StageWindow::Suspended(s.clone());
-        let loc = self.stage.position_of(&element).unwrap_or_default();
-        let size = s.size.get();
-        let bar = self.window_ssd_bar(&element);
-        let vc = self.usable_center_screen_on(output);
-        let target = driftwm::canvas::camera_to_center_window(loc, size, vc, target_zoom, bar);
         let center = self.nav_center(&element);
-        let mut os = crate::state::output_state(output);
-        os.overview_return = None;
-        os.momentum.stop();
-        os.zoom_animation_anchor = Some(crate::state::ZoomAnimationAnchor {
-            canvas: center,
-            screen: vc,
-        });
-        os.camera_target = Some(target);
-        os.zoom_target = Some(target_zoom);
+        let frame = self.suspended_chrome().frame_size(s.size.get());
+        let align = self.align_point_on(output, frame, target_zoom);
+        self.set_camera_anchor(output, center, align, target_zoom);
     }
 
     /// Relaunch the app behind a suspended window: resolve its `Exec=`, mint a
@@ -315,13 +348,10 @@ impl DriftWm {
     /// snaps it back, with button-up reseeding the snap rect), and an animation
     /// entry would re-seed its leg on every motion and rubber-band behind the
     /// cursor. Unlike the durable fullscreen/pinned/widget/dialog carve-outs
-    /// this is transient, so the relaunch caller leaves the pending relaunch to
-    /// its TTL rather than dismissing.
+    /// this is transient, so the relaunch caller stashes the adopt for the
+    /// grab's release rather than dismissing.
     pub(crate) fn element_under_interactive_grab(&self, element: &StageWindow) -> bool {
-        if self
-            .interactive_move
-            .contains(&ClusterMember::from_element(element))
-        {
+        if self.element_under_interactive_move(element) {
             return true;
         }
         // The resize half is a client-side protocol state, so it answers for
@@ -339,6 +369,423 @@ impl DriftWm {
         })
     }
 
+    /// Whether adopting into `sid` would fight a live grab — on the window being
+    /// adopted, or on the stand-in whose slot it takes. Either side is destroyed
+    /// or teleported by the adopt, which leaves the grab that was driving it
+    /// pushing air until the button comes back up.
+    pub(crate) fn adopt_fights_a_grab(&self, window: &Window, sid: SuspendedId) -> bool {
+        self.element_under_interactive_grab(&StageWindow::Client(window.clone()))
+            || self
+                .find_suspended(sid)
+                .is_some_and(|s| self.element_under_interactive_grab(&StageWindow::Suspended(s)))
+    }
+
+    /// Resolve an adopt of already-placed `window` into stand-in `sid` into one
+    /// of three outcomes: adopt it, defer it to
+    /// [`Self::flush_deferred_adoptions`] while a grab is live, or dismiss the
+    /// stand-in because the window has landed somewhere the adopt would rip it
+    /// out of.
+    pub(crate) fn resolve_placed_adopt(
+        &mut self,
+        window: &Window,
+        root: &WlSurface,
+        sid: SuspendedId,
+        origin: AdoptOrigin,
+    ) {
+        // Transient, unlike the carve-outs below: the pending relaunch keeps
+        // running so the grab's release can still land the adopt. Answered
+        // first because the flush re-runs this for *every* stashed entry and
+        // any grab release anywhere schedules it — a carve-out decided ahead of
+        // this check would dismiss a stand-in the user is still dragging, over
+        // a membership the relaunched window took meanwhile. The flush asks the
+        // same question one step earlier, so that it can leave the entry in
+        // place and hold its window hidden across the renewed deferral; the two
+        // must keep one answer.
+        if self.adopt_fights_a_grab(window, sid) {
+            self.defer_adoption(root, sid, origin);
+            return;
+        }
+        // A window already fullscreen or pinned is where policy put it; adopting
+        // would rip it out of that membership, so drop the stand-in instead and
+        // leave the window alone. A rule-placed widget, and a dialog/modal owned
+        // by another window, are the same call — but they are decided by window
+        // rules and the xdg parent link, both of which the first-commit path
+        // resolves *after* it has already picked the adopt (every suspend path
+        // excludes dialogs, so no stand-in ever stands for one). An adopt
+        // stashed there beat them once and must not lose to them at the flush.
+        let beats_rules = origin == AdoptOrigin::FirstCommit;
+        if self.is_window_fullscreen(window)
+            || self.is_pinned(window)
+            || (!beats_rules
+                && (window.is_widget() || window.parent_surface().is_some() || window.is_modal()))
+        {
+            tracing::debug!(
+                "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned/widget/dialog; dismissing stand-in"
+            );
+            self.dismiss_suspended(sid);
+            return;
+        }
+        self.adopt_relaunched(window, root, sid);
+        if let Some(toplevel) = window.toplevel() {
+            toplevel.send_configure();
+        }
+    }
+
+    /// Stash an adopt a live grab held back. One window can only ever adopt one
+    /// stand-in, so a second match on the same surface supersedes the first and
+    /// the superseded relaunch falls back to its TTL. Order is insertion order,
+    /// so two windows of one app racing for the same stand-in resolve by which
+    /// deferred first rather than by hash order.
+    ///
+    /// Keyed on the surface alone, so a later placement pass — where the token
+    /// stash is spent and only the identity fallback can still match — may
+    /// supersede the entry with a *different* stand-in of the same app (FIFO
+    /// over the pending relaunches), retargeting the adopt away from the one the
+    /// token named.
+    pub(crate) fn defer_adoption(
+        &mut self,
+        root: &WlSurface,
+        sid: SuspendedId,
+        origin: AdoptOrigin,
+    ) {
+        match self.deferred_adoptions.iter_mut().find(|d| d.root == *root) {
+            // The target is superseded, the origin is not — in either
+            // direction. It decides whether the entry hides its window, so
+            // swapping a first-commit entry for an activation pops the window
+            // into view mid-drag and then skips the reveal the drain owes it,
+            // and swapping the other way hides a window the user has been
+            // looking at all along. The first verdict also already beat the
+            // window rules, and that stands.
+            Some(slot) => slot.sid = sid,
+            None => self.deferred_adoptions.push(DeferredAdopt {
+                root: root.clone(),
+                sid,
+                origin,
+            }),
+        }
+    }
+
+    /// Whether a stashed adopt still has both ends — the pending relaunch it
+    /// was minted for, and the stand-in whose slot it would take. Either gone
+    /// and it can never land, whatever the grab does.
+    pub(crate) fn relaunch_target_live(&self, sid: SuspendedId) -> bool {
+        self.pending_relaunches.contains_key(&sid) && self.find_suspended(sid).is_some()
+    }
+
+    /// Whether a relaunched window rooted at `surface` is waiting on a deferred
+    /// adopt that has not landed yet. Such a window is staged and placed, but
+    /// the placement is a holding pattern the flush will teleport it out of, so
+    /// it is kept off the screen and out of every canvas relation until then —
+    /// drawing it would show the user a window at a site it is about to leave,
+    /// on top of whatever is really there.
+    ///
+    /// Only the first-commit origin hides: the activation origin defers an
+    /// *already placed* window (the flush's own re-check aside, the handler
+    /// stashes only when the surface has left `pending_center`), which the user
+    /// has been looking at — and possibly dragging — all along.
+    ///
+    /// The stash itself is the flag, so nothing can desync from the reveal.
+    pub(crate) fn root_hidden_by_deferred_adopt(&self, surface: &WlSurface) -> bool {
+        self.deferred_adoptions
+            .iter()
+            .any(|d| d.root == *surface && d.origin == AdoptOrigin::FirstCommit)
+    }
+
+    /// [`Self::root_hidden_by_deferred_adopt`] for callers holding an element
+    /// rather than a surface. Guarded on the (near-always empty) stash first, so
+    /// the surface lookup never runs on the per-motion hit-test walks.
+    pub(crate) fn hidden_by_deferred_adopt<Q: WaylandFocus>(&self, element: &Q) -> bool {
+        !self.deferred_adoptions.is_empty()
+            && element
+                .wl_surface()
+                .is_some_and(|s| self.root_hidden_by_deferred_adopt(&s))
+    }
+
+    /// Whether a client's fullscreen / maximize request has to be queued for
+    /// someone else to apply rather than taken now. Before the first sized
+    /// commit the geometry is still (0,0), which poisons the saved size and
+    /// lets the placement clobber the result. While a deferred adopt hides the
+    /// window there is nothing drawn to fullscreen: the render skip and the
+    /// fullscreen cull would between them empty the output — a black screen
+    /// until the button comes up — and a fit would pan the camera onto a rect
+    /// nothing is drawn at. Both queues are applied by whoever clears the
+    /// condition, the placement or the reveal.
+    pub(crate) fn queues_geometry_request(&self, surface: &WlSurface) -> bool {
+        self.pending_center.contains(surface) || self.root_hidden_by_deferred_adopt(surface)
+    }
+
+    /// Put a window the stash was hiding back on screen at the placement it has
+    /// been holding. Everything the suppression withheld has to be handed over
+    /// here, because the placement pass that would have done it is long past.
+    pub(crate) fn reveal_deferred_adopt(
+        &mut self,
+        root: &WlSurface,
+        origin: AdoptOrigin,
+        cause: RevealCause,
+    ) {
+        if origin != AdoptOrigin::FirstCommit {
+            return;
+        }
+        // Nothing to show for a surface whose window has already left the stage,
+        // or one being torn down — the drain is the whole of the reveal there.
+        // Load-bearing for `cleanup_surface_state`, which reveals *after*
+        // removing the per-surface entries this writes back: the crash route
+        // reaches it with the window still staged, and only the dead surface
+        // stops the reveal from re-seeding what was just cleared.
+        let Some(window) = self.window_for_surface(root).filter(|_| root.alive()) else {
+            return;
+        };
+        // Not on the adopt path: `Stage::replace` hands the window the stand-in's
+        // `ElementId`, and the adopt drops the animation entries for both ids on
+        // the way, so an open armed here on the pre-replace id is never read. The
+        // stand-in crossfading into the slot is that path's arrival.
+        if cause != RevealCause::Adopt {
+            self.start_window_open_animation(&window);
+        }
+        // The placement's own refresh found no rect to write (a hidden window
+        // has no snap rect at all), and on every path but the adopt nothing else
+        // ever writes one — leaving the window outside the reflow's grow test
+        // and without the shrink protection its close reads.
+        let client = StageWindow::Client(window.clone());
+        self.refresh_stable_snap_rect(&client);
+        // The placement's raise/focus was suppressed with the rest, so the
+        // window is absent from the focus history entirely: Alt-Tab skips it,
+        // and an adopt that follows finds no history slot to restore. Widgets
+        // and `focus_on_open = false` keep their exemption.
+        let may_focus = driftwm::config::applied_rule(root)
+            .is_none_or(|r| !r.widget && r.focus_on_open != Some(false));
+        // The background arm of the placement never focuses or raises a window
+        // it tucked behind a fullscreen one, and the reveal stands in for that
+        // placement. Asked against the membership as it is now, since the
+        // fullscreen may well have exited during the deferral.
+        let behind_fullscreen = self
+            .output_for_window(&window)
+            .is_some_and(|o| self.is_output_fullscreen(&o));
+        if may_focus {
+            if cause == RevealCause::Abandoned || behind_fullscreen {
+                // An abandoned reveal has let the keyboard move on for a whole
+                // relaunch deadline, and a window tucked behind a fullscreen one
+                // was never promised the focus in the first place. Both still owe
+                // it the cycle, joined at the far end rather than the front.
+                // Written to the history directly because that is a back
+                // insertion rather than a promotion — but on the normal writer's
+                // terms: its eligibility filter, and its freeze while a cycle is
+                // walking the list.
+                if self.enters_focus_history(&client) && self.stage.cycle_state().is_none() {
+                    let back = self.stage.focus_history().len();
+                    self.stage.restore_focus_history_at(&client, back);
+                }
+            } else {
+                let serial = SERIAL_COUNTER.next_serial();
+                self.raise_and_focus(&window, serial);
+            }
+        }
+        // A fullscreen or maximize the client asked for while it was hidden was
+        // queued instead of applied. An abandoned reveal is the one cause that
+        // must not hand it over: nothing was released, so the drag that forced
+        // the deferral may still be running, and entering fullscreen would flip
+        // the screen to an app the user never saw arrive, take the keyboard off
+        // what they were typing into, and park a camera the drag is still
+        // pushing. There is no later pass to hold the request for, so it goes
+        // with the entry that was abandoned.
+        if cause == RevealCause::Abandoned {
+            self.pending_fullscreen.remove(root);
+            self.pending_fit.remove(root);
+        }
+        // An adopt lands in this same dispatch and teleports the window into the
+        // stand-in's slot, so the request waits for that: a fit measured here
+        // frames the holding placement and parks the camera on a rect the
+        // teleport then moves the window out of, and a fullscreen entered here
+        // saves the holding placement as the rect its exit restores — losing the
+        // slot the user dragged the stand-in to. The flush hands it over once
+        // the window has the slot.
+        if cause != RevealCause::Adopt {
+            self.apply_queued_geometry_request(root);
+        }
+        // The window is hit-testable again from here, under a pointer that may
+        // not have moved since it was placed. Last, so the answer is taken
+        // against the rect the request above moved it to; the adopt route takes
+        // it again after its own teleport and its own request.
+        self.refresh_pointer_focus();
+    }
+
+    /// Hand over a fullscreen / maximize the client asked for while its window
+    /// was hidden and [`Self::queues_geometry_request`] queued instead of
+    /// applying. Fullscreen wins when a client asked for both. Reports whether
+    /// anything was queued, so a caller that has already taken pointer focus can
+    /// tell whether the window moved out from under it.
+    pub(crate) fn apply_queued_geometry_request(&mut self, root: &WlSurface) -> bool {
+        let Some(window) = self.window_for_surface(root) else {
+            return false;
+        };
+        let fullscreen = self.pending_fullscreen.remove(root);
+        let fit = fullscreen.is_none() && self.pending_fit.remove(root);
+        let applied = fullscreen.is_some() || fit;
+        if let Some(client_output) = fullscreen {
+            let target = self.resolve_fullscreen_output(root, client_output);
+            self.enter_fullscreen(&window, target);
+        } else if fit {
+            // The fit configures its own size, so a stable rect the adopt is
+            // still owed — payable only on a commit at the adopted size — would
+            // never come due, and `decoration_fit` writes none of its own: the
+            // window would end up with no settled footprint at all. Pay it here
+            // against the slot the adopt put it in, which is exactly the pre-fit
+            // rect a fit means to keep as the window's cluster identity. A
+            // fullscreen needs no such payment — its exit configures the adopted
+            // size back and the debt settles then, at a rect that exists again.
+            self.settle_owed_adopt_rect(&window, root);
+            self.decoration_fit(&window);
+        }
+        applied
+    }
+
+    /// Pay off the stable snap rect an adopt is owing, at the rect the adopt put
+    /// the window in rather than the size the client has committed — for a
+    /// caller about to move the window somewhere the debt's own settle can never
+    /// be reached from.
+    fn settle_owed_adopt_rect(&mut self, window: &Window, root: &WlSurface) {
+        let Some(adopt_size) = self.pending_adopt_settle.remove(&root.id()) else {
+            return;
+        };
+        let Some(loc) = self.stage.position_of(window) else {
+            return;
+        };
+        self.cache_stable_snap_rect(window, loc, adopt_size);
+    }
+
+    /// Take `root` out of the stash and hand back what the hiding withheld,
+    /// immediately before the adopt that ends it. Revealed under the adopt's own
+    /// cause, so the reveal leaves the crossfade and the queued geometry request
+    /// to the adopt that follows.
+    fn end_hiding_for_adopt(&mut self, root: &WlSurface) {
+        let Some(idx) = self.deferred_adoptions.iter().position(|d| d.root == *root) else {
+            return;
+        };
+        let entry = self.deferred_adoptions.remove(idx);
+        self.reveal_deferred_adopt(&entry.root, entry.origin, RevealCause::Adopt);
+    }
+
+    /// Drop the stashed adopts that can never land — their pending relaunch was
+    /// swept past its deadline, their stand-in was dismissed, or an adopt of the
+    /// same stand-in cancelled the relaunch out from under a second entry — and
+    /// reveal the windows they were hiding.
+    ///
+    /// Runs on the per-frame tick because nothing else revisits a stashed entry:
+    /// the flush fires only off a grab release, and a deferral can outlive every
+    /// grab there is (a client resize whose client never commits again holds one
+    /// with no grab live at all). Without this a window could stay invisible for
+    /// the rest of the session; with it the relaunch TTL bounds the wait.
+    pub fn sweep_deferred_adoptions(&mut self) {
+        if self.deferred_adoptions.is_empty() {
+            return;
+        }
+        let abandoned: Vec<WlSurface> = self
+            .deferred_adoptions
+            .iter()
+            .filter(|d| !self.relaunch_target_live(d.sid))
+            .map(|d| d.root.clone())
+            .collect();
+        for root in abandoned {
+            let Some(idx) = self.deferred_adoptions.iter().position(|d| d.root == root) else {
+                continue;
+            };
+            // Taken out one at a time, each immediately before its own reveal: a
+            // reveal walks every window (pointer focus, snap rects), and a second
+            // entry waiting its turn has to still read as hidden there.
+            let entry = self.deferred_adoptions.remove(idx);
+            self.reveal_deferred_adopt(&entry.root, entry.origin, RevealCause::Abandoned);
+        }
+    }
+
+    /// Queue the adoptions a grab held back for the moment the current dispatch
+    /// unwinds. The adopt re-seats pointer focus and a grab's teardown runs
+    /// inside the pointer mutex, so it can't run inline from there. Called from
+    /// every point a grab this stash can wait on releases: a move grab's disarm,
+    /// and the commit that settles a client resize back to `ResizeState::Idle`.
+    pub(crate) fn schedule_deferred_adoptions(&mut self) {
+        if self.deferred_adoptions.is_empty() {
+            return;
+        }
+        self.loop_handle
+            .insert_idle(|data| data.flush_deferred_adoptions());
+    }
+
+    /// Land the deferred adoptions whose grab has let go. Each entry re-runs the
+    /// full decision, so one still held by a second grab simply stays stashed
+    /// rather than blocking the rest; it rides that second grab's own scheduling
+    /// point, and deliberately does not re-arm an idle here — an always-pending
+    /// idle makes the event loop spin.
+    ///
+    /// A relaunch the TTL swept while the grab was held is not revived: the
+    /// window keeps the placement it already has and the stand-in stays behind
+    /// as a stale duplicate — the end state of any relaunch that outlives its
+    /// deadline.
+    pub(crate) fn flush_deferred_adoptions(&mut self) {
+        // Walked over the live stash by root rather than over a drained copy: a
+        // reveal walks every window (pointer focus, snap rects), and an entry
+        // still waiting its turn has to read as hidden while that runs. Each
+        // root is taken at most once, so an entry re-deferred below rides the
+        // next flush instead of looping here.
+        let roots: Vec<WlSurface> = self
+            .deferred_adoptions
+            .iter()
+            .map(|d| d.root.clone())
+            .collect();
+        for root in roots {
+            let Some(idx) = self.deferred_adoptions.iter().position(|d| d.root == root) else {
+                continue;
+            };
+            let (sid, origin) = (
+                self.deferred_adoptions[idx].sid,
+                self.deferred_adoptions[idx].origin,
+            );
+            // No stage window behind the surface — destroyed, or unmapped to
+            // hide — so the entry leaves with the drain rather than waiting for
+            // a remap: the stand-in stays as a stale duplicate, and a window
+            // that does come back is placed fresh.
+            let Some(window) = self.window_for_surface(&root) else {
+                self.deferred_adoptions.remove(idx);
+                continue;
+            };
+            let target_live = self.relaunch_target_live(sid);
+            // Asked here rather than left to `resolve_placed_adopt`, which
+            // answers it the same way: a second grab holding either side keeps
+            // the entry where it is, and the window has to stay hidden across
+            // that instead of being revealed and hidden again in one dispatch.
+            if target_live && self.adopt_fights_a_grab(&window, sid) {
+                continue;
+            }
+            self.deferred_adoptions.remove(idx);
+            // Ahead of the adopt, and in the same dispatch as it: the window is
+            // visible from here on, and no frame may be composed showing it at
+            // the placement it is about to be teleported out of.
+            let cause = if target_live {
+                RevealCause::Adopt
+            } else {
+                RevealCause::Released
+            };
+            self.reveal_deferred_adopt(&root, origin, cause);
+            // A relaunch the TTL swept, or a stand-in dismissed, while the grab
+            // was held leaves the window where the reveal just put it.
+            if !target_live {
+                continue;
+            }
+            self.resolve_placed_adopt(&window, &root, sid, origin);
+            // The reveal held this back so the adopt could take the slot first;
+            // it applies against the rect the window actually ended up with,
+            // whether the adopt landed or a carve-out dropped the stand-in. Only
+            // a first-commit entry ever hides its window, so only that origin
+            // can have a queued request to hand over.
+            if origin == AdoptOrigin::FirstCommit && self.apply_queued_geometry_request(&root) {
+                // Both the reveal and the adopt took pointer focus before this
+                // moved the window again, under a pointer that has not moved
+                // since: the answer has to be taken once more at the rect the
+                // request leaves it at.
+                self.refresh_pointer_focus();
+            }
+        }
+    }
+
     /// Adopt `window` (a relaunched client's freshly-mapped toplevel) into
     /// suspended window `sid`: a compound stage op — remove the window's own
     /// fresh entry (its `ElementId` discarded), then `Stage::replace` the
@@ -351,28 +798,19 @@ impl DriftWm {
         let Some(s) = self.find_suspended(sid) else {
             return;
         };
+        // The adopt is the end of the hiding: from here the window holds the
+        // stand-in's slot on screen, and the raise and focus below are the ones
+        // it keeps. Left stashed, the primitives would refuse the adopt's own
+        // refocus and leave the keyboard aimed at a stand-in the `replace` is
+        // about to consume. The flush drains its entry a step earlier, but a
+        // later placement pass and a re-presented relaunch token both arrive
+        // here with the entry still in — so the invariant is asserted where the
+        // adopt is, not at each route into it.
+        self.end_hiding_for_adopt(root);
         let suspended = StageWindow::Suspended(s.clone());
         let pos = self.stage.position_of(&suspended).unwrap_or_default();
         let body_size = s.size.get();
-        // The stand-in was a full snap/cluster citizen; capture its footprint so
-        // the adopted window inherits it as a stable snap rect (below) and keeps
-        // its cluster membership across the adopt, ahead of the body-size
-        // configure the client hasn't acked yet. Inflate with the ADOPTED
-        // window's rule border — not the stand-in's global default — so a
-        // pre-settle close deflates back to the exact body size, since
-        // `markless_suspend_rect` deflates with the live window's rule border.
-        // The bar stays the stand-in's: the adopted window's decoration entry
-        // isn't populated yet on the first-commit adopt path, and the stand-in's
-        // bar faithfully carries what the relaunched window will draw.
         let bar_i = self.window_ssd_bar(&suspended);
-        let bar = bar_i as f64;
-        let bw = self.window_border_width(root) as f64;
-        let standin_rect = Some(driftwm::layout::snap::SnapRect {
-            x_low: pos.x as f64 - bw,
-            x_high: pos.x as f64 + body_size.w as f64 + bw,
-            y_low: pos.y as f64 - bar - bw,
-            y_high: pos.y as f64 + body_size.h as f64 + bw,
-        });
 
         // A CSD-origin stand-in shrank its body under the bar at conversion, so
         // hand the app back the full window: positioned above the body by the
@@ -436,11 +874,10 @@ impl DriftWm {
             self.drop_resize_crossfade(id);
         }
 
-        // The adopt places the window in the stand-in's slot, so a recenter still
-        // owed from a fullscreen/fit/fill exit it hasn't acked must not fire: the
-        // adopt configure's resize would complete the settle and re-map the window
-        // to the pre-exit center, out of the slot the hold below is drawing it in.
-        self.pending_recenter.remove(&root.id());
+        // The adopt places the window in the stand-in's slot; the adopt
+        // configure's own resize is exactly the commit an owed recenter would
+        // complete on.
+        self.drop_owed_recenter(window);
 
         // Compound replace: the fresh entry must leave before the suspended
         // entry is replaced, or the same window would sit in two z-slots and
@@ -452,13 +889,13 @@ impl DriftWm {
         // The adopted window restores (fit/fullscreen round-trips) to its
         // reassembled size.
         self.stage.set_restore_size_if_missing(window, adopt_size);
-        // Seed the stable snap rect from the stand-in's so the window is a
-        // cluster member from the instant it adopts the slot, not only after its
-        // first settle (the first-commit path skips adopted windows because
-        // their live geometry is still pre-configure).
-        if let Some(rect) = standin_rect {
-            self.stable_snap_rects.insert(root.id(), rect);
-        }
+        // Owe the stable snap rect rather than assert one now: the client is
+        // still committing whatever size it mapped with, so any rect written
+        // here is a footprint it has not drawn. An entry left over from the
+        // window's pre-adopt slot is just as stale, so it goes too — the commit
+        // handler seeds off the first frame that actually carries `adopt_size`.
+        self.stable_snap_rects.remove(&root.id());
+        self.pending_adopt_settle.insert(root.id(), adopt_size);
 
         // Fill the reassembled window rect. The caller decides when the
         // configure is sent (first-commit path folds it into the initial
@@ -521,8 +958,10 @@ impl DriftWm {
             None,
         );
 
-        // An adopt is an immediate, user-visible change — write through now.
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through: an adoption can be
+        // reached from an idle callback in a teardown batch, and no handler may
+        // rebuild the envelope synchronously (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     #[cfg(not(test))]
@@ -578,13 +1017,15 @@ impl DriftWm {
             (None, None, None)
         };
 
-        let rect = self
-            .stage
-            .position_of(&element)
-            .map(|loc| (loc, s.size.get()));
+        // Only the location is taken from the animation's in-flight visual: the
+        // fade draws the chrome at the stand-in's own size, so asking about any
+        // other size would answer a question the frame composer never poses.
+        let loc = self
+            .departing_standin_rect(&element)
+            .map(|r| r.loc.to_i32_round());
         if self.backend.is_some()
-            && let Some((loc, size)) = rect
-            && self.canvas_rect_drawable(Rectangle::new(loc, size))
+            && let Some(loc) = loc
+            && self.canvas_rect_drawable(Rectangle::new(loc, s.size.get()))
         {
             let focused = self.gated_suspended_focus() == Some(id);
             self.standin_fades.push(crate::render::StandInFade {
@@ -624,7 +1065,7 @@ impl DriftWm {
                 Some(target) if self.window_fully_in_viewport(&target) => {
                     self.raise_and_focus(&target, serial);
                 }
-                Some(target) => self.navigate_to_window(&target, false),
+                Some(target) => self.navigate_to_window(&target, NavZoom::Keep),
                 None => {
                     let mru = self
                         .stage
@@ -652,8 +1093,10 @@ impl DriftWm {
         // The suspended window may have sat under the cursor; re-target so a
         // click no longer lands in dead space.
         self.refresh_pointer_focus();
-        // A dismiss is an immediate, user-visible change — write through now.
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through: a dismiss is reachable
+        // over IPC and from a stand-in's own close, either of which can share a
+        // teardown batch (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     /// The pre-fullscreen restore rect (saved location + size) of the focused
@@ -676,15 +1119,27 @@ impl DriftWm {
     /// pre-resolved so a no-`.desktop` window closes honestly instead of
     /// vanishing forever.
     pub fn suspend_focused_window(&mut self, restore_rect: Option<Rectangle<i32, Logical>>) {
+        let Some(window) = self.focused_window() else {
+            return;
+        };
+        self.suspend_window(&window, restore_rect);
+    }
+
+    /// [`Self::suspend_focused_window`] for a caller that already holds the
+    /// window. The IPC verb needs it: its selector can name a window the
+    /// keyboard is not allowed to reach (one still hidden for a deferred adopt),
+    /// and resolving the target through focus would suspend somebody else's.
+    pub fn suspend_window(
+        &mut self,
+        window: &Window,
+        restore_rect: Option<Rectangle<i32, Logical>>,
+    ) {
         // Dialogs and modals are ineligible — same exclusion the
         // `suspend_on_close` path applies. Suspending one would relaunch a
         // whole fresh app instance, which is nonsense for a child dialog.
-        let Some(window) = self
-            .focused_window()
-            .filter(|w| !w.is_widget() && w.parent_surface().is_none() && !w.is_modal())
-        else {
+        if window.is_widget() || window.parent_surface().is_some() || window.is_modal() {
             return;
-        };
+        }
         // The prelude only exits fullscreen on the active output; cover a
         // window fullscreen elsewhere.
         if let Some(output) = window
@@ -695,8 +1150,8 @@ impl DriftWm {
         }
         // Land a pinned window back on the canvas first, so the stand-in is a
         // normal canvas window at the spot the user sees it.
-        if self.is_pinned(&window) {
-            self.unpin_to_canvas(&window);
+        if self.is_pinned(window) {
+            self.unpin_to_canvas(window);
         }
         let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
             return;
@@ -706,7 +1161,7 @@ impl DriftWm {
             tracing::info!(
                 "suspend-window: '{app_id}' resolves to no .desktop entry; closing normally"
             );
-            self.mark_real_close(&window);
+            self.mark_real_close(window);
             window.send_close();
             return;
         };
@@ -715,7 +1170,7 @@ impl DriftWm {
         // window was fullscreen, else the current windowed geometry — the fit
         // / current visual size wins, restore size dropped.
         let rect = restore_rect.unwrap_or_else(|| {
-            let loc = self.stage.position_of(&window).unwrap_or_default();
+            let loc = self.stage.position_of(window).unwrap_or_default();
             Rectangle::new(loc, window.geometry().size)
         });
         self.suspend_marks.insert(
@@ -967,6 +1422,16 @@ impl DriftWm {
                 csd,
             });
         }
+        // Below the mark, which carries its own rect and an explicit "suspend
+        // this": a window still hidden for a deferred adopt has never been on
+        // screen and the stand-in it was bound for is still standing, so
+        // converting it *on its own* would leave the user two stand-ins for one
+        // app — the second at a holding placement, faded in from nothing, and
+        // sized by guesswork since the hiding is why no stable snap rect was
+        // written.
+        if self.root_hidden_by_deferred_adopt(surface) {
+            return None;
+        }
 
         // Eligibility + identity read from the snapshot when the surface unmapped
         // before destroying (the live reads are wiped by then), else live.
@@ -995,7 +1460,7 @@ impl DriftWm {
         let identity = self.resolve_identity(&app_id)?;
         // A fullscreen self-close reports the fullscreen buffer size at its
         // camera park, not the windowed rect — the pre-fullscreen saved rect
-        // (same source the explicit action and the shutdown serializer use)
+        // (same source the explicit action and the durable session write use)
         // seats the stand-in where the window actually was. Failing that, the
         // pre-unmap snapshot rect, then the live markless rect.
         let rect = fullscreen_restore_rect
@@ -1135,9 +1600,12 @@ impl DriftWm {
         }
 
         self.refresh_pointer_focus();
-        // A create is an immediate, user-visible change — write through now
-        // rather than on the debounce timer (move/resize use that).
-        self.session_store_write_now();
+        // Arm the debounce rather than writing through. This is the site that
+        // makes it load-bearing: the conversion runs from `toplevel_destroyed`
+        // and cannot tell a user's close from a logout killing the client, so
+        // under `suspend_on_close` a synchronous rebuild here would serialize
+        // the stage mid-drain (see `session_store_mark_dirty`).
+        self.session_store_mark_dirty();
     }
 
     /// Drop suspend / real-close marks whose deadline has passed. Takes `now`

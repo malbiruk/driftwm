@@ -3,30 +3,12 @@
 //! or a navigation — disarms that return and keeps the zoomed-out zoom
 //! instead of restoring the saved one.
 
-use std::time::Duration;
-
 use driftwm::config::{Action, Direction};
 use smithay::utils::{Logical, Point};
 
 use crate::state::StageWindow;
 
-use super::{Fixture, map_window, window_by_app_id};
-
-const TICK: Duration = Duration::from_millis(16);
-const MAX_TICKS: usize = 600;
-
-/// Run both viewport animations to completion, in the order a real frame loop
-/// ticks them (zoom first, so the camera uses the recomputed target).
-fn settle(f: &mut Fixture) {
-    for _ in 0..MAX_TICKS {
-        if f.state().camera_target().is_none() && f.state().zoom_target().is_none() {
-            return;
-        }
-        f.state().apply_zoom_animation(TICK);
-        f.state().apply_camera_animation(TICK);
-    }
-    panic!("viewport animation did not converge within {MAX_TICKS} ticks");
-}
+use super::{Fixture, TICK, map_window, settle, window_by_app_id};
 
 /// Two windows far enough apart that fitting them needs a zoom well under 1.0.
 /// Focus ends on the right-hand one, so `center-nearest` left has a target.

@@ -7,14 +7,15 @@
 //! The `windows=` line is a JSON array of objects with fields `id` (stable
 //! per-session window handle), `app_id`, `title`, `position` ([x, y]), `size`
 //! ([w, h]), and booleans `is_focused`/`is_widget`. Position/size match the
-//! window-rules format in config.toml: position is the **window center** with
-//! **Y-up** convention.
+//! window-rules format in config.toml: both describe the **visual frame**
+//! (content plus SSD title bar and border — see [`driftwm::canvas::Chrome`]),
+//! with position its **center** in the **Y-up** convention.
 //!
 //! `windows=` is canvas-space only. Screen-space windows are reported under
 //! their owning output instead: `outputs.{name}.fullscreen` is a JSON
 //! `{id, app_id, title}` object, and `outputs.{name}.pinned` a JSON array of
 //! `{id, app_id, title, position, size}`. Like `windows=`, a pinned entry's
-//! `position` is the window **center** in the rule convention (Y-up), but
+//! `position` is the frame **center** in the rule convention (Y-up), but
 //! relative to the **output center** rather than the canvas origin, so the
 //! numbers paste straight into a `pinned_to_screen` rule's `position`.
 //!
@@ -34,6 +35,28 @@ use crate::ipc::protocol::{CanvasLayerInfo, OutputFullscreen, OutputPinned, Wind
 
 use super::{CameraSeed, DriftWm, output_logical_size, output_state};
 
+/// Whether an output's viewport moved far enough to count as motion rather than
+/// float jitter. The thresholds live here, inside the one predicate both change
+/// detectors call — this one for the runtime state file, and the durable session
+/// store's [`DriftWm::session_store_watch_cameras`]. A tighter threshold in
+/// either would have its file rewritten on an idle desktop at whatever cadence
+/// that caller runs, so neither gets to re-type them.
+///
+/// A non-finite camera or zoom compares false throughout and so reads as
+/// unmoved. Deliberate: it can't be persisted usefully (`valid_camera_seed`
+/// refuses it on load), and calling it motion would re-arm on every iteration
+/// forever, since it never equals the baseline it was stored as either.
+pub(crate) fn viewport_moved(
+    (was_camera, was_zoom): (Point<f64, Logical>, f64),
+    (camera, zoom): (Point<f64, Logical>, f64),
+) -> bool {
+    const CAMERA_EPSILON: f64 = 0.5;
+    const ZOOM_EPSILON: f64 = 0.001;
+    (camera.x - was_camera.x).abs() >= CAMERA_EPSILON
+        || (camera.y - was_camera.y).abs() >= CAMERA_EPSILON
+        || (zoom - was_zoom).abs() >= ZOOM_EPSILON
+}
+
 /// A fullscreen window in the state file's per-output section.
 #[derive(Serialize)]
 struct FullscreenInfo {
@@ -43,8 +66,9 @@ struct FullscreenInfo {
 }
 
 /// A screen-pinned window in the state file's per-output section. `position` is
-/// the window center in rule coordinates (output-center origin, Y-up) — the
-/// numbers a `pinned_to_screen` rule's `position` takes; `size` in pixels.
+/// the visual frame's center in rule coordinates (output-center origin, Y-up) —
+/// the numbers a `pinned_to_screen` rule's `position` takes; `size` is that
+/// frame, in pixels.
 #[derive(Serialize)]
 struct PinnedInfo {
     id: u64,
@@ -97,9 +121,10 @@ fn window_titles_changed(a: &[WindowInfo], b: &[WindowInfo]) -> bool {
 }
 
 impl DriftWm {
-    /// The canvas window inventory in the shared [`WindowInfo`] shape (position =
-    /// window center, Y-up), focused window first. Single source of truth for
-    /// both the state file and the IPC `state` response, so the two can't drift.
+    /// The canvas window inventory in the shared [`WindowInfo`] shape (the
+    /// visual frame: position = its center, Y-up), focused window first. Single
+    /// source of truth for both the state file and the IPC `state` response, so
+    /// the two can't drift.
     pub fn window_inventory(&self) -> Vec<WindowInfo> {
         let focused = self.focused_window();
         let focused_suspended = self.gated_suspended_focus();
@@ -110,8 +135,9 @@ impl DriftWm {
             // and a focused one is reported like a focused client).
             if let Some(s) = window.suspended() {
                 let loc = self.stage.position_of(window).unwrap_or_default();
-                let size = s.size.get();
-                let (rx, ry) = driftwm::canvas::internal_to_rule(loc, size);
+                let chrome = self.element_chrome(window);
+                let (rx, ry) = driftwm::canvas::content_to_rule(loc, s.size.get(), chrome);
+                let size = chrome.frame_size(s.size.get());
                 windows.push(WindowInfo {
                     id: self
                         .stage
@@ -141,6 +167,13 @@ impl DriftWm {
             if self.is_pinned(window) || self.is_window_fullscreen(window) {
                 continue;
             }
+            // A window still held back for a deferred adopt is drawn nowhere,
+            // and the stand-in it is bound for is already in this list at the
+            // placement it is holding: reported here it doubles the app, and
+            // hands a bar an entry whose focus request is refused.
+            if self.hidden_by_deferred_adopt(window) {
+                continue;
+            }
             let (app_id, title) = window_app_id_title(&surface);
             if app_id.is_empty() {
                 continue;
@@ -148,8 +181,9 @@ impl DriftWm {
             let loc = self.stage.position_of(window).unwrap_or_default();
             // window.geometry().size can flicker for some Chromium-class clients
             // (see fit.rs), causing the occasional spurious write.
-            let size = window.geometry().size;
-            let (rx, ry) = driftwm::canvas::internal_to_rule(loc, size);
+            let chrome = self.element_chrome(window);
+            let (rx, ry) = driftwm::canvas::content_to_rule(loc, window.geometry().size, chrome);
+            let size = chrome.frame_size(window.geometry().size);
             windows.push(WindowInfo {
                 id: self
                     .stage
@@ -177,6 +211,11 @@ impl DriftWm {
     /// file: namespaces of screen-space layer surfaces, plus canvas-positioned
     /// layers (which bypass the layer map) with their canvas rect in rule
     /// coordinates like `windows=`, sorted for deterministic output.
+    ///
+    /// A canvas layer's rect is a visual frame like `windows=`, so one snapshot
+    /// never mixes conventions. Its only chrome is the opt-in border
+    /// [`Self::canvas_layer_chrome`] resolves, which cancels out of `position`
+    /// and adds `2 * border_width` to `size`.
     pub fn layer_inventory(&self) -> (Vec<String>, Vec<CanvasLayerInfo>) {
         let mut layers: Vec<String> = Vec::new();
         for output in self.space.outputs() {
@@ -192,10 +231,13 @@ impl DriftWm {
         let mut canvas_layers: Vec<CanvasLayerInfo> = self
             .canvas_layers
             .iter()
-            .filter_map(|cl| {
+            .enumerate()
+            .filter_map(|(idx, cl)| {
                 let pos = cl.position?;
-                let size = cl.surface.bbox().size;
-                let (rx, ry) = driftwm::canvas::internal_to_rule(pos, size);
+                let chrome = self.canvas_layer_chrome(idx);
+                let (rx, ry) =
+                    driftwm::canvas::content_to_rule(pos, cl.surface.bbox().size, chrome);
+                let size = chrome.frame_size(cl.surface.bbox().size);
                 Some(CanvasLayerInfo {
                     app_id: cl.namespace.clone(),
                     position: [rx, ry],
@@ -246,10 +288,11 @@ impl DriftWm {
             if app_id.is_empty() {
                 continue;
             }
-            let size = window.geometry().size;
-            let Some((rx, ry)) = self.pinned_rule_coords(p, size) else {
+            let chrome = self.element_chrome(window);
+            let Some((rx, ry)) = self.pinned_rule_coords(p, window.geometry().size, chrome) else {
                 continue;
             };
+            let size = chrome.frame_size(window.geometry().size);
             pinned.push(OutputPinned {
                 id: self
                     .stage
@@ -268,20 +311,21 @@ impl DriftWm {
         (fullscreen, pinned)
     }
 
-    /// A pin's rule coordinates (window center, output-center origin, Y-up) —
-    /// the numbers a `pinned_to_screen` rule's `position` takes. `None` when the
-    /// pin's output is disconnected: it can't be expressed relative to a monitor
-    /// that's gone (and pins get reassigned off dead outputs anyway).
+    /// A pin's rule coordinates (visual-frame center, output-center origin,
+    /// Y-up) — the numbers a `pinned_to_screen` rule's `position` takes. `None`
+    /// when the pin's output is disconnected: it can't be expressed relative to a
+    /// monitor that's gone (and pins get reassigned off dead outputs anyway).
     fn pinned_rule_coords(
         &self,
         pin: &driftwm::stage::PinnedSite,
         size: Size<i32, Logical>,
+        chrome: driftwm::canvas::Chrome,
     ) -> Option<(i32, i32)> {
         let output = self.output_by_name(&pin.output)?;
         let out_size = output_logical_size(&output);
         Some(driftwm::canvas::screen_top_left_to_rule(
-            pin.screen_pos,
-            size,
+            chrome.frame_loc(pin.screen_pos),
+            chrome.frame_size(size),
             out_size,
         ))
     }
@@ -330,10 +374,11 @@ impl DriftWm {
             if app_id.is_empty() {
                 continue;
             }
-            let size = window.geometry().size;
-            let Some((rx, ry)) = self.pinned_rule_coords(p, size) else {
+            let chrome = self.element_chrome(window);
+            let Some((rx, ry)) = self.pinned_rule_coords(p, window.geometry().size, chrome) else {
                 continue;
             };
+            let size = chrome.frame_size(window.geometry().size);
             let id = self
                 .stage
                 .id_of(window)
@@ -395,11 +440,8 @@ impl DriftWm {
             let name = output.name();
             let (cam, z) = (os.camera, os.zoom);
             drop(os);
-            if let Some(&(cached_cam, cached_z)) = self.state_file_cameras.get(&name) {
-                if (cam.x - cached_cam.x).abs() >= 0.5
-                    || (cam.y - cached_cam.y).abs() >= 0.5
-                    || (z - cached_z).abs() >= 0.001
-                {
+            if let Some(&cached) = self.state_file_cameras.get(&name) {
+                if viewport_moved(cached, (cam, z)) {
                     any_output_dirty = true;
                     break;
                 }
@@ -626,6 +668,23 @@ mod tests {
             is_widget: false,
             suspended: false,
         }
+    }
+
+    #[test]
+    fn viewport_motion_thresholds_hold_for_both_detectors() {
+        let at = |x: f64, y: f64, zoom: f64| (Point::from((x, y)), zoom);
+        let origin = at(0.0, 0.0, 1.0);
+
+        assert!(viewport_moved(origin, at(0.5, 0.0, 1.0)));
+        assert!(viewport_moved(origin, at(0.0, -0.5, 1.0)));
+        assert!(!viewport_moved(origin, at(0.49, 0.49, 1.0)));
+        assert!(viewport_moved(origin, at(0.0, 0.0, 0.999)));
+        assert!(!viewport_moved(origin, at(0.0, 0.0, 0.9995)));
+
+        // Non-finite reads as unmoved either way — see viewport_moved's doc.
+        let nan = at(f64::NAN, 0.0, 1.0);
+        assert!(!viewport_moved(origin, nan));
+        assert!(!viewport_moved(nan, nan));
     }
 
     #[test]

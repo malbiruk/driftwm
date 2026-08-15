@@ -18,6 +18,16 @@ When changes bundle multiple concerns, merging becomes all-or-nothing — if I l
 
 **CI must pass** — `cargo fmt --check`, `cargo clippy`, `cargo build`, and `cargo test` run automatically on PRs.
 
+**Only state belongs in `src/state/mod.rs`** — the `DriftWm` fields, the types they're made of, and the routines that must enumerate every field. A new `impl DriftWm` method goes in the sibling module for the subsystem it serves.
+
+## Blaming through reformats
+
+Bulk reformats and pure file-motion commits are listed in [`.git-blame-ignore-revs`](.git-blame-ignore-revs), so `git blame` reaches the commit that actually wrote a line. GitHub applies it automatically; locally:
+
+```bash
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+
 ## Reporting bugs
 
 Include:

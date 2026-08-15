@@ -236,9 +236,9 @@ Close a window and leave a placeholder behind instead of losing it:
 `suspend-window` swaps the window for a compositor-drawn stand-in at the same
 canvas spot — press `Enter` or click its name to bring the app right back, in
 the same place. `suspend_on_close` does this automatically for every
-client-initiated close. `[session].restore_windows` saves your whole canvas on quit/logout
-and restores it (dormant, nothing auto-launches) on the next start, with
-`restore_camera` bringing each output's view back too.
+client-initiated close. `[session].restore_windows` keeps your whole canvas saved
+as you work and restores it (dormant, nothing auto-launches) on the next start,
+with `restore_camera` bringing each output's view back too.
 
 See [docs/session.md](docs/session.md).
 
@@ -369,6 +369,29 @@ sudo make install
 ```
 
 To uninstall, run `sudo make uninstall` from the repository.
+
+### Offline build
+
+Every release carries a `driftwm-<version>-vendor.tar.xz` asset holding all Rust
+dependencies plus the `.cargo/config.toml` that points at them, for building
+without network access:
+
+```bash
+sha256sum -c driftwm-<version>-vendor.tar.xz.sha256 &&
+  tar xf driftwm-<version>.tar.gz &&
+  tar xf driftwm-<version>-vendor.tar.xz -C driftwm-<version> &&
+  cd driftwm-<version> &&
+  cargo build --offline --locked --release &&
+  sudo make install
+```
+
+> [!IMPORTANT]
+> The vendor tarball has no top-level directory: it unpacks `vendor/` and
+> `.cargo/` into whatever directory it is extracted in, hence the `-C`. Don't
+> prune `vendor/` either — cargo checksums it against `Cargo.lock`, so dropping
+> a crate you think is unused, or a file inside one, breaks `--offline`.
+
+System build dependencies still come from your distro.
 
 ### Running
 

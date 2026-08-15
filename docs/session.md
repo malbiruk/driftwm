@@ -3,8 +3,9 @@
 One mechanism backs the `suspend-window` action and the four `[session]`
 options: `suspend_on_close` leaves a placeholder behind on every
 client-initiated close, `restore_windows` brings windows that were still open
-at logout back after a restart, and `restore_camera` and `restore_bookmarks`
-restore where the canvas was framed and the bookmarks you set.
+at the last save back after a restart, and `restore_camera` and
+`restore_bookmarks` restore where the canvas was framed and the bookmarks you
+set.
 
 ## Suspended windows
 
@@ -46,7 +47,16 @@ A suspended window differs from a live window in two ways:
 - **Excluded from Alt-Tab and focus history**, the same as a pinned widget —
   it's still focusable by hovering or clicking, but cycling and MRU never
   land on it, and neither does a taskbar's window list.
-- **Unpinnable, unfullscreenable, unfittable** — those actions no-op on it.
+- **Unpinnable, unfullscreenable, unfittable** — `toggle-pin-to-screen`,
+  `toggle-fullscreen`, `fit-window`, `fit-window-snapped` and `fill-window`
+  no-op on it: each needs a client to configure or a screen slot to pin to.
+  Two things that sound like they belong here don't. `zoom-to-fit-snapped`
+  only moves the camera, so it frames a suspended window's cluster like any
+  other. And a suspended window *can* be resized — `grow-window`,
+  `shrink-window` and `driftwm msg resize` write its size directly, with no
+  client to configure, down to a 120px floor — a floor on the visible stand-in,
+  which is what a `msg resize` reply describes, so 120x120 leaves one exactly
+  that big on screen.
 
 If the window was fullscreen or screen-pinned when suspended, it's returned
 to the canvas first, at its most recent windowed size.
@@ -85,6 +95,18 @@ Escape hatches, for closes you want to stay real closes:
 > crashing from it quitting cleanly. With `suspend_on_close` on, a crashed
 > app's window and position survive, and `Enter` brings it right back.
 
+A logout is the exception, and `restore_windows` — not this flag — is what
+decides it. Windows that were still open come back only if that flag covers
+them; if you want them back, turn it on. Stand-ins are unaffected either way:
+one that already existed is always saved and always comes back, whether an
+explicit `suspend-window` or a `suspend_on_close` conversion left it there.
+
+The stand-ins a logout's *own* closes would leave usually don't reach the file —
+the compositor is being killed alongside its clients, so what survives is the
+rolling save from before the logout. A staggered shutdown is the exception: a
+session manager that stops app units before the compositor gives those closes
+time to convert and be saved, and they come back like any other stand-in.
+
 ## `restore_windows`
 
 ```toml
@@ -92,12 +114,18 @@ Escape hatches, for closes you want to stay real closes:
 restore_windows = true
 ```
 
-On a graceful shutdown — `quit`/`Super+Ctrl+Shift+Q` or a logout that sends
-SIGTERM/SIGHUP — every eligible live window is saved. On the next launch they
-come back as dormant suspended windows at the positions they were at; nothing
-auto-launches, you relaunch each one same as any other suspended window (or
-leave it be). A `kill -9`, a crash, or unplugging the machine skips the save
-entirely.
+Every eligible open window is saved as you go, about a second after the canvas
+changes — pan and zoom take a longer five seconds, since a camera moves
+constantly and costs little to lose. On the next launch they come back as
+dormant suspended windows at the positions they were at; nothing auto-launches,
+you relaunch each one same as any other suspended window (or leave it be).
+
+Nothing extra is saved when the compositor exits, so a logout, a `kill -9` and a
+crash all restore whatever that rolling save last held — up to about a second of
+window motion can be lost, or five seconds of panning. Losing power is the one
+case that can cost more than that: the file is never forced to disk, so a cut at
+the wrong moment can leave it half-written, and a file that no longer parses is
+set aside at startup and the session starts empty.
 
 Suspended windows themselves are **always** saved and restored, regardless of
 this flag; `restore_windows` only decides whether still-_open_ windows are
@@ -123,8 +151,8 @@ restore_windows = false
 Two things to keep in mind:
 
 - The flag is **independent of `suspend_on_close`**: that one governs closes,
-  this one the logout save. Set *both* to `false` for an app that should never
-  leave a stand-in behind.
+  this one whether still-open windows are saved. Set *both* to `false` for an
+  app that should never leave a stand-in behind.
 - **Key the rule on `app_id`.** Saved records carry no title, so a `title`
   criterion narrows only what gets *saved*; on the way back the rule is read
   off `app_id` alone, and decides for every saved window of that app. The
@@ -162,12 +190,18 @@ seeds fill the names the save lacks. Like the camera flag, it's read at launch.
 ## The session file
 
 The session lives at `~/.local/state/driftwm/session.json` (respects
-`XDG_STATE_HOME`). It's written through immediately on anything you'd notice
-(suspending, dismissing, relaunching) and debounced (~1s) for continuous
-changes like dragging a suspended window. A file that fails to parse (wrong
-version, corrupted write) or can't be read at all is quarantined next to it as
+`XDG_STATE_HOME`). Every change that belongs in it — suspending, dismissing,
+relaunching, moving, resizing, changing focus — queues a write that lands ~1s
+later, so a drag costs one write per second rather than one per frame. Panning
+and zooming queue the same write on a ~5s delay instead, so a long pan across
+the canvas costs a write every five seconds. A file written by an older driftwm
+is read and converted in place; one from a *newer* version, or that fails to
+parse or can't be read at all, is quarantined next to it as
 `session.json.corrupt.<timestamp>` or `session.json.unreadable.<timestamp>`,
 and startup continues with an empty session.
+
+Each saved window's `position` and `size` describe its stand-in's visual frame,
+the same convention as window rules and `driftwm msg state`.
 
 ## Relaunching & matching
 
@@ -200,11 +234,6 @@ stand-in by, in order:
 - **An app that reports a different `app_id` on relaunch** than it was
   suspended under only adopts via the activation token — the identity
   fallback won't recognize it as the same app.
-- **Touch can't grab a stand-in's resize border**, which is far thinner than a
-  fingertip — the same limit a live window's border has. Use the touch resize
-  gesture instead. Everything else is at parity: a stand-in moves and resizes by
-  pointer, by trackpad gesture, and by touch gesture, and its title bar drags
-  with a finger.
 
 ## Nested sessions
 

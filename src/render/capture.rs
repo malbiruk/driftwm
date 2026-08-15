@@ -101,6 +101,9 @@ pub fn render_screencopy(
     let scale = Scale::from(output_scale);
     let transform = output.current_transform();
     let output_mode_size = output.current_mode().unwrap().size;
+    // Same predicate `compose_frame` culled the canvas on, read from the same
+    // unticked state, so the clear agrees with the elements it is clearing for.
+    let opaque_clear = state.fullscreen_conceals_canvas(output);
 
     for screencopy in pending {
         let size = screencopy.buffer_size();
@@ -153,6 +156,7 @@ pub fn render_screencopy(
                     size,
                     scale,
                     transform,
+                    opaque_clear,
                     &use_elements,
                     cs,
                 ) {
@@ -194,6 +198,7 @@ pub fn render_screencopy(
                     scale,
                     transform,
                     Fourcc::Xrgb8888,
+                    opaque_clear,
                     &use_elements,
                     cs,
                 );
@@ -248,7 +253,20 @@ pub fn render_screencopy(
 /// for incremental rendering. Falls back to one-shot (age=0) when None.
 /// Clear color for a given fourcc — opaque black for X-prefixed (no alpha
 /// channel), transparent for A-prefixed (alpha preserved through render).
-fn clear_color_for(format: Fourcc) -> [f32; 4] {
+///
+/// `opaque` forces black on an alpha format too. It stands in for the canvas
+/// the fullscreen cull removed: the part of the output a fullscreen window does
+/// not paint over is opaque black on screen (both backends clear to it), so a
+/// capture that let the transparent clear through there would hand out holes
+/// wherever the window under-fills the output or its own alpha lets the clear
+/// show. Done with the clear rather than a black element under the window on
+/// purpose — an element the window does not fully occlude leaves smithay's
+/// primary plane holding two elements instead of one, which costs every frame
+/// its direct scan-out for the sake of something no on-screen pixel needs.
+fn clear_color_for(format: Fourcc, opaque: bool) -> [f32; 4] {
+    if opaque {
+        return [0.0, 0.0, 0.0, 1.0];
+    }
     match format {
         Fourcc::Argb8888
         | Fourcc::Abgr8888
@@ -264,12 +282,14 @@ fn clear_color_for(format: Fourcc) -> [f32; 4] {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn render_to_offscreen(
     renderer: &mut GlesRenderer,
     size: smithay::utils::Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
     format: Fourcc,
+    opaque_clear: bool,
     elements: &[&OutputRenderElements],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::gles::GlesMapping, Box<dyn std::error::Error>> {
@@ -278,7 +298,7 @@ fn render_to_offscreen(
     use smithay::backend::renderer::{Bind, ExportMem, Offscreen};
 
     let buffer_size = size.to_logical(1).to_buffer(1, Transform::Normal);
-    let clear = clear_color_for(format);
+    let clear = clear_color_for(format, opaque_clear);
 
     if let Some(cs) = capture_state {
         // Reuse or reallocate texture when size changes
@@ -340,6 +360,7 @@ pub(crate) fn render_elements_to_rgba(
         scale,
         Transform::Normal,
         Fourcc::Abgr8888,
+        false,
         elements,
         None,
     )
@@ -358,12 +379,14 @@ pub(crate) fn render_elements_to_rgba(
 /// out-of-band from `wl_output`).
 ///
 /// When `capture_state` is provided, reuses the damage tracker for incremental rendering.
+#[allow(clippy::too_many_arguments)]
 fn render_to_dmabuf(
     renderer: &mut GlesRenderer,
     dmabuf: &mut smithay::backend::allocator::dmabuf::Dmabuf,
     size: Size<i32, Physical>,
     scale: Scale<f64>,
     transform: Transform,
+    opaque_clear: bool,
     elements: &[&OutputRenderElements],
     capture_state: Option<&mut crate::state::CaptureOutputState>,
 ) -> Result<smithay::backend::renderer::sync::SyncPoint, Box<dyn std::error::Error>> {
@@ -371,7 +394,7 @@ fn render_to_dmabuf(
     use smithay::backend::renderer::Bind;
     use smithay::backend::renderer::damage::OutputDamageTracker;
 
-    let clear = clear_color_for(dmabuf.format().code);
+    let clear = clear_color_for(dmabuf.format().code, opaque_clear);
     let sync = match capture_state {
         Some(cs) => {
             let mut target = renderer.bind(dmabuf)?;
@@ -441,6 +464,7 @@ pub fn render_capture_frames(
     let output_transform = output.current_transform();
     let output_mode_size = output.current_mode().unwrap().size;
     let capture_key = format!("cap:{}", output.name());
+    let opaque_clear = state.fullscreen_conceals_canvas(output);
 
     let fail_reason = smithay::reexports::wayland_protocols::ext::image_copy_capture::v1::server::ext_image_copy_capture_frame_v1::FailureReason::Unknown;
 
@@ -493,6 +517,7 @@ pub fn render_capture_frames(
                 capture.buffer_size,
                 scale,
                 output_transform,
+                opaque_clear,
                 &use_elements,
                 cs,
             ) {
@@ -529,6 +554,7 @@ pub fn render_capture_frames(
                 scale,
                 output_transform,
                 Fourcc::Xrgb8888,
+                opaque_clear,
                 &use_elements,
                 cs,
             );
@@ -726,6 +752,9 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 capture.buffer_size,
                 scale,
                 Transform::Normal,
+                // A window-relative buffer: nothing of the output it happens to
+                // sit on, fullscreen or not, is in it to leave holes.
+                false,
                 &elems_refs,
                 cs,
             ) {
@@ -748,6 +777,7 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
                 scale,
                 Transform::Normal,
                 Fourcc::Argb8888,
+                false,
                 &elems_refs,
                 cs,
             ) {

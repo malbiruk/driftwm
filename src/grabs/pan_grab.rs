@@ -76,11 +76,16 @@ impl PointerGrab<DriftWm> for PanGrab {
         let screen_delta = current_screen_pos - self.last_screen_pos;
 
         let mouse_speed = data.config.mouse_speed;
-        let camera_delta = Point::from((
-            -screen_delta.x * mouse_speed / zoom,
-            -screen_delta.y * mouse_speed / zoom,
-        ));
-        data.drift_pan_on(camera_delta, event.time, &self.output);
+        // drift_pan_on returns zero while fullscreen locks the camera; the grab
+        // stays live regardless, so a fullscreen exit mid-drag resumes without a jump.
+        let camera_delta = data.drift_pan_on(
+            Point::from((
+                -screen_delta.x * mouse_speed / zoom,
+                -screen_delta.y * mouse_speed / zoom,
+            )),
+            event.time,
+            &self.output,
+        );
         self.last_screen_pos = current_screen_pos;
 
         if !self.dragged {

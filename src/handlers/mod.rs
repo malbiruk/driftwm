@@ -4,7 +4,7 @@ pub mod layer_shell;
 pub mod xdg_shell;
 
 use crate::decorations::DecorationKey;
-use crate::state::{DriftWm, FocusIntent, FocusTarget, StageWindow};
+use crate::state::{DriftWm, FocusIntent, FocusTarget};
 use driftwm::window_ext::WindowExt;
 use smithay::wayland::seat::WaylandFocus;
 use smithay::{
@@ -132,7 +132,7 @@ impl SeatHandler for DriftWm {
         if let Some(focus) = focused
             && self.window_for_surface(&focus.0).is_some()
         {
-            self.window_focus = Some(FocusIntent::Surface(focus.clone()));
+            self.set_focus_intent(Some(FocusIntent::Surface(focus.clone())));
         }
     }
 }
@@ -304,8 +304,7 @@ impl XdgActivationHandler for DriftWm {
             .user_data
             .get::<crate::state::RelaunchMarker>()
             .map(|m| m.0)
-            && self.pending_relaunches.contains_key(&sid)
-            && self.find_suspended(sid).is_some()
+            && self.relaunch_target_live(sid)
         {
             let window = self.window_for_surface(&surface);
             let root = window
@@ -324,35 +323,12 @@ impl XdgActivationHandler for DriftWm {
             // The press expressed placement intent at the stand-in's slot, so
             // adopt the window into it.
             if let Some(window) = window {
-                // A window already fullscreen, pinned, rule-placed as a widget,
-                // or living as a dialog/modal of another window is where policy
-                // (or its parent) wants it; adopting would rip it out of that
-                // membership — and, for a dialog, tear it off its parent. Every
-                // suspend path excludes dialogs, so no stand-in ever stands for
-                // one. Drop the stand-in instead and leave the window alone.
-                if self.is_window_fullscreen(&window)
-                    || self.is_pinned(&window)
-                    || window.is_widget()
-                    || window.parent_surface().is_some()
-                    || window.is_modal()
-                {
-                    tracing::debug!(
-                        "relaunch adopt of {sid:?} skipped: window is fullscreen/pinned/widget/dialog; dismissing stand-in"
-                    );
-                    self.dismiss_suspended(sid);
-                    return;
-                }
-                // About to adopt — but not while the window is under an active
-                // interactive move/resize grab: teleporting it would fight the
-                // grab. Transient (unlike the carve-outs above), so leave the
-                // pending relaunch to its TTL and don't dismiss the stand-in.
-                if self.element_under_interactive_grab(&StageWindow::Client(window.clone())) {
-                    return;
-                }
-                self.adopt_relaunched(&window, &root, sid);
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.send_configure();
-                }
+                self.resolve_placed_adopt(
+                    &window,
+                    &root,
+                    sid,
+                    crate::state::AdoptOrigin::Activation,
+                );
                 return;
             }
         }
@@ -409,12 +385,22 @@ impl ExtDataControlHandler for DriftWm {
 delegate_ext_data_control!(DriftWm);
 
 impl PointerConstraintsHandler for DriftWm {
-    fn new_constraint(&mut self, _surface: &WlSurface, _pointer: &PointerHandle<Self>) {
-        // Pointer constraints track pointer focus internally, so bring it up to
-        // date before activating: a client that re-creates a oneshot constraint
-        // (destroyed on deactivation) needs current focus for the new one to
-        // re-arm, e.g. a game whose cursor returns to its fullscreen surface.
-        self.refresh_pointer_focus();
+    fn new_constraint(&mut self, surface: &WlSurface, pointer: &PointerHandle<Self>) {
+        // Constraints arm against pointer focus, so a re-created oneshot
+        // constraint needs it current — but only when it is actually stale. The
+        // refresh dispatches an absolute motion, and the client already holding
+        // focus never moved: its cursor is frozen and it moved that itself with
+        // a position hint, so the motion reads as a jump it never made.
+        //
+        // Stale covers the cursor having left the surface, not just focus
+        // pointing elsewhere: a pan warps the cursor off the window and drops
+        // the constraint a frame before focus follows, and a constraint created
+        // inside that gap would otherwise arm on a window the cursor is no
+        // longer over — freezing it there with no path back.
+        let already_focused = pointer.current_focus().map(|f| f.0).as_ref() == Some(surface);
+        if !already_focused || !self.cursor_over_surface(surface) {
+            self.refresh_pointer_focus();
+        }
         self.maybe_activate_pointer_constraint();
     }
 
@@ -437,11 +423,8 @@ impl PointerConstraintsHandler for DriftWm {
         // recreates its lock (Wine/Proton does this constantly), motion events
         // delivered during the gap reach the surface with stale surface-local
         // coordinates and the game snaps the camera back.
-        let window = self.window_for_surface(surface);
-        if let Some(window) = window
-            && let Some(loc) = self.stage.position_of(&window)
-        {
-            pointer.set_location(loc.to_f64() + location);
+        if let Some(origin) = crate::input::window_origin_for_surface(self, surface) {
+            pointer.set_location(origin + location);
         }
     }
 }
@@ -516,7 +499,7 @@ impl driftwm::protocols::virtual_keyboard::VirtualKeyboardBindingHandler for Dri
     ) -> bool {
         // While locked, the lock surface owns all input (an OSK may well be
         // typing the password); bindings stay off, everything forwards.
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+        if self.session_lock.is_locked() {
             return false;
         }
         // Respect the focused window's pass_keys rule, as the physical path
@@ -771,7 +754,7 @@ impl ForeignToplevelHandler for DriftWm {
 
     fn set_fullscreen(&mut self, wl_surface: WlSurface, wl_output: Option<WlOutput>) {
         let client_output = wl_output.and_then(|wo| smithay::output::Output::from_resource(&wo));
-        if self.pending_center.contains(&wl_surface) {
+        if self.queues_geometry_request(&wl_surface) {
             self.pending_fullscreen.insert(wl_surface, client_output);
             return;
         }
@@ -790,7 +773,7 @@ impl ForeignToplevelHandler for DriftWm {
     }
 
     fn set_maximized(&mut self, wl_surface: WlSurface) {
-        if self.pending_center.contains(&wl_surface) {
+        if self.queues_geometry_request(&wl_surface) {
             self.pending_fit.insert(wl_surface);
             return;
         }
@@ -908,8 +891,18 @@ impl OutputPowerHandler for DriftWm {
             return;
         }
         let already = !self.dpms_off_outputs.contains(output);
-        if already == on {
-            self.pending_dpms.remove(output);
+        // The pending check is what keeps this early return honest: only the
+        // drain's `compositor.clear()` darkens a panel, so a queued transition
+        // the backend hasn't applied yet still has to run. Returning on the
+        // bookkeeping alone would drop it — leaving the output recorded as off
+        // while it is still lit, and `confirmed_dark` vouching for a panel that
+        // is showing the desktop.
+        if already == on
+            && self
+                .pending_dpms
+                .get(output)
+                .is_none_or(|&queued| queued == on)
+        {
             return;
         }
         // Reflect the new state immediately so the inline `mode` event the
@@ -920,6 +913,7 @@ impl OutputPowerHandler for DriftWm {
             self.dpms_off_outputs.remove(output);
         } else {
             self.dpms_off_outputs.insert(output.clone());
+            self.keep_lock_frames_while_pending();
         }
         self.pending_dpms.insert(output.clone(), on);
     }
@@ -1153,8 +1147,25 @@ driftwm::delegate_output_management!(DriftWm);
 use crate::state::SessionLock;
 use smithay::delegate_session_lock;
 use smithay::wayland::session_lock::{
-    LockSurface, SessionLockHandler, SessionLockManagerState, SessionLocker,
+    LockSurface, LockSurfaceData, SessionLockHandler, SessionLockManagerState, SessionLocker,
 };
+use std::collections::HashSet;
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// Tracks the lock role on a `wl_surface` for the pre-commit hook in
+/// `handlers::compositor`, which has to recognise an orphaned lock surface from
+/// state shape alone — `ext_session_lock_surface_v1` has no destroy seam a
+/// handler could hook.
+pub(crate) struct LockRoleMarker {
+    /// driftwm answered this role's creation with a configure. Rules out the
+    /// two roles `new_surface` returns early on: those stay live and unconfigured
+    /// forever, and must keep getting smithay's real error on a live proxy.
+    pub configured: AtomicBool,
+    /// The hook has already found this role orphaned. A latch, because the
+    /// repair writes the very `last_acked` whose absence identified the orphan
+    /// — without it the second orphaned commit reads as a live role again.
+    pub orphaned: AtomicBool,
+}
 
 impl SessionLockHandler for DriftWm {
     fn lock_state(&mut self) -> &mut SessionLockManagerState {
@@ -1162,31 +1173,138 @@ impl SessionLockHandler for DriftWm {
     }
 
     fn lock(&mut self, confirmation: SessionLocker) {
+        match self.session_lock.incumbent() {
+            // Refusing is what keeps the incumbent's lock in place. Unguarded,
+            // any unrestricted client — the global is offered to all of them —
+            // could lock a locked session: its locker would displace the
+            // incumbent's while `lock_surfaces` still holds the incumbent's
+            // surfaces, and the real lock screen's next commit would confirm the
+            // *newcomer's* lock. Dropping the locker sends `finished`, the
+            // protocol's answer to a lock already held.
+            //
+            // What it does not buy: the refused client keeps its
+            // `ext_session_lock_v1`, and smithay answers `unlock_and_destroy` on
+            // it by posting a protocol error and then unlocking anyway — with no
+            // identity handed to `unlock` to check. So any client that ever
+            // obtained a lock object can still unlock the session. Open in niri
+            // and cosmic-comp too; closing it needs a protocol seam smithay
+            // doesn't expose.
+            Some(lock) if lock.is_alive() => {
+                tracing::info!("Refusing session lock: the session is already locked");
+                return;
+            }
+            // A dead lock object says nothing about its client. The client may
+            // have died, taking its surfaces with it and leaving the outputs
+            // blanked with nothing drawing on them and no way back short of a
+            // VT switch; or it may still be connected, having merely destroyed
+            // its lock, in which case its surfaces are still painting (see the
+            // clear below). Either way the newcomer may take the session over.
+            // Most of the teardown below already ran for the lock being
+            // replaced and must not run again — the canvas→screen conversion in
+            // particular would re-convert an already-screen-space pointer.
+            // Going through `Pending` rather than confirming here is what hands
+            // the new lock surface the keyboard on its first commit.
+            Some(_) => {
+                tracing::info!("Replacing a session lock whose client died");
+                self.cancel_pending_deadline();
+                self.cancel_lock_confirm_timer();
+                // A dead lock object doesn't imply a dead client: smithay posts
+                // `invalid_destroy` only once the locker is consumed, and a
+                // `Pending` lock never consumes it, so a client can destroy its
+                // lock cleanly while every lock surface it made stays alive
+                // (`destroyed` fires on surface death, not role death). Left
+                // uncleared, those surfaces would keep painting on any output
+                // the newcomer hasn't reached, taking locked input and holding
+                // the keyboard — stalling `all_ready` for good.
+                self.lock_surfaces.clear();
+                // A live grab on either seat swallows the focus clear below — a
+                // `PopupKeyboardGrab` silently at that, since its `set_focus`
+                // ignores changes until the grab ends rather than refusing
+                // them. Only the keyboard can still acquire one mid-lock:
+                // smithay answers `zwp_input_method_v2.grab_keyboard` by
+                // installing the grab with no hook to refuse it, and the fresh
+                // path's own unset does not stop an input method asking again.
+                // The pointer cannot — the locked dispatch runs no compositor
+                // grab or gesture path, and every client request that installs
+                // one either needs a pointer grab already in place to cite
+                // (`check_grab` for move and resize, smithay's own `has_grab`
+                // for drag) or is refused outright (`popup_grab_allowed`). Its
+                // unset is kept anyway, since that whole bar lives in other
+                // files, and it is not free: smithay restores focus
+                // unconditionally, so with nothing installed it still re-motions
+                // to the stored focus — one last redundant `wl_pointer.motion`
+                // to the evicted surface, at coordinates it already had, before
+                // the clear below leaves it.
+                let pointer = self.seat.get_pointer().unwrap();
+                pointer.unset_grab(self, smithay::utils::SERIAL_COUNTER.next_serial(), 0);
+                self.seat.get_keyboard().unwrap().unset_grab(self);
+                // The lock being replaced ran these clears when it was
+                // installed; they have to repeat because a takeover from
+                // `Locked` finds pointer, touch and keyboard focus all aimed
+                // back at the surface being evicted. From a `Pending` there is
+                // usually nothing aimed anywhere yet, save for a pointer or a
+                // finger that reached a lock surface created but never committed
+                // — `new_surface` inserts at creation, not at first commit.
+                // Either way `is_locked()` holds true through `Pending`, so
+                // nothing stops input reaching that surface until the newcomer's
+                // own commit re-targets it.
+                self.clear_seat_focus();
+                let token = self.arm_pending_deadline();
+                self.session_lock = SessionLock::Pending {
+                    locker: confirmation,
+                    ready_outputs: HashSet::new(),
+                    // Reached from either `Locked` or a `Pending` still showing
+                    // the desktop; either way letting it through here would leak
+                    // unlocked content onto a locked session's screen.
+                    keep_lock_frames: true,
+                    deadline_token: token,
+                };
+                // The flag only decides what the *next* frame paints, and a
+                // `Pending` that was showing a static desktop has no redraw
+                // coming to apply it to.
+                self.mark_all_dirty();
+                return;
+            }
+            None => {}
+        }
         tracing::info!("Session lock requested");
-        self.session_lock = SessionLock::Pending(confirmation);
+        let token = self.arm_pending_deadline();
+        // A dark panel has no desktop to flash, and is the case most needing
+        // this: the standard idle setup blanks it minutes before locking, and
+        // the next stray input re-lights it onto whatever `Pending` paints
+        // (`wake_dpms_off_outputs` runs ahead of the locked-input gate).
+        //
+        // `dpms_off_outputs`, not `confirmed_dark`: an output whose off is
+        // still queued needs the guard just as much — that same input would
+        // cancel the queued off and leave the panel lit.
+        let any_output_dark = !self.dpms_off_outputs.is_empty();
+        self.session_lock = SessionLock::Pending {
+            locker: confirmation,
+            ready_outputs: HashSet::new(),
+            // With no deadline, nothing bounds how long `Pending` could leave
+            // the desktop up with input dead — degrade to blanking instead.
+            keep_lock_frames: token.is_none() || any_output_dark,
+            deadline_token: token,
+        };
 
         // Kill all transient input/animation state so nothing fires during lock
         self.gesture_state = None;
-        for output in self.space.outputs().cloned().collect::<Vec<_>>() {
-            let mut os = crate::state::output_state(&output);
-            os.momentum.stop();
-            os.edge_pan_velocity = None;
-            os.edge_pan_screen_pos = None;
-            os.edge_pan_delay = None;
-            os.panning = false;
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
-        }
         self.held_action = None;
+        // Must precede `pointer.unset_grab` below: `MoveGrab::unset` re-arms
+        // `pending_pointer_resync` when it finds `grab_cursor` still set, and
+        // that resync would re-target pointer focus on the next frame.
         self.cursor.grab_cursor = false;
         // Pick mode makes decoration_cursor true over whole window bodies, so
         // locking while hovering a pick target would leave it set through the
         // lock and until the next motion after unlock.
         self.cursor.decoration_cursor = false;
-        // Withheld touch events must never reach an app beneath the lock
-        // surface — their deadline timer would otherwise replay them mid-lock.
-        self.discard_touch_holdback();
+        // Tears down the withheld events, the touch grab, and any armed close a
+        // live sequence owns — see its own doc for why `cancel()` alone can't.
+        self.cancel_touch_sequence();
+        // Not part of the sequence — the timer outlives the fingers — and it
+        // fires `navigate_to_window`, which would arm `camera_target` mid-lock,
+        // after the clear below has had its last word.
+        self.cancel_pending_center();
         // Lock may swallow key releases and prevents focus history updates while
         // mid-cycle; reset these so none survive the locked window.
         self.stage.cancel_cycle();
@@ -1198,43 +1316,159 @@ impl SessionLockHandler for DriftWm {
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
         let pointer = self.seat.get_pointer().unwrap();
         pointer.unset_grab(self, serial, 0);
+        // A live `zwp_input_method_v2` keyboard grab forwards every key to the
+        // IME client and never passes it on to the focused surface — so the
+        // password would be typed into that client and never reach the lock
+        // screen, a leak and a lockout at once. This also drops a
+        // `PopupKeyboardGrab`, which would swallow the focus clear below; the
+        // pointer teardown above covers that one, but only while the two stay
+        // paired.
+        //
+        // The IME grab does not come back: smithay only installs it on the
+        // client's `grab_keyboard` request and only clears its bookkeeping when
+        // the grab object is destroyed, and exposes no way to re-install it. So
+        // after an unlock the IME sees no keys until it recreates the grab, and
+        // `InputMethodHandle::keyboard_grabbed` keeps reporting `true`, which
+        // costs xdg popups their keyboard grab for the rest of the session.
+        // Accepted: the alternative is a lock screen that cannot be typed into.
+        self.seat.get_keyboard().unwrap().unset_grab(self);
 
-        // Deactivate any pointer constraint held on the current focus surface.
-        // Without this, a Wine game (or any client with a Locked constraint)
-        // keeps the cursor pinned through unlock — the lock screen can't move.
-        if let Some(focus) = pointer.current_focus() {
-            smithay::wayland::pointer_constraints::with_pointer_constraint(
-                &focus.0,
-                &pointer,
-                |c| {
-                    if let Some(c) = c
-                        && c.is_active()
-                    {
-                        c.deactivate();
-                    }
-                },
-            );
+        // Has to be the last word on the per-output animation state: a grab's
+        // `unset` re-arms some of it on the way out — `disarm_interactive_move`
+        // lands a deferred view straight into `camera_target` — so clearing
+        // before the teardowns above would leave a camera flying while locked.
+        // `cancel_animations_on` over a bare `momentum.stop()` because it also
+        // drops a momentum auto-launch still pending on its timer.
+        for output in self.space.outputs().cloned().collect::<Vec<_>>() {
+            self.cancel_animations_on(&output);
+            self.clear_edge_pan(&output);
+            // `set_panning` would only reach the active output.
+            crate::state::output_state(&output).panning = false;
         }
+
+        // Established here and undone in `unlock`: for the whole lock,
+        // `pointer.current_location()` holds *screen* coords. The locked motion
+        // handlers hand the lock surface screen-space positions, and the
+        // relative one integrates `old + delta` on top of whatever is stored —
+        // so canvas coords left in place would reach the lock surface as-is
+        // until some absolute motion happened to overwrite them.
+        //
+        // Not a total invariant: mid-lock readers that want canvas coords have
+        // to gate themselves, and the round trip only returns the original
+        // position while the camera and zoom it was taken against hold still.
+        // An output disconnect re-aims both, and a client's own `set_fullscreen`
+        // still parks them mid-lock — the gate there stops the pointer hand-off,
+        // not the camera move. The cursor still lands where it appears on
+        // screen, since `unlock` reads the camera as it is then.
+        let screen_pos = driftwm::canvas::canvas_to_screen(
+            driftwm::canvas::CanvasPos(pointer.current_location()),
+            self.camera(),
+            self.zoom(),
+        )
+        .0;
+        pointer.set_location(screen_pos);
 
         self.cursor.exec_cursor_show_at = None;
         self.cursor.exec_cursor_deadline = None;
+        // Only physical pointer motion lifts the touch hide, so locking any
+        // time after a touch — including from a touch gesture — would leave the
+        // lock screen with no cursor at all.
+        self.cursor.hidden_by_touch = false;
         self.cursor.cursor_status = smithay::input::pointer::CursorImageStatus::default_named();
-        // Clear keyboard focus — no window should be interactable
-        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        self.set_keyboard_focus(None, serial);
+        // `unset_grab` above restores pointer focus to the window under the
+        // cursor, and nothing re-targets it until the first locked motion — so a
+        // click or scroll before then would reach the app behind the lock
+        // screen, and no window should be keyboard-interactable either. `None`,
+        // not the lock surface: the guard above means we only get here from
+        // `Unlocked`, and `unlock` empties `lock_surfaces`, so none exist yet.
+        // The `leave` the synthetic motion sends is also what releases a pointer
+        // constraint (a Wine game's cursor lock would otherwise pin the cursor
+        // straight through unlock) — smithay deactivates unconditionally there.
+        // Must run after the cursor fields above: this re-enters `cursor_image`,
+        // which writes `cursor_status`.
+        self.clear_seat_focus();
         self.mark_all_dirty();
     }
 
     fn unlock(&mut self) {
+        // Idempotence, not identity: any client still holding an
+        // `ext_session_lock_v1` can send `unlock_and_destroy` at any time — one
+        // that never locked anything lands here with the session already
+        // unlocked, and the conversion below must not run twice on an
+        // already-canvas location. One that sends it while the session really is
+        // locked does unlock it; see the residual noted in `lock`.
+        if !self.session_lock.is_locked() {
+            return;
+        }
         tracing::info!("Session unlocked");
+        // `unlock_and_destroy` can land on a still-`Pending` lock — smithay
+        // answers it with a protocol error and honours it anyway — so this
+        // timer needs cancelling too, not just the `Locked` backstop. The
+        // timer's own state check stops it acting on a dead lock; it doesn't
+        // stop the wakeup.
+        self.cancel_pending_deadline();
+        self.cancel_lock_confirm_timer();
+        // Undo the canvas→screen conversion `lock` established, before anything
+        // hit-tests with the stored location again.
+        let pointer = self.seat.get_pointer().unwrap();
+        let canvas_pos = driftwm::canvas::screen_to_canvas(
+            driftwm::canvas::ScreenPos(pointer.current_location()),
+            self.camera(),
+            self.zoom(),
+        )
+        .0;
+        pointer.set_location(canvas_pos);
         self.session_lock = SessionLock::Unlocked;
         self.lock_surfaces.clear();
+        // A finger still down at unlock would otherwise leave its slot
+        // allowlisted — the unlocked `on_touch_up` branch never removes one.
+        self.touch_state.lock_slots.clear();
         // Restore focus to the window (or layer) that owned it before locking.
         self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());
+        // `lock` cleared pointer focus and nothing re-seats it until the pointer
+        // physically moves, so the first click after unlocking would be
+        // swallowed. Must follow the assignment above — it no-ops while locked.
+        self.refresh_pointer_focus();
         self.mark_all_dirty();
     }
 
     fn new_surface(&mut self, surface: LockSurface, wl_output: WlOutput) {
+        // Before the early returns below: a `wl_surface` whose previous lock role
+        // was neutralised must not carry that verdict, nor the synthetic
+        // `last_acked` the hook wrote, into the role being taken now — the
+        // synthetic would tell the new role's first commit it had already acked,
+        // masking a genuine violation. `None` is what a role starts on either
+        // way — first-ever or after smithay's `destroyed` reset. Above the early
+        // returns because a role driftwm declines is exactly a role that must
+        // keep getting smithay's real errors.
+        smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
+            states
+                .data_map
+                .insert_if_missing_threadsafe(|| LockRoleMarker {
+                    configured: AtomicBool::new(false),
+                    orphaned: AtomicBool::new(false),
+                });
+            let marker = states.data_map.get::<LockRoleMarker>().unwrap();
+            marker.configured.store(false, Ordering::Relaxed);
+            marker.orphaned.store(false, Ordering::Relaxed);
+            if let Some(attributes) = states.data_map.get::<LockSurfaceData>() {
+                attributes.lock().unwrap().last_acked = None;
+            }
+        });
+
+        // Only the client that holds the lock may put a surface on it. smithay's
+        // own guard is `locked_outputs`, which compares `wl_output` *resources*
+        // — per-client objects — so it never fires across clients: without this,
+        // a client whose `lock` was refused (it still holds a live
+        // `ext_session_lock_v1`) could overwrite the real lock screen's surface
+        // for an output with a password prompt of its own, and every locked
+        // pointer and touch event would route to it.
+        let owner = self.session_lock.incumbent().and_then(|lock| lock.client());
+        if owner.is_none() || owner != surface.wl_surface().client() {
+            tracing::warn!("Ignoring lock surface from a client that does not hold the lock");
+            return;
+        }
+
         let output =
             smithay::output::Output::from_resource(&wl_output).or_else(|| self.active_output());
         let Some(output) = output else { return };
@@ -1245,6 +1479,14 @@ impl SessionLockHandler for DriftWm {
             state.size = Some((output_size.w as u32, output_size.h as u32).into());
         });
         surface.send_configure();
+        smithay::wayland::compositor::with_states(surface.wl_surface(), |states| {
+            states
+                .data_map
+                .get::<LockRoleMarker>()
+                .unwrap()
+                .configured
+                .store(true, Ordering::Relaxed);
+        });
         self.lock_surfaces.insert(output, surface);
     }
 }

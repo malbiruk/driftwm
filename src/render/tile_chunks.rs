@@ -109,6 +109,9 @@ pub struct BgChunkCache {
     /// when the viewport is unchanged; otherwise a static camera repaints the
     /// whole background (blur included) every frame.
     fallback_uniform_state: Option<(Point<f64, Logical>, i32, i32)>,
+    /// [`Self::shrink`] already ran for the current fullscreen session. The
+    /// caller fires it per frame, not once on entry.
+    shrunk: bool,
 }
 
 impl BgChunkCache {
@@ -206,7 +209,39 @@ impl BgChunkCache {
             fallback_shader,
             fallback_element: None,
             fallback_uniform_state: None,
+            shrunk: false,
         })
+    }
+
+    /// Free the per-tile half of the cache — everything the `cache_budget_mb`
+    /// LRU governs — while a fullscreen window occludes the canvas, keeping the
+    /// fallback plane, the pyramid metadata and the decoder pool. The cache
+    /// stays in `cached_tile_chunks`, so the exit frame resolves against a
+    /// resident cover instead of re-opening the TIFF, re-decoding the whole
+    /// fallback LOD and re-spawning the pool inline.
+    pub fn shrink(&mut self) {
+        // Workers mid-decode when the shrink lands still deliver, and nothing
+        // drains the channel while fullscreen: discard late blobs every frame
+        // rather than hold ~4 MB each for the whole session.
+        while self.pool.try_recv().is_some() {}
+        if self.shrunk {
+            return;
+        }
+        self.shrunk = true;
+        self.chunks.clear();
+        self.chunk_elements.clear();
+        self.chunk_meta.clear();
+        // Only chunk imports ever add to this — the fallback texture was never
+        // counted, so clearing `chunks` accounts for all of it.
+        self.vram_bytes = 0;
+        self.pool.drain_pending();
+        // Entries left here would keep `has_pending_loads()` true with nothing
+        // left to answer them, and the udev scheduler marks an output with
+        // pending loads dirty every vblank — for the whole fullscreen session.
+        self.in_flight.clear();
+        // `failed` deliberately survives: it holds no memory, doesn't feed
+        // `has_pending_loads()`, and clearing it would re-decode and re-fail
+        // every permanently-broken tile on every fullscreen exit.
     }
 
     pub fn n_lods(&self) -> u32 {
@@ -239,6 +274,9 @@ impl BgChunkCache {
         #[cfg(feature = "profile-with-tracy")]
         let _span = tracy_client::span!("BgChunkCache::ensure_visible_loaded");
 
+        // Only reached on a frame that draws the canvas, so the next shrink has
+        // fresh work to do.
+        self.shrunk = false;
         self.frame_counter = self.frame_counter.wrapping_add(1);
         let frame = self.frame_counter;
 
@@ -337,6 +375,13 @@ impl BgChunkCache {
         !self.in_flight.is_empty()
     }
 
+    /// Outstanding decode requests. Exposed for `debug_counters` so a live
+    /// session can show that a fullscreen output is holding none — a non-zero
+    /// count there is the per-vblank repaint regression.
+    pub fn in_flight_len(&self) -> usize {
+        self.in_flight.len()
+    }
+
     fn drain_responses(
         &mut self,
         renderer: &mut GlesRenderer,
@@ -352,7 +397,12 @@ impl BgChunkCache {
                 break;
             };
             let key = (resp.req.lod, resp.req.cx as i32, resp.req.cy as i32);
-            self.in_flight.remove(&key);
+            if !self.in_flight.remove(&key) {
+                // A shrink dropped the request this answers; importing it would
+                // repopulate a cache that is meant to stay empty until the
+                // fullscreen window goes away.
+                continue;
+            }
             match resp.result {
                 Ok(tile) => {
                     match renderer.import_memory(

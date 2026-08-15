@@ -24,6 +24,14 @@ pub(crate) const MAX_ENDPOINT_HOLD: Duration = Duration::from_millis(500);
 /// the endpoint hold, which the eye reads as a settled window lingering; this one
 /// is a keystroke answered by nothing moving at all.
 pub(crate) const MAX_START_HOLD: Duration = Duration::from_millis(300);
+/// A compositor resize smaller than this (per axis) carries no request at all.
+/// It is not worth freezing the window, stashing its content, flattening that on
+/// the GPU and crossfading it — and worse, a client that *cannot* honour a small
+/// request (cell-quantized terminals, aspect-locked players, fixed-size dialogs)
+/// answers by committing its old size, which is indistinguishable from not
+/// answering, so the freeze would burn its whole budget over a resize nobody can
+/// see. The geometry leg still runs; it just has nothing to wait for.
+pub(crate) const MIN_ANIMATED_RESIZE: i32 = 10;
 
 /// The freeze that precedes a compositor-initiated resize leg. Nothing moves
 /// until the client delivers the new size, so the leg can play with real content

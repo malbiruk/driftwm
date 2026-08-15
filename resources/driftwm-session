@@ -1,42 +1,46 @@
 #!/bin/sh
 # driftwm-session — launched by display manager (e.g. GDM) instead of bare driftwm.
 # Re-execs through a login shell to pick up /etc/profile, ~/.profile and PAM
-# env vars, then runs driftwm.service under the user systemd manager so the
-# compositor lives in its own cgroup with proper journald logging.
+# env vars, then runs driftwm. When systemd user manager is available it starts
+# driftwm as a user service for cgroup isolation and journald logging; otherwise
+# it falls back to running driftwm directly (e.g. on runit-based distros).
 
 if [ -z "$_DRIFTWM_WRAPPER" ]; then
     export _DRIFTWM_WRAPPER=1
     exec "$SHELL" -l -c "$0 $@"
 fi
 
-if ! hash systemctl >/dev/null 2>&1; then
-    echo "systemctl not found; driftwm-session requires systemd user manager." >&2
-    echo "Run 'driftwm' directly instead." >&2
-    exit 1
+has_systemd=0
+hash systemctl >/dev/null 2>&1 && has_systemd=1
+
+if [ "$has_systemd" -eq 1 ]; then
+    # Refuse to start a second session on top of an existing one.
+    if systemctl --user -q is-active driftwm.service; then
+        echo "A driftwm session is already running." >&2
+        exit 1
+    fi
+
+    # Clear any stale failure state on units we depend on.
+    systemctl --user reset-failed
+
+    # Import the login environment into systemd and D-Bus so anything activated
+    # via the user manager or D-Bus (portals, waybar, ...) inherits the same env.
+    systemctl --user import-environment
+    hash dbus-update-activation-environment 2>/dev/null && \
+        dbus-update-activation-environment --all
+
+    # Run the compositor as a user service and wait for it to exit. BindsTo on
+    # driftwm.service brings graphical-session.target up automatically; logs land
+    # in the journal (journalctl --user -u driftwm.service).
+    systemctl --user --wait start driftwm.service
+
+    # Force-stop graphical-session{,-pre}.target via the shutdown target so any
+    # services with PartOf=graphical-session.target are torn down cleanly.
+    systemctl --user start --job-mode=replace-irreversibly driftwm-shutdown.target
+
+    systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP
+else
+    # No systemd user manager — run compositor directly (runit, OpenRC, etc.).
+    # Environment is already set up via the login-shell re-exec above.
+    exec driftwm --backend udev
 fi
-
-# Refuse to start a second session on top of an existing one.
-if systemctl --user -q is-active driftwm.service; then
-    echo "A driftwm session is already running." >&2
-    exit 1
-fi
-
-# Clear any stale failure state on units we depend on.
-systemctl --user reset-failed
-
-# Import the login environment into systemd and D-Bus so anything activated
-# via the user manager or D-Bus (portals, waybar, ...) inherits the same env.
-systemctl --user import-environment
-hash dbus-update-activation-environment 2>/dev/null && \
-    dbus-update-activation-environment --all
-
-# Run the compositor as a user service and wait for it to exit. BindsTo on
-# driftwm.service brings graphical-session.target up automatically; logs land
-# in the journal (journalctl --user -u driftwm.service).
-systemctl --user --wait start driftwm.service
-
-# Force-stop graphical-session{,-pre}.target via the shutdown target so any
-# services with PartOf=graphical-session.target are torn down cleanly.
-systemctl --user start --job-mode=replace-irreversibly driftwm-shutdown.target
-
-systemctl --user unset-environment WAYLAND_DISPLAY DISPLAY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP XDG_SESSION_DESKTOP

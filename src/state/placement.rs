@@ -4,17 +4,25 @@ use smithay::desktop::Window;
 use smithay::utils::{Logical, Size};
 use smithay::wayland::seat::WaylandFocus;
 
+use driftwm::canvas::Chrome;
+
 use super::{AUTO_PLACE_CLUSTER_THRESHOLD, DriftWm, StageWindow};
 
 impl DriftWm {
     /// Spawn pos for `placement = "cursor"`: center the visual frame
-    /// (titlebar + content) on the cursor, clamped to the active output's
-    /// usable rect. `bar` is SSD title-bar height (0 for CSD/minimal).
+    /// (titlebar + content + border) on the cursor, clamped to the active
+    /// output's usable rect. Returns a content top-left.
     pub fn cursor_placement_pos(
         &self,
         window_size: Size<i32, Logical>,
-        bar: i32,
+        chrome: Chrome,
     ) -> Option<(i32, i32)> {
+        // A locked session keeps *screen* coords in `current_location` (see
+        // `SessionLockHandler::lock`), which read as canvas would spawn the
+        // window at a position nobody pointed at. Fall back to centering.
+        if self.session_lock.is_locked() {
+            return None;
+        }
         self.active_output()?;
 
         let pointer = self.seat.get_pointer()?;
@@ -31,24 +39,27 @@ impl DriftWm {
 
         // Target: visual frame center on cursor. Frame spans [loc.y - bar, loc.y + h],
         // so frame center = loc.y + (h - bar)/2  →  loc.y = cursor.y - h/2 + bar/2.
-        let bar_f = bar as f64;
+        // A border is symmetric and cancels out of the center; only the clamps
+        // below have to know about it.
+        let bar_f = chrome.bar as f64;
+        let bw = chrome.border as f64;
         let raw_x = cursor.x - window_size.w as f64 / 2.0;
         let raw_y = cursor.y - window_size.h as f64 / 2.0 + bar_f / 2.0;
 
         // Clamp so the frame stays fully inside the usable canvas rect.
         // For oversized windows, .max() keeps the upper bound >= lower bound
         // (the top sticks at the usable edge; the bottom overflows).
-        let max_x = (cx_max - window_size.w as f64).max(cx_min);
-        let max_y = (cy_max - window_size.h as f64).max(cy_min + bar_f);
-        let x = raw_x.clamp(cx_min, max_x);
-        let y = raw_y.clamp(cy_min + bar_f, max_y);
+        let max_x = (cx_max - window_size.w as f64 - bw).max(cx_min + bw);
+        let max_y = (cy_max - window_size.h as f64 - bw).max(cy_min + bar_f + bw);
+        let x = raw_x.clamp(cx_min + bw, max_x);
+        let y = raw_y.clamp(cy_min + bar_f + bw, max_y);
 
         Some((x.round() as i32, y.round() as i32))
     }
 
     /// Spawn pos for `placement = "auto"`: snap-place adjacent to a cluster
-    /// already in view. Returns content top-left (shifted down by `bar` so
-    /// the visual frame snaps to the neighbor).
+    /// already in view. Returns a content top-left — stepped in from the frame
+    /// `place_auto` picks, so it is the visual frame that snaps to the neighbor.
     ///
     /// The anchor is the focus snapshotted at `new_toplevel` time while it is
     /// *usable* — an eligible canvas element, visible enough that the user is
@@ -67,7 +78,7 @@ impl DriftWm {
         &self,
         new_window: &Window,
         new_size: Size<i32, Logical>,
-        bar: i32,
+        chrome: Chrome,
     ) -> Option<(i32, i32)> {
         // Anchor = keyboard focus at `new_toplevel` time, snapshotted before
         // focus was reassigned to the new surface. A missing entry means the
@@ -83,7 +94,7 @@ impl DriftWm {
                     && self.window_visible_at_least(*a, AUTO_PLACE_CLUSTER_THRESHOLD)
             });
         if let Some(focused) = snapshot {
-            return self.place_adjacent_to(focused, new_window, new_size, bar);
+            return self.place_adjacent_to(focused, new_window, new_size, chrome);
         }
 
         // Clicking empty canvas is a deliberate blank slate: honor it and let
@@ -93,7 +104,7 @@ impl DriftWm {
         }
 
         let anchor = self.nearest_auto_anchor(new_window)?;
-        self.place_adjacent_to(&anchor, new_window, new_size, bar)
+        self.place_adjacent_to(&anchor, new_window, new_size, chrome)
     }
 
     /// The element auto placement anchors to when the focus snapshot can't
@@ -140,8 +151,8 @@ impl DriftWm {
             .is_some_and(|s| self.pending_center.contains(&*s))
     }
 
-    /// Geometry-only placement of `placing` (content sized `new_size`, SSD
-    /// bar `bar`) adjacent to `anchor`'s snap cluster — a live window or a
+    /// Geometry-only placement of `placing` (content sized `new_size`, wearing
+    /// `chrome`) adjacent to `anchor`'s snap cluster — a live window or a
     /// focused suspended stand-in — treating every other mapped window as an
     /// obstacle. Returns the content top-left in canvas coords, or `None` when
     /// `anchor` is ineligible or no slot fits.
@@ -150,9 +161,9 @@ impl DriftWm {
         anchor: &StageWindow,
         placing: &Window,
         new_size: Size<i32, Logical>,
-        bar: i32,
+        chrome: Chrome,
     ) -> Option<(i32, i32)> {
-        let placing_surface = placing.wl_surface()?.into_owned();
+        placing.wl_surface()?;
 
         // Widgets sit visually below windows (wallpaper-like) — neither
         // anchors nor obstacles for auto placement.
@@ -168,7 +179,11 @@ impl DriftWm {
                 .and_then(|s| driftwm::config::applied_rule(&s))
                 .is_some_and(|r| r.widget);
             let is_fs = self.is_window_fullscreen(w);
-            if widget || is_fs || self.is_pinned(w) {
+            // A window awaiting a deferred adopt occupies no visible ground: it
+            // is not drawn where it sits and the flush moves it, so reserving
+            // that ground would push the window being placed off into free
+            // canvas for nothing.
+            if widget || is_fs || self.is_pinned(w) || self.hidden_by_deferred_adopt(w) {
                 continue;
             }
             let Some(loc) = self.stage.position_of(w) else {
@@ -191,9 +206,8 @@ impl DriftWm {
         }
         let anchor_idx = anchor_idx?;
 
-        let new_bw = self.window_border_width(&placing_surface) as f64;
-        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
-        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
+        let frame = chrome.frame_size(new_size);
+        let (new_w_f, new_h_f) = (frame.w as f64, frame.h as f64);
 
         let camera = self.camera();
         let zoom = self.zoom();
@@ -212,11 +226,8 @@ impl DriftWm {
 
         // place_auto returns frame top-left (outside border, above title bar);
         // shift inward to content top-left.
-        let bw_i = new_bw as i32;
-        Some((
-            pos.0.round() as i32 + bw_i,
-            pos.1.round() as i32 + bw_i + bar,
-        ))
+        let content = chrome.content_loc((pos.0.round() as i32, pos.1.round() as i32).into());
+        Some((content.x, content.y))
     }
 
     /// Placement for a new window that would otherwise land on top of a
@@ -231,7 +242,7 @@ impl DriftWm {
         &self,
         new_window: &Window,
         new_size: Size<i32, Logical>,
-        bar: i32,
+        chrome: Chrome,
     ) -> Option<(i32, i32)> {
         let new_surface = new_window.wl_surface()?.into_owned();
 
@@ -301,9 +312,8 @@ impl DriftWm {
             eligible.insert(idx);
         }
 
-        let new_bw = self.window_border_width(&new_surface) as f64;
-        let new_w_f = new_size.w as f64 + 2.0 * new_bw;
-        let new_h_f = (new_size.h + bar) as f64 + 2.0 * new_bw;
+        let frame = chrome.frame_size(new_size);
+        let (new_w_f, new_h_f) = (frame.w as f64, frame.h as f64);
 
         // Bias toward the fullscreen window's home center; its live location is
         // the fullscreen viewport, which is irrelevant to canvas placement.
@@ -312,7 +322,6 @@ impl DriftWm {
             anchor_rect.y + anchor_rect.h / 2.0,
         );
 
-        let bw_i = new_bw as i32;
         if let Some(pos) = driftwm::layout::auto_placement::place_auto(
             &rects,
             0,
@@ -322,10 +331,8 @@ impl DriftWm {
             vc,
             self.config.snap_gap,
         ) {
-            return Some((
-                pos.0.round() as i32 + bw_i,
-                pos.1.round() as i32 + bw_i + bar,
-            ));
+            let content = chrome.content_loc((pos.0.round() as i32, pos.1.round() as i32).into());
+            return Some((content.x, content.y));
         }
 
         // No adjacent slot: park it just below the fullscreen window's saved

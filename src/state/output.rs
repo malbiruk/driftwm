@@ -1,13 +1,84 @@
 use std::collections::HashMap;
 
+use smithay::desktop::Window;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point};
+use smithay::wayland::seat::WaylandFocus;
 
+use driftwm::canvas::{ScreenPos, clamp_to_output};
 use driftwm::config::OutputPosition;
+use driftwm::stage::StageElement;
 
-use super::{CameraSeed, DriftWm, init_output_state, output_logical_size, output_state};
+#[cfg(test)]
+use super::OutputState;
+use super::{
+    CameraSeed, DriftWm, StageWindow, canvas_render_loc, init_output_state, output_logical_size,
+    output_state,
+};
 
 impl DriftWm {
+    /// Resolve an output name (the stage's fullscreen key) back to the live
+    /// `Output`. `None` if the output was disconnected in the meantime.
+    pub fn output_by_name(&self, name: &str) -> Option<Output> {
+        self.space.outputs().find(|o| o.name() == name).cloned()
+    }
+
+    /// The output the pointer is currently on; falls back to the first output.
+    pub fn active_output(&self) -> Option<Output> {
+        self.focused_output
+            .clone()
+            .or_else(|| self.space.outputs().next().cloned())
+    }
+
+    /// Output whose viewport contains the element's center, or the active
+    /// output if it isn't visible on any. Element-generic: a stand-in resolves
+    /// by center containment exactly like a client (it never pins, so the
+    /// pin short-circuit is simply inert for it).
+    pub fn output_for_window<Q>(&self, window: &Q) -> Option<Output>
+    where
+        StageWindow: PartialEq<Q>,
+        Q: StageElement,
+    {
+        // A pinned window is fixed to one output regardless of canvas geometry.
+        if let Some(site) = self.stage.pin_of(window) {
+            return self.output_by_name(&site.output);
+        }
+        let loc = self.stage.position_of(window)?;
+        let size = window.size();
+        let center: Point<f64, Logical> = Point::from((
+            loc.x as f64 + size.w as f64 / 2.0,
+            loc.y as f64 + size.h as f64 / 2.0,
+        ));
+        self.output_showing_canvas_point(center)
+            .or_else(|| self.active_output())
+    }
+
+    /// True if `output`'s viewport currently shows the canvas point.
+    pub fn output_shows_canvas_point(&self, output: &Output, point: Point<f64, Logical>) -> bool {
+        let (camera, zoom) = {
+            let os = output_state(output);
+            (os.camera, os.zoom)
+        };
+        let visible = driftwm::canvas::visible_canvas_rect(
+            camera.to_i32_round(),
+            output_logical_size(output),
+            zoom,
+        );
+        visible.contains(Point::from((point.x as i32, point.y as i32)))
+    }
+
+    /// First output whose viewport shows the canvas point. Callers that have a
+    /// preferred output (the pointer's, say) should test it with
+    /// `output_shows_canvas_point` first: viewports overlap by default — every
+    /// output starts centered on the canvas origin — so the first match is
+    /// registration order, not proximity.
+    pub fn output_showing_canvas_point(&self, point: Point<f64, Logical>) -> Option<Output> {
+        self.space
+            .outputs()
+            .find(|output| self.output_shows_canvas_point(output, point))
+            .cloned()
+    }
+
     /// Retire every virtual placeholder output (the ones held while all physical
     /// monitors were unplugged): exit any fullscreen entered on them, drain their
     /// enters, unmap them from the [`Space`], and drop their render state. Clears
@@ -224,6 +295,7 @@ impl DriftWm {
         self.render.remove_output(&output.name());
         self.lock_surfaces.remove(output);
         self.redraws_needed.remove(output);
+        self.stop_awaiting_lock_frame(output);
 
         if is_last {
             // Keep the Output mapped as a virtual placeholder so active_output()
@@ -257,13 +329,294 @@ impl DriftWm {
                         let sz = output_logical_size(new_out);
                         (os.camera, os.zoom, sz)
                     };
-                    let center = Point::from((
-                        cam.x + size.w as f64 / (2.0 * zoom),
-                        cam.y + size.h as f64 / (2.0 * zoom),
-                    ));
-                    self.warp_pointer(center);
+                    if self.session_lock.is_locked() {
+                        // `warp_pointer` declines under a lock, and the stored
+                        // location is screen-space against the output that just
+                        // left — on a smaller survivor it would render outside
+                        // the framebuffer until some relative motion clamped it
+                        // back. Nothing to re-center on here: the lock surface
+                        // is screen-fixed.
+                        let pointer = self.seat.get_pointer().unwrap();
+                        let clamped = clamp_to_output(ScreenPos(pointer.current_location()), size);
+                        pointer.set_location(clamped.0);
+                    } else {
+                        let center = Point::from((
+                            cam.x + size.w as f64 / (2.0 * zoom),
+                            cam.y + size.h as f64 / (2.0 * zoom),
+                        ));
+                        self.warp_pointer(center);
+                    }
                 }
             }
         }
+    }
+
+    /// Effective render transform for `window` in one pass: the pre-zoom,
+    /// output-relative logical origin of its surface tree (geometry top-left
+    /// minus `geometry().loc`) and the scale to render at. The single
+    /// canvas↔screen chokepoint — every render/capture consumer routes through
+    /// it so a pinned window is decided once, not re-inlined per site.
+    ///
+    /// - Normal window: `loc - geom_loc - camera`, scaled by `zoom`.
+    /// - Pinned window on its output: `screen_pos - geom_loc`, scale `1.0`
+    ///   (identity — no camera, no zoom).
+    /// - Pinned window on any other output: `None` (don't render here).
+    /// - `output = None` (off-screen canvas capture): pinned → `None` by
+    ///   construction, so captures never include screen-pinned windows.
+    pub fn window_render_transform(
+        &self,
+        window: &Window,
+        output: Option<&Output>,
+        camera: Point<f64, Logical>,
+        zoom: f64,
+    ) -> Option<(Point<f64, Logical>, f64)> {
+        let loc = self.stage.position_of(window)?;
+        let geom_loc = window.geometry().loc;
+        // A fullscreen window is visible only on its own output. For any other
+        // output — and for the off-screen capture pass (`output == None`) — it
+        // must not render: it keeps a real canvas coord at its output's
+        // camera origin, so another monitor's camera would otherwise pan over
+        // it. On its own output it falls through to the canvas branch below,
+        // which yields (0,0) at zoom 1 thanks to the camera-park.
+        if self.stage.has_fullscreen()
+            && let Some(fs_output) = window
+                .wl_surface()
+                .and_then(|s| self.find_fullscreen_output_for_surface(&s))
+            && output != Some(&fs_output)
+        {
+            return None;
+        }
+        match self.stage.pin_of(window) {
+            Some(site) => match output {
+                Some(o) if o.name() == site.output => Some((
+                    Point::from((
+                        site.screen_pos.x as f64 - geom_loc.x as f64,
+                        site.screen_pos.y as f64 - geom_loc.y as f64,
+                    )),
+                    1.0,
+                )),
+                _ => None,
+            },
+            None => Some((canvas_render_loc(loc, geom_loc, camera), zoom)),
+        }
+    }
+
+    pub fn output_in_direction(
+        &self,
+        from: &Output,
+        dir: &driftwm::config::Direction,
+    ) -> Option<Output> {
+        let from_center: Point<f64, Logical> = {
+            let os = output_state(from);
+            let size = output_logical_size(from);
+            Point::from((
+                os.layout_position.x as f64 + size.w as f64 / 2.0,
+                os.layout_position.y as f64 + size.h as f64 / 2.0,
+            ))
+        };
+        let (dx, dy) = dir.to_unit_vec();
+
+        self.space
+            .outputs()
+            .filter(|o| *o != from)
+            .filter_map(|o| {
+                let os = output_state(o);
+                let size = output_logical_size(o);
+                let center: Point<f64, Logical> = Point::from((
+                    os.layout_position.x as f64 + size.w as f64 / 2.0,
+                    os.layout_position.y as f64 + size.h as f64 / 2.0,
+                ));
+                drop(os);
+                let to_x = center.x - from_center.x;
+                let to_y = center.y - from_center.y;
+                let dist = (to_x * to_x + to_y * to_y).sqrt();
+                if dist < 1.0 {
+                    return None;
+                }
+                // dot > 0.5 ≈ alignment within ~60° of `dir`.
+                let dot = (to_x * dx + to_y * dy) / dist;
+                if dot > 0.5 {
+                    Some((o.clone(), dist))
+                } else {
+                    None
+                }
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(o, _)| o)
+    }
+
+    /// Output whose layout rectangle contains `pos`. Uses `layout_position` +
+    /// mode size (NOT `space.output_geometry()`, which is zoom-cached).
+    pub fn output_at_layout_pos(&self, pos: Point<f64, Logical>) -> Option<Output> {
+        self.space
+            .outputs()
+            .find(|output| {
+                let os = output_state(output);
+                let lp = os.layout_position;
+                drop(os);
+                let size = output_logical_size(output);
+                pos.x >= lp.x as f64
+                    && pos.x < (lp.x + size.w) as f64
+                    && pos.y >= lp.y as f64
+                    && pos.y < (lp.y + size.h) as f64
+            })
+            .cloned()
+    }
+
+    /// layout_pos = (canvas - camera) * zoom + layout_position.
+    #[cfg(test)]
+    pub fn canvas_to_layout_pos(
+        canvas_pos: Point<f64, Logical>,
+        os: &OutputState,
+    ) -> Point<f64, Logical> {
+        let screen = driftwm::canvas::canvas_to_screen(
+            driftwm::canvas::CanvasPos(canvas_pos),
+            os.camera,
+            os.zoom,
+        )
+        .0;
+        Point::from((
+            screen.x + os.layout_position.x as f64,
+            screen.y + os.layout_position.y as f64,
+        ))
+    }
+
+    /// canvas = (layout_pos - layout_position) / zoom + camera.
+    #[cfg(test)]
+    pub fn layout_to_canvas_pos(
+        layout_pos: Point<f64, Logical>,
+        os: &OutputState,
+    ) -> Point<f64, Logical> {
+        let screen = Point::from((
+            layout_pos.x - os.layout_position.x as f64,
+            layout_pos.y - os.layout_position.y as f64,
+        ));
+        driftwm::canvas::screen_to_canvas(driftwm::canvas::ScreenPos(screen), os.camera, os.zoom).0
+    }
+
+    /// Sync each output's position to its camera so render_output
+    /// applies the canvas→screen transform.
+    pub fn update_output_from_camera(&mut self) {
+        let mut changed = false;
+        for output in self.space.outputs().cloned().collect::<Vec<_>>() {
+            let cam = output_state(&output).camera.to_i32_round();
+            if self.space.output_geometry(&output).map(|g| g.loc) != Some(cam) {
+                changed = true;
+            }
+            self.space.map_output(&output, cam);
+        }
+        if changed {
+            self.sync_pinned_locs();
+        }
+    }
+
+    /// Recompute `decoration_scale` from current outputs. Call after output
+    /// add/remove/scale change so SSD buffers re-render at the right density.
+    pub fn recompute_decoration_scale(&mut self) {
+        let max_scale = self
+            .space
+            .outputs()
+            .map(|o| o.current_scale().fractional_scale())
+            .fold(1.0_f64, f64::max);
+        self.decoration_scale = max_scale.ceil() as i32;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use driftwm::canvas::MomentumState;
+    use std::time::Instant;
+
+    fn mock_output_state(
+        camera: (f64, f64),
+        zoom: f64,
+        layout_position: (i32, i32),
+    ) -> OutputState {
+        OutputState {
+            camera: Point::from(camera),
+            zoom,
+            zoom_target: None,
+            zoom_animation_anchor: None,
+            last_rendered_zoom: zoom,
+            overview_return: None,
+            camera_target: None,
+            last_scroll_pan: None,
+            momentum: MomentumState::new(0.96),
+            panning: false,
+            edge_pan_velocity: None,
+            edge_pan_screen_pos: None,
+            edge_pan_delay: None,
+            last_rendered_camera: Point::from(camera),
+            last_frame_instant: Instant::now(),
+            layout_position: Point::from(layout_position),
+            home_return: None,
+            fullscreen_return: None,
+            active_bookmark: None,
+            backend_owned_mode: false,
+        }
+    }
+
+    #[test]
+    fn canvas_to_layout_round_trip_zoom_1() {
+        let os = mock_output_state((100.0, 200.0), 1.0, (0, 0));
+        let canvas = Point::from((150.0, 250.0));
+        let layout = DriftWm::canvas_to_layout_pos(canvas, &os);
+        let back = DriftWm::layout_to_canvas_pos(layout, &os);
+        assert!((back.x - canvas.x).abs() < 0.001);
+        assert!((back.y - canvas.y).abs() < 0.001);
+    }
+
+    #[test]
+    fn canvas_to_layout_round_trip_with_zoom() {
+        let os = mock_output_state((50.0, 75.0), 2.0, (1920, 0));
+        let canvas = Point::from((80.0, 100.0));
+        let layout = DriftWm::canvas_to_layout_pos(canvas, &os);
+        let back = DriftWm::layout_to_canvas_pos(layout, &os);
+        assert!((back.x - canvas.x).abs() < 0.001);
+        assert!((back.y - canvas.y).abs() < 0.001);
+    }
+
+    #[test]
+    fn canvas_to_layout_known_values() {
+        // camera=(100,200), zoom=2, layout_position=(1920,0)
+        // screen = (canvas - camera) * zoom = (50-100)*2 = -100, (50-200)*2 = -300
+        // layout = screen + layout_position = -100+1920 = 1820, -300+0 = -300
+        let os = mock_output_state((100.0, 200.0), 2.0, (1920, 0));
+        let canvas = Point::from((50.0, 50.0));
+        let layout = DriftWm::canvas_to_layout_pos(canvas, &os);
+        assert!((layout.x - 1820.0).abs() < 0.001);
+        assert!((layout.y - (-300.0)).abs() < 0.001);
+    }
+
+    #[test]
+    fn layout_to_canvas_known_values() {
+        // layout=(1920,0), layout_position=(1920,0), zoom=1, camera=(500,300)
+        // screen = layout - layout_position = (0, 0)
+        // canvas = screen / zoom + camera = 0 + 500 = 500, 0 + 300 = 300
+        let os = mock_output_state((500.0, 300.0), 1.0, (1920, 0));
+        let layout = Point::from((1920.0, 0.0));
+        let canvas = DriftWm::layout_to_canvas_pos(layout, &os);
+        assert!((canvas.x - 500.0).abs() < 0.001);
+        assert!((canvas.y - 300.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn round_trip_two_outputs_different_cameras() {
+        let os_a = mock_output_state((0.0, 0.0), 1.0, (0, 0));
+        let os_b = mock_output_state((500.0, 200.0), 0.5, (1920, 0));
+
+        let canvas = Point::from((600.0, 300.0));
+        // Through output A
+        let layout_a = DriftWm::canvas_to_layout_pos(canvas, &os_a);
+        let back_a = DriftWm::layout_to_canvas_pos(layout_a, &os_a);
+        assert!((back_a.x - canvas.x).abs() < 0.001);
+        assert!((back_a.y - canvas.y).abs() < 0.001);
+
+        // Through output B
+        let layout_b = DriftWm::canvas_to_layout_pos(canvas, &os_b);
+        let back_b = DriftWm::layout_to_canvas_pos(layout_b, &os_b);
+        assert!((back_b.x - canvas.x).abs() < 0.001);
+        assert!((back_b.y - canvas.y).abs() < 0.001);
     }
 }

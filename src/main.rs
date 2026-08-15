@@ -51,12 +51,7 @@ enum Sub {
     /// Send a command to the running compositor over its IPC socket.
     ///
     /// Auto-targets the instance named by `WAYLAND_DISPLAY` (override with
-    /// `DRIFTWM_SOCKET`). `camera`, `zoom`, `focus`, `move`, `opacity`, and
-    /// `bookmark` read when given no arguments and write when given arguments.
-    /// The others don't follow that rule: `action` requires its arguments,
-    /// `close`/`suspend`/`relaunch` act on the focused window when given no
-    /// selector, and `layout`, `screenshot`, `state`, `subscribe`, and
-    /// `debug-counters` need no arguments at all.
+    /// `DRIFTWM_SOCKET`).
     ///
     /// A window command selects its target by `app_id` substring
     /// (case-insensitive) or by `--id <n>`, the stable id `state` prints.
@@ -113,15 +108,43 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
 
-    if cli.check_config {
-        let _config = driftwm::config::Config::load();
-        tracing::info!("Config OK");
-        return Ok(());
-    }
-
     // --config <path>: override config file (useful for nested/test sessions).
+    // Set before --check-config so validation targets the requested file.
     if let Some(path) = &cli.config {
         unsafe { std::env::set_var("DRIFTWM_CONFIG", path) };
+        let resolved = driftwm::config::config_path();
+        // Only directories are rejected outright — `--config <(gen-config)` is
+        // a pipe, and read_to_string is happy with it.
+        let problem = match std::fs::metadata(&resolved) {
+            Ok(m) if m.is_dir() => Some("is a directory".to_string()),
+            Ok(_) => None,
+            Err(e) => Some(e.to_string()),
+        };
+        // A file the user named explicitly has to be there. Falling back to
+        // built-in defaults would look like the config was silently ignored.
+        if let Some(problem) = problem {
+            eprintln!("driftwm: --config {}: {problem}", resolved.display());
+            std::process::exit(1);
+        }
+    }
+
+    if cli.check_config {
+        // Printed rather than returned so the TOML parse error keeps its
+        // multi-line caret diagram: main's Box<dyn Error> is Debug-formatted.
+        let warnings = match driftwm::config::Config::check_from(&driftwm::config::config_path()) {
+            Ok(warnings) => warnings,
+            Err(e) => {
+                eprintln!("driftwm: {e}");
+                std::process::exit(1);
+            }
+        };
+        // stdout so the summary survives RUST_LOG=error, which also swallows
+        // push_warn's own logging — hence a count instead of a bare "OK".
+        match warnings.len() {
+            0 => println!("Config OK"),
+            n => println!("Config OK, {n} warning(s)"),
+        }
+        return Ok(());
     }
 
     // --backend: default udev on bare metal, winit if nested.
@@ -355,7 +378,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // Drives the off-screen frame-callback heartbeat when no rendering is
-    // happening (#141); see send_frame_callbacks_fallback.
+    // happening (#141); see send_frame_callbacks_fallback. Must stay strictly
+    // longer than FRAME_CALLBACK_THROTTLE (995ms), or smithay's `elapsed >
+    // throttle` gate never fires.
     event_loop.handle().insert_source(
         smithay::reexports::calloop::timer::Timer::from_duration(std::time::Duration::from_secs(1)),
         |_, _, data: &mut DriftWm| {
@@ -402,12 +427,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let now = std::time::Instant::now();
         data.sweep_marks(now);
         data.sweep_pending_relaunches(now);
+        // After the relaunch sweep, so a deferral whose deadline just passed
+        // reveals its window on the same tick rather than the next one.
+        data.sweep_deferred_adoptions();
+        // Last, so a camera animation that ticked during this iteration's
+        // render is diffed at the position it actually reached.
+        data.session_store_watch_cameras();
     });
 
-    // Runs on both a clean Action::Quit/SIGTERM exit and a loop error, so a
-    // shutdown fault never silently drops the durable session: flush it
-    // (fsync'd) before wiping the runtime state file.
-    data.serialize_session_on_shutdown();
+    // Deliberately no durable session write here: by this point the batch that
+    // stopped the loop has already dispatched whatever client disconnects came
+    // with it, so a rebuild would serialize a drained stage over a good file
+    // (see `DriftWm::session_store_mark_dirty`).
     state::remove_state_file();
 
     run_result?;

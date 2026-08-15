@@ -12,7 +12,7 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::seat::WaylandFocus;
 
 use crate::decorations::DecorationKey;
-use crate::state::{DriftWm, SuspendedId};
+use crate::state::{DriftWm, NavZoom, StageWindow, SuspendedId};
 use driftwm::window_ext::WindowExt;
 
 pub mod client;
@@ -199,6 +199,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Subscribe => unreachable!("Subscribe is handled before dispatch"),
         Request::Focus(arg) => cmd_focus(arg, state),
         Request::Move { window, to } => cmd_move(window, to, state),
+        Request::Resize { window, to } => cmd_resize(window, to, state),
         Request::Opacity { window, value } => cmd_opacity(window, value, state),
         Request::Close(sel) => cmd_close(sel, state),
         Request::Suspend(sel) => cmd_suspend(sel, state),
@@ -220,6 +221,7 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Zoom(Some(_))
             | Request::Focus(Some(_))
             | Request::Move { to: Some(_), .. }
+            | Request::Resize { to: Some(_), .. }
             | Request::Opacity { value: Some(_), .. }
             | Request::Close(_)
             | Request::Suspend(_)
@@ -240,6 +242,19 @@ fn cmd_camera(arg: Option<(f64, f64)>, state: &mut DriftWm) -> Reply {
             Ok(Response::Camera { x, y })
         }
         Some((x, y)) => {
+            // Before the exit, so a malformed request can't tear down fullscreen
+            // on its way to being rejected. serde_json parses `1e999` as `inf`
+            // without error, and an infinite target never satisfies the camera
+            // animation's arrival test — the viewport would never settle again.
+            if !x.is_finite() || !y.is_finite() {
+                return Err("camera coordinates must be finite numbers".to_string());
+            }
+            // Exit before deriving the target below: a fullscreen output
+            // refuses camera moves, and the target is derived from `state.zoom()`,
+            // which the park pins at 1.0 until the exit restores it.
+            if state.is_fullscreen() {
+                state.exit_fullscreen();
+            }
             // (x, y) is the viewport center, Y-up; map it to the internal camera
             // target so the viewport ends up centered there.
             let target =
@@ -256,6 +271,11 @@ fn cmd_zoom(arg: Option<f64>, state: &mut DriftWm) -> Reply {
         Some(zoom) => {
             if !zoom.is_finite() || zoom <= 0.0 {
                 return Err("zoom must be a positive number".to_string());
+            }
+            // As in `cmd_camera`: exit first, since `zoom_to_anchored` below
+            // anchors on the current camera and zoom, which the exit restores.
+            if state.is_fullscreen() {
+                state.exit_fullscreen();
             }
             // Same bounds as keyboard/gesture zoom; reply reports what was applied.
             let clamped = zoom.clamp(state.min_zoom(), driftwm::canvas::MAX_ZOOM);
@@ -461,13 +481,25 @@ fn cmd_focus(arg: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
         let id = focused_window_info(state, &window).id;
         return Err(format!("window #{id} is a widget and cannot be focused"));
     }
+    // A window still held back for a deferred adopt is drawn nowhere: focusing
+    // it would put the keyboard somewhere the user cannot see, and it arrives on
+    // its own once the grab holding the adopt lets go.
+    if state.hidden_by_deferred_adopt(&window) {
+        let id = focused_window_info(state, &window).id;
+        return Err(format!(
+            "window #{id} is mid-relaunch and cannot be focused yet"
+        ));
+    }
     let info = focused_window_info(state, &window);
     // Already on screen: just raise + focus, don't move the camera. Pinned
     // windows are always on screen and have no canvas position to navigate to.
     if state.is_pinned(&window) || state.window_fully_in_viewport(&window) {
         state.raise_and_focus(&window, SERIAL_COUNTER.next_serial());
     } else {
-        state.navigate_to_window(&window, state.config.zoom_reset_on_activation);
+        state.navigate_to_window(
+            &window,
+            NavZoom::from_reset(state.config.zoom_reset_on_activation),
+        );
     }
     Ok(Response::Focused(Some(info)))
 }
@@ -537,28 +569,44 @@ fn cmd_bookmark(
     }
 }
 
-fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
-    // A live client wins; a selector resolving only to a suspended stand-in
-    // reads or sets its canvas position in place (no client to reconfigure).
-    let window = match window_by_selector(state, window.as_ref()) {
-        Ok(window) => window,
+/// Resolve a selector to a stage element, **live client first**: a selector
+/// naming both a client and a stand-in must reach the client, and only one
+/// matching nothing live falls back to a stand-in. The order decides which
+/// target an ambiguous `AppId` hits, so every window verb shares this.
+fn element_by_selector(
+    state: &DriftWm,
+    selector: Option<&WindowSelector>,
+) -> Result<StageWindow, String> {
+    match window_by_selector(state, selector) {
+        Ok(window) => Ok(StageWindow::Client(window)),
         Err(e) => {
-            let Some(id) = suspended_by_selector(state, window.as_ref()) else {
+            let Some(id) = suspended_by_selector(state, selector) else {
                 return Err(e);
             };
-            let s = state
+            state
                 .find_suspended(id)
-                .ok_or_else(|| "suspended window is gone".to_string())?;
-            let element = crate::state::StageWindow::Suspended(s.clone());
-            let size = s.size.get();
+                .map(StageWindow::Suspended)
+                .ok_or_else(|| "suspended window is gone".to_string())
+        }
+    }
+}
+
+fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut DriftWm) -> Reply {
+    let window = match element_by_selector(state, window.as_ref())? {
+        StageWindow::Client(window) => window,
+        // No client to reconfigure: read or set the stand-in's canvas position
+        // in place, without the re-raise `map_window` would carry.
+        element @ StageWindow::Suspended(_) => {
+            let size = driftwm::stage::StageElement::size(&element);
+            let chrome = state.element_chrome(&element);
             return match to {
                 None => {
                     let loc = state.stage.position_of(&element).unwrap_or_default();
-                    let (x, y) = driftwm::canvas::internal_to_rule(loc, size);
+                    let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
                     Ok(Response::Position { x, y })
                 }
                 Some((x, y)) => {
-                    let loc = driftwm::canvas::rule_to_internal(x, y, size);
+                    let loc = driftwm::canvas::rule_to_content(x, y, size, chrome);
                     state.stage.set_position(&element, loc);
                     // A stand-in's canvas position is durable — coalesce the
                     // write like a pointer/touch drag does.
@@ -568,30 +616,117 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             };
         }
     };
-    let size = window.geometry().size;
     match to {
         None => {
+            // Committed geometry, matching what `msg state` and the state file
+            // derive a position from, so the two can't disagree mid-settle.
+            let size = window.geometry().size;
             let loc = state.stage.position_of(&window).unwrap_or_default();
-            let (x, y) = driftwm::canvas::internal_to_rule(loc, size);
+            // The read arm answers before the canvas guard below, so it is the one
+            // `move` path a fullscreen window — which wears no chrome — reaches.
+            let chrome = state.reported_chrome(&window);
+            let (x, y) = driftwm::canvas::content_to_rule(loc, size, chrome);
             Ok(Response::Position { x, y })
         }
         Some((x, y)) => {
             // A pinned window renders at its pin, a fullscreen one at its
-            // camera park — writing the canvas position would silently do
-            // nothing (pinned) or displace the park (fullscreen).
+            // camera park, and one held back for a deferred adopt is about to be
+            // teleported into a slot — writing the canvas position would
+            // silently do nothing, displace the park, or be overwritten.
             if !state.is_canvas_window(&window) {
-                return Err("pinned and fullscreen windows have no canvas position to move".into());
+                return Err(
+                    "this window has no canvas position to move: it is pinned, fullscreen, a \
+                     widget, or not on screen yet"
+                        .into(),
+                );
             }
-            let loc = driftwm::canvas::rule_to_internal(x, y, size);
-            // Moving re-anchors the window, invalidating any fill restore point.
-            state.stage.clear_fill(&window);
             // Activating is only consistent when the target already holds
             // focus; a selector can reach any window.
             let activate = state.focused_window().as_ref() == Some(&window);
-            state.map_window(window, loc, activate);
+            state.map_window_to_rule_point(&window, x, y, activate);
+            // The new position is durable — persist it on the session-store
+            // debounce, matching the stand-in arm above.
+            state.session_store_mark_dirty();
             Ok(Response::Position { x, y })
         }
     }
+}
+
+fn cmd_resize(
+    window: Option<WindowSelector>,
+    to: Option<(i32, i32)>,
+    state: &mut DriftWm,
+) -> Reply {
+    let element = element_by_selector(state, window.as_ref())?;
+
+    // Fullscreen-aware because the read arm below answers before the canvas
+    // guard; on the set path the guard rejects a fullscreen window anyway.
+    let chrome = state.reported_chrome(&element);
+
+    let Some((width, height)) = to else {
+        // Committed size, matching what `msg state` and the state file report,
+        // so the two can't disagree mid-settle.
+        let size = chrome.frame_size(driftwm::stage::StageElement::size(&element));
+        return Ok(Response::Size {
+            width: size.w,
+            height: size.h,
+        });
+    };
+
+    if width <= 0 || height <= 0 {
+        return Err("size must be positive".to_string());
+    }
+    // A pinned window renders at its pin, a fullscreen one fills its output, and
+    // one held back for a deferred adopt is about to be replaced — none of them
+    // hold a canvas rect a resize could write.
+    if !state.is_canvas_window(&element) {
+        return Err(
+            "this window has no canvas size to set: it is pinned, fullscreen, a widget, or not \
+             on screen yet"
+                .into(),
+        );
+    }
+    // A live grab recomputes the rect absolutely from its own start anchors on
+    // every motion tick, so anything written mid-drag is erased by the next one.
+    // The settling tail counts too: `handle_resize_commit` still owes a
+    // top/left edge compensation, and this call clears every witness
+    // `placement_owns_size` would have used to skip it.
+    //
+    // Only the window being dragged carries the state this reads, not the
+    // snapped neighbours a cluster drag carries along — a resize aimed at one of
+    // those is accepted and then overwritten by the drag's next tick.
+    if state.element_under_interactive_grab(&element) {
+        return Err(
+            "this window is under an interactive move or resize, or still settling one".to_string(),
+        );
+    }
+
+    // The request names a visual frame; the client's own min/max hints, and
+    // everything downstream of here, are content-space. Deflate, clamp there, and
+    // re-inflate for the echo.
+    let requested = chrome.content_size(Size::from((width, height)));
+    let (width, height) =
+        crate::state::resize_constraints(&element, chrome).clamp(requested.w, requested.h);
+    let current = state.requested_element_size(&element);
+    let loc = state.stage.position_of(&element).unwrap_or_default();
+    // Center-preserving: half the size delta off each axis. Chrome is a constant
+    // offset across the resize, so holding the frame's center is the same
+    // arithmetic as holding the content's and needs no term of its own.
+    let loc = Point::from((
+        loc.x + (current.w - width) / 2,
+        loc.y + (current.h - height) / 2,
+    ));
+    // Raise a client, as `move` does; leave a stand-in's z-order alone, as
+    // `move` also does.
+    let raise = matches!(element, StageWindow::Client(_));
+    // Absolute: this rect is the whole answer, so there is no promise for a later
+    // call to reconcile against.
+    state.resize_element_to(&element, Size::from((width, height)), loc, raise, None);
+    let echo = chrome.frame_size(Size::from((width, height)));
+    Ok(Response::Size {
+        width: echo.w,
+        height: echo.h,
+    })
 }
 
 /// Runtime per-window opacity. The stored `AppliedWindowRule` is the single
@@ -678,6 +813,14 @@ fn cmd_suspend(sel: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
     if state.topmost_modal_child(&window).is_some() {
         return Err("window has an open modal dialog".to_string());
     }
+    // A window still held back for a deferred adopt cannot take the keyboard, so
+    // the action's focus-resolved target would be somebody else's window. It is
+    // never fullscreen or pinned while hidden (both are withheld for the
+    // duration), so the plain suspend is the whole of what the action would do.
+    if state.hidden_by_deferred_adopt(&window) {
+        state.suspend_window(&window, None);
+        return Ok(Response::Ok);
+    }
     if state.focused_window().as_ref() != Some(&window) {
         state.raise_and_focus(&window, SERIAL_COUNTER.next_serial());
     }
@@ -753,31 +896,20 @@ pub(crate) fn resolve_screenshot_region(
             Ok((crate::state::output_viewport_rect(&output), None))
         }
         ScreenshotTarget::Window { window } => {
-            // A live client wins; a selector resolving only to a stand-in
-            // captures its chrome in isolation (docs promise suspended ids
-            // screenshot). Pinned and fullscreen clients capture fine too —
-            // `window_visual_rect` returns the right rect for both.
-            match window_by_selector(state, window.as_ref()) {
-                Ok(w) => {
-                    let rect = window_visual_rect(state, &w)
-                        .ok_or_else(|| "window has no capturable area".to_string())?;
-                    Ok((rect, Some(StageWindow::Client(w))))
-                }
-                Err(e) => {
-                    let Some(id) = suspended_by_selector(state, window.as_ref()) else {
-                        return Err(e);
-                    };
-                    let s = state
-                        .find_suspended(id)
-                        .ok_or_else(|| "suspended window is gone".to_string())?;
-                    let element = StageWindow::Suspended(s);
-                    let rect = state
-                        .visual_frame_rect(&element)
-                        .map(snap_rect_to_rect)
-                        .ok_or_else(|| "suspended window has no capturable area".to_string())?;
-                    Ok((rect, Some(element)))
-                }
-            }
+            // A selector resolving only to a stand-in captures its chrome in
+            // isolation (docs promise suspended ids screenshot). Pinned and
+            // fullscreen clients capture fine too — `window_visual_rect` returns
+            // the right rect for both.
+            let element = element_by_selector(state, window.as_ref())?;
+            let rect = match &element {
+                StageWindow::Client(w) => window_visual_rect(state, w)
+                    .ok_or_else(|| "window has no capturable area".to_string())?,
+                StageWindow::Suspended(_) => state
+                    .visual_frame_rect(&element)
+                    .map(snap_rect_to_rect)
+                    .ok_or_else(|| "suspended window has no capturable area".to_string())?,
+            };
+            Ok((rect, Some(element)))
         }
         ScreenshotTarget::All => {
             // Union over every canvas element, stand-ins included — the capture

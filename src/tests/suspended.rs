@@ -3,6 +3,7 @@
 //! through the test-only [`DriftWm::insert_suspended_for_test`] hook —
 //! production never builds a suspended element in this chunk.
 
+use driftwm::canvas::Chrome;
 use driftwm::config::{BTN_LEFT, Config};
 use driftwm::layout::snap::SnapState;
 use smithay::input::keyboard::ModifiersState;
@@ -949,7 +950,7 @@ fn auto_placement_obstacle_includes_bar_strip() {
         &StageWindow::Client(anchor.clone()),
         &placing,
         Size::from((200, 200)),
-        25,
+        Chrome { bar: 25, border: 0 },
     ) {
         let new_top = y - 25; // frame top (above content)
         let overlaps = (x as f64) < frame.x_high
@@ -1005,7 +1006,7 @@ fn auto_placement_treats_a_stand_in_like_a_window() {
             &StageWindow::Client(anchor.clone()),
             &placing,
             Size::from((200, 200)),
-            25,
+            Chrome { bar: 25, border: 0 },
         );
         // A throwaway measurement fixture — the scene is never torn down.
         f.skip_baseline_check();
@@ -1076,12 +1077,12 @@ fn auto_placement_anchors_a_new_window_against_a_focused_stand_in() {
     let surface = super::server_surface(&placing);
     f.state().auto_anchor_snapshot.insert(surface, anchor);
 
-    let bar = f
+    let chrome = f
         .state()
-        .window_ssd_bar(&StageWindow::Client(placing.clone()));
+        .element_chrome(&StageWindow::Client(placing.clone()));
     let (x, y) = f
         .state()
-        .auto_placement_pos(&placing, Size::from((200, 200)), bar)
+        .auto_placement_pos(&placing, Size::from((200, 200)), chrome)
         .expect("auto placement anchored on the stand-in");
 
     // Seat the new window and compare frames: docked gap-adjacent, not overlapping.
@@ -1137,12 +1138,12 @@ fn auto_placement_falls_back_when_the_anchored_stand_in_is_dismissed() {
     // The stand-in vanishes before the new window's placement runs.
     f.state().dismiss_suspended(sid);
 
-    let bar = f
+    let chrome = f
         .state()
-        .window_ssd_bar(&StageWindow::Client(placing.clone()));
+        .element_chrome(&StageWindow::Client(placing.clone()));
     assert!(
         f.state()
-            .auto_placement_pos(&placing, Size::from((200, 200)), bar)
+            .auto_placement_pos(&placing, Size::from((200, 200)), chrome)
             .is_none(),
         "a dismissed stand-in anchor falls back to center placement"
     );

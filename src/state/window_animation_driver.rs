@@ -1,42 +1,34 @@
+//! Compositor-side driver for window animations: starting, cancelling, and
+//! ticking entries, resolving them against client commits, and answering the
+//! render loop's per-frame questions — animated visual, chrome alpha, cull
+//! rect, fullscreen cover.
+//!
+//! [`super::window_animation`] holds the smithay-free state machine; this is
+//! everything that needs `DriftWm` (config, stage, per-output camera) to feed
+//! it. The split is a file boundary, not encapsulation: `WindowAnimations`'
+//! own methods stay `pub(crate)` for `fit.rs`, `suspended.rs`, the winit
+//! backend, and the tests.
+
 use std::time::{Duration, Instant};
 
 use smithay::desktop::Window;
-use smithay::input::pointer::CursorImageStatus;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
-use driftwm::canvas::{self, CanvasPos};
 use driftwm::stage::{ElementId, StageElement};
-use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, with_states};
+use smithay::wayland::compositor::{BufferAssignment, SurfaceAttributes, get_parent, with_states};
 use smithay::wayland::seat::WaylandFocus;
-use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 
 use smithay::output::Output;
 
 use super::window_animation::{
     AnimSpace, AnimatedVisual, ContentPolicy, FrozenPicture, FullscreenCover, GeometryRole,
+    MIN_ANIMATED_RESIZE,
 };
-use super::{DriftWm, FocusTarget, PendingView, StageWindow, output_state};
-
-/// A compositor resize smaller than this (per axis) carries no request at all.
-/// It is not worth freezing the window, stashing its content, flattening that on
-/// the GPU and crossfading it — and worse, a client that *cannot* honour a small
-/// request (cell-quantized terminals, aspect-locked players, fixed-size dialogs)
-/// answers by committing its old size, which is indistinguishable from not
-/// answering, so the freeze would burn its whole budget over a resize nobody can
-/// see. The geometry leg still runs; it just has nothing to wait for.
-const MIN_ANIMATED_RESIZE: i32 = 10;
+use super::{DriftWm, PendingView, StageWindow, output_logical_size, output_state};
 
 impl DriftWm {
-    /// Frame-rate independent lerp factor for smooth animations.
-    /// Returns how much of the remaining distance to cover this frame.
-    fn animation_factor(&self, dt: Duration) -> f64 {
-        let base = self.config.camera_speed;
-        let dt_secs = dt.as_secs_f64();
-        1.0 - (1.0 - base).powf(dt_secs * 60.0)
-    }
-
     /// Render-time animated stand-in for the window with stable id `id`, given
     /// its live target rect (canvas rect for a normal window, screen rect for a
     /// pinned one). Identity when nothing is animating.
@@ -166,6 +158,24 @@ impl DriftWm {
         self.drop_resize_crossfade(id);
     }
 
+    /// End `element`'s animation because something else — a drag — has taken
+    /// control of its geometry, landing anything the entry still owed.
+    ///
+    /// Unlike [`Self::cancel_window_animation`], which discards a parked camera
+    /// move along with the entry, this applies it: a drag that interrupts a fit
+    /// still owes the viewport the pan that fit arranged, and the entry it takes
+    /// down is the only thing that could ever have handed it back.
+    pub(crate) fn end_element_animation(&mut self, element: &StageWindow) {
+        let Some(id) = self.stage.id_of(element) else {
+            return;
+        };
+        if let Some(pending) = self.window_animations.take_pending_view(id) {
+            self.apply_pending_view(pending);
+        }
+        self.window_animations.remove(id);
+        self.drop_resize_crossfade(id);
+    }
+
     /// Shared start path for every geometry chase: resolve the id, honor the
     /// interactive-grab guard, instant-complete (skip) when the seed rect
     /// intersects no drawable output, else (re)start the chase. `replace_visual`
@@ -255,9 +265,12 @@ impl DriftWm {
                 .and_then(|s| self.find_fullscreen_output_for_surface(&s)),
         };
         let picture = FrozenPicture {
-            // A picture drawn translucent cannot claim to cover its output: the
-            // cull behind a fullscreen cover would hide the scene while the
-            // window said to be hiding it is still see-through. It is still a
+            // Translucent because it is mid-transition (an open fade still
+            // rising) cannot claim to cover its output — the cull would hide
+            // the scene while the window supposedly hiding it is still
+            // see-through. Translucent because a rule `opacity` says so is
+            // different: coverage still holds, and `fullscreen_conceals_canvas`
+            // uncovers just the canvas instead of every bucket. It is still a
             // fullscreen picture, and `bare` below says so.
             fullscreen_on: fullscreen_output
                 .clone()
@@ -373,6 +386,20 @@ impl DriftWm {
             .unwrap_or_else(|| Rectangle::new(loc.to_f64(), size.to_f64()))
     }
 
+    /// Where a stand-in's departing picture is right now: mid-slide that is the
+    /// leg's own visual, not the destination the stage already holds. A dismiss
+    /// freezes one rect for the fade's whole life and judges drawability on it,
+    /// so reading the destination would both teleport the chrome there for frame
+    /// zero and skip the fade outright while the slide is still on screen.
+    pub(crate) fn departing_standin_rect(
+        &self,
+        element: &StageWindow,
+    ) -> Option<Rectangle<f64, Logical>> {
+        let id = self.stage.id_of(element)?;
+        let loc = self.stage.position_of(element)?;
+        Some(self.geometry_seed(id, loc, StageElement::size(element)))
+    }
+
     /// Canvas geometry animation toward a size configure (fill/fit). Must be
     /// called while the stage still holds the pre-action rect; the chase target
     /// is then the new live stage position. `final_loc` is that post-action
@@ -429,12 +456,8 @@ impl DriftWm {
         );
     }
 
-    /// Position-only canvas animation from `from_loc` (nudge, cluster shift).
-    /// The stage already holds the new position; the seed pins the old one.
-    ///
-    /// `waits_for` names the entry this one is being pushed by, if any: the leg
-    /// stays parked on the seed until that entry's own resize freeze releases,
-    /// so a pushed neighbour and the window pushing it move as one.
+    /// [`Self::animate_element_move_from`] for a client window.
+    #[cfg(test)]
     pub(crate) fn animate_window_move_from(
         &mut self,
         window: &Window,
@@ -444,8 +467,14 @@ impl DriftWm {
         self.animate_element_move_from(&StageWindow::Client(window.clone()), from_loc, waits_for);
     }
 
-    /// [`Self::animate_window_move_from`] for any stage element — a suspended
-    /// stand-in pushed by a cluster shift slides like the window it stands for.
+    /// Position-only canvas animation from `from_loc` (nudge, cluster shift),
+    /// for any stage element — a suspended stand-in slides like the window it
+    /// stands for. The stage already holds the new position; the seed pins the
+    /// old one.
+    ///
+    /// `waits_for` names the entry this one is being pushed by, if any: the leg
+    /// stays parked on the seed until that entry's own resize freeze releases,
+    /// so a pushed neighbour and the window pushing it move as one.
     pub(crate) fn animate_element_move_from(
         &mut self,
         element: &StageWindow,
@@ -481,7 +510,81 @@ impl DriftWm {
         if self.frozen_fullscreen_cover(output).is_some() {
             return true;
         }
-        self.is_output_fullscreen(output) && self.fullscreen_entry_on(output).is_none()
+        // Resolved here so the parked-camera check takes the window rather than
+        // looking it up again; `fullscreen_entry_on` below still does its own.
+        let Some(entry) = self.stage.fullscreen_on(&output.name()) else {
+            return false;
+        };
+        self.fullscreen_entry_on(output).is_none()
+            && self.camera_parked_on(output, &entry.window, entry.centre_offset)
+    }
+
+    /// Whether that fullscreen picture also *hides* the canvas under it. A window
+    /// carrying a rule `opacity` below 1.0 is drawn see-through, so culling the
+    /// canvas behind it would show the clear color through the window instead of
+    /// the plane it floats on. Only the canvas comes back — layer surfaces, other
+    /// windows and pinned ones stay culled on the coverage predicate above.
+    ///
+    /// The short-circuit order is load-bearing, not stylistic:
+    /// [`Self::background_render_eligible_outputs`] calls this on udev's idle fast
+    /// path, and `applied_rule` takes a surface-state lock and clones the rule, so
+    /// coverage goes first and the lock is only taken for an output that is
+    /// actually fullscreen (0-2 windows).
+    ///
+    /// An empty window list means the cover is a suspended stand-in — it has no
+    /// client surface to carry a rule and is drawn at alpha 1.0 — so `all` on
+    /// empty answering `true` is the right answer, not an accident.
+    ///
+    /// Un-culling costs that output its direct scan-out for as long as the
+    /// translucent window is up: the background joins the window on smithay's
+    /// primary plane, which is the same one-element rule `clear_color_for`
+    /// records. That is the trade the rule buys, opted into per window.
+    pub(crate) fn fullscreen_conceals_canvas(&self, output: &Output) -> bool {
+        self.is_output_visually_fullscreen(output)
+            && self.visually_fullscreen_windows_on(output).iter().all(|w| {
+                w.wl_surface()
+                    .as_deref()
+                    .and_then(driftwm::config::applied_rule)
+                    .and_then(|r| r.opacity)
+                    .unwrap_or(1.0)
+                    >= 1.0
+            })
+    }
+
+    /// Whether `output`'s viewport still sits where `window`'s fullscreen entry
+    /// parked it. The window is mapped at that camera origin at zoom 1, plus the
+    /// `centre_offset` a smaller-than-output commit earned it, so a drifted
+    /// viewport no longer covers it — claiming coverage there would cull the
+    /// canvas from under it and show the clear color. Settled counterpart of the
+    /// frozen picture's camera-scoped claim in [`FullscreenCover::view`].
+    ///
+    /// Compared exactly, not with an epsilon: the park writes integers and
+    /// exactly 1.0, so any difference is a real seam, not rounding noise.
+    /// Compared against the window's *stage* position, never its render
+    /// offset — a CSD client's shadow margin leaves that offset non-zero at
+    /// rest, which would read false forever and thrash the background chunk
+    /// caches every frame.
+    ///
+    /// No position for `window` drops the claim. The composer bails on that same
+    /// read *before* it consults the cull, so the covering window is not drawn
+    /// either way — claiming coverage would cull the background, every other
+    /// window and every non-Overlay layer to uncover a picture that is never
+    /// pushed, leaving the output clear-color. The two halves of a fullscreen
+    /// are torn down by different sweeps (`Stage::retain_alive` drops the entry,
+    /// `reap_dead_fullscreen` the map), so a dead fullscreen window can be
+    /// missing from one while the other still names it.
+    fn camera_parked_on(
+        &self,
+        output: &Output,
+        window: &StageWindow,
+        centre_offset: Point<i32, Logical>,
+    ) -> bool {
+        let Some(position) = self.stage.position_of(window) else {
+            return false;
+        };
+        let parked = position - centre_offset;
+        let os = output_state(output);
+        os.zoom == 1.0 && os.camera == parked.to_f64()
     }
 
     /// The frozen fullscreen picture still covering `output` — one held under the
@@ -675,7 +778,7 @@ impl DriftWm {
                 self.resize_captures.drop_for(id);
             }
             if let Some(pending) = released_view {
-                self.apply_pending_view(pending);
+                self.land_or_defer_view(&element, pending);
             }
         }
 
@@ -711,6 +814,66 @@ impl DriftWm {
 
         for output in affected {
             self.redraws_needed.insert(output);
+        }
+    }
+
+    /// Land the view move `element`'s entry just released, or hold it until the
+    /// grab that would be warped by it lets go.
+    ///
+    /// A grab install clears the camera targets [`Self::apply_pending_view`]
+    /// treats as "a later action owns the view", so without this the pan would
+    /// land *more* readily under a grab than without one — straight into
+    /// something measuring its delta against a frozen canvas anchor.
+    fn land_or_defer_view(&mut self, element: &StageWindow, pending: PendingView) {
+        if self.view_warps_a_live_grab(element, &pending) {
+            self.deferred_views.insert(pending.output.clone(), pending);
+            return;
+        }
+        self.apply_pending_view(pending);
+    }
+
+    /// Whether landing `pending` would feed synthetic motion to a grab that did
+    /// not ask for it.
+    fn view_warps_a_live_grab(&self, element: &StageWindow, pending: &PendingView) -> bool {
+        // `warp_pointer` reaches a grab on exactly this condition, and only on
+        // it: `interactive_move` would miss every client resize, which installs
+        // a grab measuring against the same frozen anchor without registering as
+        // an interactive move.
+        if !self
+            .seat
+            .get_pointer()
+            .is_some_and(|pointer| pointer.is_grabbed())
+        {
+            return false;
+        }
+        // The dragged element is exempt: `end_element_animation` hands this same
+        // pan to a drag that interrupts the fit, so the user's own action
+        // inherits the promise on whichever release path gets there first.
+        if self.element_under_interactive_move(element) {
+            return false;
+        }
+        // Only the active output's camera warps the pointer (every tick that
+        // calls `warp_pointer` is `is_active`-gated), so a flight staged for any
+        // other output cannot reach the grab.
+        self.active_output()
+            .is_some_and(|output| output.name() == pending.output)
+    }
+
+    /// Hand over the view moves a grab held back. Called from the grab teardowns
+    /// rather than polled per frame: landing a pan is itself what makes the
+    /// compositor non-idle, so a check that only ran on an already-live frame
+    /// would never fire on the release that ends all activity.
+    ///
+    /// Reads no `PointerHandle` — a grab's `unset` runs inside the pointer mutex.
+    /// The `interactive_move` check stands in for it: the pointer grab is on its
+    /// way out by definition, and any *other* grab still holding one is on that
+    /// list and will flush on its own release.
+    pub(crate) fn flush_deferred_views(&mut self) {
+        if self.deferred_views.is_empty() || !self.interactive_move.is_empty() {
+            return;
+        }
+        for pending in std::mem::take(&mut self.deferred_views).into_values() {
+            self.apply_pending_view(pending);
         }
     }
 
@@ -771,6 +934,11 @@ impl DriftWm {
         if !self.window_animations.any_start_held() {
             return;
         }
+        // At full speed the crossfade this feeds is skipped outright, so every
+        // capture taken here would be discarded on the very next tick.
+        if self.config.effects.animation_speed >= 1.0 {
+            return;
+        }
         let new_buffer = with_states(surface, |states| {
             matches!(
                 states
@@ -782,6 +950,11 @@ impl DriftWm {
             )
         });
         if !new_buffer {
+            return;
+        }
+        // Only a root surface is ever a stage window, so a subsurface's commit
+        // would spend both scans below guaranteeing itself a miss.
+        if get_parent(surface).is_some() {
             return;
         }
         let Some(window) = self.window_for_surface(surface) else {
@@ -989,15 +1162,25 @@ impl DriftWm {
     /// Flatten the captured content of a closing window into a queued snapshot
     /// (backend-gated, consumes the captured close pixels). `fullscreen_output`
     /// picks screen-space placement on that output (or the pin's output when
-    /// pinned) vs. canvas space otherwise. `alpha_only` fades in place at scale
-    /// 1, for the suspend-conversion crossfade.
+    /// pinned) vs. canvas space otherwise, offset by `fullscreen_centre` for a
+    /// window that under-filled the output and was centred in it (see
+    /// [`Self::fullscreen_centre_of`]). `alpha_only` fades in place at scale 1,
+    /// for the suspend-conversion crossfade.
     pub(crate) fn snapshot_closing_window(
         &mut self,
         window: &Window,
         surface: &WlSurface,
         fullscreen_output: Option<&Output>,
+        fullscreen_centre: Point<i32, Logical>,
         alpha_only: bool,
     ) {
+        // A window awaiting a deferred adopt has never been drawn where it sits,
+        // and the capture below imports its buffers on demand rather than
+        // reusing what a frame drew — so without this the fade-out would be the
+        // first and only time the user sees it.
+        if self.root_hidden_by_deferred_adopt(surface) {
+            return;
+        }
         // Backend-gated (the headless fixture never accumulates render transients).
         let Some(mut backend) = self.backend.take() else {
             return;
@@ -1113,7 +1296,10 @@ impl DriftWm {
                 backend.renderer(),
                 &px,
                 output.name(),
-                Point::from((-geom_loc.x, -geom_loc.y)),
+                Point::from((
+                    fullscreen_centre.x - geom_loc.x,
+                    fullscreen_centre.y - geom_loc.y,
+                )),
                 flatten_scale,
                 scale_amplitude,
                 alpha_only,
@@ -1162,683 +1348,91 @@ impl DriftWm {
         }
     }
 
-    /// Fire held compositor action if repeat delay/rate has elapsed.
-    pub fn apply_key_repeat(&mut self) {
-        let Some((_, ref action, next_fire)) = self.held_action else {
-            return;
-        };
-        let now = std::time::Instant::now();
-        if now < next_fire {
-            return;
-        }
-        let action = action.clone();
-        let rate_interval = Duration::from_millis(1000 / self.config.repeat_rate.max(1) as u64);
-        self.held_action.as_mut().unwrap().2 = now + rate_interval;
-        self.execute_action(&action);
-    }
-
-    /// Compute focus target at the given canvas position, respecting whether
-    /// the pointer is currently over a layer surface or a canvas window.
-    fn focus_under(
-        &self,
-        canvas_pos: Point<f64, Logical>,
-    ) -> Option<(FocusTarget, Point<f64, Logical>)> {
-        if self.pointer_over_layer {
-            let screen_pos =
-                canvas::canvas_to_screen(CanvasPos(canvas_pos), self.camera(), self.zoom()).0;
-            self.layer_surface_under(
-                screen_pos,
-                canvas_pos,
-                &[
-                    WlrLayer::Overlay,
-                    WlrLayer::Top,
-                    WlrLayer::Bottom,
-                    WlrLayer::Background,
-                ],
-            )
-        } else {
-            // A resync landing on a stand-in must yield no focus, matching
-            // pointer_focus_under — otherwise the hidden client gets a stray enter.
-            if self.suspended_occludes(canvas_pos) {
-                return None;
-            }
-            let window_hit = self.surface_under(canvas_pos, Some(false));
-            // Pick mode: a canvas window under the pointer holds no pointer
-            // focus, mirroring focus_cascade's pick guard, so every per-frame
-            // resync agrees and can't hand the client its enter back. Widgets /
-            // canvas layers / Bottom layers keep focus.
-            if window_hit.is_some() && self.pick_mode() {
-                return None;
-            }
-            window_hit
-                .or_else(|| self.canvas_layer_under(canvas_pos))
-                .or_else(|| self.surface_under(canvas_pos, Some(true)))
-        }
-    }
-
-    /// Whether the focused surface holds an active pointer constraint. Motion
-    /// to a locked surface reads as a phantom absolute move (snap-back).
-    fn pointer_constraint_active(&self) -> bool {
-        let pointer = self.seat.get_pointer().unwrap();
-        pointer.current_focus().is_some_and(|focus| {
-            smithay::wayland::pointer_constraints::with_pointer_constraint(
-                &focus.0,
-                &pointer,
-                |c| c.is_some_and(|c| c.is_active()),
-            )
-        })
-    }
-
-    /// Keep the cursor at the same screen position after a camera or zoom
-    /// change. When a constraint is active, silently update the internal
-    /// location (see [`Self::pointer_constraint_active`]).
+    /// Whether any window animation, closing snapshot, or adoption fade has a
+    /// visual rect intersecting `output`'s viewport. Caller passes the output's
+    /// already-read camera/zoom so this never re-locks `output_state`.
     ///
-    /// A pointer grab (window move/resize, edge-pan) drives its repositioning
-    /// off this motion and needs every event, so send synchronously. Otherwise
-    /// the cursor is free over a sliding canvas: update the internal location
-    /// now (hit-testing stays correct) but defer the client-facing motion to
-    /// [`Self::flush_pointer_resync`], coalescing to one motion per frame.
-    pub(crate) fn warp_pointer(&mut self, new_pos: Point<f64, Logical>) {
-        let pointer = self.seat.get_pointer().unwrap();
+    /// `frozen_cutoff` is `Some(now)` for the redraw side: an entry still frozen
+    /// at `now` repaints the identical picture every frame, so it is not a reason
+    /// to compose one.
+    pub(super) fn output_shows_window_animations(
+        &self,
+        output: &Output,
+        camera: Point<f64, Logical>,
+        zoom: f64,
+        frozen_cutoff: Option<Instant>,
+    ) -> bool {
+        let name = output.name();
+        let viewport = output_logical_size(output);
+        let visible = driftwm::canvas::visible_canvas_rect(camera.to_i32_round(), viewport, zoom);
 
-        if self.pointer_constraint_active() {
-            // A camera warp can slide another surface under a screen-fixed
-            // cursor, stranding input on a stale lock. Reactivates itself once
-            // the cursor returns.
-            let same_surface_under_cursor = pointer.current_focus().is_some_and(|current| {
-                self.focus_under(new_pos)
-                    .is_some_and(|(under, _)| under == current)
-            });
-            if same_surface_under_cursor {
-                pointer.set_location(new_pos);
-                return;
-            }
-            if let Some(focus) = pointer.current_focus() {
-                smithay::wayland::pointer_constraints::with_pointer_constraint(
-                    &focus.0,
-                    &pointer,
-                    |c| {
-                        if let Some(c) = c
-                            && c.is_active()
-                        {
-                            c.deactivate();
-                        }
-                    },
-                );
-            }
-        }
-
-        if pointer.is_grabbed() {
-            let under = self.focus_under(new_pos);
-            let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            pointer.motion(
-                self,
-                under,
-                &smithay::input::pointer::MotionEvent {
-                    location: new_pos,
-                    serial,
-                    time: self.start_time.elapsed().as_millis() as u32,
-                },
-            );
-            pointer.frame(self);
-            return;
-        }
-
-        pointer.set_location(new_pos);
-        self.pending_pointer_resync = true;
-    }
-
-    /// Flush a pointer resync deferred by [`Self::warp_pointer`]. Sends a single
-    /// `wl_pointer.motion` to the surface under the (already-updated) cursor,
-    /// refreshing focus/hover and enter/leave. Called once per rendered frame.
-    pub(crate) fn flush_pointer_resync(&mut self) {
-        if !std::mem::take(&mut self.pending_pointer_resync) {
-            return;
-        }
-        // A constraint may have activated since the deferred warp.
-        if self.pointer_constraint_active() {
-            return;
-        }
-        let pointer = self.seat.get_pointer().unwrap();
-        let pos = pointer.current_location();
-        let under = self.focus_under(pos);
-        let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        pointer.motion(
-            self,
-            under,
-            &smithay::input::pointer::MotionEvent {
-                location: pos,
-                serial,
-                time: self.start_time.elapsed().as_millis() as u32,
-            },
-        );
-        pointer.frame(self);
-        // Pick-mode transitions are zoom-driven, so the pick affordance won't
-        // refresh on the pinch into/out of pick mode or the zoom-to-1.0
-        // animation after a pick — this per-frame resync is the only pointer
-        // path on every zoom writer. Gate on decoration_cursor too, not
-        // pick_mode() alone: the frame that steps above the threshold must still
-        // run once to clear a latched affordance, and it already reads
-        // pick_mode() == false. The second disjunct is a bare bool (no hit-test)
-        // and self-clears once the clear arm sets decoration_cursor = false.
-        if self.pick_mode() || self.cursor.decoration_cursor {
-            self.update_decoration_cursor(pos);
-        }
-    }
-
-    /// Apply scroll momentum each frame. Suppressed during active
-    /// PanGrab to avoid interfering with grab tracking.
-    pub fn apply_scroll_momentum(&mut self, dt: Duration) {
-        if self.panning() {
-            return;
-        }
-        let delta = self.with_output_state(|os| os.momentum.tick(dt)).flatten();
-        let Some(delta) = delta else {
-            return;
-        };
-
-        self.set_camera(self.camera() + delta);
-        self.update_output_from_camera();
-
-        // Shift pointer canvas position so screen position stays fixed
-        let pos = self.seat.get_pointer().unwrap().current_location();
-        self.warp_pointer(pos + delta);
-    }
-
-    /// During a touch window-move that has reached a screen edge, re-drive the
-    /// move grab from the finger's fixed screen position after the camera has
-    /// edge-panned, so the window keeps following the finger. Returns true if a
-    /// touch move consumed the edge-pan for `output`.
-    fn redrive_touch_edge_pan(&mut self, output: &Output) -> bool {
-        let Some(tep) = self.touch_state.edge_pan.clone() else {
-            return false;
-        };
-        if &tep.output != output {
-            return false;
-        }
-        let (camera, zoom) = {
-            let os = output_state(output);
-            (os.camera, os.zoom)
-        };
-        let location = canvas::screen_to_canvas(canvas::ScreenPos(tep.screen_pos), camera, zoom).0;
-        let Some(touch) = self.seat.get_touch() else {
-            return false;
-        };
-        let time = self.start_time.elapsed().as_millis() as u32;
-        touch.motion(
-            self,
-            None,
-            &smithay::input::touch::MotionEvent {
-                slot: tep.slot,
-                location,
-                time,
-            },
-        );
-        touch.frame(self);
-        true
-    }
-
-    /// Apply edge auto-pan each frame during a window drag near viewport edges.
-    /// Synthetic pointer motion keeps cursor at the same screen position and
-    /// lets the active MoveGrab reposition the window automatically.
-    pub fn apply_edge_pan(&mut self) {
-        let Some(output) = self.active_output() else {
-            return;
-        };
-        let Some(velocity) = self.effective_edge_pan_velocity(&output, Instant::now()) else {
-            return;
-        };
-        // velocity is screen-space speed; convert to canvas delta
-        let zoom = self.zoom();
-        let canvas_delta = Point::from((velocity.x / zoom, velocity.y / zoom));
-        self.set_camera(self.camera() + canvas_delta);
-        self.update_output_from_camera();
-
-        // Touch move: re-drive the grab instead of warping the (hidden) pointer.
-        if let Some(output) = self.focused_output.clone()
-            && self.redrive_touch_edge_pan(&output)
-        {
-            return;
-        }
-
-        let pos = self.seat.get_pointer().unwrap().current_location();
-        self.warp_pointer(pos + canvas_delta);
-    }
-
-    /// Apply a viewport pan delta with momentum accumulation.
-    /// Call this from any input path that should drift (scroll, click-drag, future gestures).
-    /// Targets the active output (where the pointer is).
-    /// `time_ms` is the libinput event timestamp (see [`canvas::VelocityTracker`]).
-    pub fn drift_pan(&mut self, delta: Point<f64, Logical>, time_ms: u32) {
-        self.with_output_state(|os| {
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
-            os.overview_return = None;
-            os.momentum.accumulate(delta, time_ms);
-            os.camera.x += delta.x;
-            os.camera.y += delta.y;
-        });
-        self.update_output_from_camera();
-        self.schedule_momentum_timer();
-    }
-
-    /// Apply a viewport pan delta on a specific output (for grabs pinned to an output).
-    /// `time_ms` is the libinput event timestamp (see [`canvas::VelocityTracker`]).
-    pub fn drift_pan_on(
-        &mut self,
-        delta: Point<f64, Logical>,
-        time_ms: u32,
-        output: &smithay::output::Output,
-    ) {
-        {
-            let mut os = super::output_state(output);
-            os.camera_target = None;
-            os.zoom_target = None;
-            os.zoom_animation_anchor = None;
-            os.overview_return = None;
-            os.momentum.accumulate(delta, time_ms);
-            os.camera.x += delta.x;
-            os.camera.y += delta.y;
-        }
-        self.update_output_from_camera();
-        self.schedule_momentum_timer();
-    }
-
-    /// Schedule a 50ms one-shot timer that auto-launches momentum.
-    /// Covers touchpads that don't send AxisStop on finger lift.
-    /// Each call resets the timer — only the last one fires.
-    fn schedule_momentum_timer(&mut self) {
-        if let Some(token) = self.momentum_timer.take() {
-            self.loop_handle.remove(token);
-        }
-        let token = self
-            .loop_handle
-            .insert_source(
-                smithay::reexports::calloop::timer::Timer::from_duration(Duration::from_millis(50)),
-                |_, _, data: &mut DriftWm| {
-                    data.launch_momentum();
-                    smithay::reexports::calloop::timer::TimeoutAction::Drop
-                },
-            )
-            .ok();
-        self.momentum_timer = token;
-    }
-
-    fn cancel_momentum_timer(&mut self) {
-        if let Some(token) = self.momentum_timer.take() {
-            self.loop_handle.remove(token);
-        }
-    }
-
-    /// Launch momentum on the active output — called when input ends (finger lift, gesture end).
-    pub fn launch_momentum(&mut self) {
-        self.cancel_momentum_timer();
-        self.with_output_state(|os| os.momentum.launch());
-    }
-
-    /// Launch momentum on a specific output.
-    pub fn launch_momentum_on(&mut self, output: &smithay::output::Output) {
-        self.cancel_momentum_timer();
-        super::output_state(output).momentum.launch();
-    }
-
-    /// Advance the camera animation toward `camera_target` using frame-rate independent lerp.
-    /// Shifts the pointer by the camera delta so the cursor stays at the same screen position.
-    pub fn apply_camera_animation(&mut self, dt: Duration) {
-        let Some(target) = self.camera_target() else {
-            return;
-        };
-
-        let old_camera = self.camera();
-
-        let factor = self.animation_factor(dt);
-
-        let dx = target.x - old_camera.x;
-        let dy = target.y - old_camera.y;
-
-        if dx * dx + dy * dy < 0.25 {
-            self.set_camera(target);
-            self.set_camera_target(None);
-        } else {
-            self.set_camera(Point::from((
-                old_camera.x + dx * factor,
-                old_camera.y + dy * factor,
-            )));
-        }
-
-        self.update_output_from_camera();
-
-        let delta = self.camera() - old_camera;
-        let pos = self.seat.get_pointer().unwrap().current_location();
-        self.warp_pointer(pos + delta);
-    }
-
-    /// Manage the loading cursor: activate after grace period, clear after deadline.
-    pub fn check_exec_cursor_timeout(&mut self) {
-        let Some(deadline) = self.cursor.exec_cursor_deadline else {
-            return;
-        };
-        let now = Instant::now();
-        if now >= deadline {
-            self.cursor.exec_cursor_show_at = None;
-            self.cursor.exec_cursor_deadline = None;
-            self.cursor.cursor_status = CursorImageStatus::default_named();
-            // The Wait cursor was what kept the loop spinning; without a dirty mark
-            // the last animated frame would stay on screen until another wake.
-            self.mark_all_dirty();
-        } else if let Some(show_at) = self.cursor.exec_cursor_show_at
-            && now >= show_at
-        {
-            self.cursor.exec_cursor_show_at = None;
-            self.cursor.cursor_status =
-                CursorImageStatus::Named(smithay::input::pointer::CursorIcon::Wait);
-        }
-    }
-
-    /// Advance zoom animation toward `zoom_target` using frame-rate independent lerp.
-    /// When `zoom_animation_anchor` is set (combined zoom+camera animation), keeps
-    /// its screen-space anchor stable while deriving camera, preventing drift.
-    /// Otherwise just adjusts pointer so cursor stays at the same screen position.
-    pub fn apply_zoom_animation(&mut self, dt: Duration) {
-        let Some(target) = self.zoom_target() else {
-            return;
-        };
-
-        let old_zoom = self.zoom();
-        let old_camera = self.camera();
-
-        let factor = self.animation_factor(dt);
-
-        let dz = target - old_zoom;
-        let zoom_close = dz.abs() < 0.001;
-        if zoom_close {
-            self.set_zoom(target);
-            if self.zoom_animation_anchor().is_none() {
-                self.set_zoom_target(None);
-            }
-        } else {
-            self.set_zoom(old_zoom + dz * factor);
-        }
-
-        if let Some(anchor) = self.zoom_animation_anchor() {
-            // Combined zoom+camera: lerp the canvas point at the fixed screen
-            // anchor, then derive camera. The anchor can be the viewport center
-            // (keyboard/fit) or the pointer position (wheel zoom).
-            let current_anchor: Point<f64, Logical> = Point::from((
-                old_camera.x + anchor.screen.x / old_zoom,
-                old_camera.y + anchor.screen.y / old_zoom,
-            ));
-            let cx = current_anchor.x + (anchor.canvas.x - current_anchor.x) * factor;
-            let cy = current_anchor.y + (anchor.canvas.y - current_anchor.y) * factor;
-
-            let cur_zoom = self.zoom();
-            self.set_camera(Point::from((
-                cx - anchor.screen.x / cur_zoom,
-                cy - anchor.screen.y / cur_zoom,
-            )));
-            self.update_output_from_camera();
-
-            // Suppress camera_animation — we set camera directly
-            self.set_camera_target(None);
-
-            let center_dx = anchor.canvas.x - current_anchor.x;
-            let center_dy = anchor.canvas.y - current_anchor.y;
-            if zoom_close && center_dx * center_dx + center_dy * center_dy < 0.25 {
-                // Finish both coordinates together to avoid a camera-only tail.
-                let cur_zoom = self.zoom();
-                let final_camera = Point::from((
-                    anchor.canvas.x - anchor.screen.x / cur_zoom,
-                    anchor.canvas.y - anchor.screen.y / cur_zoom,
-                ));
-                self.set_zoom_target(None);
-                self.clear_zoom_animation_anchor();
-                self.set_camera(final_camera);
-                self.update_output_from_camera();
-            }
-
-            // Warp pointer: compensate for both camera and zoom change
-            let pos = self.seat.get_pointer().unwrap().current_location();
-            let screen_x = (pos.x - old_camera.x) * old_zoom;
-            let screen_y = (pos.y - old_camera.y) * old_zoom;
-            let cur_zoom = self.zoom();
-            let cur_camera = self.camera();
-            let new_pos = Point::from((
-                screen_x / cur_zoom + cur_camera.x,
-                screen_y / cur_zoom + cur_camera.y,
-            ));
-            self.warp_pointer(new_pos);
-        } else if self.zoom() != old_zoom {
-            // Standalone zoom: just compensate pointer for zoom change
-            let pos = self.seat.get_pointer().unwrap().current_location();
-            let cur_camera = self.camera();
-            let screen_x = (pos.x - cur_camera.x) * old_zoom;
-            let screen_y = (pos.y - cur_camera.y) * old_zoom;
-            let cur_zoom = self.zoom();
-            let new_pos = Point::from((
-                screen_x / cur_zoom + cur_camera.x,
-                screen_y / cur_zoom + cur_camera.y,
-            ));
-            self.warp_pointer(new_pos);
-        }
-    }
-
-    // -- Multi-output animation ticking (udev backend) --
-    // The existing apply_* methods above operate on active_output() and are used
-    // by the winit backend (single output, timer-based). Winit gets away with
-    // tick-in-render because it's always single-output with a fixed timer.
-
-    /// Tick all per-output animations once per iteration.
-    /// Called from udev render_if_needed() before any render_frame() calls.
-    pub fn tick_all_animations(&mut self) {
-        let now = Instant::now();
-        let dt = (now - self.last_animation_tick).min(Duration::from_millis(33));
-        self.last_animation_tick = now;
-
-        // Global (not per-output) ticks
-        self.apply_key_repeat();
-        self.check_exec_cursor_timeout();
-        self.tick_window_animations(dt);
-        // Re-arm cursor edge-pan from the current cursor position before the
-        // per-output velocities are applied below (disarms outputs the cursor
-        // has left; keeps the active output's speed stable frame-to-frame).
-        self.refresh_cursor_edge_pan();
-
-        let outputs: Vec<Output> = self.space.outputs().cloned().collect();
-        let active = self.active_output();
-
-        for output in &outputs {
-            let is_active = active.as_ref().is_some_and(|a| a == output);
-
-            {
-                let mut os = output_state(output);
-                os.last_frame_instant = now;
-            }
-
-            self.tick_scroll_momentum_on(output, is_active, dt);
-            self.tick_edge_pan_on(output, is_active);
-            // A fullscreen output's camera is locked (set_camera_on refuses to
-            // move it). Drop any pending pan/zoom target so it can't fire the
-            // moment fullscreen exits; the ticks then no-op on the None targets.
-            if self.is_output_fullscreen(output) {
-                let mut os = output_state(output);
-                os.camera_target = None;
-                os.zoom_target = None;
-                os.zoom_animation_anchor = None;
-            }
-            self.tick_zoom_animation_on(output, is_active, dt);
-            self.tick_camera_animation_on(output, is_active, dt);
-        }
-
-        // Single camera sync after all outputs are ticked (avoids N×M redundancy)
-        self.update_output_from_camera();
-    }
-
-    fn tick_scroll_momentum_on(&mut self, output: &Output, is_active: bool, dt: Duration) {
-        {
-            let os = output_state(output);
-            if os.panning {
-                return;
-            }
-        }
-
-        let delta = {
-            let mut os = output_state(output);
-            os.momentum.tick(dt)
-        };
-        let Some(delta) = delta else { return };
-
-        let cam = output_state(output).camera;
-        self.set_camera_on(output, Point::from((cam.x + delta.x, cam.y + delta.y)));
-
-        if is_active {
-            let pos = self.seat.get_pointer().unwrap().current_location();
-            self.warp_pointer(pos + delta);
-        }
-    }
-
-    fn tick_edge_pan_on(&mut self, output: &Output, is_active: bool) {
-        let Some(velocity) = self.effective_edge_pan_velocity(output, Instant::now()) else {
-            return;
-        };
-        let canvas_delta = {
-            let os = output_state(output);
-            Point::from((velocity.x / os.zoom, velocity.y / os.zoom))
-        };
-
-        let cam = output_state(output).camera;
-        self.set_camera_on(
-            output,
-            Point::from((cam.x + canvas_delta.x, cam.y + canvas_delta.y)),
-        );
-
-        // Touch move: re-drive the grab instead of warping the (hidden) pointer.
-        if self.redrive_touch_edge_pan(output) {
-            return;
-        }
-
-        if is_active {
-            let pos = self.seat.get_pointer().unwrap().current_location();
-            self.warp_pointer(pos + canvas_delta);
-        }
-    }
-
-    fn tick_camera_animation_on(&mut self, output: &Output, is_active: bool, dt: Duration) {
-        let (target, old_camera) = {
-            let os = output_state(output);
-            let Some(target) = os.camera_target else {
-                return;
-            };
-            (target, os.camera)
-        };
-
-        let factor = self.animation_factor(dt);
-
-        let dx = target.x - old_camera.x;
-        let dy = target.y - old_camera.y;
-
-        let new_camera = if dx * dx + dy * dy < 0.25 {
-            output_state(output).camera_target = None;
-            target
-        } else {
-            Point::from((old_camera.x + dx * factor, old_camera.y + dy * factor))
-        };
-        self.set_camera_on(output, new_camera);
-
-        if is_active {
-            let new_camera = output_state(output).camera;
-            let delta = new_camera - old_camera;
-            let pos = self.seat.get_pointer().unwrap().current_location();
-            self.warp_pointer(pos + delta);
-        }
-    }
-
-    fn tick_zoom_animation_on(&mut self, output: &Output, is_active: bool, dt: Duration) {
-        let (target, old_zoom, old_camera, anim_anchor) = {
-            let os = output_state(output);
-            let Some(target) = os.zoom_target else { return };
-            (target, os.zoom, os.camera, os.zoom_animation_anchor)
-        };
-
-        let factor = self.animation_factor(dt);
-
-        let dz = target - old_zoom;
-        let zoom_close = dz.abs() < 0.001;
-        {
-            let mut os = output_state(output);
-            if zoom_close {
-                os.zoom = target;
-                if anim_anchor.is_none() {
-                    os.zoom_target = None;
+        for snapshot in &self.closing_snapshots {
+            match snapshot.pinned_output() {
+                Some(o) => {
+                    if o == name {
+                        return true;
+                    }
                 }
-                drop(os);
-            } else {
-                os.zoom = old_zoom + dz * factor;
-            }
-        }
-
-        if let Some(anchor) = anim_anchor {
-            let current_anchor: Point<f64, Logical> = Point::from((
-                old_camera.x + anchor.screen.x / old_zoom,
-                old_camera.y + anchor.screen.y / old_zoom,
-            ));
-            let cx = current_anchor.x + (anchor.canvas.x - current_anchor.x) * factor;
-            let cy = current_anchor.y + (anchor.canvas.y - current_anchor.y) * factor;
-
-            let cur_zoom = output_state(output).zoom;
-            self.set_camera_on(
-                output,
-                Point::from((
-                    cx - anchor.screen.x / cur_zoom,
-                    cy - anchor.screen.y / cur_zoom,
-                )),
-            );
-            {
-                let mut os = output_state(output);
-                // Suppress camera_animation — we set camera directly
-                os.camera_target = None;
-
-                let center_dx = anchor.canvas.x - current_anchor.x;
-                let center_dy = anchor.canvas.y - current_anchor.y;
-                if zoom_close && center_dx * center_dx + center_dy * center_dy < 0.25 {
-                    let final_camera = Point::from((
-                        anchor.canvas.x - anchor.screen.x / cur_zoom,
-                        anchor.canvas.y - anchor.screen.y / cur_zoom,
-                    ));
-                    os.zoom_target = None;
-                    os.zoom_animation_anchor = None;
-                    drop(os);
-                    self.set_camera_on(output, final_camera);
+                None => {
+                    if visible.overlaps(snapshot.canvas_rect().to_i32_round()) {
+                        return true;
+                    }
                 }
             }
-
-            if is_active {
-                let (cur_zoom, cur_camera) = {
-                    let os = output_state(output);
-                    (os.zoom, os.camera)
-                };
-                let pos = self.seat.get_pointer().unwrap().current_location();
-                let screen_x = (pos.x - old_camera.x) * old_zoom;
-                let screen_y = (pos.y - old_camera.y) * old_zoom;
-                let new_pos = Point::from((
-                    screen_x / cur_zoom + cur_camera.x,
-                    screen_y / cur_zoom + cur_camera.y,
-                ));
-                self.warp_pointer(new_pos);
-            }
-        } else {
-            let cur_zoom = output_state(output).zoom;
-            if cur_zoom != old_zoom && is_active {
-                let cur_camera = output_state(output).camera;
-                let pos = self.seat.get_pointer().unwrap().current_location();
-                let screen_x = (pos.x - cur_camera.x) * old_zoom;
-                let screen_y = (pos.y - cur_camera.y) * old_zoom;
-                let new_pos = Point::from((
-                    screen_x / cur_zoom + cur_camera.x,
-                    screen_y / cur_zoom + cur_camera.y,
-                ));
-                self.warp_pointer(new_pos);
+        }
+        for fade in &self.standin_fades {
+            let rect = Rectangle::new(fade.loc, fade.suspended.size.get());
+            if visible.overlaps(rect) {
+                return true;
             }
         }
+        // A crossfade outlives its leg only by a tick or two, but it rides the
+        // window's live rect for scoping either way.
+        for id in self.resize_crossfades.keys() {
+            if let Some(rect) = self.animation_open_canvas_rect(*id)
+                && visible.overlaps(rect)
+            {
+                return true;
+            }
+        }
+        for (id, geo) in self.window_animations.scoping_entries() {
+            if frozen_cutoff.is_some_and(|now| self.window_animations.frozen_at(id, now)) {
+                continue;
+            }
+            match geo {
+                Some((super::window_animation::AnimSpace::Screen(o), _)) => {
+                    if o == name {
+                        return true;
+                    }
+                }
+                Some((super::window_animation::AnimSpace::Canvas, rect)) => {
+                    if visible.overlaps(rect.to_i32_round()) {
+                        return true;
+                    }
+                }
+                None => {
+                    if let Some(rect) = self.animation_open_canvas_rect(id)
+                        && visible.overlaps(rect)
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// Live canvas rect of a window whose effect has no rect of its own — an
+    /// open entry, a resize crossfade (used for scoping only).
+    fn animation_open_canvas_rect(
+        &self,
+        id: driftwm::stage::ElementId,
+    ) -> Option<Rectangle<i32, Logical>> {
+        let window = self.stage.window_by_id(id)?;
+        let loc = self.stage.position_of(window)?;
+        Some(Rectangle::new(
+            loc,
+            driftwm::stage::StageElement::size(window),
+        ))
     }
 }

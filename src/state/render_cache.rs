@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 
+use smithay::backend::renderer::element::memory::MemoryRenderBuffer;
 use smithay::backend::renderer::gles::element::PixelShaderElement;
-use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram, GlesTexture};
+use smithay::backend::renderer::gles::{GlesPixelProgram, GlesTexProgram};
 use smithay::reexports::wayland_server::backend::ObjectId;
-use smithay::utils::{Physical, Size};
 
 use crate::decorations::DecorationKey;
 
@@ -33,19 +33,21 @@ pub struct RenderCache {
     /// an independent blur per output (different scale, size, behind-scene). Keying
     /// by output also lets each output's per-frame prune touch only its own entries.
     pub blur_cache: HashMap<(String, ObjectId), crate::render::BlurCache>,
-    pub blur_bg_fbo: Option<(GlesTexture, Size<i32, Physical>)>,
     pub blur_geometry_generation: u64,
-    /// Per-output camera-move counter. A single global counter would make one
-    /// output's pan force every other output's blur to refresh (bypassing the
-    /// animate_blur_fps throttle) even though their cameras never moved.
-    pub blur_camera_generation: HashMap<String, u64>,
-    /// When the camera last moved, per output. Occluded windows hold their
-    /// blur recomputes while a pan is in flight and catch up on settle.
-    pub blur_camera_moved_at: HashMap<String, std::time::Instant>,
-    /// Shared full-output blurred background for `animate_blur`: ping-pong
-    /// pair, blurred once per refresh and sliced per window, so cost stops
-    /// scaling with the number of blurred windows. Keyed by output name —
-    /// outputs differ in size and render on their own vblanks.
+    /// Wrap mode the blur's backdrop textures are allocated with. A property of
+    /// the GL context, resolved on first use because the query behind it is a
+    /// `glGetString` plus a string walk that would otherwise run per output per
+    /// frame.
+    pub blur_wrap_mode: Option<i32>,
+    /// Per-output pool of scratch textures for the blur's edge captures. Keyed
+    /// by output name: the extents that recur are the ones clipped to *that*
+    /// output's bounds.
+    pub blur_scratch: HashMap<String, crate::render::BlurScratchPool>,
+    /// Shared full-output blurred background: ping-pong pair, blurred once per
+    /// refresh and sliced per window, so cost stops scaling with the number of
+    /// blurred windows. Also carries the refresh cadence every blurred window
+    /// follows, sampler or not. Keyed by output name — outputs differ in size
+    /// and render on their own vblanks.
     pub shared_blur: HashMap<String, crate::render::SharedBlur>,
     /// Per-output timestamp of the last animated-background uniform push
     /// ([background] animate_fps). Keyed by output name: a single global
@@ -67,6 +69,13 @@ pub struct RenderCache {
     pub tile_mirror_shader: Option<GlesTexProgram>,
     pub wallpaper_shader: Option<GlesTexProgram>,
     pub cached_error_bar: HashMap<String, crate::render::ErrorBarCache>,
+    /// Solid-colour strip buffers for other outputs' viewport outlines, per
+    /// output. Rebuilding them each frame minted a fresh element `Id` every
+    /// frame, which re-damaged every outline and made the blur's background
+    /// hash differ every frame. Keyed by colour and extent only — see
+    /// [`crate::render::OutlineBufferKey`].
+    pub cached_outlines:
+        HashMap<String, HashMap<crate::render::OutlineBufferKey, MemoryRenderBuffer>>,
     /// Pass-through fragment shader cloned into each `BgChunkCache`.
     pub chunk_bg_shader: Option<GlesTexProgram>,
     pub cached_tile_chunks: HashMap<String, crate::render::BgChunkCache>,
@@ -88,10 +97,9 @@ impl RenderCache {
             blur_up_shader: None,
             blur_mask_shader: None,
             blur_cache: HashMap::new(),
-            blur_bg_fbo: None,
             blur_geometry_generation: 0,
-            blur_camera_generation: HashMap::new(),
-            blur_camera_moved_at: HashMap::new(),
+            blur_wrap_mode: None,
+            blur_scratch: HashMap::new(),
             shared_blur: HashMap::new(),
             background_last_animate: HashMap::new(),
             background_tick_armed: false,
@@ -103,6 +111,7 @@ impl RenderCache {
             tile_mirror_shader: None,
             wallpaper_shader: None,
             cached_error_bar: HashMap::new(),
+            cached_outlines: HashMap::new(),
             chunk_bg_shader: None,
             cached_tile_chunks: HashMap::new(),
             cached_shader_chunks: HashMap::new(),
@@ -123,13 +132,40 @@ impl RenderCache {
             .retain(|_, cs| now.saturating_sub(cs.last_used) <= MAX_IDLE);
     }
 
-    /// Drop the large per-output chunk caches (shader-bake + gigapixel TIFF),
-    /// freeing hundreds of MB of GPU textures. Single-texture tile/wallpaper
-    /// caches stay (cheap; re-decoding on exit would hitch). `compose_frame`
-    /// lazily rebuilds the chunk caches on the first non-fullscreen frame.
+    /// Destroy the per-output chunk caches (shader-bake + gigapixel TIFF). For
+    /// identity changes only — output disconnect/remap, scale or transform
+    /// changes, config reload — where the cache's own geometry is what went
+    /// stale. `compose_frame` rebuilds it synchronously on the first frame that
+    /// draws the canvas, which for a gigapixel TIFF is a whole-LOD decode and
+    /// six thread spawns; use [`Self::shrink_background_for_fullscreen`] for
+    /// the transient case.
     pub fn remove_background_chunks(&mut self, output_name: &str) {
         self.cached_tile_chunks.remove(output_name);
         self.cached_shader_chunks.remove(output_name);
+    }
+
+    /// Free the bulk of the chunk caches while a fullscreen window conceals the
+    /// canvas, keeping the never-blank cover plane and (TIFF) the decoder pool.
+    /// The caches stay in their maps, so the frame that uncovers the canvas — an
+    /// exit, or the window's opacity dropping below 1.0 — has no rebuild to pay
+    /// for, which is where the cost of destroying them lands.
+    pub fn shrink_background_for_fullscreen(&mut self, output_name: &str) {
+        if let Some(cache) = self.cached_tile_chunks.get_mut(output_name) {
+            cache.shrink();
+        }
+        if let Some(cache) = self.cached_shader_chunks.get_mut(output_name) {
+            cache.shrink();
+        }
+    }
+
+    /// Drop `output_name`'s blur textures: the per-window caches, the shared
+    /// backdrop (two full-output textures), and the edge-capture scratch pool.
+    /// All are rebuilt on demand, so any path that stops drawing blur on an
+    /// output can free them outright.
+    pub fn remove_blur_caches(&mut self, output_name: &str) {
+        self.shared_blur.remove(output_name);
+        self.blur_scratch.remove(output_name);
+        self.blur_cache.retain(|(out, _), _| out != output_name);
     }
 
     /// Drop all per-output GPU state for `output_name`. Called on output
@@ -137,12 +173,10 @@ impl RenderCache {
     /// of reusing a stale element with the previous geometry.
     pub fn remove_output(&mut self, output_name: &str) {
         self.cached_bg.remove(output_name);
-        self.shared_blur.remove(output_name);
-        self.blur_cache.retain(|(out, _), _| out != output_name);
-        self.blur_camera_generation.remove(output_name);
-        self.blur_camera_moved_at.remove(output_name);
+        self.remove_blur_caches(output_name);
         self.background_last_animate.remove(output_name);
         self.cached_error_bar.remove(output_name);
+        self.cached_outlines.remove(output_name);
         self.remove_background_chunks(output_name);
         self.remove_capture_state(output_name);
     }

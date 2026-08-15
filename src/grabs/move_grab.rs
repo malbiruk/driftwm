@@ -408,9 +408,9 @@ impl PointerGrab<DriftWm> for MoveGrab {
             // simply re-applies at new_primary_pos + offset.
             for (member, offset) in self.resolved_members(data) {
                 let member_pos = self.initial_window_location + offset;
-                data.map_window(member, member_pos, false);
+                crate::grabs::drag_map_window(data, member, member_pos);
             }
-            data.map_window(element.clone(), self.initial_window_location, false);
+            crate::grabs::drag_map_window(data, element.clone(), self.initial_window_location);
 
             // Output crossing always invalidates blur (different camera/zoom,
             // different background sample region).
@@ -455,9 +455,12 @@ impl PointerGrab<DriftWm> for MoveGrab {
         // Both arms armed `interactive_move` at grab install (guarding relaunch
         // adoption and animation starts); balance it here.
         data.disarm_interactive_move(&self.target);
-        // A stand-in's settled position (including a cross-output teleport) is
-        // durable — persist it on the session-store debounce.
-        if matches!(self.target, ClusterMember::Suspended(_)) {
+        // A settled position (including a cross-output teleport) is durable —
+        // persist it on the session-store debounce, live or stand-in alike.
+        if matches!(
+            self.target,
+            ClusterMember::Client(_) | ClusterMember::Suspended(_)
+        ) {
             data.session_store_mark_dirty();
         }
         // A pick-mode promote is the only move that sets grab_cursor (title-bar
@@ -501,6 +504,17 @@ impl MoveGrab {
         let new_screen_pos =
             Point::from((new_screen.x.round() as i32, new_screen.y.round() as i32));
         self.output = output.clone();
+        // A pinned window's geometry is its screen position: the canvas
+        // coordinate below moves with the camera while the window itself holds
+        // still, so only a changed screen position means the drag has taken the
+        // geometry away from a running entry (see `drag_map_window`).
+        if data
+            .stage
+            .pin_of(element)
+            .is_none_or(|site| site.screen_pos != new_screen_pos)
+        {
+            data.end_element_animation(element);
+        }
         // Guarded: the pin may have been toggled off mid-drag, and an
         // unconditional set_pin would silently re-pin.
         if data.stage.is_pinned(element) {
@@ -572,9 +586,9 @@ impl MoveGrab {
         // which may surprise users whose members get hidden by outsiders.
         for (member, offset) in members {
             let member_pos = new_loc + offset;
-            data.map_window(member, member_pos, false);
+            crate::grabs::drag_map_window(data, member, member_pos);
         }
-        data.map_window(element.clone(), new_loc, false);
+        crate::grabs::drag_map_window(data, element.clone(), new_loc);
 
         // Sub-pixel motion that resolves to the same integer canvas position
         // doesn't actually shift the window, so blurred neighbours don't need

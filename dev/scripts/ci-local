@@ -1,0 +1,108 @@
+#!/usr/bin/env bash
+# Run the same checks as .github/workflows/ci.yml, in the same order.
+#
+#     dev/scripts/ci-local              # every stage
+#     dev/scripts/ci-local clippy       # one stage: fmt | lock | clippy | test | soak
+#     CI_LOW_MEM=1 dev/scripts/ci-local # same checks, one link at a time
+#
+# By default this runs CI's own invocations verbatim, so a green run here means
+# a green run there. The workflow file stays the source of truth; if the two
+# ever disagree, the workflow wins.
+#
+# Two flags here that a habitual `cargo test` / `cargo clippy` leaves off, and
+# that account for most local-vs-CI surprises:
+#
+#   --all-targets     `cargo clippy` alone does not compile `#[cfg(test)]`
+#                     code, so a lint in src/tests/ passes locally and fails CI.
+#   --include-ignored `cargo test` alone skips ignored tests, which is how they
+#                     rot unnoticed.
+#
+# The soak test runs alone on one thread, matching CI: it reads fd and RSS
+# plateaus from /proc/self, so a neighbouring test holding a socket open lands
+# inside its measurement.
+#
+# CI_LOW_MEM=1 trades wall-clock for peak memory. `cargo test` unscoped links
+# all 13 test targets at once, and that link step is what exhausts RAM on a
+# small machine; low-mem mode builds and runs each target on its own instead.
+# Same tests, same flags, one link at a time. Parallelism is bounded by CI_JOBS
+# and CI_TEST_THREADS (default 2 each) in that mode only.
+
+set -euo pipefail
+
+STAGE="${1:-all}"
+LOW_MEM="${CI_LOW_MEM:-}"
+JOBS="${CI_JOBS:-2}"
+TEST_THREADS="${CI_TEST_THREADS:-2}"
+
+cd "$(dirname "$0")/../.."
+
+run() {
+	echo
+	echo "=== $* ==="
+	"$@"
+}
+
+stage_fmt() {
+	run cargo fmt --check
+}
+
+stage_lock() {
+	if [[ -n $LOW_MEM ]]; then
+		run cargo check --locked --jobs "$JOBS"
+	else
+		run cargo check --locked
+	fi
+}
+
+stage_clippy() {
+	if [[ -n $LOW_MEM ]]; then
+		run cargo clippy --all-targets --jobs "$JOBS" -- -D warnings
+	else
+		run cargo clippy --all-targets -- -D warnings
+	fi
+}
+
+stage_test() {
+	if [[ -z $LOW_MEM ]]; then
+		run cargo test --no-run
+		run cargo test -- --include-ignored --skip soak
+		return
+	fi
+
+	run cargo test --lib --jobs "$JOBS" -- --test-threads="$TEST_THREADS" --include-ignored
+
+	for t in tests/*.rs; do
+		run cargo test --test "$(basename "$t" .rs)" --jobs "$JOBS" -- \
+			--test-threads="$TEST_THREADS" --include-ignored
+	done
+
+	run cargo test --bin driftwm --jobs "$JOBS" -- \
+		--test-threads="$TEST_THREADS" --include-ignored --skip soak
+}
+
+stage_soak() {
+	if [[ -n $LOW_MEM ]]; then
+		run cargo test --bin driftwm --jobs "$JOBS" -- \
+			--include-ignored --test-threads=1 soak
+	else
+		run cargo test --bin driftwm -- --include-ignored --test-threads=1 soak
+	fi
+}
+
+case "$STAGE" in
+fmt | lock | clippy | test | soak) "stage_$STAGE" ;;
+all)
+	stage_fmt
+	stage_lock
+	stage_clippy
+	stage_test
+	stage_soak
+	;;
+*)
+	echo "unknown stage: $STAGE (want: fmt | lock | clippy | test | soak | all)" >&2
+	exit 2
+	;;
+esac
+
+echo
+echo "ci-local: all requested stages passed"

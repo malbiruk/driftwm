@@ -4,8 +4,6 @@
 //! `try_start_gesture_resize`) and threshold-action execution, since they're
 //! only reached through swipe and DoubletapSwipe begin paths.
 
-use std::cell::RefCell;
-
 use smithay::{
     backend::input::{
         Event, GestureBeginEvent, GestureEndEvent, GestureSwipeUpdateEvent, InputBackend,
@@ -16,9 +14,8 @@ use smithay::{
         GestureSwipeEndEvent as WlSwipeEnd, GestureSwipeUpdateEvent as WlSwipeUpdate,
         GrabStartData,
     },
-    reexports::wayland_protocols::xdg::shell::server::xdg_toplevel,
     utils::{Logical, Point, SERIAL_COUNTER},
-    wayland::{compositor::with_states, seat::WaylandFocus},
+    wayland::seat::WaylandFocus,
 };
 
 use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
@@ -28,7 +25,7 @@ use driftwm::config::{
 use driftwm::layout::snap::SnapState;
 use driftwm::window_ext::WindowExt;
 
-use crate::grabs::{MoveGrab, ResizeGrab, ResizeState};
+use crate::grabs::{MoveGrab, ResizeGrab};
 use crate::input::pointer::{edges_from_position, resize_cursor};
 use crate::state::{ClusterMember, DriftWm, StageWindow};
 
@@ -230,17 +227,21 @@ impl DriftWm {
         match state {
             GestureState::SwipePan => {
                 let s = self.config.trackpad_speed;
-                let canvas_delta: Point<f64, Logical> =
+                let requested: Point<f64, Logical> =
                     (-delta.x * s / zoom, -delta.y * s / zoom).into();
-                if let Some(output) = self.gesture_output.clone() {
-                    self.drift_pan_on(canvas_delta, time, &output);
-                } else {
-                    self.drift_pan(canvas_delta, time);
-                }
+                let canvas_delta = match self.gesture_output_or_active() {
+                    Some(output) => self.drift_pan_on(requested, time, &output),
+                    None => Point::from((0.0, 0.0)),
+                };
 
-                let pointer = self.seat.get_pointer().unwrap();
-                let pos = pointer.current_location();
-                self.warp_pointer(pos + canvas_delta);
+                // Skip the warp at zero: it still flags a pointer resync, which
+                // flushes a same-position motion to the focused client every
+                // gesture frame.
+                if canvas_delta.x != 0.0 || canvas_delta.y != 0.0 {
+                    let pointer = self.seat.get_pointer().unwrap();
+                    let pos = pointer.current_location();
+                    self.warp_pointer(pos + canvas_delta);
+                }
             }
             GestureState::SwipeMove => {
                 let pointer = self.seat.get_pointer().unwrap();
@@ -557,34 +558,9 @@ impl DriftWm {
                 let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
                     return false;
                 };
-                // Clear fit/fill state — user took manual control
-                self.stage.clear_fit(window);
-                self.stage.clear_fill(window);
-
-                // Store resize state on surface data map for commit() repositioning
-                with_states(&wl_surface, |states| {
-                    states
-                        .data_map
-                        .get_or_insert(|| RefCell::new(ResizeState::Idle))
-                        .replace(ResizeState::Resizing {
-                            edges,
-                            initial_window_location: initial_location,
-                            initial_window_size: initial_size,
-                            initial_screen_pos: None,
-                            last_committed_size: initial_size,
-                        });
-                });
-
-                if let Some(toplevel) = window.toplevel() {
-                    toplevel.with_pending_state(|state| {
-                        state.states.set(xdg_toplevel::State::Resizing);
-                        // Mirror the fit-state clear above, or the client keeps a
-                        // Maximized it can no longer shed — its restore button
-                        // would dispatch an unmaximize_request that `unfit_window`
-                        // silently drops.
-                        state.states.unset(xdg_toplevel::State::Maximized);
-                    });
-                }
+                // No pinned anchor: the pinned arm above delegated to the
+                // pointer path and returned, so this is a canvas window.
+                self.begin_client_resize(window, &wl_surface, edges, initial_size, None);
                 (
                     ClusterMember::Client(window.clone()),
                     crate::grabs::SizeConstraints::for_window(window),
@@ -597,7 +573,7 @@ impl DriftWm {
                 self.arm_interactive_move(&s.id);
                 (
                     ClusterMember::Suspended(s.id),
-                    crate::grabs::SizeConstraints::for_suspended(),
+                    crate::grabs::SizeConstraints::for_suspended(self.suspended_chrome()),
                     None,
                 )
             }
@@ -609,6 +585,7 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         self.raise_and_focus_element(&element, serial);
 
+        let (start_screen, start_zoom) = crate::grabs::resize_screen_anchor(&output, pos);
         let grab = ResizeGrab {
             start_data: GrabStartData {
                 focus: None,
@@ -621,6 +598,8 @@ impl DriftWm {
             initial_window_size: initial_size,
             last_window_size: initial_size,
             output,
+            start_screen,
+            start_zoom,
             last_clamped_location: pos,
             snap: SnapState::default(),
             constraints,

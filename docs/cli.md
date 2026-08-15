@@ -35,7 +35,7 @@ driftwm msg [OPTIONS] <COMMAND>
 
 Send a command to the running compositor over its IPC socket.
 
-Auto-targets the instance named by `WAYLAND_DISPLAY` (override with `DRIFTWM_SOCKET`). `camera`, `zoom`, `focus`, `move`, `opacity`, and `bookmark` read when given no arguments and write when given arguments. The others don't follow that rule: `action` requires its arguments, `close`/`suspend`/`relaunch` act on the focused window when given no selector, and `layout`, `screenshot`, `state`, `subscribe`, and `debug-counters` need no arguments at all.
+Auto-targets the instance named by `WAYLAND_DISPLAY` (override with `DRIFTWM_SOCKET`).
 
 A window command selects its target by `app_id` substring (case-insensitive) or by `--id <n>`, the stable id `state` prints. Widgets match no `app_id` search — reach one by `--id`.
 
@@ -53,7 +53,8 @@ driftwm msg --json focus --id 5
 | [`state`](#driftwm-msg-state) | Dump camera, zoom, and the window inventory |
 | [`subscribe`](#driftwm-msg-subscribe) | Stream state snapshots as they change (one JSON line per event with --json) |
 | [`focus`](#driftwm-msg-focus) | Print the focused window, or focus one by `app_id` substring or `--id` |
-| [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (center, Y-up) |
+| [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up) |
+| [`resize`](#driftwm-msg-resize) | Get a window's size, or resize it to `<width> <height>` |
 | [`close`](#driftwm-msg-close) | Close the focused window, or one by `app_id` substring or `--id` |
 | [`opacity`](#driftwm-msg-opacity) | Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque |
 | [`suspend`](#driftwm-msg-suspend) | Suspend the focused window, or one by `app_id` substring or `--id` |
@@ -76,7 +77,7 @@ Dump camera, zoom, and the window inventory.
 
 Also prints the keyboard layout, the fullscreen and pinned screen-space inventories, layer-shell namespaces, and each output's viewport. Every window entry carries the stable `id` other commands take as a selector.
 
-Reply: `{"Ok":{"State":{"camera":[..],"zoom":1.0,"windows":[..],"outputs":[..]}}}`.
+`--json` reply: `{"Ok":{"State":{"camera":[..],"zoom":1.0,"windows":[..],"outputs":[..]}}}`.
 
 ```bash
 driftwm msg --json state | jq '.Ok.State.windows'
@@ -108,7 +109,7 @@ Print the focused window, or focus one by `app_id` substring or `--id`.
 
 Focusing pans the camera to the window unless it is already fully visible. Widgets cannot be focused.
 
-Reply: `{"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}` (or `{"Ok":{"Focused":null}}`).
+`--json` reply: `{"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}` (or `{"Ok":{"Focused":null}}`).
 
 - `--id <ID>` — Target this window id
 
@@ -123,17 +124,36 @@ driftwm msg focus --id 5
 driftwm msg move [OPTIONS] [X] [Y]
 ```
 
-Get a window's position, or move it to `<x> <y>` (center, Y-up).
+Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
 
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move` refuses to reposition them.
 
-Reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
+`--json` reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
 
 - `--id <ID>` — Target this window id
 
 ```bash
 driftwm msg move
 driftwm msg move -400 200 --id 5
+```
+
+#### `driftwm msg resize`
+
+```
+driftwm msg resize [OPTIONS] [WIDTH] [HEIGHT]
+```
+
+Get a window's size, or resize it to `<width> <height>`.
+
+Dimensions are the visible frame, including any compositor-drawn title bar and border. A request is clamped to the client's declared limits — which describe the content inside that frame — and the reply echoes what was configured, not what the client went on to commit. Refused for pinned and fullscreen windows as with `move`, and while the window is under an interactive move or resize.
+
+`--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
+
+- `--id <ID>` — Target this window id
+
+```bash
+driftwm msg resize
+driftwm msg resize 800 600 --id 5
 ```
 
 #### `driftwm msg close`
@@ -146,7 +166,7 @@ Close the focused window, or one by `app_id` substring or `--id`.
 
 Errors when nothing matches.
 
-Reply: `{"Ok":"Ok"}`.
+`--json` reply: `{"Ok":"Ok"}`.
 
 - `--id <ID>` — Target this window id
 
@@ -164,7 +184,7 @@ Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque
 
 Runtime-only: seeded from an `opacity` window rule, lost when the window or the compositor restarts. Out-of-range values are rejected. Default `1`.
 
-Reply: `{"Ok":{"Opacity":0.85}}`.
+`--json` reply: `{"Ok":{"Opacity":0.85}}`.
 
 - `--id <ID>` — Target this window id
 
@@ -182,7 +202,7 @@ Suspend the focused window, or one by `app_id` substring or `--id`.
 
 The same conversion as the `suspend-window` action: the client goes away and a compositor-drawn stand-in holds its place, to be brought back with `relaunch`, `Enter`, or a click.
 
-Reply: `{"Ok":"Ok"}`.
+`--json` reply: `{"Ok":"Ok"}`.
 
 - `--id <ID>` — Target this window id
 
@@ -200,7 +220,7 @@ Relaunch a suspended window: the focused stand-in, or one by `app_id` substring 
 
 Spawns the app from its `.desktop` entry and adopts the new window into the stand-in's slot on its first sized commit. Acts only on stand-ins, so an `app_id` substring never resolves to a live client. Errors when nothing matches.
 
-Reply: `{"Ok":"Ok"}`.
+`--json` reply: `{"Ok":"Ok"}`.
 
 - `--id <ID>` — Target this window id
 
@@ -218,7 +238,9 @@ Get the camera position, or pan the viewport to `<x> <y>` (canvas point, Y-up).
 
 Panning is animated, and takes both coordinates or neither.
 
-Reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
+A fullscreen window parks the viewport, so setting a position exits fullscreen first rather than refusing as `move` does — a script that writes the camera in a loop will drop the user out of a fullscreen video. Reading never disturbs it.
+
+`--json` reply: `{"Ok":{"Camera":{"x":500.0,"y":300.0}}}`.
 
 ```bash
 driftwm msg camera
@@ -233,9 +255,9 @@ driftwm msg zoom [LEVEL]
 
 Get the zoom level, or set it with `<level>`.
 
-Setting is animated and clamped: out to fit-all, in to native resolution (no magnification).
+Setting is animated and clamped: out to fit-all, in to native resolution (no magnification). As with `camera`, setting a level on a fullscreen output exits fullscreen first rather than refusing; reading is safe.
 
-Reply: `{"Ok":{"Zoom":0.5}}`.
+`--json` reply: `{"Ok":{"Zoom":0.5}}`.
 
 ```bash
 driftwm msg zoom 0.5
@@ -251,7 +273,7 @@ List bookmarks, get or set one by `<name>`, or delete with `--delete`.
 
 Coordinates are canvas points, Y-up and window-center, the same convention as `move`; setting an existing name overwrites it. A bookmark stores a position only, never zoom — jump to one with the `go-to-bookmark` action or a `mod+<n>` keybinding.
 
-Reply: `{"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}` (get/set), or `{"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}` (list), or `{"Ok":"Ok"}` (delete).
+`--json` reply: `{"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}` (get/set), or `{"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}` (list), or `{"Ok":"Ok"}` (delete).
 
 - `[NAME]` — Bookmark name. Omit to list every bookmark
 - `[X]` — X coordinate (Y-up). Requires `<y>`
@@ -272,7 +294,7 @@ driftwm msg layout [OPTIONS]
 
 Print the active keyboard layout (full XKB name, e.g. `English (US)`).
 
-Reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
+`--json` reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
 
 - `--short` — Print the configured code for the active group instead (e.g. `us`, `ru`)
 
@@ -294,7 +316,7 @@ Window actions act on the focused window, so `focus` the target first, or pass `
 
 The socket is a full control surface: `action` can `exec`/`spawn`, `quit`, and `reload-config`. It is safe only because the socket is `0600`.
 
-Reply: `{"Ok":"Ok"}`.
+`--json` reply: `{"Ok":"Ok"}`.
 
 - `<SPEC>...` — Action and arguments, exactly as written in config (e.g. `nudge-window up`)
 
@@ -315,7 +337,7 @@ A canvas capture, not a screen grab: it re-renders a virtual viewport onto the c
 
 Blur caveat: a scene capture (viewport/`all`/`region`) shows a translucent window over a sharp backdrop, never a blurred one; a `window` capture keeps the translucency over transparent pixels. A gigapixel TIFF wallpaper uses a coarse pyramid level, softening at extreme `--scale`. Captures tile internally but cap at 16384 px/side.
 
-Reply: `{"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}`.
+`--json` reply: `{"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}`.
 
 - `--scale <SCALE>` — Pixels per canvas unit — higher captures more detail than the screen shows, independent of zoom (default: `1`)
 - `-o, --output <OUTPUT>` — Output PNG path, or `-` for stdout (default: `./driftwm-screenshot-<time>.png`)
@@ -332,7 +354,7 @@ driftwm msg screenshot window [OPTIONS] [APP_ID]
 
 The focused window, or one by `app_id` substring or `--id`.
 
-Composed alone on transparency, so overlapping windows never appear; pinned and fullscreen windows capture like any other (a fullscreen window has no chrome). Reply shape is the shared `Screenshot` reply above.
+Composed alone on transparency, so overlapping windows never appear; pinned and fullscreen windows capture like any other (a fullscreen window has no chrome). `--json` reply shape is the shared `Screenshot` reply above.
 
 - `--id <ID>` — Target this window id
 
@@ -348,7 +370,7 @@ driftwm msg screenshot all
 
 The bounding box of all non-widget windows.
 
-A scene with the canvas background plus every window's chrome, framed with a `[zoom] fit_padding` margin. Reply shape is the shared `Screenshot` reply above.
+A scene with the canvas background plus every window's chrome, framed with a `[zoom] fit_padding` margin. `--json` reply shape is the shared `Screenshot` reply above.
 
 ```bash
 driftwm msg screenshot all --scale 0.5
@@ -362,7 +384,7 @@ driftwm msg screenshot region [OPTIONS] <COORDS>...
 
 A rectangle — `X Y W H` (canvas coords, center/Y-up) or slurp's native `X,Y WxH`. Commas and the `x` separator are tolerated, so `$(slurp)` drops in directly. Treated as output-screen pixels with `--from-screen`.
 
-Captures a scene (canvas background plus window chrome) over the rectangle. Reply shape is the shared `Screenshot` reply above.
+Captures a scene (canvas background plus window chrome) over the rectangle. `--json` reply shape is the shared `Screenshot` reply above.
 
 - `<COORDS>...` — Four ints `X Y W H`, or slurp's `X,Y WxH` (quoted or not)
 - `--from-screen` — Treat the rectangle as output-screen pixels mapped via the active viewport
@@ -382,7 +404,7 @@ Print internal collection sizes for leak diagnosis (unstable keys).
 
 Keys are internal field names and change between releases; don't script against them. A window/surface/client-keyed count should return to its idle baseline once the windows and clients that raised it are gone (output-keyed counters follow output lifetimes instead and can persist across hotplug).
 
-Reply: `{"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}`.
+`--json` reply: `{"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}`.
 
 ```bash
 driftwm msg debug-counters

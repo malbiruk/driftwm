@@ -54,6 +54,8 @@ pub enum Action {
     CloseWindow,
     SuspendWindow,
     NudgeWindow(Direction),
+    GrowWindow(Direction),
+    ShrinkWindow(Direction),
     PanViewport(Direction),
     CenterWindow,
     CenterNearest(Direction),
@@ -78,7 +80,19 @@ pub enum Action {
     SwitchLayout(LayoutSwitch),
     ReloadConfig,
     ToggleCursorPan,
+    SetTrackpad(TrackpadState),
     Quit,
+}
+
+/// Desired trackpad send-events state, as set by `set-trackpad`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TrackpadState {
+    /// Flip between enabled and disabled.
+    Toggle,
+    /// Force the trackpad enabled.
+    On,
+    /// Force the trackpad disabled.
+    Off,
 }
 
 impl Action {
@@ -89,6 +103,8 @@ impl Action {
             Action::ZoomIn
                 | Action::ZoomOut
                 | Action::NudgeWindow(_)
+                | Action::GrowWindow(_)
+                | Action::ShrinkWindow(_)
                 | Action::PanViewport(_)
                 | Action::CycleWindows { .. }
                 | Action::Spawn(_)
@@ -105,6 +121,7 @@ impl Action {
                 | Action::ReloadConfig
                 | Action::SwitchLayout(_)
                 | Action::ToggleCursorPan
+                | Action::SetTrackpad(_)
                 | Action::SendToOutput(_)
         )
     }
@@ -406,6 +423,15 @@ pub enum AccelProfile {
     Adaptive,
 }
 
+/// Whether the trackpad delivers events at all, resolved from the `enable` and
+/// `disable_on_external_mouse` config fields.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendEvents {
+    Enabled,
+    Disabled,
+    DisabledOnExternalMouse,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TrackpadSettings {
     pub tap_to_click: bool,
@@ -415,6 +441,7 @@ pub struct TrackpadSettings {
     pub accel_profile: AccelProfile,
     pub click_method: Option<String>,
     pub disable_while_typing: bool,
+    pub send_events: SendEvents,
 }
 
 impl Default for TrackpadSettings {
@@ -427,6 +454,7 @@ impl Default for TrackpadSettings {
             accel_profile: AccelProfile::Adaptive,
             click_method: None,
             disable_while_typing: true,
+            send_events: SendEvents::Enabled,
         }
     }
 }
@@ -575,6 +603,44 @@ pub enum TitleAlign {
     Left,
     #[default]
     Center,
+}
+
+/// Where a centering navigation parks the focused window in the viewport.
+///
+/// Deliberately not [`Direction`]'s vocabulary: `[outputs.hot_corners]` already
+/// spells corners `top_left`/`top_right`/…, and every `Direction` in a binding
+/// is *motion* (`nudge-window up` moves a window) where this is a resting
+/// position.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FocusPlacement {
+    #[default]
+    Center,
+    Top,
+    Bottom,
+    Left,
+    Right,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+}
+
+impl FocusPlacement {
+    /// Per-axis pull in y-down screen space: -1 toward the low edge, 0 centered,
+    /// 1 toward the high edge.
+    pub fn pull(self) -> (i8, i8) {
+        match self {
+            Self::Center => (0, 0),
+            Self::Top => (0, -1),
+            Self::Bottom => (0, 1),
+            Self::Left => (-1, 0),
+            Self::Right => (1, 0),
+            Self::TopLeft => (-1, -1),
+            Self::TopRight => (1, -1),
+            Self::BottomLeft => (-1, 1),
+            Self::BottomRight => (1, 1),
+        }
+    }
 }
 
 // ── Window-rule pattern matching ────────────────────────────────────
@@ -1111,6 +1177,9 @@ pub struct OutputConfig {
     pub position: OutputPosition,
     pub mode: OutputMode,
     pub hot_corners: HotCorners,
+    /// `None` inherits the top-level `focus_placement`; `Some(Center)` means
+    /// this monitor centers despite a non-center global.
+    pub focus_placement: Option<FocusPlacement>,
 }
 
 /// Which corner of the screen to bind a hot-corner action to.
@@ -1251,6 +1320,7 @@ mod tests {
         assert!(Action::ReloadConfig.runs_during_fullscreen());
         assert!(Action::SwitchLayout(LayoutSwitch::Next).runs_during_fullscreen());
         assert!(Action::ToggleCursorPan.runs_during_fullscreen());
+        assert!(Action::SetTrackpad(TrackpadState::Toggle).runs_during_fullscreen());
         assert!(Action::SendToOutput(Direction::Right).runs_during_fullscreen());
         assert!(!Action::CloseWindow.runs_during_fullscreen());
         assert!(!Action::ZoomIn.runs_during_fullscreen());
@@ -1283,6 +1353,29 @@ mod tests {
             iso_level5_shift: true,
             ..Default::default()
         }));
+    }
+
+    #[test]
+    fn focus_placement_default_is_center() {
+        assert_eq!(FocusPlacement::default(), FocusPlacement::Center);
+    }
+
+    #[test]
+    fn focus_placement_pull_all_variants() {
+        let cases = [
+            (FocusPlacement::Center, (0, 0)),
+            (FocusPlacement::Top, (0, -1)),
+            (FocusPlacement::Bottom, (0, 1)),
+            (FocusPlacement::Left, (-1, 0)),
+            (FocusPlacement::Right, (1, 0)),
+            (FocusPlacement::TopLeft, (-1, -1)),
+            (FocusPlacement::TopRight, (1, -1)),
+            (FocusPlacement::BottomLeft, (-1, 1)),
+            (FocusPlacement::BottomRight, (1, 1)),
+        ];
+        for (placement, expected) in cases {
+            assert_eq!(placement.pull(), expected, "placement: {placement:?}");
+        }
     }
 
     #[test]

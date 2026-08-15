@@ -1,8 +1,6 @@
-use std::cell::RefCell;
-
-use crate::grabs::{MoveGrab, ResizeGrab, ResizeState};
+use crate::grabs::{MoveGrab, ResizeGrab};
 use crate::state::{
-    ClusterMember, DriftWm, FocusTarget, PopupGrabState, StageWindow, output_logical_size,
+    ClusterMember, DriftWm, FocusTarget, NavZoom, PopupGrabState, StageWindow, output_logical_size,
     output_state,
 };
 use crate::surface_tree::focus_belongs_to_toplevel;
@@ -24,7 +22,6 @@ use smithay::{
     },
     utils::{IsAlive, Logical, Point, Rectangle, Serial},
     wayland::{
-        compositor::with_states,
         input_method::InputMethodSeat,
         seat::WaylandFocus,
         shell::{
@@ -74,6 +71,10 @@ impl XdgShellHandler for DriftWm {
         self.map_window(window.clone(), pos.into(), false);
         self.raise_window(&window, false);
         self.enforce_below_windows();
+        // A new live window must land in the durable session: the debounced
+        // flush records live windows, so a crash or SIGKILL past the next one
+        // restores it.
+        self.session_store_mark_dirty();
         // Don't focus here: a pre-buffer wl_keyboard.enter is unusable, and
         // set_focus is a no-op when the target is unchanged, so focusing now
         // would trap the client unfocused (the on-commit re-focus does nothing).
@@ -170,10 +171,7 @@ impl XdgShellHandler for DriftWm {
     ) {
         let wl_surface = surface.wl_surface().clone();
         let client_output = output.and_then(|wo| smithay::output::Output::from_resource(&wo));
-        // Defer until the first sized commit — geometry is still (0,0)
-        // here, which would poison `saved_size`, and the initial-commit
-        // positioning block would clobber the fullscreen map.
-        if self.pending_center.contains(&wl_surface) {
+        if self.queues_geometry_request(&wl_surface) {
             self.pending_fullscreen.insert(wl_surface, client_output);
             return;
         }
@@ -193,7 +191,7 @@ impl XdgShellHandler for DriftWm {
 
     fn maximize_request(&mut self, surface: ToplevelSurface) {
         let wl_surface = surface.wl_surface().clone();
-        if self.pending_center.contains(&wl_surface) {
+        if self.queues_geometry_request(&wl_surface) {
             self.pending_fit.insert(wl_surface);
             return;
         }
@@ -246,6 +244,10 @@ impl XdgShellHandler for DriftWm {
                 .fullscreen_on(&output.name())
                 .map(|entry| Rectangle::new(entry.saved_location, entry.saved_size))
         });
+        // Also captured before the teardown: the close fade is placed in screen
+        // space and has to start where the picture was drawn, which for a window
+        // that under-filled the output is its centred offset, not the corner.
+        let fullscreen_centre = self.fullscreen_centre_of(fs_output.as_ref());
         if let Some(ref output) = fs_output {
             self.stage.take_fullscreen(&output.name());
             // Two statements, not one `if let`: the scrutinee's MutexGuard
@@ -270,7 +272,13 @@ impl XdgShellHandler for DriftWm {
         {
             // Crossfade the dying window over the stand-in that takes its rect
             // (fade in place, scale 1). Capture precedes the stage surgery.
-            self.snapshot_closing_window(window, &wl_surface, fs_output.as_ref(), true);
+            self.snapshot_closing_window(
+                window,
+                &wl_surface,
+                fs_output.as_ref(),
+                fullscreen_centre,
+                true,
+            );
             self.convert_to_suspended(window, &wl_surface, conv);
             self.cleanup_surface_state(&wl_surface);
             return;
@@ -298,9 +306,15 @@ impl XdgShellHandler for DriftWm {
                 });
 
             // When auto-navigation is off, dropping an off-screen follow target
-            // guarantees focus never lands somewhere the user can't see.
-            let follow = follow
-                .filter(|t| self.config.auto_navigate_on_close || self.window_fully_in_viewport(t));
+            // guarantees focus never lands somewhere the user can't see. A
+            // window hidden for a deferred adopt is dropped either way: it reads
+            // as off screen, so with auto-navigation on it would be kept as a
+            // target that can neither be focused nor panned to — suppressing the
+            // fallback tiers that would have found a real one.
+            let follow = follow.filter(|t| {
+                !self.hidden_by_deferred_adopt(t)
+                    && (self.config.auto_navigate_on_close || self.window_fully_in_viewport(t))
+            });
 
             let keyboard = self.seat.get_keyboard().unwrap();
             let current_focus = keyboard.current_focus();
@@ -332,7 +346,7 @@ impl XdgShellHandler for DriftWm {
                         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                         self.raise_and_focus(&target, serial);
                     } else {
-                        self.navigate_to_window(&target, false);
+                        self.navigate_to_window(&target, NavZoom::Keep);
                     }
                 } else {
                     // No follow target. Pick first MRU entry; if it's
@@ -389,9 +403,18 @@ impl XdgShellHandler for DriftWm {
             // first on a client disconnect) then owns the snapshot, so this
             // can't stack a second double-alpha fade for the same window.
             if wl_surface.alive() {
-                self.snapshot_closing_window(window, &wl_surface, fs_output.as_ref(), false);
+                self.snapshot_closing_window(
+                    window,
+                    &wl_surface,
+                    fs_output.as_ref(),
+                    fullscreen_centre,
+                    false,
+                );
             }
             self.unmap_window(window);
+            // The window left the stage; the durable record must follow, or a
+            // stale flush could re-save a window the user closed minutes ago.
+            self.session_store_mark_dirty();
             // The window may have sat under the cursor; re-target pointer focus
             // now that it's gone so clicks don't fall into the destroyed surface.
             self.refresh_pointer_focus();
@@ -529,10 +552,6 @@ impl XdgShellHandler for DriftWm {
             return;
         };
 
-        // Clear fit/fill state — user took manual control
-        self.stage.clear_fit(&window);
-        self.stage.clear_fill(&window);
-
         // Pinned windows resize in screen space (see start_compositor_resize_with_edge).
         let pinned_site = self.stage.pin_of(&window).cloned();
         let pinned_initial_screen_pos = pinned_site.as_ref().map(|s| s.screen_pos);
@@ -540,27 +559,13 @@ impl XdgShellHandler for DriftWm {
             .as_ref()
             .and_then(|s| self.output_by_name(&s.output));
 
-        // Store resize state in the surface data map for commit() repositioning
-        with_states(&wl_surface, |states| {
-            states
-                .data_map
-                .get_or_insert(|| RefCell::new(ResizeState::Idle))
-                .replace(ResizeState::Resizing {
-                    edges,
-                    initial_window_location,
-                    initial_window_size,
-                    initial_screen_pos: pinned_initial_screen_pos,
-                    last_committed_size: initial_window_size,
-                });
-        });
-
-        surface.with_pending_state(|state| {
-            state.states.set(xdg_toplevel::State::Resizing);
-            // Mirror the fit-state clear above, or the client keeps a Maximized
-            // it can no longer shed — its restore button would dispatch an
-            // unmaximize_request that `unfit_window` silently drops.
-            state.states.unset(xdg_toplevel::State::Maximized);
-        });
+        self.begin_client_resize(
+            &window,
+            &wl_surface,
+            edges,
+            initial_window_size,
+            pinned_initial_screen_pos,
+        );
 
         self.cursor.grab_cursor = true;
         self.cursor.cursor_status = CursorImageStatus::Named(resize_cursor(edges));
@@ -577,6 +582,9 @@ impl XdgShellHandler for DriftWm {
             };
         let constraints = crate::grabs::SizeConstraints::for_window(&window);
         let locked_ratio = crate::grabs::locked_ratio_for(&window, initial_window_size);
+        let grab_output = pinned_output.unwrap_or(output);
+        let (start_screen, start_zoom) =
+            crate::grabs::resize_screen_anchor(&grab_output, start_data.location);
         let grab = ResizeGrab {
             start_data,
             target: ClusterMember::Client(window),
@@ -584,7 +592,9 @@ impl XdgShellHandler for DriftWm {
             initial_window_location,
             initial_window_size,
             last_window_size: initial_window_size,
-            output: pinned_output.unwrap_or(output),
+            output: grab_output,
+            start_screen,
+            start_zoom,
             last_clamped_location,
             snap: driftwm::layout::snap::SnapState::default(),
             constraints,
@@ -647,7 +657,7 @@ impl DriftWm {
         &self,
         root: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> bool {
-        if !matches!(self.session_lock, crate::state::SessionLock::Unlocked) {
+        if self.session_lock.is_locked() {
             return self
                 .lock_surfaces
                 .values()

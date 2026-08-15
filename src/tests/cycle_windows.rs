@@ -12,6 +12,8 @@ use driftwm::config::Action;
 use smithay::desktop::Window;
 use smithay::utils::SERIAL_COUNTER;
 
+use crate::state::NavZoom;
+
 use super::{Fixture, client::ClientId, map_window, window_by_app_id};
 
 /// Map toplevels a, b, c on a fresh client; focus history ends [c, b, a].
@@ -39,7 +41,7 @@ fn held_cycle_step(f: &mut Fixture) {
     if let Some(target) = f.state().stage.cycle_step(false, anchor.as_ref()) {
         let window = target.client().expect("cycle target is a client").clone();
         f.state().cycle_navigating = true;
-        f.state().navigate_to_window(&window, false);
+        f.state().navigate_to_window(&window, NavZoom::Keep);
         f.state().cycle_navigating = false;
     }
 }

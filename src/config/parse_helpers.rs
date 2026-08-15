@@ -14,9 +14,9 @@ use super::toml::{
     OutputOutlineConfig, OutputRuleFile, PassKeysFile, WindowRuleFile,
 };
 use super::types::{
-    BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FontWeight, HotCorners,
-    KeyCombo, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition, PassKeys,
-    Pattern, TitleAlign, WindowRule,
+    BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FocusPlacement, FontWeight,
+    HotCorners, KeyCombo, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition,
+    PassKeys, Pattern, TitleAlign, WindowRule,
 };
 
 /// How actionable a config warning is. The error bar has room for one message,
@@ -580,6 +580,24 @@ pub(super) fn parse_output_position(val: &::toml::Value) -> Result<OutputPositio
     }
 }
 
+/// One of the nine `focus_placement` values, case- and whitespace-insensitive.
+/// `None` for anything else, so both call sites can warn in their own house
+/// style rather than share a message.
+pub(super) fn parse_focus_placement(s: &str) -> Option<FocusPlacement> {
+    Some(match s.trim().to_lowercase().as_str() {
+        "center" => FocusPlacement::Center,
+        "top" => FocusPlacement::Top,
+        "bottom" => FocusPlacement::Bottom,
+        "left" => FocusPlacement::Left,
+        "right" => FocusPlacement::Right,
+        "top-left" => FocusPlacement::TopLeft,
+        "top-right" => FocusPlacement::TopRight,
+        "bottom-left" => FocusPlacement::BottomLeft,
+        "bottom-right" => FocusPlacement::BottomRight,
+        _ => return None,
+    })
+}
+
 pub(super) fn parse_output_rule(
     r: OutputRuleFile,
     errors: &mut Warnings,
@@ -615,6 +633,25 @@ pub(super) fn parse_output_rule(
         None => HotCorners::default(),
     };
 
+    // Warn-and-inherit rather than `?`: an `Err` here would make the caller drop
+    // the whole entry, so one typo would silently take this monitor's scale,
+    // mode, transform and hot corners with it. Staying `None` also keeps
+    // "inherit the global" distinct from an explicit `"center"`.
+    let focus_placement = r.focus_placement.as_deref().and_then(|s| {
+        let parsed = parse_focus_placement(s);
+        if parsed.is_none() {
+            collect_warn(
+                errors,
+                format!(
+                    "config: unknown [[outputs]] focus_placement '{s}' for '{}', \
+                     using the top-level value",
+                    r.name
+                ),
+            );
+        }
+        parsed
+    });
+
     Ok(OutputConfig {
         name: r.name,
         scale,
@@ -622,6 +659,7 @@ pub(super) fn parse_output_rule(
         position,
         mode,
         hot_corners,
+        focus_placement,
     })
 }
 
@@ -745,6 +783,56 @@ mod tests {
     fn parse_transform_invalid() {
         assert!(parse_transform("upside-down").is_err());
         assert!(parse_transform("").is_err());
+    }
+
+    #[test]
+    fn parse_focus_placement_all_variants() {
+        let cases = [
+            ("center", FocusPlacement::Center),
+            ("top", FocusPlacement::Top),
+            ("bottom", FocusPlacement::Bottom),
+            ("left", FocusPlacement::Left),
+            ("right", FocusPlacement::Right),
+            ("top-left", FocusPlacement::TopLeft),
+            ("top-right", FocusPlacement::TopRight),
+            ("bottom-left", FocusPlacement::BottomLeft),
+            ("bottom-right", FocusPlacement::BottomRight),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_focus_placement(input),
+                Some(expected),
+                "input: {input}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_focus_placement_case_and_whitespace_insensitive() {
+        let cases = [
+            ("  CENTER ", FocusPlacement::Center),
+            (" Top", FocusPlacement::Top),
+            ("BOTTOM  ", FocusPlacement::Bottom),
+            ("\tLeft", FocusPlacement::Left),
+            ("RiGhT ", FocusPlacement::Right),
+            ("  TOP-Left ", FocusPlacement::TopLeft),
+            (" Top-Right ", FocusPlacement::TopRight),
+            (" Bottom-LEFT", FocusPlacement::BottomLeft),
+            ("  BOTTOM-right  ", FocusPlacement::BottomRight),
+        ];
+        for (input, expected) in cases {
+            assert_eq!(
+                parse_focus_placement(input),
+                Some(expected),
+                "input: {input:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_focus_placement_unknown_returns_none() {
+        assert_eq!(parse_focus_placement("diagonal"), None);
+        assert_eq!(parse_focus_placement(""), None);
     }
 
     #[test]

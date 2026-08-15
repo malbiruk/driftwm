@@ -1,9 +1,16 @@
-//! Durable session store + restore: the quit-serialize round-trip, origin
+//! Durable session store + restore: the save/restore round-trip, origin
 //! filtering with carry-forward when `restore_windows` is off, fresh-boot camera
-//! seeding, and the immediate write on create/dismiss. The fixture drives the
-//! same `serialize_session_on_shutdown` the main.rs choke point calls; the
-//! post-`run()` wiring itself (Quit + signalfd both reaching it) is hardware
-//! smoke, not covered here.
+//! seeding, and what arms the debounce. The debounced flush is the only writer
+//! — nothing writes at shutdown — and it records live windows as well as
+//! stand-ins, so a crash or a logout that kills the clients leaves the canvas
+//! as of the last flush in the file.
+//!
+//! That flush is a real calloop timer with no injectable clock, so scenarios
+//! drive `session_store_write_now` where production would wait the debounce
+//! out. An "assert dirty" therefore has to flush first: mapping a toplevel and
+//! plenty of other paths set the flag, and only a flush clears it. The timer
+//! runs on either of two intervals — the window one, or the longer camera one —
+//! and the scenarios that care assert which, never a wall-clock value.
 
 use std::collections::{BTreeMap, HashMap};
 use std::rc::Rc;
@@ -12,10 +19,11 @@ use driftwm::config::Config;
 use driftwm::desktop_entry::DesktopEntryCache;
 use driftwm::session::{self, Origin, SessionEntry, SessionEnvelope, SessionOutput};
 use smithay::utils::{Point, Rectangle, SERIAL_COUNTER, Size};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
-use crate::state::{CameraSeed, FocusTarget, StageWindow, SuspendedWindow};
+use crate::state::{CameraSeed, FocusTarget, StageWindow, SuspendedWindow, WRITE_DEBOUNCE};
 
 use super::real::TempDir;
 use super::{Fixture, map_window, server_surface, window_by_app_id};
@@ -114,9 +122,9 @@ fn entry(id: u64, app: &str, origin: Origin) -> SessionEntry {
     }
 }
 
-/// Serialize live windows on quit (`restore_windows = true`), then a fresh
+/// A flush records live windows (`restore_windows = true`), then a fresh
 /// `DriftWm` materializes them in z-order at their exact rects with `Quit`
-/// origin. Drives the factored serialize fn the choke point calls.
+/// origin.
 #[test]
 fn quit_serialize_round_trip() {
     let tmp = TempDir::new();
@@ -135,7 +143,7 @@ fn quit_serialize_round_trip() {
         let b = f.add_client();
         map_at(&mut f, b, "beta", (200, 200), (-300, 100));
 
-        f.state().serialize_session_on_shutdown();
+        f.state().session_store_write_now();
     }
 
     // The file holds both, in z-order, as quit records.
@@ -261,7 +269,7 @@ fn focus_round_trips_onto_the_restored_stand_in() {
         f.state()
             .set_window_focus(Some(FocusTarget(server_surface(&alpha))), serial);
 
-        f.state().serialize_session_on_shutdown();
+        f.state().session_store_write_now();
     }
 
     let saved = session::read(&path);
@@ -332,7 +340,7 @@ fn an_unfocused_session_restores_unfocused() {
         let serial = SERIAL_COUNTER.next_serial();
         f.state().set_window_focus(None, serial);
 
-        f.state().serialize_session_on_shutdown();
+        f.state().session_store_write_now();
     }
 
     let saved = session::read(&path);
@@ -419,9 +427,8 @@ fn a_withheld_restored_focus_survives_to_the_next_boot() {
     // is withheld — and then the session is written straight back out.
     {
         let mut f = Fixture::with_config(config_restore(true));
-        // This boot quits with its stand-in still on the canvas, as a real one
-        // does — dismissing it to reach the baseline would rewrite the file the
-        // second boot reads.
+        // This boot ends with its stand-in still on the canvas, as a real one
+        // does, so it never reaches the teardown baseline.
         f.skip_baseline_check();
         f.add_output(1, (1920, 1080));
         f.state().session_store.path = Some(path.clone());
@@ -432,7 +439,7 @@ fn a_withheld_restored_focus_survives_to_the_next_boot() {
             None,
             "the off-screen stand-in is not focused"
         );
-        f.state().serialize_session_on_shutdown();
+        f.state().session_store_write_now();
     }
 
     let rewritten = session::read(&path);
@@ -506,11 +513,12 @@ fn a_carried_entry_loses_its_stale_focus_flag() {
         "a carried entry's flag restores no focus — it never materialized"
     );
 
-    // Dismissing the explicit stand-in rewrites the file.
+    // Dismissing the explicit stand-in arms the debounce; its flush rewrites.
     let restored = suspended_in_order(&mut f);
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].0.identity.app_id, "keepme");
     f.state().dismiss_suspended(restored[0].0.id);
+    f.state().session_store_write_now();
 
     let after = session::read(&path);
     assert_eq!(after.entries.len(), 1);
@@ -552,8 +560,10 @@ fn flag_off_materializes_explicit_and_carries_quit() {
     assert_eq!(restored.len(), 1);
     assert_eq!(restored[0].0.identity.app_id, "keepme");
 
-    // Dismissing it rewrites the file — the carried quit entry survives.
+    // Dismissing it arms the debounce; the flush it queued rewrites the file,
+    // and the carried quit entry survives that rewrite.
     f.state().dismiss_suspended(restored[0].0.id);
+    f.state().session_store_write_now();
     let after = session::read(&path);
     assert_eq!(after.entries.len(), 1);
     assert_eq!(after.entries[0].app_id, "onlyquit");
@@ -561,8 +571,8 @@ fn flag_off_materializes_explicit_and_carries_quit() {
 }
 
 /// Restore flipped on after a flag-off boot must not duplicate a relaunched app:
-/// the carried-forward quit entry is dropped at shutdown (the live canvas is
-/// authoritative), so the app serializes once, not twice.
+/// the carried-forward quit entry is dropped on the next flush (the live canvas
+/// is authoritative), so the app serializes once, not twice.
 #[test]
 fn restore_flip_on_drops_carried_quit_for_relaunched_app() {
     let cache = TempDir::new();
@@ -595,9 +605,9 @@ fn restore_flip_on_drops_carried_quit_for_relaunched_app() {
     let id = f.add_client();
     map_at(&mut f, id, "onlyquit", (400, 300), (300, 300));
 
-    // Config hot-reload flips restore on; shutdown serializes the live windows.
+    // Config hot-reload flips restore on; the next flush records the live windows.
     f.state().config.session.restore_windows = true;
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     // The app is written exactly once (the live window), not duplicated by the
     // carried-forward quit entry.
@@ -648,7 +658,7 @@ fn restore_flip_on_preserves_unrelaunched_carried_quit() {
 
     // Flip restore on, then quit.
     f.state().config.session.restore_windows = true;
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     let after = session::read(&path);
     // A's carried quit was deduped against the live window — a single entry.
@@ -814,7 +824,7 @@ fn out_of_range_entry_is_dropped_and_not_carried() {
     assert_eq!(restored[0].0.identity.app_id, "good");
 
     // The bad entry is gone from the next serialize too (not carried forward).
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
     let after = session::read(&path);
     assert!(
         after.entries.iter().all(|e| e.app_id != "bad"),
@@ -823,6 +833,117 @@ fn out_of_range_entry_is_dropped_and_not_carried() {
     for (s, _) in restored {
         f.state().dismiss_suspended(s.id);
     }
+}
+
+/// A schema-v1 file's `position`/`size` describe the stand-in's bare body (no
+/// chrome). Loading it converts those numbers to the v2 frame convention and
+/// deflates them back to the same body, so a v1 record materializes at exactly
+/// the rect it always described, wearing its chrome around it.
+#[test]
+fn v1_session_entry_converts_body_to_frame_on_load() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    std::fs::write(
+        &path,
+        r#"{"version":1,"saved_at":0,"outputs":{},"entries":[
+            {"id":1,"app_id":"legacy","desktop_id":"legacy.desktop","display_name":"Legacy",
+             "position":[100,200],"size":[400,300],"origin":"explicit"}]}"#,
+    )
+    .unwrap();
+
+    let mut f =
+        Fixture::with_config(Config::from_toml("[decorations]\nborder_width = 4\n").unwrap());
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    let (s, pos) = (restored[0].0.clone(), restored[0].1);
+
+    // The v1 numbers describe the body directly: content top-left =
+    // rule_to_internal(100, 200, (400, 300)) = (100 - 200, -200 - 150) =
+    // (-100, -350). The conversion inflates that by the 25px bar and 4px border
+    // into a frame and `materialize_entry` deflates it straight back. Reading
+    // the v1 numbers as a frame instead would shrink the body to 392×267 at
+    // (-96, -321).
+    assert_eq!(
+        s.size.get(),
+        Size::from((400, 300)),
+        "the stand-in's body is the v1 size verbatim, not shrunk by the chrome"
+    );
+    assert_eq!(pos, Point::from((-100, -350)));
+
+    f.state().dismiss_suspended(s.id);
+}
+
+/// The same visible frame as the v1 file above, but already in the v2
+/// convention: no migration runs (`envelope.version == session::VERSION`), so
+/// landing on the identical body and position proves those really are the
+/// current on-disk numbers, not an artifact of the v1 conversion.
+#[test]
+fn v2_session_entry_round_trips_unchanged() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        bookmarks: BTreeMap::new(),
+        saved_at: 0,
+        entries: vec![SessionEntry {
+            id: 1,
+            app_id: "current".to_string(),
+            desktop_id: "current.desktop".to_string(),
+            display_name: "Current".to_string(),
+            position: [100, 213],
+            size: [408, 333],
+            origin: Origin::Explicit,
+            csd: false,
+            focused: false,
+        }],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f =
+        Fixture::with_config(Config::from_toml("[decorations]\nborder_width = 4\n").unwrap());
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1);
+    let (s, pos) = (restored[0].0.clone(), restored[0].1);
+    assert_eq!(s.size.get(), Size::from((400, 300)));
+    assert_eq!(pos, Point::from((-100, -350)));
+
+    f.state().dismiss_suspended(s.id);
+}
+
+/// A version this build doesn't recognize (too new, or garbled) is
+/// quarantined at the `DriftWm::load_session` boundary, not just at the
+/// lower-level `session::read` the lib-crate unit tests already cover:
+/// nothing materializes, and the bad file is renamed aside rather than
+/// silently misread.
+#[test]
+fn unknown_session_version_is_quarantined_on_load() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    std::fs::write(
+        &path,
+        r#"{"version":999,"saved_at":0,"outputs":{},"entries":[]}"#,
+    )
+    .unwrap();
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    assert_eq!(suspended_in_order(&mut f).len(), 0);
+    assert!(
+        !path.exists(),
+        "a future-version file is quarantined, not silently misread"
+    );
 }
 
 /// A `zoom: 0.0` durable seed (hand-edit / corruption) is filtered at load, so
@@ -877,7 +998,7 @@ fn invalid_zoom_seed_is_ignored_and_reserializes_sane() {
 
     // The next serialize records the live sane zoom, not the corrupt 0.0.
     f.state().session_store.path = Some(path.clone());
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
     let after = session::read(&path);
     assert_eq!(
         after.outputs.get("HEADLESS-1").map(|o| o.zoom),
@@ -1009,10 +1130,525 @@ fn restore_camera_off_preserves_disconnected_output_camera() {
     assert_eq!(saved.zoom, 0.75);
 }
 
-/// A create writes the durable file immediately; a dismiss rewrites it. Drives
-/// the real conversion path, not the test-only insertion hook.
+/// Move `output`'s camera by `(dx, dy)` the way an interactive pan grab does:
+/// straight into `output_state`, the route `set_camera_on`'s own doc records as
+/// bypassing it.
+fn pan_output(output: &smithay::output::Output, dx: f64, dy: f64) {
+    let mut os = crate::state::output_state(output);
+    os.camera += Point::from((dx, dy));
+}
+
+/// A pan arms the debounced write, so a session where the user only moved the
+/// viewport still persists it; a sub-pixel nudge is float jitter and must not.
+/// Each half flushes first — `dirty` is set by plenty of unrelated paths and
+/// cleared only by a flush, so an unflushed "assert dirty" would pass with no
+/// watcher at all.
 #[test]
-fn create_and_dismiss_write_immediately() {
+fn a_pan_arms_the_debounce_and_a_jitter_nudge_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "a pan is durable session state: the envelope always serializes cameras"
+    );
+
+    f.state().session_store_write_now();
+    pan_output(&output, 0.4, 0.4);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "a sub-threshold nudge is jitter — arming on it would rewrite the file \
+         once a second on an idle desktop"
+    );
+}
+
+/// The same pair for zoom, whose threshold is far finer than the camera's.
+#[test]
+fn a_zoom_change_arms_the_debounce_and_a_finer_one_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    crate::state::output_state(&output).zoom = 0.998;
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "a zoom past the threshold arms the durable write"
+    );
+
+    f.state().session_store_write_now();
+    crate::state::output_state(&output).zoom = 0.9975;
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "a zoom delta under 0.001 is jitter"
+    );
+}
+
+/// Sub-threshold steps are measured against the last *armed* camera, not the
+/// previous tick's: a slow continuous pan accumulates into an arming delta
+/// instead of creeping across the canvas unrecorded.
+#[test]
+fn sub_threshold_drift_accumulates_until_it_arms() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    for step in 1..=2 {
+        pan_output(&output, 0.2, 0.0);
+        f.pump(1);
+        assert!(
+            !f.state().session_store_dirty(),
+            "{step} steps of 0.2px is still under the 0.5px threshold"
+        );
+    }
+    pan_output(&output, 0.2, 0.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "0.6px of accumulated drift crosses the threshold"
+    );
+
+    // Cancels the debounce timer the drift armed; `debug_counters` has no entry
+    // for event-loop timers, so the teardown baseline would not catch one.
+    f.state().session_store_write_now();
+}
+
+/// Viewport motion coalesces on the longer interval. Panning is this canvas's
+/// primary interaction, and at the window interval a sustained pan would rewrite
+/// the file once a second for the whole gesture. The four interval scenarios
+/// assert which side of `WRITE_DEBOUNCE` a debounce landed on rather than any
+/// absolute value — the timer is a real calloop one with no injectable clock.
+#[test]
+fn a_pan_arms_the_long_camera_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    // Flush first: plenty of paths arm the short interval and only a flush
+    // disarms, so an unflushed reading would measure whatever was already
+    // pending instead of the pan.
+    f.state().session_store_write_now();
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left > WRITE_DEBOUNCE),
+        "a pan alone waits out the camera interval, not the window one"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// A window mutation keeps the short interval: it is a discrete change the user
+/// expects to survive, where a camera is continuous and self-correcting.
+#[test]
+fn a_window_mutation_arms_the_short_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.state().dismiss_suspended(sid);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "losing a dismiss to a crash is losing the user's own action"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// A window mutation arriving mid-pan pulls the pending write back in: the
+/// nearer deadline wins, so a discrete change is never held for the camera's
+/// sake.
+#[test]
+fn a_window_mutation_shortens_a_pending_camera_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    pan_output(&output, 40.0, -25.0);
+    f.pump(1);
+    let after_the_pan = f.state().session_store_debounce_remaining();
+    assert!(
+        after_the_pan.is_some_and(|left| left > WRITE_DEBOUNCE),
+        "precondition: the pan armed the camera interval"
+    );
+
+    f.state().dismiss_suspended(sid);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "the dismiss re-armed the pending write at the window interval"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// Not the other way round: a camera move while a window mutation is pending
+/// leaves that deadline where it is instead of pushing the write out to the
+/// camera interval — otherwise a pan started right after a dismiss would delay
+/// it by four seconds.
+#[test]
+fn a_pan_does_not_extend_a_pending_window_debounce() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.state().dismiss_suspended(sid);
+    let after_the_dismiss = f.state().session_store_debounce_remaining();
+    assert!(
+        after_the_dismiss.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "precondition: the dismiss armed the window interval"
+    );
+
+    pan_output(&output, 400.0, 300.0);
+    f.pump(1);
+    let remaining = f.state().session_store_debounce_remaining();
+    assert!(
+        remaining.is_some_and(|left| left <= WRITE_DEBOUNCE),
+        "the pan rides the pending flush rather than deferring it"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// A connecting output only seeds the watcher's baseline — it does not arm.
+/// Otherwise every boot would leave a pending debounce behind the outputs it
+/// came up with.
+#[test]
+fn a_connecting_output_seeds_the_watcher_without_arming() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.state().session_store_write_now();
+
+    f.add_output(1, (1920, 1080));
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the output's camera is a first sight, not motion"
+    );
+}
+
+/// With persistence off, a pan must not leave a debounce armed for a write that
+/// can never happen.
+#[test]
+fn no_session_path_never_arms_on_a_pan() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    assert!(f.state().session_store.path.is_none());
+
+    pan_output(&output, 500.0, 500.0);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "persistence is off entirely — a pan must not arm a timer that can never write"
+    );
+}
+
+/// The write side records cameras unconditionally: a session that only panned,
+/// with `restore_camera` off and no window ever touched, still has its viewport
+/// in the file. What the watcher exists to get written.
+#[test]
+fn a_pan_alone_reaches_the_file() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(Config::default());
+    assert!(!f.state().config.session.restore_camera);
+    let output = f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&output, 400.0, 300.0);
+    f.pump(1);
+    assert!(f.state().session_store_dirty(), "the pan armed the write");
+    // The debounce is a real 1s calloop timer with no injectable clock, so drive
+    // the flush it would run rather than waiting it out.
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    let saved_output = saved
+        .outputs
+        .get("HEADLESS-1")
+        .expect("the panned output is in the envelope");
+    assert_eq!(saved_output.camera, [-560.0, -240.0]);
+    assert!(saved.entries.is_empty(), "no window was ever touched");
+}
+
+/// Multi-output: a pan on the second monitor arms, and unplugging it drops its
+/// baseline rather than arming — so a replug seeds afresh instead of diffing
+/// the new camera against one from before the unplug.
+#[test]
+fn a_second_output_arms_on_its_own_pan_and_re_seeds_after_a_replug() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let second = f.add_output(2, (1920, 1080));
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    pan_output(&second, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "the envelope carries every output's camera, not just the active one's"
+    );
+
+    f.state().session_store_write_now();
+    f.remove_output(&second);
+    assert!(
+        !f.state().session_store_dirty(),
+        "a disconnect is not viewport motion, and the focus hand-over that \
+         comes with one — which arms the write on its own — has no window to \
+         hand focus to here"
+    );
+
+    let second = f.add_output(2, (1920, 1080));
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the replugged output is a first sight again — its default camera is \
+         not diffed against the one it had before the unplug"
+    );
+
+    f.state().session_store_write_now();
+    pan_output(&second, 40.0, -25.0);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "and it is watched from there on"
+    );
+
+    f.state().session_store_write_now();
+}
+
+/// Moving the focus arms the debounce, so the restored focus is as of the last
+/// focus change rather than as of the last window the user happened to move.
+/// Re-focusing what is already focused must not: `raise_and_focus` re-seats the
+/// same intent on every click, and without the guard a user clicking one window
+/// would rewrite the file once a second forever.
+#[test]
+fn focusing_another_window_arms_the_debounce_and_re_focusing_does_not() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta"]);
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (-500, -200));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (100, -200));
+    let alpha = window_by_app_id(&mut f, "alpha").unwrap();
+
+    // Path last, then a pump, so the watcher seeds its baseline from wherever
+    // placement left the camera and only the focus change is left to measure.
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&alpha, serial);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "the envelope flags which entry held the focus — a focus change is a \
+         durable change"
+    );
+
+    f.state().session_store_write_now();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&alpha, serial);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the intent did not change, so there is nothing new to write"
+    );
+}
+
+/// The stand-in half of the same contract: focus on a suspended window is
+/// recorded too, and it moves through its own setter.
+#[test]
+fn focusing_a_stand_in_arms_the_debounce_and_re_focusing_does_not() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let first = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 0)),
+        Size::from((300, 200)),
+        "s1",
+        "S1",
+    );
+    let second = f.state().insert_suspended_for_test(
+        2,
+        Point::from((500, 0)),
+        Size::from((300, 200)),
+        "s2",
+        "S2",
+    );
+    f.state().focus_and_raise_suspended(first);
+
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+
+    f.state().session_store_write_now();
+    f.state().focus_and_raise_suspended(second);
+    f.pump(1);
+    assert!(
+        f.state().session_store_dirty(),
+        "focus moved to the other stand-in"
+    );
+
+    f.state().session_store_write_now();
+    f.state().focus_and_raise_suspended(second);
+    f.pump(1);
+    assert!(
+        !f.state().session_store_dirty(),
+        "the intent did not change, so there is nothing new to write"
+    );
+
+    f.state().dismiss_suspended(first);
+    f.state().dismiss_suspended(second);
+    // Cancels the debounce the dismissals armed; the teardown baseline covers
+    // the stage, not the event loop's timers.
+    f.state().session_store_write_now();
+}
+
+/// The third write site: `focus_changed` rewrites the intent for focus seated
+/// on the keyboard directly, which is the only route the dead-intent history
+/// recovery takes. The launcher shape reaches it — an exclusive layer holds the
+/// seat focus while the intended window dies, so the destroy's focus-follow
+/// (which wants the seat focus or the history head) never fires and leaves the
+/// intent pointing at a dead surface; the recovery to the survivor then happens
+/// inside the layer's teardown, with no setter involved.
+#[test]
+fn the_history_recovery_after_a_layer_teardown_arms_the_debounce() {
+    use smithay::utils::IsAlive;
+
+    let tmp = TempDir::new();
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_at(&mut f, id, "survivor", (400, 300), (-500, -200));
+    let doomed_surface = map_at(&mut f, id, "doomed", (200, 200), (100, -200));
+    let survivor = window_by_app_id(&mut f, "survivor").unwrap();
+    let doomed = window_by_app_id(&mut f, "doomed").unwrap();
+
+    // The last real focus change is on the survivor, so it — not the window
+    // about to die — is the history head.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&survivor, serial);
+
+    let launcher = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "launcher");
+    let ls = launcher.surface.clone();
+    launcher.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        kb_interactivity: Some(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive),
+        ..Default::default()
+    });
+    launcher.commit();
+    f.roundtrip(id);
+    let layer = f.client(id).layer(&ls);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+
+    // Hover under the launcher moves the intent while the layer keeps the seat
+    // focus — the case the setter's doc comment is written for.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state()
+        .set_window_focus(Some(FocusTarget(server_surface(&doomed))), serial);
+    f.client(id).window(&doomed_surface).destroy();
+    f.double_roundtrip(id);
+    assert!(
+        f.state()
+            .window_focus_surface()
+            .is_some_and(|t| !t.0.alive()),
+        "the intent is left pointing at the window that died under the launcher"
+    );
+
+    f.state().session_store.path = Some(tmp.path().join("session.json"));
+    f.pump(1);
+    f.state().session_store_write_now();
+
+    f.client(id).layer(&ls).layer_surface.destroy();
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.state().focused_window().as_ref(),
+        Some(&survivor),
+        "the recovery landed on the surviving window"
+    );
+    assert!(
+        f.state().session_store_dirty(),
+        "the recovery's rewrite is a focus change like any other"
+    );
+
+    f.client(id).layer(&ls).surface.destroy();
+    f.double_roundtrip(id);
+    f.state().session_store_write_now();
+}
+
+/// A create and a dismiss only *arm* the debounce — neither rebuilds the
+/// envelope from inside its handler, because the conversion runs from
+/// `toplevel_destroyed`, which a logout reaches with the stage already
+/// draining. The flush the timer would run is what puts either change in the
+/// file. Drives the real conversion path, not the test-only insertion hook.
+#[test]
+fn create_and_dismiss_arm_the_debounce() {
     let cache = TempDir::new();
     let tmp = TempDir::new();
     let path = tmp.path().join("session.json");
@@ -1029,33 +1665,360 @@ fn create_and_dismiss_write_immediately() {
     f.state().raise_and_focus(&window, serial);
     let surface = f.client(id).state.windows[0].surface.clone();
 
-    // Suspend → convert → immediate write.
+    // Mapping the window already set the flag, and only a flush clears it.
+    f.state().session_store_write_now();
+
+    // Suspend → convert.
     f.state()
         .execute_action(&driftwm::config::Action::SuspendWindow);
     f.client(id).window(&surface).destroy();
     f.roundtrip(id);
     f.dispatch();
-
-    let after_create = session::read(&path);
-    assert_eq!(
-        after_create.entries.len(),
-        1,
-        "create wrote through at once"
+    assert!(
+        f.state().session_store_dirty(),
+        "the conversion armed the debounce rather than writing from the \
+         destroy handler"
     );
+
+    // What that debounce writes when it comes due.
+    f.state().session_store_write_now();
+    let after_create = session::read(&path);
+    assert_eq!(after_create.entries.len(), 1);
     assert_eq!(after_create.entries[0].app_id, "myapp");
     assert_eq!(after_create.entries[0].origin, Origin::Explicit);
     assert!(
         after_create.entries[0].focused,
-        "the stand-in inherited the closed window's focus, and the write kept it"
+        "the stand-in inherited the closed window's focus, and the flush kept it"
     );
 
     let sid = after_create.entries[0].id;
     f.state().dismiss_suspended(crate::state::SuspendedId(sid));
-    let after_dismiss = session::read(&path);
+    assert!(f.state().session_store_dirty(), "the dismiss armed it too");
+
+    f.state().session_store_write_now();
     assert!(
-        after_dismiss.entries.is_empty(),
-        "dismiss wrote through at once"
+        session::read(&path).entries.is_empty(),
+        "and that flush drops the dismissed stand-in"
     );
+}
+
+/// A steady-state flush records live windows, not just suspended stand-ins:
+/// the crash-recovery contract, and — since nothing writes at shutdown — the
+/// only thing a logout leaves behind. A SIGKILL lands with the canvas as of the
+/// last flush in the file instead of an empty rewrite that erases the prior
+/// session.
+#[test]
+fn steady_state_flush_writes_live_windows() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+
+    f.state().session_store_write_now();
+
+    // Both live windows, in z-order, as quit records at their shrunken-body
+    // rects.
+    let saved = session::read(&path);
+    assert_eq!(saved.entries.len(), 2);
+    assert_eq!(saved.entries[0].app_id, "alpha");
+    assert_eq!(saved.entries[0].position, [700, -650]);
+    assert_eq!(saved.entries[0].size, [400, 300]);
+    assert_eq!(saved.entries[1].app_id, "beta");
+    assert_eq!(saved.entries[1].position, [-200, -200]);
+    assert_eq!(saved.entries[1].size, [200, 200]);
+    assert!(saved.entries.iter().all(|e| e.origin == Origin::Quit));
+
+    // The flush is a true steady-state write: the file loads back into a fresh
+    // compositor, so a crash mid-session recovers the canvas.
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 2);
+    assert_eq!(restored[0].0.identity.app_id, "alpha");
+    assert_eq!(restored[0].1, Point::from((500, 525)));
+    for (s, _) in restored {
+        f.state().dismiss_suspended(s.id);
+    }
+}
+
+/// Closing a live window drops it from the steady-state file: the teardown
+/// arms the same debounce as a create, so a crash after a manual close cannot
+/// resurrect a window the user already dismissed.
+#[test]
+fn closing_a_live_window_drops_it_from_the_steady_state_file() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+    let b = f.add_client();
+    let b_surface = map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+    f.state().session_store_write_now();
+    assert_eq!(session::read(&path).entries.len(), 2);
+
+    // The user closes beta; the client teardown unmaps it and arms the debounce.
+    f.client(b).window(&b_surface).destroy();
+    f.roundtrip(b);
+    f.dispatch();
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    assert_eq!(saved.entries.len(), 1);
+    assert_eq!(saved.entries[0].app_id, "alpha");
+    assert_eq!(saved.entries[0].position, [700, -650]);
+}
+
+/// A logout SIGTERMs the clients and the compositor together, so client
+/// teardown runs while the compositor is still up: it must leave the file
+/// exactly as the last flush wrote it, killed windows included.
+///
+/// The dirty flag is the load-bearing half. The content on its own proves
+/// nothing — the fixture cannot re-run a write at process exit, which is the
+/// thing being deleted — but any synchronous rebuild reached from the teardown
+/// would both clear the flag and write the drained stage, so the pair says the
+/// file is still the earlier write and the teardown only armed the debounce.
+#[test]
+fn a_teardown_that_kills_clients_leaves_the_saved_session_intact() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let config = Config::from_toml(
+        "[session]\nrestore_windows = true\nrestore_bookmarks = true\n\
+         [decorations]\ndefault_mode = \"server\"\n",
+    )
+    .unwrap();
+    let mut f = Fixture::with_config(config);
+    let output = f.add_output(1, (1920, 1080));
+    // Without a resolvable identity for every app, `live_window_entry` records
+    // nothing and every assertion below passes against an empty file.
+    inject_cache(&mut f, &cache, &["alpha", "beta", "gamma"]);
+    f.state().session_store.path = Some(path.clone());
+    f.state().bookmarks.insert("desk".into(), [12.0, -34.0]);
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+    let c = f.add_client();
+    map_at(&mut f, c, "gamma", (300, 300), (900, -400));
+    pan_output(&output, 120.0, -80.0);
+    f.pump(1);
+
+    // The last durable write before the logout.
+    f.state().session_store_write_now();
+    let before = session::read(&path);
+    assert_eq!(before.entries.len(), 3, "precondition: all three are saved");
+    let camera = crate::state::output_state(&output).camera;
+
+    // Two of the three clients die while the compositor keeps running, as a
+    // logout's SIGTERM makes them.
+    f.kill_client(a);
+    f.kill_client(b);
+    f.pump(10);
+    assert_eq!(
+        f.state().stage.windows().count(),
+        1,
+        "precondition: the two disconnects drained the stage down to gamma"
+    );
+
+    let after = session::read(&path);
+    assert_eq!(
+        after.entries, before.entries,
+        "the teardown wrote nothing: all three windows are still in the file"
+    );
+    assert!(
+        f.state().session_store_dirty(),
+        "it armed the debounce instead — a synchronous rebuild would have \
+         cleared this and dropped the two killed windows"
+    );
+    assert_eq!(
+        after.outputs["HEADLESS-1"].camera,
+        [camera.x, camera.y],
+        "the rest of the envelope is untouched too"
+    );
+    assert_eq!(after.bookmarks["desk"], [12.0, -34.0]);
+
+    // Cancels the debounce the teardown armed; `debug_counters` has no entry
+    // for event-loop timers, so the teardown baseline would not catch one.
+    f.state().session_store_write_now();
+}
+
+/// The same race under `suspend_on_close`, which the default config cannot
+/// catch: the conversion runs from `toplevel_destroyed` and cannot tell a
+/// user's close from a logout killing the client, so a synchronous rebuild
+/// there rewrites the file from whatever is left on the stage.
+///
+/// One per-app rule is enough to reach it, so that is what this uses: alpha's
+/// disconnect really does leave the stage, beta's converts. The two kills are
+/// sequenced rather than batched because a real logout's dispatch order is
+/// epoll's — this pins the order that loses data, instead of hoping for it.
+#[test]
+fn a_suspend_on_close_conversion_during_teardown_does_not_rewrite_the_file() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let config = config_restore_with_rule(
+        true,
+        "[[window_rules]]\napp_id = \"beta\"\nsuspend_on_close = true\n",
+    );
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta", "gamma"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+    let c = f.add_client();
+    map_at(&mut f, c, "gamma", (300, 300), (900, -400));
+
+    f.state().session_store_write_now();
+    let before = session::read(&path);
+    assert_eq!(before.entries.len(), 3, "precondition: all three are saved");
+
+    // alpha leaves the stage first…
+    f.kill_client(a);
+    f.pump(10);
+    assert_eq!(
+        f.state().stage.windows().count(),
+        2,
+        "precondition: the unruled app really closed instead of converting"
+    );
+
+    // …then beta's disconnect converts it, from a stage alpha has already left.
+    f.kill_client(b);
+    f.pump(10);
+    let sid = suspended_in_order(&mut f)
+        .first()
+        .map(|(s, _)| s.id)
+        .expect("precondition: beta converted to a stand-in");
+
+    let after = session::read(&path);
+    assert_eq!(
+        after.entries, before.entries,
+        "the conversion armed the debounce instead of rebuilding the envelope \
+         from the drained stage, which would have lost alpha"
+    );
+    assert!(f.state().session_store_dirty());
+
+    f.state().dismiss_suspended(sid);
+    f.state().session_store_write_now();
+}
+
+/// A debounce armed just before a client dies flushes the stage as it is when
+/// the timer comes due, not as it was when the move armed it — the kill variant
+/// of the graceful-close case above.
+#[test]
+fn a_debounce_armed_before_a_kill_flushes_without_the_killed_window() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha", "beta"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let a = f.add_client();
+    map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+    let b = f.add_client();
+    map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+    f.state().session_store_write_now();
+
+    // The user drags beta, arming the debounce; then its client is killed
+    // before the second is up.
+    let beta = window_by_app_id(&mut f, "beta").unwrap();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&beta, serial);
+    f.state()
+        .execute_action(&driftwm::config::Action::NudgeWindow(
+            driftwm::config::Direction::Right,
+        ));
+    assert!(
+        f.state().session_store_dirty(),
+        "precondition: the nudge armed the debounce"
+    );
+
+    f.kill_client(b);
+    f.pump(10);
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    assert_eq!(
+        saved.entries.len(),
+        1,
+        "the pending write records the stage it flushes from, not the one that \
+         armed it"
+    );
+    assert_eq!(saved.entries[0].app_id, "alpha");
+    assert_eq!(saved.entries[0].position, [700, -650]);
+}
+
+/// The IPC `resize` verb (and the grow/shrink steps behind it) settles on the
+/// client's answering commit, which arms the session-store debounce like a grab
+/// resize's settle does — a crash after `msg resize` restores the new size, not
+/// the pre-resize one.
+#[test]
+fn ipc_resize_of_a_live_window_persists_at_steady_state() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["alpha"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let id = f.add_client();
+    let surface = map_at(&mut f, id, "alpha", (400, 300), (500, 500));
+    f.state().session_store_write_now();
+    assert_eq!(session::read(&path).entries[0].size, [400, 300]);
+
+    assert_eq!(
+        crate::ipc::dispatch(
+            crate::ipc::protocol::Request::Resize {
+                window: None,
+                to: Some((600, 500)),
+            },
+            f.state(),
+        ),
+        Ok(crate::ipc::protocol::Response::Size {
+            width: 600,
+            height: 500,
+        })
+    );
+    // Deliver the configure the request queued before adopting it, or the
+    // client takes the stale map-time configure (an empty size) for the new one.
+    f.roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+    f.dispatch();
+
+    // The answering commit armed the debounce; flush straight through and the
+    // new size is what a crash would restore.
+    f.state().session_store_write_now();
+    let saved = session::read(&path);
+    assert_eq!(saved.entries.len(), 1);
+    assert_eq!(saved.entries[0].size, [600, 500]);
 }
 
 /// The `csd` flag round-trips through session.json: a CSD window suspends to a
@@ -1086,9 +2049,12 @@ fn csd_flag_round_trips_through_session() {
         f.client(id).window(&surface).destroy();
         f.roundtrip(id);
         f.dispatch();
+        // The conversion only armed the debounce; run the flush it queued.
+        f.state().session_store_write_now();
 
         // Tear the stand-in down cleanly for the fixture baseline, but keep the
-        // durable file (clear the path so the dismiss doesn't rewrite it empty).
+        // durable file (clear the path so the dismiss's debounce can't rewrite
+        // it empty).
         let sid = suspended_in_order(&mut f)[0].0.id;
         f.state().session_store.path = None;
         f.state().dismiss_suspended(sid);
@@ -1120,22 +2086,24 @@ fn csd_flag_round_trips_through_session() {
 fn no_path_disables_persistence() {
     let mut f = Fixture::with_config(config_restore(true));
     f.add_output(1, (1920, 1080));
-    // No path injected: every write path is a no-op and touches no file.
+    // No path injected: the flush is a no-op that touches no file, and the arm
+    // neither sets the flag nor registers a debounce timer — which nothing else
+    // would catch, since `debug_counters` tracks neither of those.
     f.state().session_store.path = None;
     f.state().session_store_write_now();
     f.state().session_store_mark_dirty();
-    f.state().serialize_session_on_shutdown();
-    // Nothing to assert beyond "no panic, no file" — the fixture's teardown
-    // baseline confirms no state leaked (e.g. a stray debounce timer).
-    assert!(f.state().session_store.path.is_none());
+    assert!(
+        !f.state().session_store_dirty(),
+        "an arm with nowhere to write must not queue one"
+    );
 }
 
 /// A `restore_windows = false` rule keeps its app's live window out of the
-/// shutdown save even with the global flag on, while an unruled app's live
+/// durable save even with the global flag on, while an unruled app's live
 /// window still saves — proving the exclusion is the rule, not a missing
 /// desktop entry or some other blanket ineligibility.
 #[test]
-fn restore_windows_false_rule_excludes_matching_app_from_shutdown_save() {
+fn restore_windows_false_rule_excludes_matching_app_from_the_durable_save() {
     let cache = TempDir::new();
     let tmp = TempDir::new();
     let path = tmp.path().join("session.json");
@@ -1154,7 +2122,7 @@ fn restore_windows_false_rule_excludes_matching_app_from_shutdown_save() {
     let b = f.add_client();
     map_at(&mut f, b, "included", (400, 300), (800, 300));
 
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     let saved = session::read(&path);
     assert!(
@@ -1315,7 +2283,7 @@ fn restore_windows_false_rule_with_title_excludes_records_by_app_id() {
     );
 
     // The live window's real title is known at save time, so the same rule keeps
-    // it out of the shutdown save — and the record is carried forward once, not
+    // it out of the durable save — and the record is carried forward once, not
     // re-saved as a stand-in of its own.
     let id = f.add_client();
     map_titled_at(
@@ -1327,7 +2295,7 @@ fn restore_windows_false_rule_with_title_excludes_records_by_app_id() {
         (300, 300),
     );
 
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
     let after = session::read(&path);
     assert_eq!(
         after
@@ -1382,7 +2350,7 @@ fn a_title_only_restore_windows_rule_does_not_govern_what_comes_back() {
     f.state().dismiss_suspended(restored[0].0.id);
 }
 
-/// An explicitly suspended stand-in is saved at shutdown even for an app a
+/// An explicitly suspended stand-in is saved even for an app a
 /// `restore_windows = false` rule keeps out of the save: the rule governs the
 /// automatic save of still-open windows, not an artifact the user deliberately
 /// left on the canvas — which is what the load side's `Explicit` bypass expects
@@ -1413,7 +2381,7 @@ fn restore_windows_false_rule_still_saves_an_explicit_stand_in() {
     f.roundtrip(id);
     f.dispatch();
 
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     let saved = session::read(&path);
     assert_eq!(saved.entries.len(), 1);
@@ -1430,7 +2398,7 @@ fn restore_windows_false_rule_still_saves_an_explicit_stand_in() {
 
 /// `restore_windows` is resolved against the live config, not the rule stamped
 /// when a window mapped, so a rule added or dropped by a hot-reload decides the
-/// next shutdown save without either window remapping.
+/// next durable save without either window remapping.
 #[test]
 fn a_hot_reloaded_restore_windows_rule_decides_the_next_save() {
     let cache = TempDir::new();
@@ -1454,7 +2422,7 @@ fn a_hot_reloaded_restore_windows_rule_decides_the_next_save() {
     f.state()
         .reload_config_from_contents(&restore_toml(true, &rule_for("beta")));
 
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     let saved = session::read(&path);
     assert!(
@@ -1545,7 +2513,7 @@ fn restore_windows_true_rule_saves_and_materializes_with_global_off() {
     let b = f.add_client();
     map_at(&mut f, b, "excluded", (400, 300), (800, 300));
 
-    f.state().serialize_session_on_shutdown();
+    f.state().session_store_write_now();
 
     let after = session::read(&path);
     assert!(
@@ -1623,7 +2591,7 @@ fn restore_windows_false_rule_carried_record_does_not_grow_across_cycles() {
         let b = f.add_client();
         map_at(&mut f, b, &included_app, (400, 300), (800, 300));
 
-        f.state().serialize_session_on_shutdown();
+        f.state().session_store_write_now();
 
         let after = session::read(&path);
         let excluded_count = after

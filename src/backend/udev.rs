@@ -2,6 +2,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::Once;
 use std::time::Duration;
 
 use smithay::reexports::wayland_server::backend::GlobalId;
@@ -16,9 +17,9 @@ use smithay::{
             compositor::{DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
-        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority},
+        egl::{EGLContext, EGLDevice, EGLDisplay, context::ContextPriority, fence::EGLFence},
         libinput::{LibinputInputBackend, LibinputSessionInterface},
-        renderer::ImportDma,
+        renderer::{ImportDma, sync::SyncPoint},
         session::{Event as SessionEvent, Session, libseat::LibSeatSession},
         udev::{self, UdevBackend, UdevEvent},
     },
@@ -109,6 +110,16 @@ fn apply_gamma(
 }
 
 impl UdevDevice {
+    /// The CRTC driving `output`, for callers that hold output-keyed state and
+    /// need to consult the CRTC-keyed frame bookkeeping.
+    pub(crate) fn crtc_for_output(&self, output: &Output) -> Option<crtc::Handle> {
+        let dev = self.0.borrow();
+        dev.surfaces
+            .iter()
+            .find(|(_, s)| s.output == *output)
+            .map(|(crtc, _)| *crtc)
+    }
+
     /// Look up the per-output gamma LUT size. Prefers atomic GAMMA_LUT_SIZE;
     /// falls back to the CRTC's legacy `gamma_length`. Returns `None` if the
     /// CRTC reports size 0 (e.g. Apple DCP on Asahi, virtual outputs without
@@ -181,9 +192,10 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         {
             let interval = Duration::from_secs_f64(1.0 / fps as f64);
             // Wake for the soonest-due eligible output; stamps are per-output.
-            // A fullscreen/DPMS-off output's stamp goes stale forever once it
-            // stops rendering — excluding it here keeps a long-dead stamp
-            // from collapsing this to the 1ms floor and busy-rescheduling.
+            // The stamp of an output that stopped rendering its background —
+            // DPMS-off, or fullscreen with the canvas concealed — goes stale
+            // forever; excluding it here keeps a long-dead stamp from
+            // collapsing this to the 1ms floor and busy-rescheduling.
             let elapsed = data
                 .render
                 .background_last_animate
@@ -242,21 +254,65 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
         for (output, on) in &pending {
             let Some((&crtc, surface)) = dev.surfaces.iter_mut().find(|(_, s)| s.output == *output)
             else {
+                // No surface left to apply the transition to, and no later pass
+                // will find one — the request is simply lost. A lock is
+                // unaffected: an output goes surface-less by being removed, and
+                // removal already drops it from the awaited set.
+                tracing::warn!(
+                    "DPMS {}: no DRM surface for '{}', dropping the transition",
+                    if *on { "on" } else { "off" },
+                    output.name()
+                );
                 continue;
             };
             if *on {
                 data.redraws_needed.insert(output.clone());
             } else {
-                if let Err(e) = surface.compositor.clear() {
-                    tracing::warn!(
-                        "DPMS off: compositor.clear failed for '{}': {e:?}",
-                        output.name()
-                    );
-                }
-                data.redraws_needed.remove(output);
-                data.frames_pending.remove(&crtc);
-                if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
-                    data.loop_handle.remove(token);
+                let cleared = surface.compositor.clear();
+                match cleared {
+                    Ok(()) => {
+                        // Only now is the panel dark and idle: smithay drops its
+                        // `pending_frame` inside a successful `clear`, so no flip
+                        // is outstanding and nothing will render here again while
+                        // the output is off. Forgetting a flight that is still in
+                        // the air would let the render gate re-enter
+                        // `render_frame` inside the in-flight window and credit
+                        // the next VBlank to the wrong frame.
+                        data.redraws_needed.remove(output);
+                        data.frames_pending.remove(&crtc);
+                        if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
+                            data.loop_handle.remove(token);
+                        }
+                        // A dark panel satisfies the lock as well as a lock frame
+                        // does, and this output will never render again while it
+                        // is off — so an awaited one has to report in here or the
+                        // confirmation waits out the whole timeout for a frame
+                        // that cannot come.
+                        data.forget_lock_frame(crtc);
+                        data.stop_awaiting_lock_frame(output);
+                    }
+                    // The panel may still be lit on whatever it last scanned
+                    // out, which on the backstop path is precisely the frame
+                    // that was never a lock frame — confirming here would put
+                    // the desktop behind a `locked` event.
+                    Err(e) => {
+                        tracing::error!(
+                            "DPMS off: compositor.clear failed for '{}': {e:?} — leaving it lit \
+                             and awaiting a lock frame",
+                            output.name()
+                        );
+                        // Recording an output as off when its panel is still lit
+                        // would freeze it out of the render gate forever. Put the
+                        // bookkeeping back on reality so the output keeps
+                        // rendering; the `refresh` below then tells the client
+                        // the output is still on. Only a lock retries from here —
+                        // its backstop asks again next pass (and skips outputs
+                        // already marked off, which is the other reason to undo
+                        // the mark). An ordinary `wlopm --off` gets this error
+                        // and nothing more.
+                        data.dpms_off_outputs.remove(output);
+                        data.redraws_needed.insert(output.clone());
+                    }
                 }
             }
         }
@@ -298,8 +354,10 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
     {
         data.mark_all_dirty();
     } else if data.render.background_is_animated {
-        // Fullscreen outputs skip the background entirely, so an animated bg
-        // gives them nothing to redraw — marking them just burns battery.
+        // An output whose fullscreen window conceals the canvas skips the
+        // background entirely, so an animated bg gives it nothing to redraw —
+        // marking it just burns battery. A translucent fullscreen window
+        // conceals nothing, so its output keeps ticking.
         let dirty: Vec<_> = data
             .background_render_eligible_outputs()
             .filter(|o| data.background_animation_due(&o.name()))
@@ -642,6 +700,9 @@ pub fn init_udev(
         data.render.blur_down_shader = blur_down;
         data.render.blur_up_shader = blur_up;
         data.render.blur_mask_shader = blur_mask;
+        // The blur's wrap mode is a property of the GL context, and this is a
+        // new one.
+        data.render.blur_wrap_mode = None;
         data.backend = Some(backend);
     }
 
@@ -674,6 +735,15 @@ pub fn init_udev(
                         Err(e) => tracing::warn!("frame_submitted error: {e:?}"),
                     }
                     data.frames_pending.remove(&crtc);
+                    // The VBlank event itself is the proof the frame flipped —
+                    // `frame_submitted` returning `Ok(None)` is a real flip that
+                    // simply carries no feedback.
+                    if data.lock_frame_queued.remove(&crtc) {
+                        data.lock_frame_on_screen.insert(crtc);
+                        data.stop_awaiting_lock_frame(&surface.output);
+                    } else {
+                        data.lock_frame_on_screen.remove(&crtc);
+                    }
                     // Real VBlank beat any estimated-VBlank timer we might have armed.
                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
                         data.loop_handle.remove(token);
@@ -702,12 +772,12 @@ pub fn init_udev(
                     for (_, token) in data.estimated_vblank_timers.drain() {
                         data.loop_handle.remove(token);
                     }
-                    // Releases for held keys / cycle modifiers may not be delivered
-                    // when the session is paused.
-                    data.suppressed_keys.clear();
-                    data.held_buttons.clear();
-                    data.stage.cancel_cycle();
-                    data.tap.reset();
+                    data.clear_lock_frames();
+                    data.confirm_lock_on_session_pause();
+                    // The only reset a switch we didn't initiate ourselves
+                    // (`chvt`, logind) ever reaches — the keyboard handler's two
+                    // copies both hang off a key we intercepted.
+                    data.reset_held_input_state();
                 }
                 SessionEvent::ActivateSession => {
                     tracing::info!("Session resumed (VT switch back)");
@@ -718,8 +788,15 @@ pub fn init_udev(
                         tracing::error!("Failed to activate DRM: {e}");
                         return;
                     }
-                    // VBlanks for pre-switch frames never arrive
+                    // VBlanks for pre-switch frames never arrive, so nothing
+                    // would ever retire their provenance either.
                     data.frames_pending.clear();
+                    // Whatever wedged the GPU has had a suspend/resume or a VT
+                    // round-trip to clear, and the first frame back is the
+                    // slowest of the session — the tier that survived the switch
+                    // would be the one most likely to cut it short.
+                    data.fence_failures.clear();
+                    data.clear_lock_frames();
                     for (_, token) in data.estimated_vblank_timers.drain() {
                         data.loop_handle.remove(token);
                     }
@@ -830,6 +907,8 @@ pub fn init_udev(
                                         teardown_output(data, surface, is_last);
                                     }
                                     data.frames_pending.remove(&crtc);
+                                    data.fence_failures.remove(&crtc);
+                                    data.forget_lock_frame(crtc);
                                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc)
                                     {
                                         data.loop_handle.remove(token);
@@ -1242,6 +1321,119 @@ fn teardown_output(data: &mut DriftWm, surface: SurfaceData, is_last: bool) {
     data.active_outputs.remove(&output);
 }
 
+/// How long to wait on a render fence that has been coming back normally.
+///
+/// Sits well above even a pathological composite (4K, blurred, full-output
+/// redraw, several monitors in one pass): tripping this on a merely slow frame
+/// would trade a stall for a corrupt one. It bounds each signal-free interval
+/// rather than the call — Mesa's native-fence path ends in libsync's
+/// `sync_wait`, which restarts `poll` with the full timeout on every `EINTR`.
+const FENCE_WAIT_BUDGET: Duration = Duration::from_secs(2);
+
+/// Budget after a single miss. Still far above any real frame: one miss is as
+/// easily a GPU climbing out of a power state or a kernel-recovered hang as a
+/// wedge, and dropping straight to [`FENCE_WAIT_WEDGED`] would let a legitimate
+/// 60ms frame hold the output in the wedged tier from then on.
+const FENCE_WAIT_SUSPECT: Duration = Duration::from_millis(250);
+
+/// Budget once a fence has missed twice running. The "might just be slow"
+/// reading is spent by then, and the loop is rendering every output serially —
+/// at the full budget a wedged GPU leaves under a percent of the loop for the VT
+/// switch this bound exists to permit.
+const FENCE_WAIT_WEDGED: Duration = Duration::from_millis(50);
+
+/// How often a wait in the wedged tier is taken at [`FENCE_WAIT_SUSPECT`]
+/// instead. Every wait in that tier misses by construction once the GPU is
+/// merely slower than its budget, so without a periodically longer one an output
+/// that came back as slow-but-working would flip early forever.
+const FENCE_REPROBE_INTERVAL: u32 = 8;
+
+/// A fence kind the budget can't be applied to has been seen. Unlike the
+/// per-CRTC failure counts this is a property of the build, not of a GPU, so one
+/// report for the process is all it can ever be worth.
+static UNKNOWN_FENCE_SEEN: Once = Once::new();
+
+/// Wait for the GPU to finish the frame, but never indefinitely.
+///
+/// `SyncPoint::wait` is `eglClientWaitSync` with `EGL_FOREVER` on the
+/// compositor's only thread, so a fence that never signals takes the event loop
+/// with it — input, Wayland dispatch, and the session notifier a VT switch needs
+/// — leaving a reboot as the only way out.
+///
+/// Giving up does not make the frame correct. This path runs precisely where KMS
+/// can't be gated on the fence, so a flip that goes out early can show a partial
+/// frame; that is the artifact `wait_for_frame_completion` exists to suppress.
+/// The trade is a rare corrupt frame against a session that has to be
+/// power-cycled.
+///
+/// Only bounds the wait it can see: when the renderer can't export a fence at
+/// all, smithay falls back to `glFinish` inside `render_frame`, which has
+/// already returned by the time this runs.
+fn wait_for_fence(data: &mut DriftWm, crtc: crtc::Handle, sync: &SyncPoint, output: &Output) {
+    let Some(fence) = sync.get::<EGLFence>() else {
+        // A sync point with no fence waits on nothing, but one holding a kind we
+        // can't downcast to still has to be awaited: skipping it would tear with
+        // nothing in the log to say why. Unreachable with the pinned smithay —
+        // the swapchain's fence comes from the GLES renderer, which produces an
+        // EGL fence or none — so this only fires after a bump.
+        if sync.contains_fence() {
+            UNKNOWN_FENCE_SEEN.call_once(|| {
+                tracing::warn!(
+                    "render fence on {} is not an EGL fence — waiting on it unbounded, which \
+                     a wedged GPU can turn into a session that needs a power cycle",
+                    output.name()
+                );
+            });
+            let _ = sync.wait();
+        }
+        return;
+    };
+    let failures = data.fence_failures.get(&crtc).copied().unwrap_or(0);
+    let budget = match failures {
+        0 => FENCE_WAIT_BUDGET,
+        n if n == 1 || n % FENCE_REPROBE_INTERVAL == 0 => FENCE_WAIT_SUSPECT,
+        _ => FENCE_WAIT_WEDGED,
+    };
+    // Deliberately no retry on `Err`: EGL has no interrupted status, so this
+    // fails only on a real EGL error, and a retry loop would hand back the whole
+    // budget on every pass — the unbounded wait this exists to remove.
+    let failed = match fence.client_wait(Some(budget), true) {
+        Ok(true) => false,
+        Ok(false) => {
+            report_fence_failure(
+                output,
+                &format!("still unsignalled after {budget:?}"),
+                failures == 0,
+            );
+            true
+        }
+        Err(err) => {
+            report_fence_failure(output, &format!("wait failed: {err}"), failures == 0);
+            true
+        }
+    };
+    if failed {
+        data.fence_failures.insert(crtc, failures + 1);
+    } else {
+        data.fence_failures.remove(&crtc);
+    }
+}
+
+/// Warn on the frame a fence starts failing, then stay quiet until it recovers.
+/// The condition persists while the GPU is wedged and the subscriber writes
+/// synchronously on this thread, so warning per frame would itself cost frames.
+fn report_fence_failure(output: &Output, what: &str, first: bool) {
+    if !first {
+        tracing::debug!("render fence on {}: {what}", output.name());
+        return;
+    }
+    tracing::warn!(
+        "render fence on {}: {what}. Flipping without it — the GPU is not \
+         completing work, so expect missing or corrupt frames.",
+        output.name()
+    );
+}
+
 /// Render a single frame and queue it to the DRM compositor.
 fn render_frame(
     data: &mut DriftWm,
@@ -1315,11 +1507,16 @@ fn render_frame(
     // Build cursor + compose frame
     let cursor_alpha = if data.active_output().as_ref() == Some(output) {
         1.0
-    } else if data.is_output_fullscreen(output) || data.is_fullscreen() {
+    } else if data.is_output_fullscreen(output)
+        || data.is_fullscreen()
+        || data.session_lock.is_locked()
+    {
         // The ghost cursor shows where the pointer sits on the shared canvas,
         // which only applies between canvas viewports. A fullscreen output is
         // not one — don't ghost the pointer onto a fullscreen output's window,
-        // nor project a fullscreen output's pointer onto other monitors.
+        // nor project a fullscreen output's pointer onto other monitors. Nor is
+        // a locked one: the pointer's location is then screen-space on the
+        // active output alone, and means nothing on any other.
         0.0
     } else {
         data.config.inactive_cursor_opacity as f32
@@ -1342,6 +1539,9 @@ fn render_frame(
     );
     #[cfg(feature = "profile-with-tracy")]
     drop(_cursor_span);
+    // Read the same predicate `compose_frame` is about to branch on, so the
+    // bookkeeping below can never disagree with what was actually painted.
+    let lock_frame = data.session_lock.renders_lock_frame();
     let renderer = backend.renderer();
     let elements = crate::render::compose_frame(data, renderer, output, cursor_elements);
 
@@ -1382,12 +1582,16 @@ fn render_frame(
         && (rr.needs_sync() || data.config.backend.wait_for_frame_completion)
         && let PrimaryPlaneElement::Swapchain(ref element) = rr.primary_element
     {
+        // `has_fence` distinguishes a real wait from the fenceless case, which
+        // reports needs_sync but blocks on nothing — without it a smoke test
+        // reads a permanent no-op as "the path is exercised".
         tracing::debug!(
-            "Fence wait: needs_sync={}, force={}",
+            "Fence wait: needs_sync={}, force={}, has_fence={}",
             rr.needs_sync(),
             data.config.backend.wait_for_frame_completion,
+            element.sync.contains_fence(),
         );
-        let _ = element.sync.wait();
+        wait_for_fence(data, crtc, &element.sync, output);
     }
 
     match render_result {
@@ -1403,21 +1607,44 @@ fn render_frame(
             match queue_result {
                 Ok(()) => {
                     data.frames_pending.insert(crtc);
+                    if lock_frame {
+                        data.lock_frame_queued.insert(crtc);
+                    } else {
+                        data.lock_frame_queued.remove(&crtc);
+                    }
                 }
                 Err(FrameError::EmptyFrame) => {
                     // No page flip - no real VBlank to wake us. Always arm the
                     // estimated timer so the render gate paces re-renders to the refresh
                     // period; otherwise a dirty-but-unchanged output spins render_frame.
+                    //
+                    // Nothing was queued, so whatever is scanned out stays — and
+                    // if that was already a lock frame, this output owes nothing
+                    // more. Load-bearing, not belt-and-braces: an output with no
+                    // lock surface of its own paints black in both lock states,
+                    // so the redraw that seeds the wait produces no damage, no
+                    // flip and therefore no VBlank, ever. Reading
+                    // `lock_frame_on_screen` is only sound because the render
+                    // gate keeps `render_frame` out of the in-flight window, so
+                    // smithay's `pending_frame` is `None` at every reachable
+                    // `EmptyFrame` — an invariant of the gate, not of
+                    // `EmptyFrame`, and it stops holding if triple-buffering
+                    // relaxes the gate.
+                    if lock_frame && data.lock_frame_on_screen.contains(&crtc) {
+                        data.stop_awaiting_lock_frame(output);
+                    }
                     queue_estimated_vblank_timer(data, output, crtc);
                 }
                 Err(e) => {
                     tracing::warn!("Failed to queue frame: {e:?}");
+                    retry_dropped_lock_frame(data, output);
                     queue_estimated_vblank_timer(data, output, crtc);
                 }
             }
         }
         Err(e) => {
             tracing::warn!("Render frame error: {e:?}");
+            retry_dropped_lock_frame(data, output);
             queue_estimated_vblank_timer(data, output, crtc);
         }
     }
@@ -1504,6 +1731,19 @@ fn deliver_presentation(
             // can't be reported safely against that clock id.
             feedback.discarded();
         }
+    }
+}
+
+/// A frame that never reached the screen leaves `redraws_needed` already drained
+/// (`render_frame` removes the entry before compositing), so nothing retries it.
+/// While the output still owes a lock frame that would stall the confirmation to
+/// the timeout — re-arm it so the post-dispatch `render_if_needed` in `main`
+/// composites again (the estimated-VBlank timer only supplies the wake-up; its
+/// callback does nothing but drop its own token). Scoped to the awaiting case;
+/// dropped frames are otherwise not retried.
+fn retry_dropped_lock_frame(data: &mut DriftWm, output: &Output) {
+    if data.is_awaiting_lock_frame(output) {
+        data.redraws_needed.insert(output.clone());
     }
 }
 
