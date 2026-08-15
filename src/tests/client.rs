@@ -222,6 +222,7 @@ pub struct Popup {
     pub surface: WlSurface,
     pub xdg_surface: XdgSurface,
     pub xdg_popup: XdgPopup,
+    pub viewport: WpViewport,
     pub pending_configure: PopupConfigure,
     pub configures_received: Vec<(u32, PopupConfigure)>,
     /// Set once the compositor dismisses the popup (`xdg_popup.popup_done`).
@@ -867,6 +868,12 @@ impl State {
         xdg_surface: XdgSurface,
         xdg_popup: XdgPopup,
     ) -> &mut Popup {
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .unwrap()
+            .get_viewport(&surface, &self.qh, ());
+
         let popup = Popup {
             qh: self.qh.clone(),
             spbm: self.spbm.clone().unwrap(),
@@ -875,6 +882,7 @@ impl State {
             surface,
             xdg_surface,
             xdg_popup,
+            viewport,
             pending_configure: PopupConfigure::default(),
             configures_received: Vec::new(),
             popup_done: false,
@@ -1223,10 +1231,11 @@ impl Popup {
     }
 
     /// Tear down the popup role and surface in protocol order (popup →
-    /// xdg_surface → wl_surface).
+    /// xdg_surface → viewport → wl_surface).
     pub fn destroy(&self) {
         self.xdg_popup.destroy();
         self.xdg_surface.destroy();
+        self.viewport.destroy();
         self.surface.destroy();
     }
 
@@ -1250,6 +1259,13 @@ impl Popup {
     pub fn attach_new_buffer(&self) {
         let buffer = self.spbm.create_u32_rgba_buffer(0, 0, 0, 0, &self.qh, ());
         self.surface.attach(Some(&buffer), 0, 0);
+    }
+
+    /// Scale the 1×1 buffer to `(w, h)`. Without this the popup's input region
+    /// is a single logical pixel whatever the positioner asked for, since
+    /// smithay sizes a surface from its viewport destination or its buffer.
+    pub fn set_size(&self, w: u16, h: u16) {
+        self.viewport.set_destination(i32::from(w), i32::from(h));
     }
 
     pub fn recent_configures(&mut self) -> impl Iterator<Item = &PopupConfigure> {
