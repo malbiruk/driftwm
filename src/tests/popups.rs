@@ -271,9 +271,8 @@ fn popup_over_the_parents_resize_band_is_not_a_chrome_hit() {
     f.double_roundtrip(id);
 }
 
-/// The other half of the ring, where no popup reaches, must keep answering —
-/// the fix is a popup-shaped hole in the chrome walk, not a retreat to
-/// content-before-chrome (which a CSD client's shadow would swallow whole).
+/// The pre-check takes a popup-shaped bite out of the chrome walk, not the
+/// whole ring: a band point no popup reaches must keep answering.
 #[test]
 fn resize_band_uncovered_by_the_popup_still_reports_chrome() {
     let mut f = Fixture::new();
@@ -282,12 +281,11 @@ fn resize_band_uncovered_by_the_popup_still_reports_chrome() {
 
     let parent = map_window(&mut f, id, "parent", (400, 300));
     let popup_surface = map_popup(&mut f, id, &parent);
-    grow_popup(&mut f, id, &popup_surface, (200, 100));
 
     let window = window_by_app_id(&mut f, "parent").unwrap();
     let win_pos = f.state().stage.position_of(&window).unwrap();
-    // The popup stops 100px past the parent's left edge; the right band is
-    // 400px further along.
+    // The right band, a full window width away from the popup sitting at the
+    // parent's top-left corner.
     let probe = pt(f64::from(win_pos.x) + 404.0, f64::from(win_pos.y) + 150.0);
 
     let hit = f.state().decoration_under(probe).map(|(_, hit)| hit);
@@ -351,6 +349,56 @@ fn a_windows_own_shadow_does_not_occlude_its_resize_band() {
     );
 }
 
+/// A pinned window's chrome answers from `pinned_decoration_under`, a separate
+/// screen-space walk from `decoration_under`, so the popup carve-out has to
+/// exist there too — a menu overhanging a pinned frame must not resize it.
+#[test]
+fn popup_over_a_pinned_parents_resize_band_is_not_a_chrome_hit() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [200, 150]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "pin", (200, 150));
+    let popup_surface = map_popup(&mut f, id, &parent);
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+    let site = f.state().stage.pin_of(&window).cloned().unwrap();
+    let pin = site.screen_pos;
+
+    // The far side of the same ring, where the popup does not reach. Without
+    // it a pin the walk skips outright — wrong output, or never pinned at all —
+    // would read as the popup silencing the chrome.
+    let uncovered = pt(f64::from(pin.x) + 204.0, f64::from(pin.y) + 75.0);
+    let chrome = f.state().pinned_decoration_under(uncovered).map(|(_, h)| h);
+    assert!(
+        matches!(
+            chrome,
+            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Right))
+        ),
+        "test setup bug: the pinned window's uncovered band must report chrome, got {chrome:?}"
+    );
+
+    // The default positioner centers the 200x100 popup on the parent's
+    // top-left corner, so its right half laps over the parent's left band.
+    let covered = pt(f64::from(pin.x) - 4.0, f64::from(pin.y) + 10.0);
+    let hit = f.state().pinned_decoration_under(covered).map(|(_, h)| h);
+    assert!(
+        hit.is_none(),
+        "a pinned band point covered by the window's own popup must not be chrome, got {hit:?}"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
 /// `pointer_context` counts chrome as on-window through `decoration_under`.
 /// With that disjunct now silent over a popup-covered band, the context has to
 /// rest on the popup-aware `element_under` arm — otherwise every on-window
@@ -369,6 +417,13 @@ fn binding_context_over_a_popup_covered_band_stays_on_window() {
     let win_pos = f.state().stage.position_of(&window).unwrap();
     let probe = pt(f64::from(win_pos.x) - 4.0, f64::from(win_pos.y) + 10.0);
 
+    // Without this the context could ride the `decoration_under` disjunct — the
+    // very one the popup silences — and pass for the wrong reason.
+    let chrome = f.state().decoration_under(probe).map(|(_, hit)| hit);
+    assert!(
+        chrome.is_none(),
+        "test setup bug: the probe must sit where the chrome walk falls silent, got {chrome:?}"
+    );
     assert_eq!(
         f.state().pointer_context(probe),
         BindingContext::OnWindow,

@@ -1639,7 +1639,6 @@ impl DriftWm {
                 continue;
             }
             let loc = p.screen_pos;
-            let size = window.geometry().size;
             let surface_origin = loc - window.geometry().loc;
             let local = screen_pos - surface_origin.to_f64();
 
@@ -1656,6 +1655,7 @@ impl DriftWm {
                 return None;
             }
 
+            let size = window.geometry().size;
             if self
                 .decorations
                 .contains_key(&DecorationKey::Surface(wl_surface.id()))
@@ -1911,8 +1911,7 @@ impl DriftWm {
             // If this window's client surface covers pos, stop: a higher window's
             // content occludes any lower window's decoration margin (mirrors
             // surface_under's z-order semantics so cursor and click agree).
-            // Toplevel-only — the popup trees were walked above, and each walk
-            // costs a `with_states` lock per popup-bearing surface.
+            // Toplevel-only — the popup trees were walked above.
             if window
                 .surface_under(
                     local,
