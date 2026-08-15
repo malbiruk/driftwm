@@ -1640,6 +1640,21 @@ impl DriftWm {
             }
             let loc = p.screen_pos;
             let size = window.geometry().size;
+            let surface_origin = loc - window.geometry().loc;
+            let local = screen_pos - surface_origin.to_f64();
+
+            // Popups render above this window's own chrome — same pre-check,
+            // and the same reason for skipping the toplevel tree, as
+            // `decoration_under`.
+            if window
+                .surface_under(
+                    local,
+                    WindowSurfaceType::POPUP | WindowSurfaceType::SUBSURFACE,
+                )
+                .is_some()
+            {
+                return None;
+            }
 
             if self
                 .decorations
@@ -1674,10 +1689,13 @@ impl DriftWm {
                 }
             }
 
-            // Content occludes a lower window's decoration margin.
-            let surface_origin = loc - window.geometry().loc;
+            // Content occludes a lower window's decoration margin. Toplevel-only:
+            // the popup trees were already walked above.
             if window
-                .surface_under(screen_pos - surface_origin.to_f64(), WindowSurfaceType::ALL)
+                .surface_under(
+                    local,
+                    WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE,
+                )
                 .is_some()
             {
                 return None;
@@ -1864,6 +1882,27 @@ impl DriftWm {
                 continue;
             }
             let loc = entry.position;
+            let surface_origin = loc - window.geometry().loc;
+            let local = pos - surface_origin.to_f64();
+
+            // A popup renders above this window's own chrome (the render pass
+            // pushes popup elements ahead of the title bar), so a point inside
+            // one is never a chrome hit. POPUP|SUBSURFACE walks the popup trees
+            // without entering the toplevel's, which has to stay *behind* the
+            // bands: a CSD client's shadow overlaps its own resize margin and
+            // usually declares no input region, so counting it here would
+            // swallow the whole ring. Which also means a menu drawn as a plain
+            // subsurface instead of a popup still reports chrome — the two are
+            // indistinguishable by role.
+            if window
+                .surface_under(
+                    local,
+                    WindowSurfaceType::POPUP | WindowSurfaceType::SUBSURFACE,
+                )
+                .is_some()
+            {
+                return None;
+            }
 
             if let Some(hit) = self.decoration_hit_for(window, loc, pos) {
                 return Some((DecoTarget::Client(window.clone()), hit));
@@ -1872,9 +1911,13 @@ impl DriftWm {
             // If this window's client surface covers pos, stop: a higher window's
             // content occludes any lower window's decoration margin (mirrors
             // surface_under's z-order semantics so cursor and click agree).
-            let surface_origin = loc - window.geometry().loc;
+            // Toplevel-only — the popup trees were walked above, and each walk
+            // costs a `with_states` lock per popup-bearing surface.
             if window
-                .surface_under(pos - surface_origin.to_f64(), WindowSurfaceType::ALL)
+                .surface_under(
+                    local,
+                    WindowSurfaceType::TOPLEVEL | WindowSurfaceType::SUBSURFACE,
+                )
                 .is_some()
             {
                 return None;
