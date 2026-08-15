@@ -51,6 +51,20 @@ pub(crate) enum HitKind {
     Decoration(DecorationHit),
 }
 
+/// What the screen-space pinned chrome walk found. The answer an `Option` can't
+/// give is `Covered`: a pinned window owns the point but its chrome doesn't, so
+/// the caller has to stop rather than fall through to the canvas walk — that
+/// walk skips pins and would answer for a window drawn *behind* this one.
+#[derive(Debug)]
+pub(crate) enum PinnedChrome {
+    Hit(Window, DecorationHit),
+    /// A pinned window's own content or popup takes the point, which is also
+    /// what keeps the walk from reaching a lower pin's margin under it.
+    Covered,
+    /// No pin reaches here — the canvas walk owns this point.
+    Miss,
+}
+
 /// Constant-speed edge-pan velocity for the bare cursor: a steady glide
 /// whenever the cursor sits within `zone` px of an edge of the *usable* area
 /// (output minus layer-shell exclusive zones), directed away from the edge(s)
@@ -1610,19 +1624,22 @@ impl DriftWm {
     /// Screen-space SSD-decoration hit-test for pinned windows (mirror of
     /// `decoration_under`). `screen_pos` is output-relative. Used by the button
     /// dispatch and the cursor update so pinned windows' title bar / close
-    /// button / resize borders behave like canvas windows'.
+    /// button / resize borders behave like canvas windows'. See
+    /// [`PinnedChrome`] for what `Covered` vs `Miss` means to the caller.
     pub(crate) fn pinned_decoration_under(
         &self,
         screen_pos: Point<f64, smithay::utils::Logical>,
-    ) -> Option<(Window, crate::decorations::DecorationHit)> {
+    ) -> PinnedChrome {
         use crate::decorations::DecorationHit;
         if !self.stage.has_pinned() {
-            return None;
+            return PinnedChrome::Miss;
         }
-        let output = self.active_output()?;
+        let Some(output) = self.active_output() else {
+            return PinnedChrome::Miss;
+        };
         // Fullscreen covers pinned windows on that output (like the top layer).
         if self.is_output_fullscreen(&output) {
-            return None;
+            return PinnedChrome::Miss;
         }
         let output_name = output.name();
         let bar_height = self.config.decorations.title_bar_height;
@@ -1652,7 +1669,7 @@ impl DriftWm {
                 )
                 .is_some()
             {
-                return None;
+                return PinnedChrome::Covered;
             }
 
             let size = window.geometry().size;
@@ -1661,10 +1678,10 @@ impl DriftWm {
                 .contains_key(&DecorationKey::Surface(wl_surface.id()))
             {
                 if crate::decorations::close_button_contains(screen_pos, loc, size.w, bar_height) {
-                    return Some((window.clone(), DecorationHit::CloseButton));
+                    return PinnedChrome::Hit(window.clone(), DecorationHit::CloseButton);
                 }
                 if crate::decorations::title_bar_contains(screen_pos, loc, size.w, bar_height) {
-                    return Some((window.clone(), DecorationHit::TitleBar));
+                    return PinnedChrome::Hit(window.clone(), DecorationHit::TitleBar);
                 }
                 if self.config.resize_on_border
                     && let Some(edge) = crate::decorations::resize_edge_at(
@@ -1675,7 +1692,7 @@ impl DriftWm {
                         border_width,
                     )
                 {
-                    return Some((window.clone(), DecorationHit::ResizeBorder(edge)));
+                    return PinnedChrome::Hit(window.clone(), DecorationHit::ResizeBorder(edge));
                 }
             } else {
                 let is_widget =
@@ -1685,7 +1702,7 @@ impl DriftWm {
                     && let Some(edge) =
                         crate::decorations::resize_edge_at(screen_pos, loc, size, 0, border_width)
                 {
-                    return Some((window.clone(), DecorationHit::ResizeBorder(edge)));
+                    return PinnedChrome::Hit(window.clone(), DecorationHit::ResizeBorder(edge));
                 }
             }
 
@@ -1698,10 +1715,10 @@ impl DriftWm {
                 )
                 .is_some()
             {
-                return None;
+                return PinnedChrome::Covered;
             }
         }
-        None
+        PinnedChrome::Miss
     }
 
     /// Update cursor icon based on what decoration area the pointer is over.
@@ -1755,18 +1772,23 @@ impl DriftWm {
         // Resolve the decoration key + region from a pinned window (screen
         // space, always a client) or the canvas hit-test (client or suspended).
         let hit: Option<(DecorationKey, DecorationHit)> =
-            if let Some((window, h)) = self.pinned_decoration_under(screen_pos) {
-                window
+            match self.pinned_decoration_under(screen_pos) {
+                PinnedChrome::Hit(window, h) => window
                     .wl_surface()
-                    .map(|s| (DecorationKey::Surface(s.id()), h))
-            } else {
-                self.decoration_under(canvas_pos)
-                    .and_then(|(target, h)| match target {
-                        DecoTarget::Client(w) => {
-                            w.wl_surface().map(|s| (DecorationKey::Surface(s.id()), h))
-                        }
-                        DecoTarget::Suspended(s) => Some((DecorationKey::Suspended(s.id), h)),
-                    })
+                    .map(|s| (DecorationKey::Surface(s.id()), h)),
+                // The pin owns this point but its chrome doesn't. Answer nothing
+                // rather than falling through: the canvas walk skips pins, so it
+                // would hand back the chrome of a window drawn *behind* this one.
+                PinnedChrome::Covered => None,
+                PinnedChrome::Miss => {
+                    self.decoration_under(canvas_pos)
+                        .and_then(|(target, h)| match target {
+                            DecoTarget::Client(w) => {
+                                w.wl_surface().map(|s| (DecorationKey::Surface(s.id()), h))
+                            }
+                            DecoTarget::Suspended(s) => Some((DecorationKey::Suspended(s.id), h)),
+                        })
+                }
             };
         match hit {
             Some((key, DecorationHit::CloseButton)) => {

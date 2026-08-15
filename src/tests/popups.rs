@@ -12,6 +12,7 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::decorations::DecorationHit;
+use crate::input::PinnedChrome;
 use crate::state::output_state;
 
 use super::client::{ClientId, PopupProps};
@@ -26,7 +27,7 @@ fn pt(x: f64, y: f64) -> Point<f64, Logical> {
 
 /// Grow a mapped popup to `size` via its viewport (see
 /// [`super::client::Popup::set_size`]) and settle the commit.
-fn grow_popup(f: &mut Fixture, id: ClientId, surface: &WlSurface, size: (u16, u16)) {
+pub(super) fn grow_popup(f: &mut Fixture, id: ClientId, surface: &WlSurface, size: (u16, u16)) {
     let popup = f.client(id).popup(surface);
     popup.set_size(size.0, size.1);
     popup.commit();
@@ -377,11 +378,14 @@ size = [200, 150]
     // it a pin the walk skips outright — wrong output, or never pinned at all —
     // would read as the popup silencing the chrome.
     let uncovered = pt(f64::from(pin.x) + 204.0, f64::from(pin.y) + 75.0);
-    let chrome = f.state().pinned_decoration_under(uncovered).map(|(_, h)| h);
+    let chrome = f.state().pinned_decoration_under(uncovered);
     assert!(
         matches!(
             chrome,
-            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Right))
+            PinnedChrome::Hit(
+                _,
+                DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Right)
+            )
         ),
         "test setup bug: the pinned window's uncovered band must report chrome, got {chrome:?}"
     );
@@ -389,10 +393,11 @@ size = [200, 150]
     // The default positioner centers the 200x100 popup on the parent's
     // top-left corner, so its right half laps over the parent's left band.
     let covered = pt(f64::from(pin.x) - 4.0, f64::from(pin.y) + 10.0);
-    let hit = f.state().pinned_decoration_under(covered).map(|(_, h)| h);
+    let hit = f.state().pinned_decoration_under(covered);
     assert!(
-        hit.is_none(),
-        "a pinned band point covered by the window's own popup must not be chrome, got {hit:?}"
+        matches!(hit, PinnedChrome::Covered),
+        "a pinned band point covered by the window's own popup must read as covered, \
+         not as a point no pin reaches, got {hit:?}"
     );
 
     f.client(id).popup(&popup_surface).destroy();

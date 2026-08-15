@@ -21,7 +21,7 @@ use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
-use crate::input::DecoTarget;
+use crate::input::{DecoTarget, PinnedChrome};
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
     PendingMiddleClick, PickTarget, StageWindow, SuspendedWindow, ZoomAnimationAnchor,
@@ -1008,7 +1008,7 @@ impl DriftWm {
 
         if !modifier_binding
             && button == config::BTN_LEFT
-            && let Some((window, hit)) = self.pinned_decoration_under(screen_pos)
+            && let PinnedChrome::Hit(window, hit) = self.pinned_decoration_under(screen_pos)
         {
             let is_widget = window
                 .wl_surface()
