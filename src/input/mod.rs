@@ -2060,14 +2060,7 @@ impl DriftWm {
         if crate::decorations::close_button_contains(pos, loc, size.w, bar) {
             return Some(DecorationHit::CloseButton);
         }
-        // The whole bar band, including the padding strip right of the close
-        // button, is a drag target — the stand-in draws chrome across its full
-        // width, so no sliver falls through to a window beneath.
-        if pos.y >= (loc.y - bar) as f64
-            && pos.y < loc.y as f64
-            && pos.x >= loc.x as f64
-            && pos.x < (loc.x + size.w) as f64
-        {
+        if crate::decorations::title_bar_contains(pos, loc, size.w, bar) {
             return Some(DecorationHit::TitleBar);
         }
         // Body: the content rect below the title bar. A centered label sub-rect

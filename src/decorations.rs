@@ -139,6 +139,9 @@ pub fn close_button_rect(
 }
 
 /// Check if a canvas position is within the title bar (excluding close button).
+/// The band runs the window's full width, padding strip and all, because the bar
+/// paints across all of it — stopping short would leave a sliver that falls
+/// through to whatever is drawn beneath.
 pub fn title_bar_contains(
     pos: Point<f64, Logical>,
     window_loc: Point<i32, Logical>,
@@ -150,8 +153,12 @@ pub fn title_bar_contains(
     let bar_top = window_loc.y as f64 - bar_height as f64;
     let bar_bottom = window_loc.y as f64;
     let bar_left = window_loc.x as f64;
-    let bar_right = bar_left + width as f64 - bar_height as f64 - CLOSE_BTN_RIGHT_PAD as f64;
-    x >= bar_left && x < bar_right && y >= bar_top && y < bar_bottom
+    let bar_right = bar_left + width as f64;
+    x >= bar_left
+        && x < bar_right
+        && y >= bar_top
+        && y < bar_bottom
+        && !close_button_contains(pos, window_loc, width, bar_height)
 }
 
 /// Check if a canvas position is within the close button.
@@ -587,14 +594,18 @@ mod tests {
     }
 
     #[test]
-    fn title_bar_contains_point_right_of_bar_body_returns_false() {
-        let bar_right = 0.0 + 400.0 - 25.0 - PAD as f64;
-        assert!(!title_bar_contains(
-            pt(bar_right, 80.0),
-            loc(0, 100),
-            400,
-            25
-        ));
+    fn title_bar_contains_point_at_bar_right_edge_returns_false() {
+        // Half-open band: x == bar_left + width is the first excluded column —
+        // the bar spans the window's whole width, so this is the right boundary.
+        assert!(!title_bar_contains(pt(400.0, 80.0), loc(0, 100), 400, 25));
+    }
+
+    #[test]
+    fn title_bar_contains_point_in_right_pad_strip_returns_true() {
+        // width=400, bar_height=25: the close button covers [367, 392), so the
+        // pad strip [392, 400) is inside the full-width bar band but outside
+        // the close button — it must read as the title bar, not a hole.
+        assert!(title_bar_contains(pt(395.0, 80.0), loc(0, 100), 400, 25));
     }
 
     #[test]
