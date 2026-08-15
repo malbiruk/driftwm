@@ -159,4 +159,28 @@ impl DriftWm {
             .and_then(|w| w.client())
             .cloned()
     }
+
+    /// The stage window owning `surface`, following subsurface parents and then
+    /// the xdg-popup parent chain. `window_for_surface` matches a toplevel's own
+    /// surface only, so it answers `None` for a popup or a subsurface — a caller
+    /// asking "which window is this hit in?" needs this instead.
+    ///
+    /// Two `None`s here are answers, not gaps: a popup whose parent isn't set yet
+    /// (a layer-shell popup before `get_popup`, or a dead one) has no root to
+    /// climb to, and a layer-parented popup climbs to the layer surface, which is
+    /// no stage window.
+    pub(crate) fn window_for_surface_root(&self, surface: &WlSurface) -> Option<Window> {
+        let mut root = surface.clone();
+        // Subsurface parents only — this stops at a popup rather than crossing
+        // into its parent.
+        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
+            root = parent;
+        }
+        if let Some(kind) = self.popups.find_popup(&root) {
+            // Climbs the whole popup chain internally, so a nested popup
+            // resolves in this one call.
+            root = smithay::desktop::find_popup_root_surface(&kind).ok()?;
+        }
+        self.window_for_surface(&root)
+    }
 }

@@ -307,7 +307,7 @@ impl DriftWm {
                 // an overlapping window.
                 if self
                     .surface_under(pos, None)
-                    .and_then(|(target, _)| self.window_for_surface(&target.0))
+                    .and_then(|(target, _)| self.window_for_surface_root(&target.0))
                     .is_some_and(|top| top != window)
                 {
                     // Occluded decoration hit; continue normal dispatch.

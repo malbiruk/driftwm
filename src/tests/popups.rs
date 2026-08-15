@@ -379,6 +379,56 @@ fn binding_context_over_a_popup_covered_band_stays_on_window() {
     f.double_roundtrip(id);
 }
 
+/// `window_for_surface` matches a toplevel's own surface only, so the button
+/// dispatch's "is anything on top of this chrome?" guard read every popup and
+/// subsurface hit as *nothing on top* — a silent no-op. The root-resolving
+/// lookup answers with the window that actually owns the surface, however deep
+/// the popup chain.
+#[test]
+fn window_for_surface_root_resolves_popups_to_their_toplevel() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "parent", (400, 300));
+    let menu = map_popup(&mut f, id, &parent);
+    let submenu = map_popup(&mut f, id, &menu);
+
+    let window = window_by_app_id(&mut f, "parent").unwrap();
+    let root = server_surface(&window);
+
+    let popups: Vec<_> = smithay::desktop::PopupManager::popups_for_surface(&root)
+        .map(|(kind, _)| kind.wl_surface().clone())
+        .collect();
+    assert_eq!(
+        popups.len(),
+        2,
+        "test setup bug: both the menu and its submenu must be tracked"
+    );
+
+    assert_eq!(
+        f.state().window_for_surface(&popups[0]),
+        None,
+        "a popup surface is not a stage window's own surface — the gap this resolves"
+    );
+    for popup in &popups {
+        assert_eq!(
+            f.state().window_for_surface_root(popup),
+            Some(window.clone()),
+            "every popup in the chain must resolve to the toplevel it hangs off"
+        );
+    }
+    assert_eq!(
+        f.state().window_for_surface_root(&root),
+        Some(window.clone()),
+        "a toplevel's own surface still resolves to itself"
+    );
+
+    f.client(id).popup(&submenu).destroy();
+    f.client(id).popup(&menu).destroy();
+    f.double_roundtrip(id);
+}
+
 /// A canvas-positioned layer widget (see the `widget`/`position` window
 /// rule) can parent an xdg popup directly (`zwlr_layer_surface_v1.get_popup`).
 /// `canvas_layer_under` must find that popup even where it overhangs past

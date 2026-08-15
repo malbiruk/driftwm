@@ -813,14 +813,21 @@ impl State {
         self.create_popup_with(parent, PopupProps::default())
     }
 
+    /// `parent` may be a toplevel or another popup — an xdg popup's parent is
+    /// any xdg surface, which is how submenus nest.
     pub fn create_popup_with(&mut self, parent: &WlSurface, props: PopupProps) -> &mut Popup {
         let parent_xdg = self
             .windows
             .iter()
             .find(|w| w.surface == *parent)
-            .unwrap()
-            .xdg_surface
-            .clone();
+            .map(|w| w.xdg_surface.clone())
+            .or_else(|| {
+                self.popups
+                    .iter()
+                    .find(|p| p.surface == *parent)
+                    .map(|p| p.xdg_surface.clone())
+            })
+            .unwrap();
 
         let positioner = self.build_positioner(props);
 
