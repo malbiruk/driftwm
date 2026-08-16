@@ -15,11 +15,15 @@
         pkg-config
       ];
 
+      # libdisplay-info-sys caps the native library below 0.4. Kept out of the
+      # `with pkgs` lists because `or` won't resolve a bare name.
+      displayInfoFor = pkgs: pkgs.libdisplay-info_0_3 or pkgs.libdisplay-info;
+
       buildInputsFor = pkgs: with pkgs; [
         wayland
         wayland-protocols
         seatd # libseat
-        libdisplay-info
+        (displayInfoFor pkgs)
         libinput
         libgbm
         libxkbcommon
@@ -37,7 +41,7 @@
       runtimeLibsFor = pkgs: with pkgs; [
         wayland
         seatd
-        libdisplay-info
+        (displayInfoFor pkgs)
         libinput
         libgbm
         libxkbcommon
