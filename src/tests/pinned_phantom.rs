@@ -680,7 +680,7 @@ fn pinned_content_does_not_fall_through_to_the_window_beneath() {
     let id = f.add_client();
     let (_client_surface, site) = map_small_pin(&mut f, id);
 
-    // P's body center: content, not chrome, but still the pin's own surface.
+    // Inside P's body: content, not chrome, but still the pin's own surface.
     let probe = pt(site.x as f64 + 96.0, site.y as f64 + 75.0);
     let canvas_probe = window_beneath(&mut f, id, probe);
 
@@ -791,7 +791,10 @@ fn chrome_beside_every_pin_still_answers_from_the_canvas() {
     let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
-    map_window(&mut f, id, "pin", (200, 150));
+    // Via the helper: its `pin_of` unwrap is what keeps this test from passing
+    // vacuously if the rule ever stopped pinning, since an unpinned "pin" would
+    // make the walk return `Miss` from its `has_pinned` guard alone.
+    let (_client_surface, _site) = map_small_pin(&mut f, id);
 
     // A canvas origin the fixture camera leaves far outside the output's screen
     // rect, so no pin's screen site could ever reach it.

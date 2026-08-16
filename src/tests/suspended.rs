@@ -185,6 +185,9 @@ fn client_ssd_bar_right_pad_strip_is_chrome() {
         "the client beneath genuinely owns the strip before the bar covers it"
     );
 
+    // Mapping an existing entry re-pushes it, so this both places the decorated
+    // window over the strip and lifts it back above `beneath` — which the
+    // parking step above had left on top.
     f.state().map_window(
         StageWindow::Client(window.clone()),
         Point::from((500, 500)),
@@ -194,7 +197,7 @@ fn client_ssd_bar_right_pad_strip_is_chrome() {
     assert!(
         matches!(
             f.state().decoration_under(strip),
-            Some((DecoTarget::Client(_), DecorationHit::TitleBar))
+            Some((DecoTarget::Client(ref w), DecorationHit::TitleBar)) if *w == window
         ),
         "the right-pad strip of a live window's own bar is chrome, not a hole"
     );

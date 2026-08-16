@@ -602,10 +602,10 @@ mod tests {
 
     #[test]
     fn title_bar_contains_point_in_right_pad_strip_returns_true() {
-        // width=400, bar_height=25: the close button covers [367, 392), so the
-        // pad strip [392, 400) is inside the full-width bar band but outside
-        // the close button — it must read as the title bar, not a hole.
-        assert!(title_bar_contains(pt(395.0, 80.0), loc(0, 100), 400, 25));
+        // The strip between the close button's right edge and the bar's: inside
+        // the full-width band, outside the button — the title bar, not a hole.
+        let strip = 400.0 - PAD as f64 / 2.0;
+        assert!(title_bar_contains(pt(strip, 80.0), loc(0, 100), 400, 25));
     }
 
     #[test]
