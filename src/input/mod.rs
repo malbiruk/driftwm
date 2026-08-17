@@ -789,8 +789,10 @@ impl DriftWm {
             return;
         };
 
-        // position_transformed gives screen-local coords (0..width, 0..height)
-        let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
 
         // When locked, pointer only targets the lock surface
         if self.session_lock.is_locked() {

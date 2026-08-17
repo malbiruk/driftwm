@@ -486,7 +486,10 @@ impl DriftWm {
         self.focused_output = Some(output.clone());
         self.cursor.hidden_by_touch = true;
 
-        let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
         let (camera, zoom) = {
             let os = output_state(&output);
             (os.camera, os.zoom)
@@ -841,7 +844,10 @@ impl DriftWm {
         if !self.session_lock.is_locked() || self.touch_state.lock_slots.contains(&slot) {
             self.cursor.hidden_by_touch = true;
         }
-        let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
         let (camera, zoom) = {
             let os = output_state(&output);
             (os.camera, os.zoom)
