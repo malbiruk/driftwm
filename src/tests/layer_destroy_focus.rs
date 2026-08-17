@@ -9,7 +9,10 @@ use driftwm::config::BTN_LEFT;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use super::input_backend::{pointer_to_screen, press, release};
-use super::{Fixture, client::LayerConfigureProps, input_backend::FakeDevice, pointer_focus};
+use super::{
+    Fixture, assert_click_grab, client::LayerConfigureProps, input_backend::FakeDevice,
+    pointer_focus,
+};
 
 use smithay::utils::Point;
 
@@ -124,24 +127,6 @@ fn layer_destroyed_under_the_cursor_keeps_pointer_focus() {
     f.client(id).layer(&panel).surface.destroy();
     f.client(id).layer(&bar).layer_surface.destroy();
     f.double_roundtrip(id);
-}
-
-/// A layer press delivers a `ScreenSpaceClickGrab`; a `PanGrab` means the
-/// press fell through to the canvas. Pressed, not yet released.
-fn assert_click_grab(f: &mut Fixture, why: &str) {
-    let (pan_grab, click_grab) = f
-        .state()
-        .seat
-        .get_pointer()
-        .unwrap()
-        .with_grab(|_, g| {
-            (
-                g.is::<crate::grabs::PanGrab>(),
-                g.is::<crate::grabs::ScreenSpaceClickGrab>(),
-            )
-        })
-        .unwrap_or((false, false));
-    assert_eq!((pan_grab, click_grab), (false, true), "{why}");
 }
 
 /// Exiting fullscreen can restore a hidden bar beneath a stationary cursor:

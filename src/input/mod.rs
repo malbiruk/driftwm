@@ -11,7 +11,7 @@ use smithay::{
     },
     desktop::{WindowSurfaceType, layer_map_for_output},
     input::pointer::{MotionEvent, RelativeMotionEvent},
-    utils::{Point, SERIAL_COUNTER},
+    utils::{Point, SERIAL_COUNTER, Serial},
     wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
@@ -712,6 +712,55 @@ impl DriftWm {
         });
     }
 
+    /// Send a `wl_pointer.motion` and record what the client was told, so
+    /// [`Self::refresh_pointer_focus`] can recognise a re-seat that would put
+    /// nothing new on the wire. Every compositor-initiated dispatch goes through
+    /// here — a record kept by only some of them goes stale the moment another
+    /// site delivers a different coordinate, and the guard would then skip
+    /// forever.
+    ///
+    /// Not every client-visible motion, though: `unset_grab` with
+    /// `restore_focus` re-sends one from inside smithay against its own cached
+    /// focus, which this never sees. That direction is safe — the record is left
+    /// describing an older delivery, so the guard errs toward sending again —
+    /// but it is why the record is a shadow copy and not ground truth.
+    ///
+    /// A grabbed pointer routes through the grab, which supplies its own focus
+    /// and location, so what `under` says was delivered is a guess: clear the
+    /// record instead of writing a lie into it. The record is written before the
+    /// dispatch, which is only safe while no grab sends a motion from its own
+    /// `motion` handler — one that did would leave the record describing the
+    /// inner delivery while the outer one is what reached the wire.
+    ///
+    /// Frame handling deliberately stays with the caller. Two sites group this
+    /// motion with a later `axis` or `relative_motion` under one frame, and a
+    /// frame emitted here would split those groups.
+    pub(crate) fn dispatch_pointer_motion(
+        &mut self,
+        under: Option<(FocusTarget, Point<f64, Logical>)>,
+        location: Point<f64, Logical>,
+        serial: Serial,
+        time: u32,
+    ) {
+        let pointer = self.seat.get_pointer().unwrap();
+        self.last_pointer_delivery = if pointer.is_grabbed() {
+            None
+        } else {
+            under
+                .as_ref()
+                .map(|(focus, origin)| (focus.clone(), *origin, location - *origin))
+        };
+        pointer.motion(
+            self,
+            under,
+            &MotionEvent {
+                location,
+                serial,
+                time,
+            },
+        );
+    }
+
     /// Recompute pointer focus at the current cursor location and dispatch a
     /// synthetic motion. Call after the scene under the cursor changes without a
     /// real pointer event (e.g. the window under the cursor closes): smithay's
@@ -732,6 +781,7 @@ impl DriftWm {
         .0;
         let old_focus = pointer.current_focus();
         let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
+        let focus_unchanged = under.as_ref().map(|(focus, _)| focus) == old_focus.as_ref();
         // A lock still holding the surface under the cursor has nothing to
         // re-seat, and the motion below would read as a jump the client never
         // made: the lock freezes the cursor while `cursor_position_hint` keeps
@@ -739,23 +789,47 @@ impl DriftWm {
         // the cursor strands the lock, so that falls through to clear it.
         // Confines are excluded — that cursor really moves, and suppressing the
         // re-seat would leave it measured against a stale surface origin.
-        if self.pointer_constraint_locked()
-            && under.as_ref().map(|(focus, _)| focus) == old_focus.as_ref()
-        {
+        if self.pointer_constraint_locked() && focus_unchanged {
             return;
         }
-        let serial = SERIAL_COUNTER.next_serial();
-        let time = self.start_time.elapsed().as_millis() as u32;
-        pointer.motion(
-            self,
-            under,
-            &MotionEvent {
-                location: canvas_pos,
-                serial,
-                time,
-            },
-        );
-        pointer.frame(self);
+        // Compare the whole basis of the delivery — target, surface origin and
+        // the surface-local point all three. The local point alone is not
+        // enough: `set_location` advances the cursor with no event, so an
+        // unchanged origin does not mean an unchanged delivery, and conversely a
+        // window carrying the cursor with it (a fullscreen re-centre) preserves
+        // the local point while moving the origin. That case still owes a motion
+        // — smithay caches the origin next to the focus and `DefaultGrab` copies
+        // it into the grab it installs on the next press, so skipping would let
+        // a whole drag arrive measured against a dead origin.
+        //
+        // Exact float equality on purpose: when both sides shift by the same
+        // delta the difference is an ulp, and erring toward a redundant motion
+        // is the safe direction, so an epsilon would only buy suppressed sends
+        // the client is owed.
+        let delivery = under
+            .as_ref()
+            .map(|(focus, origin)| (focus.clone(), *origin, canvas_pos - *origin));
+        // Never while grabbed: the grab does work in its motion handler (edge
+        // pan, member shifts) that a skipped tick would drop, and it delivers
+        // something other than `under` anyway.
+        //
+        // `focus_unchanged` is load-bearing, not belt-and-braces. `None` in the
+        // record is overloaded — nothing under the cursor, nothing recorded yet,
+        // *and* "the last dispatch went through a grab" — so the delivery
+        // comparison alone reads as redundant in a case that is anything but: a
+        // press-drag-release over a window blanks the record, and if that window
+        // then closes with the cursor over bare canvas, both sides are `None`
+        // while smithay still holds focus on the dead surface. Skipping there
+        // routes the next press into a destroyed surface, which is the whole
+        // reason this function exists. Do not drop the conjunct.
+        let redundant =
+            !pointer.is_grabbed() && focus_unchanged && delivery == self.last_pointer_delivery;
+        if !redundant {
+            let serial = SERIAL_COUNTER.next_serial();
+            let time = self.start_time.elapsed().as_millis() as u32;
+            self.dispatch_pointer_motion(under, canvas_pos, serial, time);
+            pointer.frame(self);
+        }
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
     }
@@ -800,15 +874,7 @@ impl DriftWm {
             let time = Event::time_msec(&event);
             let focus = self.lock_surface_focus(&output);
             let pointer = self.seat.get_pointer().unwrap();
-            pointer.motion(
-                self,
-                focus,
-                &MotionEvent {
-                    location: screen_pos,
-                    serial,
-                    time,
-                },
-            );
+            self.dispatch_pointer_motion(focus, screen_pos, serial, time);
             pointer.frame(self);
             return;
         }
@@ -822,15 +888,7 @@ impl DriftWm {
         // Promote an armed pick to a move once the drag clears the slop. Before
         // pointer.motion so the freshly installed grab receives this event.
         self.maybe_promote_pick(canvas_pos);
-        pointer.motion(
-            self,
-            under,
-            &MotionEvent {
-                location: canvas_pos,
-                serial,
-                time,
-            },
-        );
+        self.dispatch_pointer_motion(under, canvas_pos, serial, time);
         pointer.frame(self);
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
@@ -866,15 +924,7 @@ impl DriftWm {
             let serial = SERIAL_COUNTER.next_serial();
             let time = Event::time_msec(&event);
             let focus = self.lock_surface_focus(&output);
-            pointer.motion(
-                self,
-                focus,
-                &MotionEvent {
-                    location: new_pos,
-                    serial,
-                    time,
-                },
-            );
+            self.dispatch_pointer_motion(focus, new_pos, serial, time);
             pointer.frame(self);
             return;
         }
@@ -1057,15 +1107,7 @@ impl DriftWm {
         // Promote an armed pick to a move once the drag clears the slop. Before
         // pointer.motion so the freshly installed grab receives this event.
         self.maybe_promote_pick(canvas_pos);
-        pointer.motion(
-            self,
-            under.clone(),
-            &MotionEvent {
-                location: canvas_pos,
-                serial,
-                time,
-            },
-        );
+        self.dispatch_pointer_motion(under.clone(), canvas_pos, serial, time);
         pointer.relative_motion(
             self,
             under,

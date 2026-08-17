@@ -5,9 +5,7 @@ use smithay::{
         Axis, AxisSource, ButtonState, Device, DeviceCapability, Event, InputBackend,
         PointerAxisEvent, PointerButtonEvent,
     },
-    input::pointer::{
-        AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent,
-    },
+    input::pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData},
     reexports::{
         calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -1436,14 +1434,11 @@ impl DriftWm {
                             let screen_pos =
                                 canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
                             let under = self.pointer_focus_under_pick(screen_pos, new_pos);
-                            pointer.motion(
-                                self,
+                            self.dispatch_pointer_motion(
                                 under,
-                                &MotionEvent {
-                                    location: new_pos,
-                                    serial,
-                                    time: Event::time_msec(&event),
-                                },
+                                new_pos,
+                                serial,
+                                Event::time_msec(&event),
                             );
                         }
                     } else if source == AxisSource::Finger {

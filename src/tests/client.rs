@@ -110,6 +110,11 @@ pub struct State {
     /// Surface-local position carried by every `wl_pointer` enter/motion this
     /// client has received, oldest first.
     pub pointer_positions: Vec<(f64, f64)>,
+    /// Count of `wl_pointer.frame` events this client has received. A frame
+    /// with no motion/enter inside it still increments this, so pairing it
+    /// with `pointer_positions.len()` catches an empty frame a plain position
+    /// count would miss.
+    pub pointer_frames: usize,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -419,6 +424,7 @@ impl Client {
             session_locks: Vec::new(),
             touch_events: Vec::new(),
             pointer_positions: Vec::new(),
+            pointer_frames: 0,
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -1839,6 +1845,7 @@ impl Dispatch<WlPointer, ()> for State {
                 surface_y,
                 ..
             } => state.pointer_positions.push((surface_x, surface_y)),
+            wl_pointer::Event::Frame => state.pointer_frames += 1,
             _ => (),
         }
     }
