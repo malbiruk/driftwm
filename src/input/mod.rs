@@ -132,6 +132,10 @@ fn cursor_edge_pan_velocity(
 /// `geometry().loc` inside the surface of a client drawing its own shadows, so
 /// surface-local values (constraint regions, cursor hints) need that subtracted
 /// back out.
+///
+/// Reads the surface's user data through `Window::geometry`, so it must never
+/// be called from inside a `with_states` or `with_pointer_constraint` closure
+/// on the same surface — that mutex is not re-entrant.
 pub(crate) fn window_origin_for_surface(
     state: &DriftWm,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -691,24 +695,39 @@ impl DriftWm {
             return;
         };
 
-        with_pointer_constraint(&focus.0, &pointer, |constraint| {
-            let Some(constraint) = constraint else { return };
+        // `with_pointer_constraint` and `window_origin_for_surface` both lock the
+        // surface's mutex, so the region check can't run inside this closure —
+        // read the region out first, then check and activate below. Outer `None`
+        // means nothing to arm (no constraint, or already active); inner `None`
+        // means the constraint has no region and arms anywhere.
+        let Some(arming_region) = with_pointer_constraint(&focus.0, &pointer, |constraint| {
+            let constraint = constraint?;
             if constraint.is_active() {
+                return None;
+            }
+            Some(constraint.region().cloned())
+        }) else {
+            return;
+        };
+
+        if let Some(region) = arming_region {
+            let pointer_canvas = pointer.current_location();
+            let Some(surface_origin) = window_origin_for_surface(self, &focus.0) else {
+                return;
+            };
+            let local = pointer_canvas - surface_origin;
+            if !region.contains(local.to_i32_round()) {
                 return;
             }
+        }
 
-            if let Some(region) = constraint.region() {
-                let pointer_canvas = pointer.current_location();
-                let Some(surface_origin) = window_origin_for_surface(self, &focus.0) else {
-                    return;
-                };
-                let local = pointer_canvas - surface_origin;
-                if !region.contains(local.to_i32_round()) {
-                    return;
-                }
+        // Nothing between the two calls dispatches or runs client code, so this
+        // is still the same, inactive constraint — and `activate` is idempotent
+        // regardless.
+        with_pointer_constraint(&focus.0, &pointer, |constraint| {
+            if let Some(constraint) = constraint {
+                constraint.activate();
             }
-
-            constraint.activate();
         });
     }
 

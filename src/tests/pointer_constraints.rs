@@ -9,6 +9,11 @@
 //! The silence is conditional in both directions: a confined cursor really
 //! moves and is owed its motion, and a lock whose surface the cursor has left
 //! has to be let go, or it freezes there with nothing to release it.
+//!
+//! A constraint carrying a region arms only while the pointer is inside it,
+//! and the region is surface-local, so the tests below also pin the origin
+//! the compositor measures it from — the path that used to deadlock by
+//! re-locking the surface's user-data mutex.
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use smithay::utils::{Logical, Point};
@@ -23,6 +28,10 @@ use super::{Fixture, map_top_layer, map_window, window_by_app_id};
 
 const SHADOW: Point<i32, Logical> = Point::new(26, 23);
 const GEOMETRY: (i32, i32) = (800, 600);
+
+/// Surface-local position of the pointer after [`point_at_window_center`]: the
+/// geometry centre, measured from the surface origin the shadow pushes out.
+const CENTER_IN_SURFACE: (i32, i32) = (GEOMETRY.0 / 2 + SHADOW.x, GEOMETRY.1 / 2 + SHADOW.y);
 
 /// A mapped window whose surface reaches [`SHADOW`] beyond its geometry on
 /// every side, like a client drawing its own shadows. Returns the client
@@ -461,5 +470,71 @@ fn a_locked_pointer_neither_moves_nor_reports_absolute_motion() {
         f.client(id).state.pointer_positions,
         Vec::new(),
         "a locked client must see relative motion only"
+    );
+}
+
+#[test]
+fn a_region_around_the_pointer_arms_the_lock() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, _) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    // Reaches less than `SHADOW` from the pointer, so measuring from the
+    // geometry origin instead of the surface origin would put it outside.
+    let _lock = f.client(id).lock_pointer_with_region(
+        &surface,
+        &[(
+            CENTER_IN_SURFACE.0 - SHADOW.x + 1,
+            CENTER_IN_SURFACE.1 - SHADOW.y + 1,
+            SHADOW.x * 2 - 2,
+            SHADOW.y * 2 - 2,
+        )],
+    );
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().pointer_constraint_active(),
+        "a lock whose region covers the pointer must arm"
+    );
+}
+
+#[test]
+fn a_lock_stays_disarmed_until_the_pointer_enters_its_region() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, surface_origin) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    // Its centre sits less than `SHADOW` from the near edges, so the same wrong
+    // origin would miss it on the way back in — which needs the offset to clear
+    // both `SHADOW` components.
+    let region = (30, 30, SHADOW.x * 2 - 2, SHADOW.y * 2 - 2);
+    let _lock = f.client(id).lock_pointer_with_region(&surface, &[region]);
+    f.double_roundtrip(id);
+
+    assert!(
+        !f.state().pointer_constraint_active(),
+        "a lock must not arm with the pointer outside its region"
+    );
+
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        surface_origin
+            + Point::from((
+                (region.0 + region.2 / 2) as f64,
+                (region.1 + region.3 / 2) as f64,
+            )),
+    );
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().pointer_constraint_active(),
+        "the lock must arm once the pointer moves inside its region"
     );
 }

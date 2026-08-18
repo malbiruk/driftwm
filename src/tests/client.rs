@@ -613,6 +613,17 @@ impl Client {
         self.state.confine_pointer(surface)
     }
 
+    /// Lock the pointer to `surface`, restricted to a region given as
+    /// surface-local `(x, y, w, h)` rects. The lock arms only while the pointer
+    /// is inside the region.
+    pub fn lock_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpLockedPointerV1 {
+        self.state.lock_pointer_with_region(surface, rects)
+    }
+
     /// Send `ext_session_lock_manager_v1.lock`, entering
     /// `SessionLockHandler::lock` on the compositor. The created lock object
     /// is tracked as this client's most recent [`Lock`]; its `locked`/
@@ -725,13 +736,24 @@ impl State {
     /// issues to declare which part of its buffer is fully opaque. Takes
     /// effect on the surface's next commit.
     pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
-        let compositor = self.compositor.as_ref().unwrap();
-        let region = compositor.create_region(&self.qh, ());
+        let region = self.region_from(rects);
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
+    }
+
+    /// A `wl_region` covering `rects`, given as `(x, y, w, h)`. The compositor
+    /// snapshots a region when it handles the request that carries it, so the
+    /// caller may destroy it as soon as it has been passed on.
+    fn region_from(&self, rects: &[(i32, i32, i32, i32)]) -> WlRegion {
+        let region = self
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_region(&self.qh, ());
         for &(x, y, w, h) in rects {
             region.add(x, y, w, h);
         }
-        surface.set_opaque_region(Some(&region));
-        region.destroy();
+        region
     }
 
     pub fn create_layer(
@@ -943,6 +965,26 @@ impl State {
         let constraints = self.pointer_constraints.as_ref().unwrap();
         let pointer = self.pointer.as_ref().unwrap();
         constraints.confine_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
+    pub fn lock_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpLockedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        let region = self.region_from(rects);
+        let lock = constraints.lock_pointer(
+            surface,
+            pointer,
+            Some(&region),
+            Lifetime::Persistent,
+            &self.qh,
+            (),
+        );
+        region.destroy();
+        lock
     }
 
     pub fn lock_session(&mut self) {
