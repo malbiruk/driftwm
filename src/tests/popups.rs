@@ -2,19 +2,37 @@
 //! client: mapping/tracking, parent teardown, grab-serial handling, client
 //! crash reaping, and the serial gate on activation.
 
-use smithay::utils::Point;
+use driftwm::config::BindingContext;
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
+use smithay::utils::{Logical, Point};
+use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_protocols::xdg::shell::client::xdg_positioner::{
     Anchor, ConstraintAdjustment, Gravity,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+use crate::decorations::DecorationHit;
+use crate::input::PinnedChrome;
 use crate::state::output_state;
 
-use super::client::PopupProps;
+use super::client::{ClientId, PopupProps};
 use super::{
     Fixture, config, first_popup_surface, keyboard_focus, map_layer_popup_with, map_popup,
     map_popup_with, map_window, popups_tracked_on, server_surface, window_by_app_id,
 };
+
+fn pt(x: f64, y: f64) -> Point<f64, Logical> {
+    Point::from((x, y))
+}
+
+/// Grow a mapped popup to `size` via its viewport (see
+/// [`super::client::Popup::set_size`]) and settle the commit.
+pub(super) fn grow_popup(f: &mut Fixture, id: ClientId, surface: &WlSurface, size: (u16, u16)) {
+    let popup = f.client(id).popup(surface);
+    popup.set_size(size.0, size.1);
+    popup.commit();
+    f.double_roundtrip(id);
+}
 
 #[test]
 fn popup_maps_and_is_tracked() {
@@ -211,6 +229,261 @@ fn overhanging_popup_keeps_parent_hit_testable() {
     );
 
     f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// The parent's own popup covers part of the parent's 8px CSD resize ring —
+/// a menu item that overhangs the frame. Popups render above the compositor's
+/// chrome, so that point belongs to the popup: reporting the ring there shows
+/// a resize cursor over the menu and resizes the parent on click.
+#[test]
+fn popup_over_the_parents_resize_band_is_not_a_chrome_hit() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "parent", (400, 300));
+    let popup_surface = map_popup(&mut f, id, &parent);
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    let window = window_by_app_id(&mut f, "parent").unwrap();
+    let win_pos = f.state().stage.position_of(&window).unwrap();
+    // The default positioner centers the 200x100 popup on the parent's
+    // top-left corner, so its right half laps over the parent's left band.
+    let probe = pt(f64::from(win_pos.x) - 4.0, f64::from(win_pos.y) + 10.0);
+
+    let popup_server = first_popup_surface(&server_surface(&window)).unwrap();
+    assert_eq!(
+        f.state().surface_under(probe, None).map(|(t, _)| t.0),
+        Some(popup_server),
+        "test setup bug: the probe must land on the popup, not just near it"
+    );
+
+    let hit = f.state().decoration_under(probe).map(|(_, hit)| hit);
+    assert!(
+        hit.is_none(),
+        "a band point covered by the window's own popup must not be chrome, got {hit:?}"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// The pre-check takes a popup-shaped bite out of the chrome walk, not the
+/// whole ring: a band point no popup reaches must keep answering.
+#[test]
+fn resize_band_uncovered_by_the_popup_still_reports_chrome() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "parent", (400, 300));
+    let popup_surface = map_popup(&mut f, id, &parent);
+    // Sized, or the popup covers a single pixel and this asserts nothing about
+    // a popup at all.
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    let window = window_by_app_id(&mut f, "parent").unwrap();
+    let win_pos = f.state().stage.position_of(&window).unwrap();
+    // The popup is centered on the parent's top-left corner, so it reaches
+    // 100px right of it; the opposite band is a full window width further on.
+    let probe = pt(f64::from(win_pos.x) + 404.0, f64::from(win_pos.y) + 150.0);
+
+    let hit = f.state().decoration_under(probe).map(|(_, hit)| hit);
+    assert!(
+        matches!(
+            hit,
+            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Right))
+        ),
+        "an uncovered resize band must still report chrome, got {hit:?}"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// A CSD client's shadow reaches past its geometry over the compositor's own
+/// resize ring, and such clients usually declare no input region, so the
+/// shadow reads as input across its whole buffer. The popup pre-check must
+/// therefore skip the toplevel tree — occluding on it would kill
+/// compositor-side border resize for every window that draws a shadow.
+#[test]
+fn a_windows_own_shadow_does_not_occlude_its_resize_band() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let shadow = Point::<i32, Logical>::from((26, 23));
+    let surface = map_window(
+        &mut f,
+        id,
+        "shadowed",
+        ((400 + shadow.x * 2) as u16, (300 + shadow.y * 2) as u16),
+    );
+    f.client(id)
+        .window(&surface)
+        .set_geometry(shadow.x, shadow.y, 400, 300);
+    f.client(id).window(&surface).commit();
+    f.double_roundtrip(id);
+
+    let window = window_by_app_id(&mut f, "shadowed").unwrap();
+    assert_eq!(
+        window.geometry().loc,
+        shadow,
+        "test setup bug: the window must carry the shadow offset"
+    );
+    let win_pos = f.state().stage.position_of(&window).unwrap();
+    let probe = pt(f64::from(win_pos.x) - 4.0, f64::from(win_pos.y) + 10.0);
+
+    assert!(
+        f.state().element_under(probe).is_some(),
+        "test setup bug: the shadow must really cover the probe"
+    );
+
+    let hit = f.state().decoration_under(probe).map(|(_, hit)| hit);
+    assert!(
+        matches!(
+            hit,
+            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Left))
+        ),
+        "the window's own shadow must not occlude its resize band, got {hit:?}"
+    );
+}
+
+/// A pinned window's chrome answers from `pinned_decoration_under`, a separate
+/// screen-space walk from `decoration_under`, so the popup carve-out has to
+/// exist there too — a menu overhanging a pinned frame must not resize it.
+#[test]
+fn popup_over_a_pinned_parents_resize_band_is_not_a_chrome_hit() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [200, 150]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "pin", (200, 150));
+    let popup_surface = map_popup(&mut f, id, &parent);
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    let window = window_by_app_id(&mut f, "pin").unwrap();
+    let site = f.state().stage.pin_of(&window).cloned().unwrap();
+    let pin = site.screen_pos;
+
+    // The far side of the same ring, where the popup does not reach. Without
+    // it a pin the walk skips outright — wrong output, or never pinned at all —
+    // would read as the popup silencing the chrome.
+    let uncovered = pt(f64::from(pin.x) + 204.0, f64::from(pin.y) + 75.0);
+    let chrome = f.state().pinned_decoration_under(uncovered);
+    assert!(
+        matches!(
+            chrome,
+            PinnedChrome::Hit(
+                _,
+                DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Right)
+            )
+        ),
+        "test setup bug: the pinned window's uncovered band must report chrome, got {chrome:?}"
+    );
+
+    // The default positioner centers the 200x100 popup on the parent's
+    // top-left corner, so its right half laps over the parent's left band.
+    let covered = pt(f64::from(pin.x) - 4.0, f64::from(pin.y) + 10.0);
+    let hit = f.state().pinned_decoration_under(covered);
+    assert!(
+        matches!(hit, PinnedChrome::Covered),
+        "a pinned band point covered by the window's own popup must read as covered, \
+         not as a point no pin reaches, got {hit:?}"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// `decoration_under` stays silent over a popup-covered band (its own popup
+/// pre-check), so `pointer_context` must still resolve on-window there via
+/// the popup-aware `element_under` arm — otherwise every on-window mouse
+/// binding silently swaps for its on-canvas counterpart over a menu.
+#[test]
+fn binding_context_over_a_popup_covered_band_stays_on_window() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "parent", (400, 300));
+    let popup_surface = map_popup(&mut f, id, &parent);
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    let window = window_by_app_id(&mut f, "parent").unwrap();
+    let win_pos = f.state().stage.position_of(&window).unwrap();
+    let probe = pt(f64::from(win_pos.x) - 4.0, f64::from(win_pos.y) + 10.0);
+
+    // Without this the context could ride the `decoration_under` disjunct — the
+    // very one the popup silences — and pass for the wrong reason.
+    let chrome = f.state().decoration_under(probe).map(|(_, hit)| hit);
+    assert!(
+        chrome.is_none(),
+        "test setup bug: the probe must sit where the chrome walk falls silent, got {chrome:?}"
+    );
+    assert_eq!(
+        f.state().pointer_context(probe),
+        BindingContext::OnWindow,
+        "a point over a popup is on-window whether or not the chrome walk answers"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// `window_for_surface` matches only a toplevel's own surface, so it can't
+/// resolve a popup or subsurface hit to the window it belongs to. This
+/// climbs however deep the popup chain runs to answer that instead.
+#[test]
+fn window_for_surface_root_resolves_popups_to_their_toplevel() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let parent = map_window(&mut f, id, "parent", (400, 300));
+    let menu = map_popup(&mut f, id, &parent);
+    let submenu = map_popup(&mut f, id, &menu);
+
+    let window = window_by_app_id(&mut f, "parent").unwrap();
+    let root = server_surface(&window);
+
+    let popups: Vec<_> = smithay::desktop::PopupManager::popups_for_surface(&root)
+        .map(|(kind, _)| kind.wl_surface().clone())
+        .collect();
+    assert_eq!(
+        popups.len(),
+        2,
+        "test setup bug: both the menu and its submenu must be tracked"
+    );
+
+    assert_eq!(
+        f.state().window_for_surface(&popups[0]),
+        None,
+        "a popup surface is not a stage window's own surface — the gap this resolves"
+    );
+    for popup in &popups {
+        assert_eq!(
+            f.state().window_for_surface_root(popup),
+            Some(window.clone()),
+            "every popup in the chain must resolve to the toplevel it hangs off"
+        );
+    }
+    assert_eq!(
+        f.state().window_for_surface_root(&root),
+        Some(window.clone()),
+        "a toplevel's own surface still resolves to itself"
+    );
+
+    f.client(id).popup(&submenu).destroy();
+    f.client(id).popup(&menu).destroy();
     f.double_roundtrip(id);
 }
 

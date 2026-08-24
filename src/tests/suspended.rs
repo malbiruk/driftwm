@@ -13,7 +13,7 @@ use crate::decorations::DecorationHit;
 use crate::input::DecoTarget;
 use crate::state::{FocusIntent, FocusTarget, StageWindow, SuspendedId};
 
-use super::{Fixture, give_ssd, is_activated, map_window, window_by_app_id};
+use super::{Fixture, give_ssd, is_activated, map_window, server_surface, window_by_app_id};
 
 /// Server decorations on by default so suspended chrome (and the client bar)
 /// resolve, and 1:1 canvas↔screen (camera origin, zoom 1).
@@ -145,6 +145,72 @@ fn suspended_bar_right_pad_strip_is_chrome() {
     );
 
     f.state().dismiss_suspended(sid);
+}
+
+/// The client-SSD twin of `suspended_bar_right_pad_strip_is_chrome`: a live
+/// window's own bar has the same pad strip, and the widened band that fixes it
+/// has to reach ordinary client chrome too, not just the stand-in's.
+#[test]
+fn client_ssd_bar_right_pad_strip_is_chrome() {
+    let mut f = Fixture::with_config(config_ssd());
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // A client whose body reaches up into the decorated window's bar band.
+    map_window(&mut f, id, "beneath", (400, 300));
+    let beneath = window_by_app_id(&mut f, "beneath").unwrap();
+    map_window(&mut f, id, "w", (400, 300));
+    let window = window_by_app_id(&mut f, "w").unwrap();
+    give_ssd(&mut f, &window);
+    origin_view(&mut f);
+
+    // Park the decorated window off the strip first, so the setup assertion
+    // below observes the client beneath rather than assuming it.
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((5000, 5000)),
+        false,
+    );
+    f.state().map_window(
+        StageWindow::Client(beneath.clone()),
+        Point::from((500, 400)),
+        false,
+    );
+
+    // A point in the 8px strip right of the close button, within the bar band:
+    // x in [500+400-8, 500+400), y in [500-25, 500).
+    let strip = pt(500.0 + 400.0 - 4.0, 500.0 - 13.0);
+    assert_eq!(
+        f.state().surface_under(strip, None).map(|(t, _)| t.0),
+        Some(server_surface(&beneath)),
+        "the client beneath genuinely owns the strip before the bar covers it"
+    );
+
+    // Mapping an existing entry re-pushes it, so this both places the decorated
+    // window over the strip and lifts it back above `beneath` — which the
+    // parking step above had left on top.
+    f.state().map_window(
+        StageWindow::Client(window.clone()),
+        Point::from((500, 500)),
+        false,
+    );
+
+    assert!(
+        matches!(
+            f.state().decoration_under(strip),
+            Some((DecoTarget::Client(ref w), DecorationHit::TitleBar)) if *w == window
+        ),
+        "the right-pad strip of a live window's own bar is chrome, not a hole"
+    );
+    // Unlike a stand-in's strip, this one is a real surface's chrome, so the
+    // cascade answers with that surface — what it must never answer with is the
+    // client beneath.
+    assert_eq!(
+        f.state()
+            .pointer_focus_under(strip, strip)
+            .map(|(t, _)| t.0),
+        Some(server_surface(&window)),
+        "the strip belongs to the bar's own window, not the client beneath"
+    );
 }
 
 /// A bare (modifier-less) mouse move binding does not beat suspended chrome: a

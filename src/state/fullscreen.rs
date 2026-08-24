@@ -344,16 +344,21 @@ impl DriftWm {
             }
             // Surface origin, not the geometry origin the stage positions by:
             // smithay subtracts it to get surface-local coordinates.
+            //
+            // Best-effort coordinate: the client has not acked the fullscreen
+            // configure yet, so a client that drops a CSD shadow inset on
+            // fullscreen still has its old origin here. This dispatch exists to
+            // move *focus* onto the fullscreen surface so a cursor lock can arm;
+            // the commit hook in `CompositorHandler::commit` is what corrects the
+            // coordinate once the client's geometry lands. Keep both.
             let origin =
                 crate::input::window_origin_for_surface(self, &wl_surface).unwrap_or_default();
-            pointer.motion(
-                self,
+            let time = self.start_time.elapsed().as_millis() as u32;
+            self.dispatch_pointer_motion(
                 Some((FocusTarget(wl_surface.into_owned()), origin)),
-                &smithay::input::pointer::MotionEvent {
-                    location: new_pos,
-                    serial,
-                    time: self.start_time.elapsed().as_millis() as u32,
-                },
+                new_pos,
+                serial,
+                time,
             );
             pointer.frame(self);
             self.maybe_activate_pointer_constraint();
@@ -526,6 +531,12 @@ impl DriftWm {
         // cursor; `pointer_over_layer` and smithay's focus are otherwise only
         // refreshed by pointer motion, and a stale flag would route the next
         // press/scroll over the bar to the canvas.
+        //
+        // It may now legitimately send nothing — when nothing was revealed and
+        // the delivered point is unchanged, the refresh recognises the re-seat as
+        // redundant. Keep the call: the reveal case is what it is here for, and
+        // the exiting client's own coordinate is corrected by the commit hook
+        // when it drops fullscreen geometry.
         self.refresh_pointer_focus();
         // The re-seat above is the resync, so the one the warp deferred would
         // only repeat the walk. Cleared here and not in `refresh_pointer_focus`:

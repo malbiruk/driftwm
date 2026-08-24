@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveGrab, ResizeGrab, TouchGestureGrab, edge_from_origin};
-use crate::input::DecoTarget;
+use crate::input::{DecoTarget, PinnedChrome};
 use crate::state::{
     ClusterMember, DriftWm, FocusTarget, NavZoom, StageWindow, SuspendedWindow, output_state,
 };
@@ -486,7 +486,10 @@ impl DriftWm {
         self.focused_output = Some(output.clone());
         self.cursor.hidden_by_touch = true;
 
-        let screen_pos = event.position_transformed(output_geo.size);
+        let transform = output.current_transform();
+        let size = transform.invert().transform_size(output_geo.size);
+        let screen_pos =
+            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
         let (camera, zoom) = {
             let os = output_state(&output);
             (os.camera, os.zoom)
@@ -546,14 +549,15 @@ impl DriftWm {
         // break double-tap-to-fit.
         self.cancel_pending_center();
 
-        // Pinned windows render above canvas content and hit-test their SSD in
-        // screen space — the canvas-space check below can't see them.
+        // Fresh interaction. The first finger hit-tests SSD decorations. Pinned
+        // windows render above canvas content and hit-test their SSD in screen
+        // space — the canvas-space walk nested below can't see them.
         match self.pinned_decoration_under(screen_pos) {
-            Some((window, DecorationHit::TitleBar)) => {
+            PinnedChrome::Hit(window, DecorationHit::TitleBar) => {
                 self.start_touch_pinned_move(&window, slot, canvas_pos, serial);
                 return;
             }
-            Some((window, DecorationHit::CloseButton)) => {
+            PinnedChrome::Hit(window, DecorationHit::CloseButton) => {
                 self.touch_state.pending_close = Some(PendingClose {
                     slot,
                     window,
@@ -563,46 +567,49 @@ impl DriftWm {
                 });
                 return;
             }
-            _ => {}
-        }
-
-        // Fresh interaction. The first finger hit-tests SSD decorations.
-        match self.decoration_under(canvas_pos) {
-            Some((DecoTarget::Client(window), DecorationHit::TitleBar)) => {
-                self.start_touch_move(
-                    &StageWindow::Client(window),
-                    slot,
-                    canvas_pos,
-                    serial,
-                    output,
-                );
-                return;
-            }
-            Some((DecoTarget::Client(window), DecorationHit::CloseButton)) => {
-                self.touch_state.pending_close = Some(PendingClose {
-                    slot,
-                    window,
-                    last_canvas: canvas_pos,
-                    last_screen: screen_pos,
-                    pinned: false,
-                });
-                return;
-            }
-            // Suspended windows are opaque: a tap focuses + raises, the label
-            // relaunches, the close button dismisses, the bar drags. But an
-            // Overlay/Top layer or pinned window renders above the stand-in;
-            // dispatch its tap only when the stand-in is the real cascade winner
-            // (`pointer_focus_under` returns None over it), matching the pointer
-            // path's layers > pinned > suspended ordering.
-            Some((DecoTarget::Suspended(s), hit))
-                if self.pointer_focus_under(screen_pos, canvas_pos).is_none() =>
-            {
-                self.touch_suspended_hit(&s, hit, slot, canvas_pos, serial, output);
-                return;
-            }
-            // Resize borders aren't touch-draggable (8px ≪ a fingertip); fall
-            // through to the canvas-gesture grab.
-            _ => {}
+            // The pin owns this point but offers no touch-draggable band — a
+            // resize border (the only other hit this walk builds, and 8px is far
+            // under a fingertip), its content, or its popup. Skip the canvas
+            // decoration walk, which would answer for a window behind the pin,
+            // and fall to the canvas-gesture grab below.
+            PinnedChrome::Hit(..) | PinnedChrome::Covered => {}
+            PinnedChrome::Miss => match self.decoration_under(canvas_pos) {
+                Some((DecoTarget::Client(window), DecorationHit::TitleBar)) => {
+                    self.start_touch_move(
+                        &StageWindow::Client(window),
+                        slot,
+                        canvas_pos,
+                        serial,
+                        output,
+                    );
+                    return;
+                }
+                Some((DecoTarget::Client(window), DecorationHit::CloseButton)) => {
+                    self.touch_state.pending_close = Some(PendingClose {
+                        slot,
+                        window,
+                        last_canvas: canvas_pos,
+                        last_screen: screen_pos,
+                        pinned: false,
+                    });
+                    return;
+                }
+                // Suspended windows are opaque: a tap focuses + raises, the label
+                // relaunches, the close button dismisses, the bar drags. But an
+                // Overlay/Top layer or pinned window renders above the stand-in;
+                // dispatch its tap only when the stand-in is the real cascade winner
+                // (`pointer_focus_under` returns None over it), matching the pointer
+                // path's layers > pinned > suspended ordering.
+                Some((DecoTarget::Suspended(s), hit))
+                    if self.pointer_focus_under(screen_pos, canvas_pos).is_none() =>
+                {
+                    self.touch_suspended_hit(&s, hit, slot, canvas_pos, serial, output);
+                    return;
+                }
+                // Resize borders aren't touch-draggable (8px ≪ a fingertip); fall
+                // through to the canvas-gesture grab.
+                _ => {}
+            },
         }
 
         // Otherwise start the canvas-gesture grab. A content touch focuses +
@@ -837,7 +844,6 @@ impl DriftWm {
         if !self.session_lock.is_locked() || self.touch_state.lock_slots.contains(&slot) {
             self.cursor.hidden_by_touch = true;
         }
-        // Применяем фиксы трансформации координат из tablet-fix
         let transform = output.current_transform();
         let size = transform.invert().transform_size(output_geo.size);
         let screen_pos =
@@ -919,7 +925,7 @@ impl DriftWm {
                 let still_inside = if pc.pinned {
                     matches!(
                         self.pinned_decoration_under(pc.last_screen),
-                        Some((ref w, DecorationHit::CloseButton)) if *w == pc.window
+                        PinnedChrome::Hit(ref w, DecorationHit::CloseButton) if *w == pc.window
                     )
                 } else {
                     matches!(

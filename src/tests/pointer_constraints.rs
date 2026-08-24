@@ -9,20 +9,29 @@
 //! The silence is conditional in both directions: a confined cursor really
 //! moves and is owed its motion, and a lock whose surface the cursor has left
 //! has to be let go, or it freezes there with nothing to release it.
+//!
+//! A constraint carrying a region arms only while the pointer is inside it,
+//! and the region is surface-local, so the tests below also pin the origin
+//! the compositor measures it from — the path that used to deadlock by
+//! re-locking the surface's user-data mutex.
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use smithay::utils::{Logical, Point};
 use wayland_client::protocol::wl_surface::WlSurface;
 use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_confined_pointer_v1::ZwpConfinedPointerV1;
 use wayland_protocols::wp::pointer_constraints::zv1::client::zwp_locked_pointer_v1::ZwpLockedPointerV1;
-use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
-use super::client::{ClientId, LayerConfigureProps};
+use super::client::ClientId;
 use super::input_backend::{FakeDevice, pointer_relative_motion, pointer_to};
-use super::{Fixture, map_window, window_by_app_id};
+use super::{Fixture, map_top_layer, map_window, window_by_app_id};
 
 const SHADOW: Point<i32, Logical> = Point::new(26, 23);
 const GEOMETRY: (i32, i32) = (800, 600);
+
+/// Surface-local position of the pointer after [`point_at_window_center`]: the
+/// geometry centre, measured from the surface origin the shadow pushes out.
+const CENTER_IN_SURFACE: (i32, i32) = (GEOMETRY.0 / 2 + SHADOW.x, GEOMETRY.1 / 2 + SHADOW.y);
 
 /// A mapped window whose surface reaches [`SHADOW`] beyond its geometry on
 /// every side, like a client drawing its own shadows. Returns the client
@@ -96,36 +105,6 @@ fn confine_pointer_over(
          not read as a lock, or this scenario tests nothing"
     );
     confine
-}
-
-/// Map a Top layer with `namespace` at `size` and settle. A `None` anchor
-/// centers it on the output. Returns the client-side surface.
-fn map_top_layer(
-    f: &mut Fixture,
-    id: ClientId,
-    namespace: &str,
-    size: (u32, u32),
-    anchor: Option<zwlr_layer_surface_v1::Anchor>,
-) -> WlSurface {
-    let created = f
-        .client(id)
-        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, namespace);
-    let surface = created.surface.clone();
-    created.set_configure_props(LayerConfigureProps {
-        size: Some(size),
-        anchor,
-        exclusive_zone: Some(0),
-        ..Default::default()
-    });
-    created.commit();
-    f.roundtrip(id);
-
-    let layer = f.client(id).layer(&surface);
-    layer.set_size(size.0 as u16, size.1 as u16);
-    layer.attach_new_buffer();
-    layer.ack_last_and_commit();
-    f.double_roundtrip(id);
-    surface
 }
 
 /// The hint is surface-local, so it must be measured from the surface origin,
@@ -314,6 +293,73 @@ fn fullscreening_a_confined_client_sends_it_the_motion() {
     );
 }
 
+/// A CSD client that drops its shadow inset on fullscreen gets a corrected
+/// surface-local coordinate on its own commit, without waiting for an
+/// unrelated refresh. `fullscreening_a_confined_client_sends_it_the_motion`
+/// above doesn't exercise this because its client never changes geometry —
+/// this one does, the way GTK drops its CSD margin on fullscreen.
+///
+/// Subsurface coverage is dropped: the fixture client never binds
+/// `wl_subcompositor` and has no subsurface API to exercise.
+#[test]
+fn a_csd_client_dropping_its_shadow_on_fullscreen_is_corrected_on_its_own_commit() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, _) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    let window = window_by_app_id(&mut f, "game").unwrap();
+    assert_eq!(
+        window.geometry().loc,
+        SHADOW,
+        "the window must still carry the shadow offset going into \
+         fullscreen, or this scenario tests nothing"
+    );
+
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+
+    // The entry's own dispatch used the geometry the client hadn't dropped
+    // yet — captured here for contrast with the corrected delivery below.
+    let stale_delivery = f.state().last_pointer_delivery.clone();
+
+    // The client's second commit: same content size, but the geometry origin
+    // moves to (0, 0) as the shadow inset is dropped.
+    f.client(id)
+        .window(&surface)
+        .set_geometry(0, 0, GEOMETRY.0, GEOMETRY.1);
+    f.client(id).window(&surface).commit();
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        window.geometry().loc,
+        Point::from((0, 0)),
+        "the shadow inset must actually be gone, or this scenario tests nothing"
+    );
+
+    let true_origin =
+        (f.state().stage.position_of(&window).unwrap() - window.geometry().loc).to_f64();
+    let cursor = f.state().seat.get_pointer().unwrap().current_location();
+    let expected_local = cursor - true_origin;
+
+    assert_eq!(
+        f.client(id).state.pointer_positions.last(),
+        Some(&(expected_local.x, expected_local.y)),
+        "the commit that drops the shadow must itself correct the client's \
+         surface-local coordinate, without waiting for an unrelated refresh \
+         to run"
+    );
+    assert_ne!(
+        f.state().last_pointer_delivery,
+        stale_delivery,
+        "the correction must actually differ from the stale, pre-commit \
+         delivery, or this scenario tests nothing"
+    );
+}
+
 /// The other half of the re-seat guard: a scene change that slides a *different*
 /// surface under the frozen cursor strands the lock on a surface the cursor has
 /// left. That one has to fall through, clearing the lock and handing the motion
@@ -424,5 +470,71 @@ fn a_locked_pointer_neither_moves_nor_reports_absolute_motion() {
         f.client(id).state.pointer_positions,
         Vec::new(),
         "a locked client must see relative motion only"
+    );
+}
+
+#[test]
+fn a_region_around_the_pointer_arms_the_lock() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, _) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    // Reaches less than `SHADOW` from the pointer, so measuring from the
+    // geometry origin instead of the surface origin would put it outside.
+    let _lock = f.client(id).lock_pointer_with_region(
+        &surface,
+        &[(
+            CENTER_IN_SURFACE.0 - SHADOW.x + 1,
+            CENTER_IN_SURFACE.1 - SHADOW.y + 1,
+            SHADOW.x * 2 - 2,
+            SHADOW.y * 2 - 2,
+        )],
+    );
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().pointer_constraint_active(),
+        "a lock whose region covers the pointer must arm"
+    );
+}
+
+#[test]
+fn a_lock_stays_disarmed_until_the_pointer_enters_its_region() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, surface_origin) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    // Its centre sits less than `SHADOW` from the near edges, so the same wrong
+    // origin would miss it on the way back in — which needs the offset to clear
+    // both `SHADOW` components.
+    let region = (30, 30, SHADOW.x * 2 - 2, SHADOW.y * 2 - 2);
+    let _lock = f.client(id).lock_pointer_with_region(&surface, &[region]);
+    f.double_roundtrip(id);
+
+    assert!(
+        !f.state().pointer_constraint_active(),
+        "a lock must not arm with the pointer outside its region"
+    );
+
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        surface_origin
+            + Point::from((
+                (region.0 + region.2 / 2) as f64,
+                (region.1 + region.3 / 2) as f64,
+            )),
+    );
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().pointer_constraint_active(),
+        "the lock must arm once the pointer moves inside its region"
     );
 }

@@ -17,18 +17,33 @@
 //!
 //! That screen-space arm also answers for a pinned window's chrome, so the
 //! `resize_on_border` margin scenarios live here as well.
+//!
+//! A related but separate defect also lives here: `pinned_decoration_under`'s
+//! `Covered` answer (a pin's content or popup owns a point, but not its
+//! chrome) must stop the caller rather than fall through to
+//! `decoration_under`, which skips pins and would answer for a canvas window
+//! drawn behind the one actually there.
 
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
 use driftwm::config::{BTN_LEFT, BindingContext};
 use smithay::desktop::Window;
+use smithay::input::pointer::{CursorIcon, CursorImageStatus};
+use smithay::reexports::wayland_protocols::xdg::shell::server::xdg_toplevel;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use wayland_client::protocol::wl_surface::WlSurface;
 
+use crate::decorations::DecorationHit;
+use crate::input::PinnedChrome;
 use crate::state::StageWindow;
 
 use super::client::ClientId;
-use super::input_backend::{FakeDevice, click, pointer_to, press, release, touch_down, touch_up};
+use super::input_backend::{
+    FakeDevice, click, pointer_to, press, release, touch_down, touch_motion, touch_up,
+};
+use super::popups::grow_popup;
 use super::{
-    Fixture, config, give_ssd, is_activated, map_window, server_surface, window_by_app_id,
+    Fixture, config, give_ssd, is_activated, map_popup, map_window, server_surface,
+    window_by_app_id,
 };
 
 /// Every window here is 400x300 so a rect test needs only its origin.
@@ -64,6 +79,15 @@ resize_on_border = false
 app_id = "pin"
 pinned_to_screen = true
 size = [400, 300]
+"#;
+
+/// A smaller pin (200x150) for the chrome fall-through scenarios below, whose
+/// geometry is worked out against that exact size.
+const PIN_RULE_SMALL: &str = r#"
+[[window_rules]]
+app_id = "pin"
+pinned_to_screen = true
+size = [200, 150]
 "#;
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -614,4 +638,256 @@ fn a_tap_on_a_pinned_window_as_drawn_targets_it() {
         "the tap belongs to the pinned window drawn under the finger"
     );
     assert!(!is_activated(&beneath));
+}
+
+/// Map P (CSD pin, 200x150 via [`PIN_RULE_SMALL`]) and return its client-side
+/// surface (for `map_popup`) and screen site.
+fn map_small_pin(f: &mut Fixture, id: ClientId) -> (WlSurface, Point<i32, Logical>) {
+    let client_surface = map_window(f, id, "pin", (200, 150));
+    let pin = window_by_app_id(f, "pin").unwrap();
+    let site = f.state().stage.pin_of(&pin).unwrap().screen_pos;
+    (client_surface, site)
+}
+
+/// A plain 100x100 client "beneath" positioned so `probe`'s canvas coordinate
+/// lands in its left resize band, mid-height — never a corner. Returns
+/// `probe`'s canvas coordinate.
+fn window_beneath(
+    f: &mut Fixture,
+    id: ClientId,
+    probe: Point<f64, Logical>,
+) -> Point<f64, Logical> {
+    let canvas_probe = to_canvas(f, probe);
+    map_window(f, id, "beneath", (100, 100));
+    let window = window_by_app_id(f, "beneath").unwrap();
+    let origin = Point::from((
+        (canvas_probe.x + 4.0) as i32,
+        (canvas_probe.y - 50.0) as i32,
+    ));
+    f.state()
+        .map_window(StageWindow::Client(window), origin, false);
+    canvas_probe
+}
+
+/// A pinned window's own content silences its chrome walk at `probe`: the
+/// caller must stop there, not fall through to the canvas window drawn behind
+/// the pin, which is exactly what the canvas-space fallback would otherwise
+/// answer for.
+#[test]
+fn pinned_content_does_not_fall_through_to_the_window_beneath() {
+    let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (_client_surface, site) = map_small_pin(&mut f, id);
+
+    // Inside P's body: content, not chrome, but still the pin's own surface.
+    let probe = pt(site.x as f64 + 96.0, site.y as f64 + 75.0);
+    let canvas_probe = window_beneath(&mut f, id, probe);
+
+    assert!(
+        matches!(
+            f.state().decoration_under(canvas_probe).map(|(_, h)| h),
+            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Left))
+        ),
+        "test setup bug: the canvas walk must have a wrong answer ready here"
+    );
+
+    assert!(
+        matches!(
+            f.state().pinned_decoration_under(probe),
+            PinnedChrome::Covered
+        ),
+        "the pin's own content owns this point; the walk must stop, not fall through"
+    );
+
+    // Latch a decoration cursor on P's own left band first; an already-clear
+    // latch would hold for a caller that never touches it.
+    let band = to_canvas(&mut f, pt(site.x as f64 - 4.0, site.y as f64 + 75.0));
+    f.state().update_decoration_cursor(band);
+    assert!(
+        f.state().cursor.decoration_cursor,
+        "test setup bug: the pin's own resize band must latch a decoration cursor"
+    );
+
+    f.state().update_decoration_cursor(canvas_probe);
+    assert!(
+        !f.state().cursor.decoration_cursor,
+        "no chrome answered, so the decoration-cursor latch must clear"
+    );
+    assert_eq!(
+        f.state().cursor.cursor_status,
+        CursorImageStatus::Named(CursorIcon::Default),
+        "the pin's content must silence the resize cursor the window beneath would show"
+    );
+}
+
+/// The popup half of the same scenario: a pin's own popup silences its chrome
+/// walk exactly like its content does, so the caller must stop rather than
+/// fall through to the window drawn behind the pin.
+#[test]
+fn a_popup_over_a_pinned_band_does_not_fall_through_either() {
+    let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (client_surface, site) = map_small_pin(&mut f, id);
+
+    let popup_surface = map_popup(&mut f, id, &client_surface);
+    grow_popup(&mut f, id, &popup_surface, (200, 100));
+
+    // The default positioner centers the 200x100 popup on P's top-left
+    // corner, so its right half laps over P's left band — the same band
+    // `popups.rs`'s `popup_over_a_pinned_parents_resize_band_is_not_a_chrome_hit`
+    // already relies on.
+    let probe = pt(site.x as f64 - 4.0, site.y as f64 + 10.0);
+    let canvas_probe = window_beneath(&mut f, id, probe);
+
+    assert!(
+        matches!(
+            f.state().decoration_under(canvas_probe).map(|(_, h)| h),
+            Some(DecorationHit::ResizeBorder(xdg_toplevel::ResizeEdge::Left))
+        ),
+        "test setup bug: the canvas walk must have a wrong answer ready here"
+    );
+
+    assert!(
+        matches!(
+            f.state().pinned_decoration_under(probe),
+            PinnedChrome::Covered
+        ),
+        "the pin's own popup owns this point; the walk must stop, not fall through"
+    );
+
+    // Same latch-then-clear as the content twin: the same left band, below the
+    // popup's bottom edge so P's own chrome still answers there.
+    let band = to_canvas(&mut f, pt(site.x as f64 - 4.0, site.y as f64 + 75.0));
+    f.state().update_decoration_cursor(band);
+    assert!(
+        f.state().cursor.decoration_cursor,
+        "test setup bug: the pin's uncovered resize band must latch a decoration cursor"
+    );
+
+    f.state().update_decoration_cursor(canvas_probe);
+    assert!(
+        !f.state().cursor.decoration_cursor,
+        "no chrome answered, so the decoration-cursor latch must clear"
+    );
+    assert_eq!(
+        f.state().cursor.cursor_status,
+        CursorImageStatus::Named(CursorIcon::Default),
+        "the pin's popup must silence the resize cursor the window beneath would show"
+    );
+
+    f.client(id).popup(&popup_surface).destroy();
+    f.double_roundtrip(id);
+}
+
+/// The `Miss` non-vacuity guard: a pin exists on the output, but nowhere near
+/// this canvas window's own resize band, so the band must still answer from
+/// the canvas walk. Without this, the whole fix could have been "a pinned
+/// window's presence silences chrome everywhere," which would also make the
+/// `Covered` tests above pass.
+#[test]
+fn chrome_beside_every_pin_still_answers_from_the_canvas() {
+    let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    // Via the helper: its `pin_of` unwrap is what keeps this test from passing
+    // vacuously if the rule ever stopped pinning, since an unpinned "pin" would
+    // make the walk return `Miss` from its `has_pinned` guard alone.
+    let (_client_surface, _site) = map_small_pin(&mut f, id);
+
+    // A canvas origin the fixture camera leaves far outside the output's screen
+    // rect, so no pin's screen site could ever reach it.
+    map_window(&mut f, id, "canvas", (400, 300));
+    let window = window_by_app_id(&mut f, "canvas").unwrap();
+    let origin = Point::from((5000, 5000));
+    f.state()
+        .map_window(StageWindow::Client(window), origin, false);
+
+    // 4px outside the left edge, mid-height: inside the resize border.
+    let probe = pt(origin.x as f64 - 4.0, origin.y as f64 + 150.0);
+
+    f.state().update_decoration_cursor(probe);
+    assert!(
+        f.state().cursor.decoration_cursor,
+        "a pin elsewhere on the output must not swallow chrome the canvas walk owns"
+    );
+    assert_eq!(
+        f.state().cursor.cursor_status,
+        CursorImageStatus::Named(CursorIcon::WResize),
+        "the canvas window's own resize cursor must still show"
+    );
+}
+
+/// The touch twin of `pinned_content_does_not_fall_through_to_the_window_beneath`:
+/// a finger on a pinned window's resize band must not start a drag on an SSD
+/// window's title bar drawn behind the pin.
+#[test]
+fn a_tap_on_a_pinned_resize_band_does_not_move_the_window_beneath() {
+    let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (_client_surface, site) = map_small_pin(&mut f, id);
+
+    // P's left band, mid-height.
+    let probe = pt(site.x as f64 - 4.0, site.y as f64 + 75.0);
+    let canvas_probe = to_canvas(&mut f, probe);
+
+    // A plain CSD "beneath" would offer the canvas walk only a resize border,
+    // which it discards anyway — so this has to be SSD for the fall-through to
+    // be observable at all.
+    map_window(&mut f, id, "beneath", (100, 100));
+    let window = window_by_app_id(&mut f, "beneath").unwrap();
+    give_ssd(&mut f, &window);
+    let origin = Point::from((
+        (canvas_probe.x - 50.0) as i32,
+        (canvas_probe.y + 12.0) as i32,
+    ));
+    f.state()
+        .map_window(StageWindow::Client(window.clone()), origin, false);
+
+    assert!(
+        matches!(
+            f.state().decoration_under(canvas_probe).map(|(_, h)| h),
+            Some(DecorationHit::TitleBar)
+        ),
+        "test setup bug: the canvas walk must have a drag-start answer ready here"
+    );
+
+    let before = f.state().stage.position_of(&window).unwrap();
+
+    touch_down(&mut f, canvas_probe, 0);
+    touch_motion(&mut f, pt(canvas_probe.x + 40.0, canvas_probe.y + 40.0), 0);
+
+    assert_eq!(
+        f.state().stage.position_of(&window).unwrap(),
+        before,
+        "the pin's resize band must not start a touch move on the window beneath"
+    );
+
+    touch_up(&mut f, 0);
+}
+
+/// An SSD pin's padding strip right of the close button is chrome too,
+/// mirroring `suspended_bar_right_pad_strip_is_chrome` and its client-SSD twin.
+#[test]
+fn pinned_bar_right_pad_strip_is_chrome() {
+    let mut f = Fixture::with_config(config(PIN_RULE_SMALL));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let (_client_surface, site) = map_small_pin(&mut f, id);
+    let pin = window_by_app_id(&mut f, "pin").unwrap();
+    give_ssd(&mut f, &pin);
+
+    // A point in the 8px strip right of the close button, within the bar
+    // band: x in [site.x+200-8, site.x+200), y in [site.y-25, site.y).
+    let strip = pt(site.x as f64 + 200.0 - 4.0, site.y as f64 - 13.0);
+
+    assert!(
+        matches!(
+            f.state().pinned_decoration_under(strip),
+            PinnedChrome::Hit(_, DecorationHit::TitleBar)
+        ),
+        "the right-pad strip of a pinned SSD window's bar is chrome, not a hole"
+    );
 }

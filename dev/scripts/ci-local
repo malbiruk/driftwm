@@ -6,8 +6,9 @@
 #     CI_LOW_MEM=1 dev/scripts/ci-local # same checks, one link at a time
 #
 # By default this runs CI's own invocations verbatim, so a green run here means
-# a green run there. The workflow file stays the source of truth; if the two
-# ever disagree, the workflow wins.
+# a green run there — the one addition is a `timeout` around the test stages,
+# matching the budgets the workflow sets on the same steps. The workflow file
+# stays the source of truth; if the two ever disagree, the workflow wins.
 #
 # Two flags here that a habitual `cargo test` / `cargo clippy` leaves off, and
 # that account for most local-vs-CI surprises:
@@ -42,6 +43,12 @@ run() {
 	"$@"
 }
 
+# A deadlocked test hangs instead of failing, and a hung run here has frozen a
+# dev machine before. CI bounds the same two stages.
+run_bounded() {
+	run timeout "${CI_TEST_TIMEOUT:-20m}" "$@"
+}
+
 stage_fmt() {
 	run cargo fmt --check
 }
@@ -65,27 +72,27 @@ stage_clippy() {
 stage_test() {
 	if [[ -z $LOW_MEM ]]; then
 		run cargo test --no-run
-		run cargo test -- --include-ignored --skip soak
+		run_bounded cargo test -- --include-ignored --skip soak
 		return
 	fi
 
-	run cargo test --lib --jobs "$JOBS" -- --test-threads="$TEST_THREADS" --include-ignored
+	run_bounded cargo test --lib --jobs "$JOBS" -- --test-threads="$TEST_THREADS" --include-ignored
 
 	for t in tests/*.rs; do
-		run cargo test --test "$(basename "$t" .rs)" --jobs "$JOBS" -- \
+		run_bounded cargo test --test "$(basename "$t" .rs)" --jobs "$JOBS" -- \
 			--test-threads="$TEST_THREADS" --include-ignored
 	done
 
-	run cargo test --bin driftwm --jobs "$JOBS" -- \
+	run_bounded cargo test --bin driftwm --jobs "$JOBS" -- \
 		--test-threads="$TEST_THREADS" --include-ignored --skip soak
 }
 
 stage_soak() {
 	if [[ -n $LOW_MEM ]]; then
-		run cargo test --bin driftwm --jobs "$JOBS" -- \
+		run_bounded cargo test --bin driftwm --jobs "$JOBS" -- \
 			--include-ignored --test-threads=1 soak
 	else
-		run cargo test --bin driftwm -- --include-ignored --test-threads=1 soak
+		run_bounded cargo test --bin driftwm -- --include-ignored --test-threads=1 soak
 	fi
 }
 

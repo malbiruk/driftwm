@@ -30,6 +30,9 @@ jobs:
   test:
     name: build & test
     runs-on: ubuntu-24.04
+    # Backstops the steps a step-level budget doesn't cover; the default is six
+    # hours.
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
 
@@ -50,13 +53,18 @@ jobs:
       - name: Build tests
         run: cargo test --no-run
 
+      # Bounded because a deadlocked test hangs rather than fails, and a hang
+      # that trips the step budget stays legible as one.
       - name: Run tests
+        timeout-minutes: 20
         run: cargo test -- --include-ignored --skip soak
 
       # The soak's fd and RSS plateaus are read from /proc/self, so a
       # neighbouring test holding a socket open lands inside its measurement.
-      # It only means anything with the process to itself.
+      # It only means anything with the process to itself. Bounded for the same
+      # reason as the step above.
       - name: Run soak
+        timeout-minutes: 15
         run: cargo test --bin driftwm -- --include-ignored --test-threads=1 soak
 
   clippy:

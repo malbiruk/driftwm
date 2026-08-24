@@ -1,4 +1,4 @@
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::sync::atomic::Ordering;
 
 use crate::decorations::DecorationKey;
@@ -9,7 +9,7 @@ use crate::state::{ClientState, DriftWm, FocusTarget, NavZoom, PendingRecenter, 
 use driftwm::window_ext::WindowExt;
 use smithay::backend::renderer::utils::RendererSurfaceStateUserData;
 use smithay::desktop::layer_map_for_output;
-use smithay::utils::{Point, Rectangle, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER};
 use smithay::wayland::session_lock::{LockSurfaceConfigure, LockSurfaceData, LockSurfaceState};
 use smithay::wayland::shell::wlr_layer::{Anchor, LayerSurfaceCachedState, LayerSurfaceData};
 use smithay::{
@@ -31,6 +31,17 @@ use smithay::{
         shm::{ShmHandler, ShmState},
     },
 };
+
+/// The `geometry().loc` a window last committed, so the next commit can tell
+/// whether the surface origin moved. Kept in the window's own user data so it
+/// dies with the window.
+///
+/// `None` until a commit observes one, rather than seeded at `(0, 0)`: the
+/// first commit to reach the hook is the bufferless one before the initial
+/// configure, whose empty bbox makes `geometry()` fall back to `(0, 0)` for
+/// every client anyway — but this doesn't depend on that coincidence.
+#[derive(Default)]
+struct LastGeometryLoc(Cell<Option<Point<i32, Logical>>>);
 
 impl CompositorHandler for DriftWm {
     fn compositor_state(&mut self) -> &mut CompositorState {
@@ -901,6 +912,41 @@ impl CompositorHandler for DriftWm {
                 self.settle_adopted_stable_rect(&window, &root);
 
                 self.reflow_grown_snapped_window(&window, &root);
+
+                // Surface-local pointer coordinates are measured from
+                // `position - geometry().loc`, so a client that changes its
+                // geometry origin without moving — a GTK app dropping its CSD
+                // shadow inset when it fullscreens — silently invalidates
+                // whatever coordinate the pointer was last given. Re-run the hit
+                // test on any committed change rather than gating on the
+                // pointer's focus: the window whose origin moved can be under a
+                // cursor focused on something else entirely. Must follow
+                // `on_commit()` above, since `geometry()` intersects the
+                // declared rect with a `bbox` only `on_commit` refreshes.
+                //
+                // Keyed on the client's own geometry, so a compositor-side move
+                // is *not* covered — a peer shoved aside by a reflow commits
+                // nothing and keeps its stale origin until something else
+                // refreshes. Closing that wants a pull, not another hook.
+                //
+                // This makes a commit a caller of the live pointer grab's
+                // `motion` handler, which nothing was before. It holds only
+                // while no grab calls `set_grab`/`unset_grab` from `motion`:
+                // `PointerHandle::motion` keeps its inner lock across the
+                // callback, so one that did would deadlock here. Grabs change
+                // the grab from `button`/`up` — keep it that way.
+                // Every desync subsurface commit reaches here too, since `root`
+                // walks to the toplevel — so a client with many of them pays one
+                // bbox walk per subsurface per frame, not one per frame.
+                let geo_loc = window.geometry().loc;
+                let previous = window
+                    .user_data()
+                    .get_or_insert(LastGeometryLoc::default)
+                    .0
+                    .replace(Some(geo_loc));
+                if previous.is_some_and(|previous| previous != geo_loc) {
+                    self.refresh_pointer_focus();
+                }
             }
         }
 

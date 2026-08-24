@@ -110,6 +110,11 @@ pub struct State {
     /// Surface-local position carried by every `wl_pointer` enter/motion this
     /// client has received, oldest first.
     pub pointer_positions: Vec<(f64, f64)>,
+    /// Count of `wl_pointer.frame` events this client has received. A frame
+    /// with no motion/enter inside it still increments this, so pairing it
+    /// with `pointer_positions.len()` catches an empty frame a plain position
+    /// count would miss.
+    pub pointer_frames: usize,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -222,6 +227,7 @@ pub struct Popup {
     pub surface: WlSurface,
     pub xdg_surface: XdgSurface,
     pub xdg_popup: XdgPopup,
+    pub viewport: WpViewport,
     pub pending_configure: PopupConfigure,
     pub configures_received: Vec<(u32, PopupConfigure)>,
     /// Set once the compositor dismisses the popup (`xdg_popup.popup_done`).
@@ -418,6 +424,7 @@ impl Client {
             session_locks: Vec::new(),
             touch_events: Vec::new(),
             pointer_positions: Vec::new(),
+            pointer_frames: 0,
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -606,6 +613,17 @@ impl Client {
         self.state.confine_pointer(surface)
     }
 
+    /// Lock the pointer to `surface`, restricted to a region given as
+    /// surface-local `(x, y, w, h)` rects. The lock arms only while the pointer
+    /// is inside the region.
+    pub fn lock_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpLockedPointerV1 {
+        self.state.lock_pointer_with_region(surface, rects)
+    }
+
     /// Send `ext_session_lock_manager_v1.lock`, entering
     /// `SessionLockHandler::lock` on the compositor. The created lock object
     /// is tracked as this client's most recent [`Lock`]; its `locked`/
@@ -718,13 +736,24 @@ impl State {
     /// issues to declare which part of its buffer is fully opaque. Takes
     /// effect on the surface's next commit.
     pub fn set_opaque_region(&mut self, surface: &WlSurface, rects: &[(i32, i32, i32, i32)]) {
-        let compositor = self.compositor.as_ref().unwrap();
-        let region = compositor.create_region(&self.qh, ());
+        let region = self.region_from(rects);
+        surface.set_opaque_region(Some(&region));
+        region.destroy();
+    }
+
+    /// A `wl_region` covering `rects`, given as `(x, y, w, h)`. The compositor
+    /// snapshots a region when it handles the request that carries it, so the
+    /// caller may destroy it as soon as it has been passed on.
+    fn region_from(&self, rects: &[(i32, i32, i32, i32)]) -> WlRegion {
+        let region = self
+            .compositor
+            .as_ref()
+            .unwrap()
+            .create_region(&self.qh, ());
         for &(x, y, w, h) in rects {
             region.add(x, y, w, h);
         }
-        surface.set_opaque_region(Some(&region));
-        region.destroy();
+        region
     }
 
     pub fn create_layer(
@@ -812,14 +841,21 @@ impl State {
         self.create_popup_with(parent, PopupProps::default())
     }
 
+    /// `parent` may be a toplevel or another popup — an xdg popup's parent is
+    /// any xdg surface, which is how submenus nest.
     pub fn create_popup_with(&mut self, parent: &WlSurface, props: PopupProps) -> &mut Popup {
         let parent_xdg = self
             .windows
             .iter()
             .find(|w| w.surface == *parent)
-            .unwrap()
-            .xdg_surface
-            .clone();
+            .map(|w| w.xdg_surface.clone())
+            .or_else(|| {
+                self.popups
+                    .iter()
+                    .find(|p| p.surface == *parent)
+                    .map(|p| p.xdg_surface.clone())
+            })
+            .unwrap();
 
         let positioner = self.build_positioner(props);
 
@@ -867,6 +903,12 @@ impl State {
         xdg_surface: XdgSurface,
         xdg_popup: XdgPopup,
     ) -> &mut Popup {
+        let viewport = self
+            .viewporter
+            .as_ref()
+            .unwrap()
+            .get_viewport(&surface, &self.qh, ());
+
         let popup = Popup {
             qh: self.qh.clone(),
             spbm: self.spbm.clone().unwrap(),
@@ -875,6 +917,7 @@ impl State {
             surface,
             xdg_surface,
             xdg_popup,
+            viewport,
             pending_configure: PopupConfigure::default(),
             configures_received: Vec::new(),
             popup_done: false,
@@ -922,6 +965,26 @@ impl State {
         let constraints = self.pointer_constraints.as_ref().unwrap();
         let pointer = self.pointer.as_ref().unwrap();
         constraints.confine_pointer(surface, pointer, None, Lifetime::Persistent, &self.qh, ())
+    }
+
+    pub fn lock_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpLockedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        let region = self.region_from(rects);
+        let lock = constraints.lock_pointer(
+            surface,
+            pointer,
+            Some(&region),
+            Lifetime::Persistent,
+            &self.qh,
+            (),
+        );
+        region.destroy();
+        lock
     }
 
     pub fn lock_session(&mut self) {
@@ -1223,10 +1286,11 @@ impl Popup {
     }
 
     /// Tear down the popup role and surface in protocol order (popup →
-    /// xdg_surface → wl_surface).
+    /// xdg_surface → viewport → wl_surface).
     pub fn destroy(&self) {
         self.xdg_popup.destroy();
         self.xdg_surface.destroy();
+        self.viewport.destroy();
         self.surface.destroy();
     }
 
@@ -1250,6 +1314,13 @@ impl Popup {
     pub fn attach_new_buffer(&self) {
         let buffer = self.spbm.create_u32_rgba_buffer(0, 0, 0, 0, &self.qh, ());
         self.surface.attach(Some(&buffer), 0, 0);
+    }
+
+    /// Scale the 1×1 buffer to `(w, h)`. Without this the popup's input region
+    /// is a single logical pixel whatever the positioner asked for, since
+    /// smithay sizes a surface from its viewport destination or its buffer.
+    pub fn set_size(&self, w: u16, h: u16) {
+        self.viewport.set_destination(i32::from(w), i32::from(h));
     }
 
     pub fn recent_configures(&mut self) -> impl Iterator<Item = &PopupConfigure> {
@@ -1816,6 +1887,7 @@ impl Dispatch<WlPointer, ()> for State {
                 surface_y,
                 ..
             } => state.pointer_positions.push((surface_x, surface_y)),
+            wl_pointer::Event::Frame => state.pointer_frames += 1,
             _ => (),
         }
     }

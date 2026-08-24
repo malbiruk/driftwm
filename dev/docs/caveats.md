@@ -16,6 +16,10 @@ calloop is single-threaded. A 50ms DNS lookup, a slow file read, a stuck subproc
 
 `output_state(output)` returns a `MutexGuard`. In an `if let`/`while let`/`match` scrutinee the guard lives to the end of the body, so re-locking inside deadlocks the event loop — the v0.14.0 freeze when a client destroyed its toplevel while fullscreen. Take the guard in a separate `let` statement. Two guards enforce this: `clippy::significant_drop_in_scrutinee` (warn in `Cargo.toml [lints]`, hard error under CI's `-D warnings`) rejects the pattern statically, and debug builds panic on a re-entrant lock — which also catches the variant clippy can't see, a named guard held across a call that re-locks.
 
+## Never re-enter a surface's user-data lock
+
+`compositor::with_states` holds a non-reentrant `Mutex` for the whole closure, and so does everything built on it. Calling one from inside another closure on the *same* surface hangs the compositor with no panic and no log — this is how the compositor froze whenever a game armed a pointer lock carrying a region. Read what you need out of the closure, drop the lock, then act. Nothing enforces this statically; see `smithay-api.md` for the list of APIs that take this lock.
+
 ## Client misbehavior must not crash the compositor
 
 Clients can disconnect at any time, send malformed requests, or go unresponsive. Every piece of client-derived data should be validated. Prefer `if let` over `unwrap()` for anything from a client.

@@ -571,6 +571,11 @@ pub struct PopupGrabState {
     pub has_keyboard_grab: bool,
 }
 
+/// One `wl_pointer.motion` as the client received it: the focus target, the
+/// surface origin it was measured against, and the resulting surface-local
+/// point. See [`DriftWm::last_pointer_delivery`].
+pub type PointerDelivery = (FocusTarget, Point<f64, Logical>, Point<f64, Logical>);
+
 /// Central compositor state.
 pub struct DriftWm {
     pub start_time: Instant,
@@ -966,6 +971,13 @@ pub struct DriftWm {
     /// a 90-140 Hz pan/momentum stream doesn't re-render a hover-reactive client
     /// per event. See [`DriftWm::warp_pointer`].
     pub pending_pointer_resync: bool,
+    /// The last [`PointerDelivery`] actually put on the wire. `None` while the
+    /// record can't be trusted — nothing under the cursor, or a grab that
+    /// substituted its own focus and location. Written only by
+    /// [`DriftWm::dispatch_pointer_motion`], read by
+    /// [`DriftWm::refresh_pointer_focus`] to drop a re-seat the client would see
+    /// as a phantom mouse move.
+    pub last_pointer_delivery: Option<PointerDelivery>,
     /// wl_surface commits since the last rendered frame. Tracy diagnostic
     /// counter (plotted as `frame.commits`); sampled and reset on every
     /// render_frame, so it's only meaningful on a single-output profiling

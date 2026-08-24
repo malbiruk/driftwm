@@ -227,15 +227,8 @@ impl DriftWm {
         if pointer.is_grabbed() {
             let under = self.focus_under(new_pos);
             let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-            pointer.motion(
-                self,
-                under,
-                &smithay::input::pointer::MotionEvent {
-                    location: new_pos,
-                    serial,
-                    time: self.start_time.elapsed().as_millis() as u32,
-                },
-            );
+            let time = self.start_time.elapsed().as_millis() as u32;
+            self.dispatch_pointer_motion(under, new_pos, serial, time);
             pointer.frame(self);
             return;
         }
@@ -267,15 +260,8 @@ impl DriftWm {
         let pos = pointer.current_location();
         let under = self.focus_under(pos);
         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
-        pointer.motion(
-            self,
-            under,
-            &smithay::input::pointer::MotionEvent {
-                location: pos,
-                serial,
-                time: self.start_time.elapsed().as_millis() as u32,
-            },
-        );
+        let time = self.start_time.elapsed().as_millis() as u32;
+        self.dispatch_pointer_motion(under, pos, serial, time);
         pointer.frame(self);
         // Pick-mode transitions are zoom-driven, so the pick affordance won't
         // refresh on the pinch into/out of pick mode or the zoom-to-1.0

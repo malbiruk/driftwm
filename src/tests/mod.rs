@@ -46,6 +46,7 @@ mod layer_frame_gating;
 mod opacity;
 mod pinned_phantom;
 mod pointer_constraints;
+mod pointer_motion_dedup;
 mod popups;
 mod real_clients;
 mod relaunch;
@@ -603,4 +604,54 @@ fn is_activated(window: &Window) -> bool {
         .toplevel()
         .expect("toplevel")
         .with_pending_state(|s| s.states.contains(xdg_toplevel::State::Activated))
+}
+
+/// Map a Top layer with `namespace` at `size` and settle. A `None` anchor
+/// centers it on the output. Returns the client-side surface.
+fn map_top_layer(
+    f: &mut Fixture,
+    id: client::ClientId,
+    namespace: &str,
+    size: (u32, u32),
+    anchor: Option<wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor>,
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1;
+
+    let created = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, namespace);
+    let surface = created.surface.clone();
+    created.set_configure_props(client::LayerConfigureProps {
+        size: Some(size),
+        anchor,
+        exclusive_zone: Some(0),
+        ..Default::default()
+    });
+    created.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(size.0 as u16, size.1 as u16);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+    surface
+}
+
+/// A layer press delivers a `ScreenSpaceClickGrab`; a `PanGrab` means the
+/// press fell through to the canvas. Pressed, not yet released.
+fn assert_click_grab(f: &mut Fixture, why: &str) {
+    let (pan_grab, click_grab) = f
+        .state()
+        .seat
+        .get_pointer()
+        .unwrap()
+        .with_grab(|_, g| {
+            (
+                g.is::<crate::grabs::PanGrab>(),
+                g.is::<crate::grabs::ScreenSpaceClickGrab>(),
+            )
+        })
+        .unwrap_or((false, false));
+    assert_eq!((pan_grab, click_grab), (false, true), "{why}");
 }

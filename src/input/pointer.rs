@@ -5,9 +5,7 @@ use smithay::{
         Axis, AxisSource, ButtonState, Device, DeviceCapability, Event, InputBackend,
         PointerAxisEvent, PointerButtonEvent,
     },
-    input::pointer::{
-        AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData, MotionEvent,
-    },
+    input::pointer::{AxisFrame, ButtonEvent, CursorIcon, CursorImageStatus, Focus, GrabStartData},
     reexports::{
         calloop::timer::{TimeoutAction, Timer},
         wayland_protocols::xdg::shell::server::xdg_toplevel,
@@ -21,7 +19,7 @@ use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
-use crate::input::DecoTarget;
+use crate::input::{DecoTarget, PinnedChrome};
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
     PendingMiddleClick, PickTarget, StageWindow, SuspendedWindow, ZoomAnimationAnchor,
@@ -312,7 +310,7 @@ impl DriftWm {
                 // an overlapping window.
                 if self
                     .surface_under(pos, None)
-                    .and_then(|(target, _)| self.window_for_surface(&target.0))
+                    .and_then(|(target, _)| self.window_for_surface_root(&target.0))
                     .is_some_and(|top| top != window)
                 {
                     // Occluded decoration hit; continue normal dispatch.
@@ -1013,7 +1011,7 @@ impl DriftWm {
 
         if !modifier_binding
             && button == config::BTN_LEFT
-            && let Some((window, hit)) = self.pinned_decoration_under(screen_pos)
+            && let PinnedChrome::Hit(window, hit) = self.pinned_decoration_under(screen_pos)
         {
             let is_widget = window
                 .wl_surface()
@@ -1441,14 +1439,11 @@ impl DriftWm {
                             let screen_pos =
                                 canvas_to_screen(CanvasPos(new_pos), self.camera(), self.zoom()).0;
                             let under = self.pointer_focus_under_pick(screen_pos, new_pos);
-                            pointer.motion(
-                                self,
+                            self.dispatch_pointer_motion(
                                 under,
-                                &MotionEvent {
-                                    location: new_pos,
-                                    serial,
-                                    time: Event::time_msec(&event),
-                                },
+                                new_pos,
+                                serial,
+                                Event::time_msec(&event),
                             );
                         }
                     } else if source == AxisSource::Finger {
