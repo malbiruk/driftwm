@@ -151,6 +151,11 @@ pub struct SessionConfig {
     pub restore_bookmarks: bool,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct TabletSettings {
+    pub map_to_output: Option<String>,
+}
+
 #[derive(Debug, PartialEq)]
 pub struct Config {
     pub mod_key: ModKey,
@@ -232,6 +237,7 @@ pub struct Config {
     pub trackpad: TrackpadSettings,
     pub mouse_device: MouseDeviceSettings,
     pub touch: TouchSettings,
+    pub tablet: TabletSettings,
     pub gesture_thresholds: GestureThresholds,
     pub touch_thresholds: TouchThresholds,
     pub layout_independent: bool,
@@ -842,6 +848,13 @@ impl Config {
             }
         };
 
+        let tablet = {
+            let t = &raw.input.tablet;
+            TabletSettings {
+                map_to_output: t.map_to_output.clone().filter(|o| o.as_str() != "none"),
+            }
+        };
+
         let gesture_thresholds = GestureThresholds {
             swipe_distance: non_negative(
                 raw.gestures.swipe_threshold.unwrap_or(12.0),
@@ -1188,6 +1201,7 @@ impl Config {
             trackpad,
             mouse_device,
             touch,
+            tablet,
             gesture_thresholds,
             touch_thresholds,
             layout_independent: raw.input.keyboard.layout_independent.unwrap_or(true),

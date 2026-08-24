@@ -5,11 +5,14 @@ use smithay::{
         TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
     },
     input::pointer::MotionEvent,
+    output::Output,
+    reexports::input::Device as LibinputDevice,
     utils::SERIAL_COUNTER,
     wayland::tablet_manager::{TabletDescriptor, TabletSeatTrait},
 };
 
-use crate::state::DriftWm;
+use crate::input::touch::{as_libinput_device, is_internal_output, physical_size_matches};
+use crate::state::{DriftWm, output_state};
 use driftwm::canvas::{ScreenPos, screen_to_canvas};
 
 /// Wrapper to route tablet tip events through the standard pointer button logic.
@@ -65,23 +68,27 @@ impl DriftWm {
         }
     }
 
-    pub fn on_tablet_tool_axis<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent) {
-        let output = match self.active_output() {
-            Some(o) => o,
-            None => return,
+    pub fn on_tablet_tool_axis<I: InputBackend>(&mut self, event: I::TabletToolAxisEvent)
+    where
+        I::Device: 'static,
+    {
+        let Some(output) = self.tablet_output_for_device::<I>(&event.device()) else {
+            return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
 
-        // Absolute coordinate from 0.0 to 1.0 mapped to output size
-        // let screen_pos = event.position_transformed(output_geo.size);
         let transform = output.current_transform();
         let size = transform.invert().transform_size(output_geo.size);
         let screen_pos =
             transform.transform_point_in(event.position_transformed(size), &size.to_f64());
 
-        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+        let (camera, zoom) = {
+            let os = output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
@@ -139,25 +146,27 @@ impl DriftWm {
         }
     }
 
-    pub fn on_tablet_tool_proximity<I: InputBackend>(
-        &mut self,
-        event: I::TabletToolProximityEvent,
-    ) {
-        let output = match self.active_output() {
-            Some(o) => o,
-            None => return,
+    pub fn on_tablet_tool_proximity<I: InputBackend>(&mut self, event: I::TabletToolProximityEvent)
+    where
+        I::Device: 'static,
+    {
+        let Some(output) = self.tablet_output_for_device::<I>(&event.device()) else {
+            return;
         };
         let Some(output_geo) = self.space.output_geometry(&output) else {
             return;
         };
 
-        // let screen_pos = event.position_transformed(output_geo.size);
         let transform = output.current_transform();
         let size = transform.invert().transform_size(output_geo.size);
         let screen_pos =
             transform.transform_point_in(event.position_transformed(size), &size.to_f64());
 
-        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
+        let (camera, zoom) = {
+            let os = output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
@@ -231,5 +240,53 @@ impl DriftWm {
                 event.time_msec(),
             );
         }
+    }
+
+    /// Output a tablet from `device` maps to. Resolved per-device so multiple
+    /// tablets each drive their own monitor. Resolution order: explicit
+    /// config first, then libinput's output tag, then a single-output shortcut,
+    /// then physical-size match (a digitizer is the same physical size as the
+    /// panel it overlays), then the internal panel, then the first output.
+    pub(crate) fn tablet_output_for_device<I: InputBackend>(
+        &self,
+        device: &I::Device,
+    ) -> Option<Output>
+    where
+        I::Device: 'static,
+    {
+        if let Some(name) = self.config.tablet.map_to_output.as_deref()
+            && let Some(o) = self.output_by_name(name)
+        {
+            return Some(o);
+        }
+
+        let libinput_device = as_libinput_device::<I>(device);
+
+        if let Some(name) = libinput_device.and_then(LibinputDevice::output_name)
+            && let Some(o) = self.output_by_name(&name)
+        {
+            return Some(o);
+        }
+
+        let mut outputs = self.space.outputs();
+        let first = outputs.next().cloned();
+        if outputs.next().is_none() {
+            return first; // zero or one output: unambiguous
+        }
+
+        if let Some((dev_w, dev_h)) = libinput_device.and_then(LibinputDevice::size)
+            && let Some(o) = self.space.outputs().find(|o| {
+                let size = o.physical_properties().size;
+                physical_size_matches(size.w as f64, size.h as f64, dev_w, dev_h)
+            })
+        {
+            return Some(o.clone());
+        }
+
+        if let Some(o) = self.space.outputs().find(|o| is_internal_output(&o.name())) {
+            return Some(o.clone());
+        }
+
+        first
     }
 }

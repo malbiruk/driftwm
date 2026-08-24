@@ -961,7 +961,7 @@ impl DriftWm {
 
 /// Downcast a backend input device to the libinput device behind it, if any (the
 /// udev backend); `None` for the winit virtual device.
-fn as_libinput_device<I: InputBackend>(device: &I::Device) -> Option<&LibinputDevice>
+pub(crate) fn as_libinput_device<I: InputBackend>(device: &I::Device) -> Option<&LibinputDevice>
 where
     I::Device: 'static,
 {
@@ -981,14 +981,14 @@ where
 /// (mutter's `MAX_SIZE_MATCH_DIFF`). Tries both orientations so a digitizer that
 /// reports its width/height swapped still matches. Zero/unknown sizes never
 /// match.
-fn physical_size_matches(out_w: f64, out_h: f64, dev_w: f64, dev_h: f64) -> bool {
+pub(crate) fn physical_size_matches(out_w: f64, out_h: f64, dev_w: f64, dev_h: f64) -> bool {
     const TOLERANCE: f64 = 0.05;
     let close = |a: f64, b: f64| b > 0.0 && a > 0.0 && (a - b).abs() / b <= TOLERANCE;
     (close(dev_w, out_w) && close(dev_h, out_h)) || (close(dev_w, out_h) && close(dev_h, out_w))
 }
 
 /// Whether `name` is an internal-panel connector (laptop built-in display).
-fn is_internal_output(name: &str) -> bool {
+pub(crate) fn is_internal_output(name: &str) -> bool {
     let name = name.to_ascii_uppercase();
     name.starts_with("EDP") || name.starts_with("LVDS") || name.starts_with("DSI")
 }

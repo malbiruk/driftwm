@@ -278,7 +278,7 @@ map_to_output = "DP-2"
 
 Default: `"none"`
 
-map tablet absolute coordinates to a specific output by name (e.g., "eDP-1")
+Output name (e.g. "eDP-1") this tablet maps to. If unset, the tablet output is auto-detected based on libinput tags, physical size matching against the output, or falling back to the internal panel.
 
 ## `[cursor]`
 

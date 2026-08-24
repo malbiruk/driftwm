@@ -68,6 +68,13 @@ pub(super) struct InputConfig {
     pub trackpad: TrackpadConfig,
     pub mouse: MouseDeviceFileConfig,
     pub touch: TouchDeviceFileConfig,
+    pub tablet: TabletDeviceFileConfig,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+#[serde(default, deny_unknown_fields)]
+pub(super) struct TabletDeviceFileConfig {
+    pub map_to_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
