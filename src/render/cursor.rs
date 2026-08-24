@@ -60,33 +60,32 @@ pub fn build_cursor_elements(
                     scale,
                     alpha,
                 );
-            } else {
-                let hotspot = with_states(surface, |states| {
-                    states
-                        .data_map
-                        .get::<CursorImageSurfaceData>()
-                        .map(|d| d.lock().unwrap().hotspot)
-                        .unwrap_or_default()
-                });
-                let pos: Point<i32, Physical> = (
-                    (physical_pos.x - hotspot.x as f64 * scale) as i32,
-                    (physical_pos.y - hotspot.y as f64 * scale) as i32,
-                )
-                    .into();
-                let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
-                    smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
-                        renderer,
-                        surface,
-                        pos,
-                        Scale::from(1.0),
-                        alpha,
-                        Kind::Cursor,
-                    );
-                elems
-                    .into_iter()
-                    .map(|e| OutputRenderElements::CursorSurface(e.into()))
-                    .collect()
             }
+            let hotspot = with_states(surface, |states| {
+                states
+                    .data_map
+                    .get::<CursorImageSurfaceData>()
+                    .map(|d| d.lock().unwrap().hotspot)
+                    .unwrap_or_default()
+            });
+            let pos: Point<i32, Physical> = (
+                (physical_pos.x - hotspot.x as f64 * scale) as i32,
+                (physical_pos.y - hotspot.y as f64 * scale) as i32,
+            )
+                .into();
+            let elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>> =
+                smithay::backend::renderer::element::surface::render_elements_from_surface_tree(
+                    renderer,
+                    surface,
+                    pos,
+                    Scale::from(1.0),
+                    alpha,
+                    Kind::Cursor,
+                );
+            elems
+                .into_iter()
+                .map(|e| OutputRenderElements::CursorSurface(e.into()))
+                .collect()
         }
         CursorImageStatus::Named(icon) => {
             build_xcursor_elements(state, renderer, physical_pos, icon.name(), scale, alpha)
