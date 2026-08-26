@@ -125,6 +125,27 @@ fn cursor_edge_pan_velocity(
     Some(Point::from((vx / len * speed, vy / len * speed)))
 }
 
+/// Map an absolute-position event into `output`-local screen space, honouring
+/// the output's rotation.
+///
+/// `Space::output_geometry` reports the size *after* the transform, while the
+/// event scales its own coordinates against the panel-native size — so the
+/// inverse transform recovers that size to sample against, and
+/// `transform_point_in` maps the sampled point back into the rotated frame.
+pub(crate) fn event_screen_pos<I, E>(
+    output: &smithay::output::Output,
+    output_geo_size: smithay::utils::Size<i32, smithay::utils::Logical>,
+    event: &E,
+) -> Point<f64, smithay::utils::Logical>
+where
+    I: InputBackend,
+    E: AbsolutePositionEvent<I>,
+{
+    let transform = output.current_transform();
+    let size = transform.invert().transform_size(output_geo_size);
+    transform.transform_point_in(event.position_transformed(size), &size.to_f64())
+}
+
 /// Canvas-space surface origin of the window whose *root* surface is `surface` —
 /// the point surface-local coordinates are measured from. `None` for a
 /// subsurface or popup, which the identity match never finds.
@@ -890,10 +911,7 @@ impl DriftWm {
             return;
         };
 
-        let transform = output.current_transform();
-        let size = transform.invert().transform_size(output_geo.size);
-        let screen_pos =
-            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
+        let screen_pos = event_screen_pos::<I, _>(&output, output_geo.size, &event);
 
         // When locked, pointer only targets the lock surface
         if self.session_lock.is_locked() {
@@ -909,19 +927,38 @@ impl DriftWm {
         let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), self.camera(), self.zoom()).0;
         let serial = SERIAL_COUNTER.next_serial();
         let time = Event::time_msec(&event);
+        self.dispatch_absolute_motion(&output, screen_pos, canvas_pos, serial, time);
+    }
+
+    /// The shared tail of every absolute motion that moves the seat pointer:
+    /// focus cascade, pick promotion, dispatch, and the per-motion side
+    /// effects, in the order they have to run. Returns what the motion was
+    /// delivered to, which the tablet path forwards on tablet-v2 as well.
+    ///
+    /// Both callers route through here on purpose: a second copy of this
+    /// sequence silently falls behind it.
+    pub(crate) fn dispatch_absolute_motion(
+        &mut self,
+        output: &smithay::output::Output,
+        screen_pos: Point<f64, smithay::utils::Logical>,
+        canvas_pos: Point<f64, smithay::utils::Logical>,
+        serial: Serial,
+        time: u32,
+    ) -> Option<(FocusTarget, Point<f64, smithay::utils::Logical>)> {
         let pointer = self.seat.get_pointer().unwrap();
         let old_focus = pointer.current_focus();
         let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
         // Promote an armed pick to a move once the drag clears the slop. Before
         // pointer.motion so the freshly installed grab receives this event.
         self.maybe_promote_pick(canvas_pos);
-        self.dispatch_pointer_motion(under, canvas_pos, serial, time);
+        self.dispatch_pointer_motion(under.clone(), canvas_pos, serial, time);
         pointer.frame(self);
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
-        self.check_hot_corners(&output, screen_pos);
+        self.check_hot_corners(output, screen_pos);
         self.maybe_hover_focus(canvas_pos);
         self.refresh_cursor_edge_pan();
+        under
     }
 
     /// Handle relative pointer motion (libinput mice/trackpads).

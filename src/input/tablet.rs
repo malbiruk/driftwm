@@ -1,8 +1,8 @@
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, ButtonState, Device, DeviceCapability, Event, InputBackend,
-        PointerButtonEvent, ProximityState, TabletToolButtonEvent, TabletToolEvent,
-        TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
+        ButtonState, Device, DeviceCapability, Event, InputBackend, PointerButtonEvent,
+        ProximityState, TabletToolButtonEvent, TabletToolEvent, TabletToolProximityEvent,
+        TabletToolTipEvent, TabletToolTipState,
     },
     output::Output,
     reexports::input::Device as LibinputDevice,
@@ -78,10 +78,7 @@ impl DriftWm {
             return;
         };
 
-        let transform = output.current_transform();
-        let size = transform.invert().transform_size(output_geo.size);
-        let screen_pos =
-            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
+        let screen_pos = super::event_screen_pos::<I, _>(&output, output_geo.size, &event);
 
         let (camera, zoom) = {
             let os = output_state(&output);
@@ -99,19 +96,9 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
-        // Update pointer in seat so normal menus/hover work for legacy applications
-        let pointer = self.seat.get_pointer().unwrap();
-        let old_focus = pointer.current_focus();
-        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
-        // Before the motion so a freshly installed grab receives this event.
-        self.maybe_promote_pick(canvas_pos);
-        self.dispatch_pointer_motion(under.clone(), canvas_pos, serial, time);
-        pointer.frame(self);
-        self.update_decoration_cursor(canvas_pos);
-        self.update_pointer_constraint(old_focus);
-        self.check_hot_corners(&output, screen_pos);
-        self.maybe_hover_focus(canvas_pos);
-        self.refresh_cursor_edge_pan();
+        // Drives the seat pointer too, so menus and hover keep working in
+        // clients that speak no tablet protocol.
+        let under = self.dispatch_absolute_motion(&output, screen_pos, canvas_pos, serial, time);
 
         // Forward native tablet events to supporting clients
         let tablet_seat = self.seat.tablet_seat();
@@ -157,10 +144,7 @@ impl DriftWm {
             return;
         };
 
-        let transform = output.current_transform();
-        let size = transform.invert().transform_size(output_geo.size);
-        let screen_pos =
-            transform.transform_point_in(event.position_transformed(size), &size.to_f64());
+        let screen_pos = super::event_screen_pos::<I, _>(&output, output_geo.size, &event);
 
         let (camera, zoom) = {
             let os = output_state(&output);
