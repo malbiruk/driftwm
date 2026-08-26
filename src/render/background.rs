@@ -692,7 +692,7 @@ fn load_image_to_texture(
     };
     let (w, h) = img.dimensions();
     let raw = img.into_raw();
-    let has_transparency = raw.chunks_exact(4).any(|px| px[3] < 255);
+    let has_transparency = raw.as_chunks::<4>().0.iter().any(|px| px[3] < 255);
     match renderer.import_memory(
         &raw,
         Fourcc::Abgr8888,

@@ -331,7 +331,7 @@ fn rgb_to_rgba8(raw: Vec<u8>, color: TiffColor) -> Vec<u8> {
         TiffColor::Rgba8 => raw,
         TiffColor::Rgb8 => {
             let mut out = Vec::with_capacity(raw.len() / 3 * 4);
-            for px in raw.chunks_exact(3) {
+            for px in raw.as_chunks::<3>().0 {
                 out.extend_from_slice(&[px[0], px[1], px[2], 255]);
             }
             out

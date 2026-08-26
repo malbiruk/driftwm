@@ -109,7 +109,7 @@ fn render_error_bar(text: &str, width: i32, bar_height: i32, scale: i32) -> Memo
     let h = (bar_height.max(1) * s).max(1);
 
     let mut pixels = vec![0u8; (w * h * 4) as usize];
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0 {
         px[3] = 255;
     }
 
