@@ -337,3 +337,28 @@ fn removing_a_tablet_takes_it_off_the_seat() {
         "unplugging it takes it back off"
     );
 }
+
+#[test]
+fn a_tablet_plugged_in_while_locked_still_registers() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    f.client(id).lock_session();
+    f.roundtrip(id);
+    assert!(
+        f.state().session_lock.is_locked(),
+        "the lock handler ran, or this scenario tests nothing"
+    );
+
+    let device = FakeDevice::tablet();
+    tablet_added(&mut f, &device);
+
+    // Registration is bookkeeping, not input delivery. Dropping it with the
+    // rest of the locked event stream would leave the tablet dead after unlock
+    // until it was physically replugged.
+    assert_eq!(
+        f.state().seat.tablet_seat().count_tablets(),
+        1,
+        "a hotplug behind the lock screen still reaches the seat"
+    );
+}

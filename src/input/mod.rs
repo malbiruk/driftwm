@@ -340,6 +340,19 @@ impl DriftWm {
 
         // When locked, forward keyboard (VT switch + lock surface input) and
         // pointer events directly to smithay — no compositor grabs or gestures.
+        // Device add/remove is bookkeeping, not input delivery: a tablet plugged
+        // in behind the lock screen has to reach the seat, or it stays
+        // unregistered until it is physically replugged after unlocking.
+        match &event {
+            InputEvent::DeviceAdded { device } => {
+                self.on_device_added::<I>(device);
+            }
+            InputEvent::DeviceRemoved { device } => {
+                self.on_device_removed::<I>(device);
+            }
+            _ => {}
+        }
+
         if self.session_lock.is_locked() {
             match event {
                 InputEvent::Keyboard { event } => self.on_keyboard::<I>(event),
@@ -430,8 +443,6 @@ impl DriftWm {
             InputEvent::TouchUp { event } => self.on_touch_up::<I>(event),
             InputEvent::TouchCancel { event } => self.on_touch_cancel::<I>(event),
             InputEvent::TouchFrame { event } => self.on_touch_frame::<I>(event),
-            InputEvent::DeviceAdded { device } => self.on_device_added::<I>(&device),
-            InputEvent::DeviceRemoved { device } => self.on_device_removed::<I>(&device),
             InputEvent::TabletToolAxis { event } => self.on_tablet_tool_axis::<I>(event),
             InputEvent::TabletToolProximity { event } => self.on_tablet_tool_proximity::<I>(event),
             InputEvent::TabletToolTip { event } => self.on_tablet_tool_tip::<I>(event),
