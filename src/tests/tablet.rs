@@ -14,7 +14,8 @@ use smithay::wayland::tablet_manager::TabletSeatTrait;
 use driftwm::config::BTN_LEFT;
 
 use super::input_backend::{
-    FakeDevice, pen_proximity_in, pen_tip_down, pen_tip_up, pen_to, tablet_added, tablet_removed,
+    FakeDevice, FakeTabletAxes, pen_proximity_in, pen_proximity_in_screen, pen_tip_down,
+    pen_tip_up, pen_to, pen_to_screen_with, tablet_added, tablet_removed, touch_down,
 };
 use super::{Fixture, config, keyboard_focus, map_window, server_surface, window_by_app_id};
 
@@ -30,14 +31,20 @@ fn pen_in_proximity(f: &mut Fixture, at: Point<f64, Logical>) -> FakeDevice {
 fn pen_motion_moves_the_pointer() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
-    let at = Point::from((40.0, -20.0));
-    let device = pen_in_proximity(&mut f, at);
+    // Pinned so the expected canvas point is hand-computed rather than run back
+    // through the inverse of the mapping under test: at zoom 1 a screen point
+    // lands on `screen + camera`.
+    f.state().set_camera(Point::from((-100.0, -50.0)));
+    let device = FakeDevice::tablet();
+    tablet_added(&mut f, &device);
 
-    pen_to(&mut f, &device, at);
+    let screen = Point::from((500.0, 400.0));
+    pen_proximity_in_screen(&mut f, &device, screen);
+    pen_to_screen_with(&mut f, &device, screen, FakeTabletAxes::default());
 
     assert_eq!(
         f.state().seat.get_pointer().unwrap().current_location(),
-        at,
+        Point::from((400.0, 350.0)),
         "a pen in proximity drives the same seat pointer legacy apps read"
     );
 }
@@ -74,7 +81,7 @@ fn pen_tip_down_focuses_the_window_under_it() {
 
     let device = pen_in_proximity(&mut f, at);
     pen_to(&mut f, &device, at);
-    pen_tip_down(&mut f, &device, at);
+    pen_tip_down(&mut f, &device);
 
     assert_eq!(
         keyboard_focus(&mut f).as_ref(),
@@ -167,13 +174,8 @@ fn pen_motion_checks_hot_corners() {
     // Raw screen space: a corner is a screen-space zone, and which canvas point
     // lands on it depends on the camera.
     let corner = Point::from((2.0, 2.0));
-    super::input_backend::pen_proximity_in_screen(&mut f, &device, corner);
-    super::input_backend::pen_to_screen_with(
-        &mut f,
-        &device,
-        corner,
-        super::input_backend::FakeTabletAxes::default(),
-    );
+    pen_proximity_in_screen(&mut f, &device, corner);
+    pen_to_screen_with(&mut f, &device, corner, FakeTabletAxes::default());
 
     assert!(
         crate::state::output_state(&output).zoom_target.is_some(),
@@ -198,6 +200,7 @@ fn pen_motion_respects_pick_mode() {
         Point::from((500, 400)),
         true,
     );
+    f.state().set_camera(Point::from((0.0, 0.0)));
     f.state().set_zoom(0.3);
 
     let at = Point::from((700.0, 550.0));
@@ -212,6 +215,85 @@ fn pen_motion_respects_pick_mode() {
         "in pick mode a pen must not hand the window pointer focus, or its \
          clicks reach the client while a mouse's would pick the window"
     );
+
+    // Positive control: the same pen over the same window above the threshold
+    // must reach it, or the assertion above would also pass on a pen that
+    // simply never found the window.
+    f.state().set_zoom(0.8);
+    pen_to(&mut f, &device, at);
+    f.roundtrip(id);
+    assert!(
+        super::pointer_focus(&mut f).is_some(),
+        "above the threshold the pen reaches the window normally"
+    );
+}
+
+#[test]
+fn pen_proximity_takes_over_the_output_it_maps_to() {
+    let mut f = Fixture::with_config(config(
+        r#"
+        [input.tablet]
+        map_to_output = "HEADLESS-2"
+        "#,
+    ));
+    let out1 = f.add_output(1, (1920, 1080));
+    let out2 = f.add_output(2, (1920, 1080));
+    assert_eq!(
+        f.state().focused_output.as_ref(),
+        Some(&out1),
+        "the first output must start active, or this scenario tests nothing"
+    );
+
+    let device = FakeDevice::tablet();
+    tablet_added(&mut f, &device);
+    pen_proximity_in(&mut f, &device, Point::from((0.0, 0.0)));
+
+    // Proximity resolves focus through the same cascade as motion, and that
+    // cascade reads `active_output()` — so entering proximity has to claim the
+    // output too, or the pen hit-tests its coordinates against another
+    // monitor's layers and pins before it has moved once.
+    assert_eq!(
+        f.state().focused_output.as_ref(),
+        Some(&out2),
+        "entering proximity claims the pen's output, like motion does"
+    );
+}
+
+#[test]
+fn a_tip_without_a_registered_tool_still_clicks() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let device = FakeDevice::tablet();
+
+    // No `tablet_added`, so the seat has no tool to send `tip_down` to.
+    pen_tip_down(&mut f, &device);
+
+    assert!(
+        f.state().held_buttons.contains(&BTN_LEFT),
+        "an absent tool must not swallow the emulated button, or a pen whose \
+         registration was missed moves the cursor but can never click"
+    );
+}
+
+#[test]
+fn pen_motion_restores_a_cursor_touch_hid() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let at = Point::from((40.0, -20.0));
+
+    touch_down(&mut f, at, 0);
+    assert!(
+        f.state().cursor.hidden_by_touch,
+        "touch hides the cursor, or this scenario tests nothing"
+    );
+
+    let device = pen_in_proximity(&mut f, at);
+    pen_to(&mut f, &device, at);
+
+    assert!(
+        !f.state().cursor.hidden_by_touch,
+        "a pen is real pointer input, so it brings the cursor back"
+    );
 }
 
 #[test]
@@ -222,13 +304,13 @@ fn a_tip_cycle_presses_and_releases_the_left_button() {
     let device = pen_in_proximity(&mut f, at);
     pen_to(&mut f, &device, at);
 
-    pen_tip_down(&mut f, &device, at);
+    pen_tip_down(&mut f, &device);
     assert!(
         f.state().held_buttons.contains(&BTN_LEFT),
         "a tip-down is emulated as a left press for clients that speak no tablet protocol"
     );
 
-    pen_tip_up(&mut f, &device, at);
+    pen_tip_up(&mut f, &device);
     assert!(
         !f.state().held_buttons.contains(&BTN_LEFT),
         "a tip-up must release it again, or the next click lands on a stuck button"

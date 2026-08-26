@@ -171,6 +171,15 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
+        // The cascade below resolves layers, pins and pick mode through
+        // `active_output()`, so the pen's own output has to be active before it
+        // runs or a pinned tablet hit-tests its coordinates against another
+        // monitor's scene.
+        if event.state() == ProximityState::In {
+            self.focused_output = Some(output.clone());
+            self.cursor.hidden_by_touch = false;
+        }
+
         // Below `interact_min` a canvas window is a click target, not an input
         // surface, so the pen must not hand it tablet focus either. A later axis
         // event re-enters proximity through smithay's focus handling once the
@@ -181,10 +190,6 @@ impl DriftWm {
         let display_handle = self.display_handle.clone();
         let tool = tablet_seat.add_tool::<Self>(self, &display_handle, &event.tool());
         let tablet = tablet_seat.get_tablet(&TabletDescriptor::from(&event.device()));
-
-        if event.state() == ProximityState::In {
-            self.cursor.hidden_by_touch = false;
-        }
 
         if let Some(tablet) = tablet {
             match event.state() {
@@ -207,32 +212,27 @@ impl DriftWm {
     }
 
     pub fn on_tablet_tool_tip<I: InputBackend>(&mut self, event: I::TabletToolTipEvent) {
-        let tablet_seat = self.seat.tablet_seat();
-        let tool = tablet_seat.get_tool(&event.tool());
-
-        let Some(tool) = tool else {
-            return;
-        };
+        let tool = self.seat.tablet_seat().get_tool(&event.tool());
 
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
-        match event.tip_state() {
+        let button_state = match event.tip_state() {
             TabletToolTipState::Down => {
-                tool.tip_down(serial, time);
-                self.on_pointer_button::<I, _>(TabletTipButtonEvent::new(
-                    event,
-                    ButtonState::Pressed,
-                ));
+                if let Some(tool) = &tool {
+                    tool.tip_down(serial, time);
+                }
+                ButtonState::Pressed
             }
             TabletToolTipState::Up => {
-                tool.tip_up(time);
-                self.on_pointer_button::<I, _>(TabletTipButtonEvent::new(
-                    event,
-                    ButtonState::Released,
-                ));
+                if let Some(tool) = &tool {
+                    tool.tip_up(time);
+                }
+                ButtonState::Released
             }
-        }
+        };
+
+        self.on_pointer_button::<I, _>(TabletTipButtonEvent::new(event, button_state));
     }
 
     pub fn on_tablet_tool_button<I: InputBackend>(&mut self, event: I::TabletToolButtonEvent) {

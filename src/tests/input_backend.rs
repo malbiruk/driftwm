@@ -818,18 +818,16 @@ pub fn pen_to(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
     pen_to_with(f, device, at, FakeTabletAxes::default());
 }
 
-fn tip(
-    f: &mut Fixture,
-    device: &FakeDevice,
-    at: Point<f64, Logical>,
-    tip_state: TabletToolTipState,
-) {
-    let screen = screen_of(f, at);
+/// A tip event carries no position the compositor reads: the tip acts wherever
+/// the pen last moved to, so the button it emulates uses the pointer's current
+/// location. The fake reports the origin rather than take a position argument
+/// that could silently disagree with the preceding motion.
+fn tip(f: &mut Fixture, device: &FakeDevice, tip_state: TabletToolTipState) {
     f.state()
         .process_input_event::<FakeInput>(InputEvent::TabletToolTip {
             event: FakeTabletTipEvent {
                 device: device.clone(),
-                screen,
+                screen: Point::default(),
                 tool: fake_tool(),
                 axes: FakeTabletAxes::default(),
                 tip_state,
@@ -838,11 +836,11 @@ fn tip(
         });
 }
 
-/// Press the pen tip to the surface at canvas-space `at`.
-pub fn pen_tip_down(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
-    tip(f, device, at, TabletToolTipState::Down);
+/// Press the pen tip to the surface, wherever the pen already is.
+pub fn pen_tip_down(f: &mut Fixture, device: &FakeDevice) {
+    tip(f, device, TabletToolTipState::Down);
 }
 
-pub fn pen_tip_up(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
-    tip(f, device, at, TabletToolTipState::Up);
+pub fn pen_tip_up(f: &mut Fixture, device: &FakeDevice) {
+    tip(f, device, TabletToolTipState::Up);
 }
