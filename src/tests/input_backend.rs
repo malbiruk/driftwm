@@ -18,8 +18,10 @@ use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use smithay::backend::input::{
     AbsolutePositionEvent, ButtonState, Device, DeviceCapability, Event, InputBackend, InputEvent,
     KeyState, KeyboardKeyEvent, Keycode, PointerButtonEvent, PointerMotionAbsoluteEvent,
-    PointerMotionEvent, TouchCancelEvent, TouchDownEvent, TouchEvent, TouchMotionEvent, TouchSlot,
-    TouchUpEvent, UnusedEvent,
+    PointerMotionEvent, ProximityState, TabletToolAxisEvent, TabletToolButtonEvent,
+    TabletToolCapabilities, TabletToolDescriptor, TabletToolEvent, TabletToolProximityEvent,
+    TabletToolTipEvent, TabletToolTipState, TabletToolType, TouchCancelEvent, TouchDownEvent,
+    TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
 };
 use smithay::utils::{Logical, Point};
 
@@ -78,6 +80,12 @@ impl FakeDevice {
 
     pub fn keyboard() -> Self {
         Self::new("fake-keyboard", &[DeviceCapability::Keyboard])
+    }
+
+    /// A graphics tablet. `TabletTool` is the capability `on_device_added`
+    /// gates registration on, so a device without it never reaches the seat.
+    pub fn tablet() -> Self {
+        Self::new("fake-tablet", &[DeviceCapability::TabletTool])
     }
 }
 
@@ -304,6 +312,198 @@ impl TouchEvent<FakeInput> for FakeTouchCancelEvent {
 
 impl TouchCancelEvent<FakeInput> for FakeTouchCancelEvent {}
 
+/// The tablet-tool axes a scenario chose to report. `None` is "this axis did
+/// not change", which is exactly what the `*_has_changed` half of
+/// [`TabletToolEvent`] answers — `on_tablet_tool_axis` forwards an axis to the
+/// client only when its flag is set, so an unset axis must stay silent rather
+/// than report zero.
+#[derive(Clone, Default)]
+pub struct FakeTabletAxes {
+    pub pressure: Option<f64>,
+    pub distance: Option<f64>,
+    pub tilt: Option<(f64, f64)>,
+    pub rotation: Option<f64>,
+    pub slider: Option<f64>,
+    pub wheel: Option<(f64, i32)>,
+}
+
+/// The pen every scenario uses unless it needs a second one. Capabilities are
+/// advertised to the client at `add_tool` time, so a tool that omits one here
+/// cannot legally send that axis.
+fn fake_tool() -> TabletToolDescriptor {
+    TabletToolDescriptor {
+        tool_type: TabletToolType::Pen,
+        hardware_serial: 1,
+        hardware_id_wacom: 1,
+        capabilities: TabletToolCapabilities::PRESSURE
+            | TabletToolCapabilities::DISTANCE
+            | TabletToolCapabilities::TILT
+            | TabletToolCapabilities::ROTATION
+            | TabletToolCapabilities::SLIDER
+            | TabletToolCapabilities::WHEEL,
+    }
+}
+
+/// The 18 required methods of [`TabletToolEvent`] are the same projection of
+/// [`FakeTabletAxes`] on all four event types, so they are written once.
+/// `delta_x`/`delta_y` are zero throughout: nothing on the compositor path
+/// reads them, since position comes from the `AbsolutePositionEvent` half.
+macro_rules! impl_tablet_tool_event {
+    ($($ty:ty),+ $(,)?) => {$(
+        impl TabletToolEvent<FakeInput> for $ty {
+            fn tool(&self) -> TabletToolDescriptor {
+                self.tool.clone()
+            }
+
+            fn delta_x(&self) -> f64 {
+                0.0
+            }
+
+            fn delta_y(&self) -> f64 {
+                0.0
+            }
+
+            fn distance(&self) -> f64 {
+                self.axes.distance.unwrap_or(0.0)
+            }
+
+            fn distance_has_changed(&self) -> bool {
+                self.axes.distance.is_some()
+            }
+
+            fn pressure(&self) -> f64 {
+                self.axes.pressure.unwrap_or(0.0)
+            }
+
+            fn pressure_has_changed(&self) -> bool {
+                self.axes.pressure.is_some()
+            }
+
+            fn slider_position(&self) -> f64 {
+                self.axes.slider.unwrap_or(0.0)
+            }
+
+            fn slider_has_changed(&self) -> bool {
+                self.axes.slider.is_some()
+            }
+
+            fn tilt_x(&self) -> f64 {
+                self.axes.tilt.map_or(0.0, |(x, _)| x)
+            }
+
+            fn tilt_x_has_changed(&self) -> bool {
+                self.axes.tilt.is_some()
+            }
+
+            fn tilt_y(&self) -> f64 {
+                self.axes.tilt.map_or(0.0, |(_, y)| y)
+            }
+
+            fn tilt_y_has_changed(&self) -> bool {
+                self.axes.tilt.is_some()
+            }
+
+            fn rotation(&self) -> f64 {
+                self.axes.rotation.unwrap_or(0.0)
+            }
+
+            fn rotation_has_changed(&self) -> bool {
+                self.axes.rotation.is_some()
+            }
+
+            fn wheel_delta(&self) -> f64 {
+                self.axes.wheel.map_or(0.0, |(d, _)| d)
+            }
+
+            fn wheel_delta_discrete(&self) -> i32 {
+                self.axes.wheel.map_or(0, |(_, d)| d)
+            }
+
+            fn wheel_has_changed(&self) -> bool {
+                self.axes.wheel.is_some()
+            }
+        }
+    )+};
+}
+
+/// A pen moving while in proximity, in the same screen-space convention as
+/// [`FakeAbsoluteEvent`].
+pub struct FakeTabletAxisEvent {
+    device: FakeDevice,
+    screen: Point<f64, Logical>,
+    tool: TabletToolDescriptor,
+    axes: FakeTabletAxes,
+    time: u32,
+}
+
+impl TabletToolAxisEvent<FakeInput> for FakeTabletAxisEvent {}
+
+/// A pen entering or leaving the tablet's detection range.
+pub struct FakeTabletProximityEvent {
+    device: FakeDevice,
+    screen: Point<f64, Logical>,
+    tool: TabletToolDescriptor,
+    axes: FakeTabletAxes,
+    state: ProximityState,
+    time: u32,
+}
+
+impl TabletToolProximityEvent<FakeInput> for FakeTabletProximityEvent {
+    fn state(&self) -> ProximityState {
+        self.state
+    }
+}
+
+/// The pen tip touching or leaving the surface — the tablet's analogue of a
+/// button press, which `on_tablet_tool_tip` also routes through the pointer.
+pub struct FakeTabletTipEvent {
+    device: FakeDevice,
+    screen: Point<f64, Logical>,
+    tool: TabletToolDescriptor,
+    axes: FakeTabletAxes,
+    tip_state: TabletToolTipState,
+    time: u32,
+}
+
+impl TabletToolTipEvent<FakeInput> for FakeTabletTipEvent {
+    fn tip_state(&self) -> TabletToolTipState {
+        self.tip_state
+    }
+}
+
+/// A button on the pen barrel.
+pub struct FakeTabletButtonEvent {
+    device: FakeDevice,
+    screen: Point<f64, Logical>,
+    tool: TabletToolDescriptor,
+    axes: FakeTabletAxes,
+    button: u32,
+    button_state: ButtonState,
+    time: u32,
+}
+
+impl TabletToolButtonEvent<FakeInput> for FakeTabletButtonEvent {
+    fn button(&self) -> u32 {
+        self.button
+    }
+
+    // Seat-wide count of held tool buttons; nothing on the tablet path reads it.
+    fn seat_button_count(&self) -> u32 {
+        1
+    }
+
+    fn button_state(&self) -> ButtonState {
+        self.button_state
+    }
+}
+
+impl_tablet_tool_event!(
+    FakeTabletAxisEvent,
+    FakeTabletProximityEvent,
+    FakeTabletTipEvent,
+    FakeTabletButtonEvent,
+);
+
 impl_event!(
     FakeKeyEvent,
     FakeButtonEvent,
@@ -313,8 +513,20 @@ impl_event!(
     FakeTouchMotionEvent,
     FakeTouchUpEvent,
     FakeTouchCancelEvent,
+    FakeTabletAxisEvent,
+    FakeTabletProximityEvent,
+    FakeTabletTipEvent,
+    FakeTabletButtonEvent,
 );
-impl_absolute_position!(FakeAbsoluteEvent, FakeTouchDownEvent, FakeTouchMotionEvent);
+impl_absolute_position!(
+    FakeAbsoluteEvent,
+    FakeTouchDownEvent,
+    FakeTouchMotionEvent,
+    FakeTabletAxisEvent,
+    FakeTabletProximityEvent,
+    FakeTabletTipEvent,
+    FakeTabletButtonEvent,
+);
 
 impl InputBackend for FakeInput {
     type Device = FakeDevice;
@@ -337,10 +549,10 @@ impl InputBackend for FakeInput {
     type GestureHoldBeginEvent = UnusedEvent;
     type GestureHoldEndEvent = UnusedEvent;
     type TouchFrameEvent = UnusedEvent;
-    type TabletToolAxisEvent = UnusedEvent;
-    type TabletToolProximityEvent = UnusedEvent;
-    type TabletToolTipEvent = UnusedEvent;
-    type TabletToolButtonEvent = UnusedEvent;
+    type TabletToolAxisEvent = FakeTabletAxisEvent;
+    type TabletToolProximityEvent = FakeTabletProximityEvent;
+    type TabletToolTipEvent = FakeTabletTipEvent;
+    type TabletToolButtonEvent = FakeTabletButtonEvent;
     type SwitchToggleEvent = UnusedEvent;
     type SpecialEvent = UnusedEvent;
 }
@@ -536,4 +748,107 @@ pub fn touch_cancel(f: &mut Fixture) {
                 time: next_time(),
             },
         });
+}
+
+/// Register a tablet with the seat, the way a hotplug (or the udev backend's
+/// startup enumeration) would. Nothing tablet-related reaches a client until
+/// this runs: `on_tablet_tool_axis` looks the tablet up by descriptor and
+/// silently drops the event when it is absent.
+pub fn tablet_added(f: &mut Fixture, device: &FakeDevice) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::DeviceAdded {
+            device: device.clone(),
+        });
+}
+
+pub fn tablet_removed(f: &mut Fixture, device: &FakeDevice) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::DeviceRemoved {
+            device: device.clone(),
+        });
+}
+
+/// Bring the pen into proximity over raw screen position `screen`.
+pub fn pen_proximity_in_screen(f: &mut Fixture, device: &FakeDevice, screen: Point<f64, Logical>) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::TabletToolProximity {
+            event: FakeTabletProximityEvent {
+                device: device.clone(),
+                screen,
+                tool: fake_tool(),
+                axes: FakeTabletAxes::default(),
+                state: ProximityState::In,
+                time: next_time(),
+            },
+        });
+}
+
+/// Bring the pen into proximity over canvas-space `at`.
+pub fn pen_proximity_in(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
+    let screen = screen_of(f, at);
+    pen_proximity_in_screen(f, device, screen);
+}
+
+/// Move the pen to raw screen position `screen`, reporting `axes`.
+pub fn pen_to_screen_with(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    screen: Point<f64, Logical>,
+    axes: FakeTabletAxes,
+) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::TabletToolAxis {
+            event: FakeTabletAxisEvent {
+                device: device.clone(),
+                screen,
+                tool: fake_tool(),
+                axes,
+                time: next_time(),
+            },
+        });
+}
+
+/// Move the pen to canvas-space `at`, reporting `axes`.
+pub fn pen_to_with(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    at: Point<f64, Logical>,
+    axes: FakeTabletAxes,
+) {
+    let screen = screen_of(f, at);
+    pen_to_screen_with(f, device, screen, axes);
+}
+
+/// Move the pen to canvas-space `at` with no axis changes — the hover case.
+pub fn pen_to(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
+    pen_to_with(f, device, at, FakeTabletAxes::default());
+}
+
+fn tip(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    at: Point<f64, Logical>,
+    tip_state: TabletToolTipState,
+) {
+    let screen = screen_of(f, at);
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::TabletToolTip {
+            event: FakeTabletTipEvent {
+                device: device.clone(),
+                screen,
+                tool: fake_tool(),
+                axes: FakeTabletAxes::default(),
+                tip_state,
+                time: next_time(),
+            },
+        });
+}
+
+/// Press the pen tip to the surface at canvas-space `at`.
+pub fn pen_tip_down(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
+    tip(f, device, at, TabletToolTipState::Down);
+}
+
+pub fn pen_tip_up(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>) {
+    tip(f, device, at, TabletToolTipState::Up);
 }

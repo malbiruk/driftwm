@@ -4,7 +4,6 @@ use smithay::{
         PointerButtonEvent, ProximityState, TabletToolButtonEvent, TabletToolEvent,
         TabletToolProximityEvent, TabletToolTipEvent, TabletToolTipState,
     },
-    input::pointer::MotionEvent,
     output::Output,
     reexports::input::Device as LibinputDevice,
     utils::SERIAL_COUNTER,
@@ -90,26 +89,28 @@ impl DriftWm {
         };
         let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
 
+        // The pen resolves its own output, so it makes that output active the
+        // way touch does — everything downstream that reads `active_output()`
+        // (hot corners, the actions they fire, later relative motion) would
+        // otherwise act on whichever output the pointer was last on.
+        self.focused_output = Some(output.clone());
+        // A pen is real pointer input, so it restores the cursor touch hid.
+        self.cursor.hidden_by_touch = false;
+
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
         // Update pointer in seat so normal menus/hover work for legacy applications
         let pointer = self.seat.get_pointer().unwrap();
         let old_focus = pointer.current_focus();
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
-
-        pointer.motion(
-            self,
-            under.clone(),
-            &MotionEvent {
-                location: canvas_pos,
-                serial,
-                time,
-            },
-        );
+        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
+        // Before the motion so a freshly installed grab receives this event.
+        self.maybe_promote_pick(canvas_pos);
+        self.dispatch_pointer_motion(under.clone(), canvas_pos, serial, time);
         pointer.frame(self);
         self.update_decoration_cursor(canvas_pos);
         self.update_pointer_constraint(old_focus);
+        self.check_hot_corners(&output, screen_pos);
         self.maybe_hover_focus(canvas_pos);
         self.refresh_cursor_edge_pan();
 
@@ -171,17 +172,24 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
-        let under = self.pointer_focus_under(screen_pos, canvas_pos);
+        // Pick-aware like the axis path: below `interact_min` a canvas window is
+        // a click target, not an input surface, so the pen must not hand it
+        // tablet focus either. A later axis event re-enters proximity through
+        // smithay's own focus handling once the zoom is back above it.
+        let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
 
         let tablet_seat = self.seat.tablet_seat();
         let display_handle = self.display_handle.clone();
         let tool = tablet_seat.add_tool::<Self>(self, &display_handle, &event.tool());
         let tablet = tablet_seat.get_tablet(&TabletDescriptor::from(&event.device()));
 
+        if event.state() == ProximityState::In {
+            self.cursor.hidden_by_touch = false;
+        }
+
         if let Some(tablet) = tablet {
             match event.state() {
                 ProximityState::In => {
-                    self.cursor.hidden_by_touch = false;
                     if let Some((focus_target, relative_pos)) = under {
                         tool.proximity_in(
                             canvas_pos,

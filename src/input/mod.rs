@@ -383,6 +383,7 @@ impl DriftWm {
                 | InputEvent::GestureHoldBegin { .. }
                 | InputEvent::TouchDown { .. }
                 | InputEvent::TouchMotion { .. }
+                | InputEvent::TabletToolTip { .. }
         ) {
             self.tap.taint();
         }

@@ -60,6 +60,7 @@ mod soak;
 mod stand_in_parity;
 mod suspend_flows;
 mod suspended;
+mod tablet;
 mod trackpad_send_events;
 mod translucent_fullscreen;
 mod window_animation;

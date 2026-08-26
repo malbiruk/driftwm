@@ -109,8 +109,6 @@ impl DriftWm {
     /// 1. Configured mouse bindings (move, resize, pan, etc.)
     /// 2. Normal click on window → focus + raise + forward to client
     /// 3. Left-click on empty canvas → pan canvas
-    // pub(super) fn on_pointer_button<I: InputBackend>(&mut self, event: I::PointerButtonEvent) {
-    // pub(super) fn on_pointer_button<E: PointerButtonEvent>(&mut self, event: E) {
     pub(super) fn on_pointer_button<I: InputBackend, E: PointerButtonEvent<I>>(
         &mut self,
         event: E,
