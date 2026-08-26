@@ -89,10 +89,9 @@ impl DriftWm {
         };
         let canvas_pos = screen_to_canvas(ScreenPos(screen_pos), camera, zoom).0;
 
-        // The pen resolves its own output, so it makes that output active the
-        // way touch does — everything downstream that reads `active_output()`
-        // (hot corners, the actions they fire, later relative motion) would
-        // otherwise act on whichever output the pointer was last on.
+        // The pen resolves its own output, so make that one active: everything
+        // downstream reading `active_output()` — hot corners, later relative
+        // motion — would otherwise act on whichever output the pointer was on.
         self.focused_output = Some(output.clone());
         // A pen is real pointer input, so it restores the cursor touch hid.
         self.cursor.hidden_by_touch = false;
@@ -172,10 +171,10 @@ impl DriftWm {
         let serial = SERIAL_COUNTER.next_serial();
         let time = event.time_msec();
 
-        // Pick-aware like the axis path: below `interact_min` a canvas window is
-        // a click target, not an input surface, so the pen must not hand it
-        // tablet focus either. A later axis event re-enters proximity through
-        // smithay's own focus handling once the zoom is back above it.
+        // Below `interact_min` a canvas window is a click target, not an input
+        // surface, so the pen must not hand it tablet focus either. A later axis
+        // event re-enters proximity through smithay's focus handling once the
+        // zoom is back above it.
         let under = self.pointer_focus_under_pick(screen_pos, canvas_pos);
 
         let tablet_seat = self.seat.tablet_seat();

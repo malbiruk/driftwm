@@ -312,11 +312,9 @@ impl TouchEvent<FakeInput> for FakeTouchCancelEvent {
 
 impl TouchCancelEvent<FakeInput> for FakeTouchCancelEvent {}
 
-/// The tablet-tool axes a scenario chose to report. `None` is "this axis did
-/// not change", which is exactly what the `*_has_changed` half of
-/// [`TabletToolEvent`] answers — `on_tablet_tool_axis` forwards an axis to the
-/// client only when its flag is set, so an unset axis must stay silent rather
-/// than report zero.
+/// The tablet-tool axes a scenario chose to report. `None` means "unchanged"
+/// and drives the `*_has_changed` half of [`TabletToolEvent`], so an unset axis
+/// stays silent instead of reaching the client as a zero.
 #[derive(Clone, Default)]
 pub struct FakeTabletAxes {
     pub pressure: Option<f64>,
@@ -327,9 +325,8 @@ pub struct FakeTabletAxes {
     pub wheel: Option<(f64, i32)>,
 }
 
-/// The pen every scenario uses unless it needs a second one. Capabilities are
-/// advertised to the client at `add_tool` time, so a tool that omits one here
-/// cannot legally send that axis.
+/// The pen every scenario uses. Capabilities are advertised to the client at
+/// `add_tool` time, so a tool omitting one here cannot legally send that axis.
 fn fake_tool() -> TabletToolDescriptor {
     TabletToolDescriptor {
         tool_type: TabletToolType::Pen,
@@ -344,10 +341,10 @@ fn fake_tool() -> TabletToolDescriptor {
     }
 }
 
-/// The 18 required methods of [`TabletToolEvent`] are the same projection of
+/// [`TabletToolEvent`]'s 18 methods are the same projection of
 /// [`FakeTabletAxes`] on all four event types, so they are written once.
-/// `delta_x`/`delta_y` are zero throughout: nothing on the compositor path
-/// reads them, since position comes from the `AbsolutePositionEvent` half.
+/// `delta_x`/`delta_y` stay zero: position comes from the
+/// `AbsolutePositionEvent` half, and nothing on the compositor path reads them.
 macro_rules! impl_tablet_tool_event {
     ($($ty:ty),+ $(,)?) => {$(
         impl TabletToolEvent<FakeInput> for $ty {
@@ -438,7 +435,6 @@ pub struct FakeTabletAxisEvent {
 
 impl TabletToolAxisEvent<FakeInput> for FakeTabletAxisEvent {}
 
-/// A pen entering or leaving the tablet's detection range.
 pub struct FakeTabletProximityEvent {
     device: FakeDevice,
     screen: Point<f64, Logical>,
@@ -454,8 +450,8 @@ impl TabletToolProximityEvent<FakeInput> for FakeTabletProximityEvent {
     }
 }
 
-/// The pen tip touching or leaving the surface — the tablet's analogue of a
-/// button press, which `on_tablet_tool_tip` also routes through the pointer.
+/// The tablet's analogue of a button press: `on_tablet_tool_tip` routes a tip
+/// through the pointer as well.
 pub struct FakeTabletTipEvent {
     device: FakeDevice,
     screen: Point<f64, Logical>,
@@ -471,7 +467,6 @@ impl TabletToolTipEvent<FakeInput> for FakeTabletTipEvent {
     }
 }
 
-/// A button on the pen barrel.
 pub struct FakeTabletButtonEvent {
     device: FakeDevice,
     screen: Point<f64, Logical>,
@@ -750,10 +745,9 @@ pub fn touch_cancel(f: &mut Fixture) {
         });
 }
 
-/// Register a tablet with the seat, the way a hotplug (or the udev backend's
-/// startup enumeration) would. Nothing tablet-related reaches a client until
-/// this runs: `on_tablet_tool_axis` looks the tablet up by descriptor and
-/// silently drops the event when it is absent.
+/// Register a tablet with the seat, the way a hotplug would. Nothing
+/// tablet-related reaches a client until this runs: `on_tablet_tool_axis` looks
+/// the tablet up by descriptor and silently drops the event when it is absent.
 pub fn tablet_added(f: &mut Fixture, device: &FakeDevice) {
     f.state()
         .process_input_event::<FakeInput>(InputEvent::DeviceAdded {

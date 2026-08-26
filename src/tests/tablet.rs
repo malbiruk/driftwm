@@ -1,9 +1,8 @@
-//! Graphics-tablet (`wp_tablet_manager_v2`) input, driven through the real
-//! `process_input_event` entry point with the synthetic backend
-//! (`input_backend`). A pen is not only a tablet-protocol source: the
-//! compositor also drives the seat pointer from it so legacy apps and
-//! server-side decorations keep working, which is why most of what follows
-//! asserts on pointer-side bookkeeping rather than on tablet-v2 wire traffic.
+//! Graphics-tablet (`wp_tablet_manager_v2`) input. A pen is not only a
+//! tablet-protocol source: the compositor drives the seat pointer from it so
+//! legacy apps and server-side decorations keep working, which is why most of
+//! what follows asserts on pointer-side bookkeeping rather than tablet-v2 wire
+//! traffic.
 //!
 //! The per-device output resolver is shared with touch
 //! (`DriftWm::touch_output_for_device`); the fake reports no libinput device,
@@ -19,8 +18,7 @@ use super::input_backend::{
 };
 use super::{Fixture, config, keyboard_focus, map_window, server_surface, window_by_app_id};
 
-/// A pen that has been registered and brought into proximity — the state every
-/// scenario below starts from, since an unregistered tablet drops axis events.
+/// A registered pen in proximity — the state every scenario below starts from.
 fn pen_in_proximity(f: &mut Fixture, at: Point<f64, Logical>) -> FakeDevice {
     let device = FakeDevice::tablet();
     tablet_added(f, &device);
@@ -51,13 +49,12 @@ fn pen_motion_still_drives_the_pointer_before_the_tablet_registers() {
     let device = FakeDevice::tablet();
     let at = Point::from((40.0, -20.0));
 
-    // No `tablet_added`, so the seat holds no tablet under this descriptor and
-    // the tablet-v2 half of the handler finds nothing to forward to.
+    // No `tablet_added`, so the tablet-v2 half of the handler finds no tablet
+    // to forward to.
     pen_to(&mut f, &device, at);
 
-    // The pointer half runs first and unconditionally, which is what keeps a
-    // missed registration (a hotplug the compositor never saw) degrading to
-    // pointer-only input rather than to a dead pen.
+    // The pointer half runs first and unconditionally, so a missed registration
+    // degrades to pointer-only input rather than to a dead pen.
     assert_eq!(
         f.state().seat.get_pointer().unwrap().current_location(),
         at,
@@ -112,9 +109,8 @@ fn pen_motion_records_what_it_delivered() {
         .expect("the window must be under the pen, or this scenario tests nothing");
 
     // `refresh_pointer_focus` skips a resync when the delivery it would make
-    // matches this record. A pen that moves the pointer without writing it
-    // leaves whatever the last pointer event left, so a later resync compares
-    // against a delivery that never happened.
+    // matches this record, so a pen that moves the pointer without writing it
+    // leaves a later resync comparing against a delivery that never happened.
     assert_eq!(
         f.state().last_pointer_delivery,
         Some((focus, origin, at - origin)),
@@ -143,10 +139,8 @@ fn pen_motion_takes_over_the_output_it_maps_to() {
     let device = pen_in_proximity(&mut f, at);
     pen_to(&mut f, &device, at);
 
-    // Touch does exactly this after resolving its own per-device output
-    // (`input/touch.rs`): a device pinned to one output makes that output the
-    // active one, or everything reading `active_output()` afterwards — hot
-    // corners, relative motion, window placement — acts on the wrong monitor.
+    // A device pinned to one output makes that output active, or everything
+    // reading `active_output()` afterwards acts on the wrong monitor.
     assert_eq!(
         f.state().focused_output.as_ref(),
         Some(&out2),
@@ -170,8 +164,8 @@ fn pen_motion_checks_hot_corners() {
     tablet_added(&mut f, &device);
     let output = f.state().active_output().expect("an output");
 
-    // Raw screen space: the corner is a screen-space zone, and the canvas
-    // point that maps onto it depends on the camera.
+    // Raw screen space: a corner is a screen-space zone, and which canvas point
+    // lands on it depends on the camera.
     let corner = Point::from((2.0, 2.0));
     super::input_backend::pen_proximity_in_screen(&mut f, &device, corner);
     super::input_backend::pen_to_screen_with(
@@ -212,10 +206,7 @@ fn pen_motion_respects_pick_mode() {
     f.roundtrip(id);
 
     // Below `interact_min` a canvas window takes no pointer input — clicks pick
-    // or move it instead. `pointer_focus_under_pick` is what enforces that, and
-    // its own docs say every real-input pointer path must go through it (touch
-    // is the one documented exception). A pen drives the seat pointer, so it is
-    // such a path.
+    // or move it instead — and a pen drives the seat pointer like any mouse.
     assert!(
         super::pointer_focus(&mut f).is_none(),
         "in pick mode a pen must not hand the window pointer focus, or its \
