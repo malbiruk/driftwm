@@ -272,6 +272,14 @@ pin touch to an output by connector name; "none" (default) auto-detects the touc
 map_to_output = "DP-2"
 ```
 
+## `[input.tablet]`
+
+### `map_to_output`
+
+Default: `"none"`
+
+Output name (e.g. "eDP-1") this tablet maps to. If unset, the tablet output is auto-detected based on libinput tags, physical size matching against the output, or falling back to the internal panel.
+
 ## `[cursor]`
 
 ### `theme`
