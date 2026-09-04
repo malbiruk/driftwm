@@ -334,3 +334,78 @@ fn move_to_bookmark_and_msg_move_agree_for_a_stand_in() {
 
     f.state().dismiss_suspended(sid);
 }
+
+/// A widget cannot be moved manually (no titlebar drag, gesture, or nudge),
+/// but can be moved via IPC `msg move --id <ID> <X> <Y>`.
+#[test]
+fn widget_can_be_moved_by_ipc_but_not_manually() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "widget"
+widget = true
+
+[[window_rules]]
+app_id = "normal"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    map_window(&mut f, id, "normal", (400, 300));
+    let normal = window_by_app_id(&mut f, "normal").unwrap();
+
+    map_window(&mut f, id, "widget", (200, 100));
+    let widget = window_by_app_id(&mut f, "widget").unwrap();
+
+    let widget_id = f.state().stage.id_of(&widget).unwrap().0;
+
+    // Precondition: manual moves decline the widget.
+    let widget_loc = f.state().stage.position_of(&widget).unwrap();
+    let center = Point::from((widget_loc.x as f64 + 100.0, widget_loc.y as f64 + 50.0));
+    assert!(
+        f.state().draggable_element_under(center).is_none(),
+        "draggable_element_under declines widgets"
+    );
+    assert!(
+        !f.state().try_start_gesture_move(center, false),
+        "gesture move declines widgets"
+    );
+
+    // IPC move by ID repositions the widget to (500, -250).
+    assert_eq!(
+        mv(
+            &mut f,
+            Some(WindowSelector::Id(widget_id)),
+            Some((500, -250))
+        ),
+        Ok(Response::Position { x: 500, y: -250 })
+    );
+
+    // Querying the position via IPC matches what was written.
+    assert_eq!(
+        mv(&mut f, Some(WindowSelector::Id(widget_id)), None),
+        Ok(Response::Position { x: 500, y: -250 })
+    );
+
+    // Widgets must remain below normal windows in stacking.
+    let entries: Vec<_> = f
+        .state()
+        .stage
+        .entries()
+        .map(|e| e.window.clone())
+        .collect();
+    let widget_idx = entries
+        .iter()
+        .position(|w| w == &StageWindow::Client(widget.clone()))
+        .unwrap();
+    let normal_idx = entries
+        .iter()
+        .position(|w| w == &StageWindow::Client(normal.clone()))
+        .unwrap();
+    assert!(
+        widget_idx < normal_idx,
+        "widget must remain stacked below normal windows"
+    );
+}
