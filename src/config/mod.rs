@@ -1601,6 +1601,12 @@ mod tests {
     }
 
     #[test]
+    fn outer_frame_inset_goes_negative_at_zero_outer_gap_with_a_border() {
+        let (config, _) = Config::from_toml_collect("[snap]\nouter_gap = 0.0\n").unwrap();
+        assert_eq!(config.outer_frame_inset(4), -4.0);
+    }
+
+    #[test]
     fn effects_animation_speed_out_of_range_rejects_and_clamps() {
         let (zero, warnings) = Config::from_toml_collect(
             r#"

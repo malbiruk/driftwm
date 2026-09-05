@@ -1208,4 +1208,75 @@ mod tests {
             Some("a".to_owned())
         );
     }
+
+    fn usable_rect(x: i32, y: i32, w: i32, h: i32) -> Rectangle<i32, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    fn frame_rect(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, Logical> {
+        Rectangle::new(Point::from((x, y)), Size::from((w, h)))
+    }
+
+    #[test]
+    fn covers_usable_area_true_at_exact_equality() {
+        assert!(covers_usable_area(
+            frame_rect(0.0, 0.0, 1920.0, 1080.0),
+            usable_rect(0, 0, 1920, 1080)
+        ));
+    }
+
+    #[test]
+    fn covers_usable_area_true_when_oversize() {
+        assert!(covers_usable_area(
+            frame_rect(-10.0, -10.0, 1940.0, 1100.0),
+            usable_rect(0, 0, 1920, 1080)
+        ));
+    }
+
+    #[test]
+    fn covers_usable_area_true_with_negligible_float_noise() {
+        assert!(covers_usable_area(
+            frame_rect(1e-9, 0.0, 1920.0 - 1e-9, 1080.0),
+            usable_rect(0, 0, 1920, 1080)
+        ));
+    }
+
+    #[test]
+    fn covers_usable_area_false_half_a_pixel_short_on_one_edge() {
+        // Half a pixel is a real, visible sliver (a fractional pan can leave a
+        // fill exactly this short), not float noise — must not cover.
+        assert!(!covers_usable_area(
+            frame_rect(0.5, 0.0, 1919.5, 1080.0),
+            usable_rect(0, 0, 1920, 1080)
+        ));
+    }
+
+    #[test]
+    fn covers_usable_area_false_when_exactly_one_pixel_short_on_each_edge() {
+        let usable = usable_rect(0, 0, 1920, 1080);
+        assert!(
+            !covers_usable_area(frame_rect(1.0, 0.0, 1919.0, 1080.0), usable),
+            "left edge a pixel short"
+        );
+        assert!(
+            !covers_usable_area(frame_rect(0.0, 1.0, 1920.0, 1079.0), usable),
+            "top edge a pixel short"
+        );
+        assert!(
+            !covers_usable_area(frame_rect(0.0, 0.0, 1919.0, 1080.0), usable),
+            "right edge a pixel short"
+        );
+        assert!(
+            !covers_usable_area(frame_rect(0.0, 0.0, 1920.0, 1079.0), usable),
+            "bottom edge a pixel short"
+        );
+    }
+
+    #[test]
+    fn covers_usable_area_false_when_far_away() {
+        assert!(!covers_usable_area(
+            frame_rect(5000.0, 5000.0, 1920.0, 1080.0),
+            usable_rect(0, 0, 1920, 1080)
+        ));
+    }
 }

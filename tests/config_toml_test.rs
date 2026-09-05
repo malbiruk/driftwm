@@ -612,6 +612,41 @@ fn toml_snap_renamed_keys_are_migration_errors_not_fatal() {
 }
 
 #[test]
+fn toml_outer_gap_omitted_defaults_to_zero_not_gap() {
+    let toml = r#"
+        [snap]
+        gap = 20.0
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert_eq!(config.snap_outer_gap, 0.0);
+}
+
+#[test]
+fn toml_outer_gap_explicit_value_overrides_gap() {
+    let toml = r#"
+        [snap]
+        gap = 20.0
+        outer_gap = 3.0
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert_eq!(config.snap_outer_gap, 3.0);
+}
+
+#[test]
+fn toml_outer_gap_negative_clamps_to_zero_with_warning() {
+    let toml = r#"
+        [snap]
+        outer_gap = -5.0
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert_eq!(config.snap_outer_gap, 0.0);
+    assert!(
+        warnings.iter().any(|w| w.contains("snap.outer_gap")),
+        "expected a snap.outer_gap warning, got {warnings:?}"
+    );
+}
+
+#[test]
 fn toml_zoom_reset_policies_default_true() {
     let config = Config::from_toml("").unwrap();
     assert!(config.zoom_reset_on_new_window);

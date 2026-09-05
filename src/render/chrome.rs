@@ -38,3 +38,41 @@ impl DrawnChrome {
         self
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::DrawnChrome;
+
+    fn configured() -> DrawnChrome {
+        DrawnChrome {
+            ssd_bar: true,
+            border_width: 5,
+            corner_radius: 8,
+            shadow: true,
+        }
+    }
+
+    #[test]
+    fn fullscreen_sheds_all_chrome_even_while_covering() {
+        assert_eq!(configured().drawn(true, true), DrawnChrome::NONE);
+    }
+
+    #[test]
+    fn fullscreen_sheds_all_chrome_while_not_covering() {
+        assert_eq!(configured().drawn(true, false), DrawnChrome::NONE);
+    }
+
+    #[test]
+    fn covering_the_usable_area_squares_corners_and_drops_shadow_but_keeps_bar_and_border() {
+        let drawn = configured().drawn(false, true);
+        assert_eq!(drawn.corner_radius, 0);
+        assert!(!drawn.shadow);
+        assert_eq!(drawn.ssd_bar, configured().ssd_bar);
+        assert_eq!(drawn.border_width, configured().border_width);
+    }
+
+    #[test]
+    fn neither_fullscreen_nor_covering_is_the_identity() {
+        assert_eq!(configured().drawn(false, false), configured());
+    }
+}

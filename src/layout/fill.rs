@@ -728,6 +728,57 @@ mod tests {
         assert!(approx(out.y_low, 25.0) && approx(out.y_high, 975.0));
     }
 
+    #[test]
+    fn zero_bounds_inset_reaches_the_room_edge_but_keeps_the_gap_from_a_neighbor() {
+        // No inset from the room itself (bounds_inset = 0), but a neighbor still
+        // keeps its full gap.
+        let cur = rect(400.0, 400.0, 100.0, 100.0);
+        let neighbor = rect(600.0, 300.0, 200.0, 300.0);
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            0.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
+        assert!(approx(out.x_low, 0.0), "x_low = {}", out.x_low);
+        assert!(approx(out.x_high, 590.0), "x_high = {}", out.x_high); // gap short of the neighbor
+        assert!(approx(out.y_low, 0.0), "y_low = {}", out.y_low);
+        assert!(approx(out.y_high, 1000.0), "y_high = {}", out.y_high);
+    }
+
+    #[test]
+    fn negative_bounds_inset_grows_the_frame_past_the_room() {
+        let cur = rect(400.0, 400.0, 100.0, 100.0);
+        let out = fill_rect(cur, &[], room(), -5.0, 0.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        assert!(rect_approx(out, rect(-5.0, -5.0, 1010.0, 1010.0)));
+    }
+
+    #[test]
+    fn bounds_inset_larger_than_the_gap_still_yields_to_a_closer_neighbor() {
+        // The room inset (25) is generous, but the neighbor's much smaller gap
+        // (5) is what actually limits the side that faces it.
+        let cur = rect(400.0, 400.0, 100.0, 100.0);
+        let neighbor = rect(600.0, 300.0, 200.0, 300.0);
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            25.0,
+            5.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
+        assert!(approx(out.x_low, 25.0), "x_low = {}", out.x_low);
+        assert!(approx(out.x_high, 595.0), "x_high = {}", out.x_high);
+        assert!(approx(out.y_low, 25.0), "y_low = {}", out.y_low);
+        assert!(approx(out.y_high, 975.0), "y_high = {}", out.y_high);
+    }
+
     /// A rect strategy inside a generous canvas, sizes kept positive.
     fn any_rect() -> impl Strategy<Value = SnapRect> {
         (
@@ -798,6 +849,20 @@ mod tests {
                         prop_assert!(!out.overlaps(o), "result {out:?} overlaps resolvable obstacle {o:?}");
                     }
                 }
+            }
+        }
+
+        #[test]
+        fn result_within_bounds_inset_independently_of_the_obstacle_gap(
+            current in any_rect(),
+            obstacles in prop::collection::vec(any_rect(), 0..6),
+            bounds_inset in 0.0..30.0f64,
+            gap in 0.0..30.0f64,
+        ) {
+            let bounds = rect(-800.0, -800.0, 1600.0, 1600.0);
+            if let Some(out) = fill_rect(current, &obstacles, bounds, bounds_inset, gap, UNCONSTRAINED, UNCONSTRAINED) {
+                let b = inset_bounds(bounds, bounds_inset);
+                prop_assert!(within(out, b), "result {out:?} escaped inset bounds {b:?}");
             }
         }
 
