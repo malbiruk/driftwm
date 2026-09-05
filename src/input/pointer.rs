@@ -89,18 +89,13 @@ impl DriftWm {
 
     /// Whether `window`'s `pass_mouse` rule claims this trigger, so the binding
     /// is discarded and the event takes the ordinary unbound path to the client.
-    /// Resolved against the live config like `pass_keys`, so a reload applies
-    /// immediately — not `config::applied_rule`, which is the map-time copy.
     fn pass_mouse_claims(
         &self,
         window: &smithay::desktop::Window,
         mods: &smithay::input::keyboard::ModifiersState,
         trigger: config::MouseTrigger,
     ) -> bool {
-        let app_id = window.app_id_or_class().unwrap_or_default();
-        let title = window.window_title().unwrap_or_default();
-        self.config
-            .resolve_window_rules(&app_id, &title)
+        self.live_rule_for(window)
             .is_some_and(|r| r.pass_mouse.allows(mods, trigger))
     }
 
@@ -1460,7 +1455,11 @@ impl DriftWm {
                 .cloned();
             if fs_scroll.is_some()
                 && let Some(window) = self.active_fullscreen_window()
-                && self.pass_mouse_claims(&window, &mods, scroll_trigger(source))
+                && self.pass_mouse_claims(
+                    &window,
+                    &mods,
+                    config::MouseTrigger::for_axis_source(source),
+                )
             {
                 fs_scroll = None;
             }
@@ -1504,7 +1503,11 @@ impl DriftWm {
         if action.is_some()
             && context == BindingContext::OnWindow
             && let Some(window) = self.pass_mouse_target_under(pos)
-            && self.pass_mouse_claims(&window, &mods, scroll_trigger(source))
+            && self.pass_mouse_claims(
+                &window,
+                &mods,
+                config::MouseTrigger::for_axis_source(source),
+            )
         {
             action = None;
         }
@@ -1675,15 +1678,6 @@ pub(super) fn edges_from_position(
         (_, _, true, _) => xdg_toplevel::ResizeEdge::Top,
         (_, _, _, true) => xdg_toplevel::ResizeEdge::Bottom,
         _ => xdg_toplevel::ResizeEdge::BottomRight,
-    }
-}
-
-/// The continuous-scroll `pass_mouse` trigger for an axis source, matching what
-/// `Config::mouse_scroll_lookup_ctx` builds from the same source.
-fn scroll_trigger(source: AxisSource) -> config::MouseTrigger {
-    match source {
-        AxisSource::Finger => config::MouseTrigger::TrackpadScroll,
-        _ => config::MouseTrigger::WheelScroll,
     }
 }
 

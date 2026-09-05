@@ -15,8 +15,8 @@ use super::toml::{
 };
 use super::types::{
     BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FocusPlacement, FontWeight,
-    HotCorners, KeyCombo, ModKey, MouseBinding, OutputConfig, OutputMode, OutputOutlineSettings,
-    OutputPosition, PassKeys, PassMouse, Pattern, TitleAlign, WindowRule,
+    HotCorners, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition, PassList,
+    Pattern, TitleAlign, WindowRule,
 };
 
 /// How actionable a config warning is. The error bar has room for one message,
@@ -357,6 +357,43 @@ fn parse_pattern(s: String, errors: &mut Warnings) -> Pattern {
     Pattern::Glob(s)
 }
 
+/// Parse a `pass_keys` / `pass_mouse` value: `true` is `All`, a list keeps the
+/// combos `parse` accepts and warns about the rest, and a list left with none
+/// usable is `None`. `field` names the key in the warning, `kind` the combo it
+/// wanted ("key", "mouse").
+fn parse_pass_list<C>(
+    value: Option<PassListFile>,
+    field: &str,
+    kind: &str,
+    errors: &mut Warnings,
+    parse: impl Fn(&str) -> Result<C, String>,
+) -> PassList<C> {
+    match value {
+        None | Some(PassListFile::Bool(false)) => PassList::None,
+        Some(PassListFile::Bool(true)) => PassList::All,
+        Some(PassListFile::List(strs)) => {
+            let combos: Vec<C> = strs
+                .iter()
+                .filter_map(|s| match parse(s) {
+                    Ok(c) => Some(c),
+                    Err(e) => {
+                        collect_warn(
+                            errors,
+                            format!("config: {field} invalid {kind} combo '{s}': {e}"),
+                        );
+                        None
+                    }
+                })
+                .collect();
+            if combos.is_empty() {
+                PassList::None
+            } else {
+                PassList::Only(combos)
+            }
+        }
+    }
+}
+
 pub(super) fn parse_window_rule(
     r: WindowRuleFile,
     mod_key: ModKey,
@@ -387,57 +424,15 @@ pub(super) fn parse_window_rule(
             None
         }
     };
-    let pass_keys = match r.pass_keys {
-        None | Some(PassListFile::Bool(false)) => PassKeys::None,
-        Some(PassListFile::Bool(true)) => PassKeys::All,
-        Some(PassListFile::List(strs)) => {
-            let combos: Vec<KeyCombo> = strs
-                .iter()
-                .filter_map(|s| match parse_key_combo(s, mod_key) {
-                    Ok(mut c) => {
-                        c.normalize();
-                        Some(c)
-                    }
-                    Err(e) => {
-                        collect_warn(
-                            errors,
-                            format!("config: pass_keys invalid key combo '{s}': {e}"),
-                        );
-                        None
-                    }
-                })
-                .collect();
-            if combos.is_empty() {
-                PassKeys::None
-            } else {
-                PassKeys::Only(combos)
-            }
-        }
-    };
-    let pass_mouse = match r.pass_mouse {
-        None | Some(PassListFile::Bool(false)) => PassMouse::None,
-        Some(PassListFile::Bool(true)) => PassMouse::All,
-        Some(PassListFile::List(strs)) => {
-            let combos: Vec<MouseBinding> = strs
-                .iter()
-                .filter_map(|s| match parse_mouse_binding(s, mod_key) {
-                    Ok(b) => Some(b),
-                    Err(e) => {
-                        collect_warn(
-                            errors,
-                            format!("config: pass_mouse invalid mouse combo '{s}': {e}"),
-                        );
-                        None
-                    }
-                })
-                .collect();
-            if combos.is_empty() {
-                PassMouse::None
-            } else {
-                PassMouse::Only(combos)
-            }
-        }
-    };
+    let pass_keys = parse_pass_list(r.pass_keys, "pass_keys", "key", errors, |s| {
+        parse_key_combo(s, mod_key).map(|mut c| {
+            c.normalize();
+            c
+        })
+    });
+    let pass_mouse = parse_pass_list(r.pass_mouse, "pass_mouse", "mouse", errors, |s| {
+        parse_mouse_binding(s, mod_key)
+    });
     let app_id = r.app_id.map(|s| parse_pattern(s, errors));
     let title = r.title.map(|s| parse_pattern(s, errors));
     let size = r.size.and_then(|[w, h]| {

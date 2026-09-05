@@ -8,6 +8,8 @@
 //! Also the per-surface teardown sweep, shared by the normal and crash
 //! shutdown paths so the two cannot drift apart and leak.
 
+use driftwm::config::AppliedWindowRule;
+use driftwm::window_ext::WindowExt;
 use smithay::desktop::Window;
 use smithay::reexports::wayland_server::Resource;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
@@ -158,6 +160,15 @@ impl DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(surface))
             .and_then(|w| w.client())
             .cloned()
+    }
+
+    /// The window rules matching `window` right now, resolved against the live
+    /// config rather than the map-time copy `config::applied_rule` holds — the
+    /// `pass_keys` / `pass_mouse` exception, so a reload applies immediately.
+    pub(crate) fn live_rule_for(&self, window: &Window) -> Option<AppliedWindowRule> {
+        let app_id = window.app_id_or_class().unwrap_or_default();
+        let title = window.window_title().unwrap_or_default();
+        self.config.resolve_window_rules(&app_id, &title)
     }
 
     /// The stage window owning `surface`, following subsurface parents and then

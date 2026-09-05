@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::f64::consts::FRAC_1_SQRT_2;
 use std::hash::Hash;
 
+use smithay::backend::input::AxisSource;
 use smithay::input::keyboard::{Keysym, ModifiersState};
 use smithay::utils::Transform;
 
@@ -280,6 +281,18 @@ pub enum MouseTrigger {
     WheelUp,
     /// One discrete wheel notch toward the user.
     WheelDown,
+}
+
+impl MouseTrigger {
+    /// The continuous-scroll trigger an axis source scrolls as. Shared by the
+    /// binding lookup and the `pass_mouse` claim so the two can't disagree on
+    /// what a trackpad reports.
+    pub fn for_axis_source(source: AxisSource) -> Self {
+        match source {
+            AxisSource::Finger => Self::TrackpadScroll,
+            _ => Self::WheelScroll,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

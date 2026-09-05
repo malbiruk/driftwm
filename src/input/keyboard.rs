@@ -11,7 +11,6 @@ use smithay::{
 };
 
 use driftwm::config::Modifiers;
-use driftwm::window_ext::WindowExt;
 
 use crate::state::DriftWm;
 
@@ -137,14 +136,10 @@ impl DriftWm {
                 // gated focus: it has no client, so a matching rule would only
                 // Forward bindings (and Enter) into a `None` seat focus.
                 if suspended_gate.is_none() {
-                    let focused_pass_keys = state.focused_window().and_then(|w| {
-                        let app_id = w.app_id_or_class().unwrap_or_default();
-                        let title = w.window_title().unwrap_or_default();
-                        state
-                            .config
-                            .resolve_window_rules(&app_id, &title)
-                            .map(|r| r.pass_keys)
-                    });
+                    let focused_pass_keys = state
+                        .focused_window()
+                        .and_then(|w| state.live_rule_for(&w))
+                        .map(|r| r.pass_keys);
                     if focused_pass_keys
                         .as_ref()
                         .is_some_and(|pk| pk.allows_raw(modifiers, sym))

@@ -364,13 +364,9 @@ impl Config {
         source: AxisSource,
         context: BindingContext,
     ) -> Option<&MouseAction> {
-        let trigger = match source {
-            AxisSource::Finger => MouseTrigger::TrackpadScroll,
-            _ => MouseTrigger::WheelScroll,
-        };
         let binding = MouseBinding {
             modifiers: Modifiers::from_state(modifiers),
-            trigger,
+            trigger: MouseTrigger::for_axis_source(source),
         };
         self.mouse.lookup(&binding, context)
     }
