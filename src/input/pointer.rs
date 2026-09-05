@@ -139,8 +139,8 @@ impl DriftWm {
     }
 
     /// Whether the toplevel whose content is under `pos` claims `trigger`.
-    /// Callers own the pick-mode gate: it holds for canvas subjects but not
-    /// for pinned windows, which keep pointer focus below `interact_min`.
+    /// Callers own the pick-mode gate; `try_pinned_button` is the one caller
+    /// that leaves it off.
     fn target_claims(
         &self,
         pos: Point<f64, smithay::utils::Logical>,

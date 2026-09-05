@@ -626,3 +626,24 @@ fn a_claimed_notch_on_a_fullscreen_window_runs_no_action() {
         "the window claimed the notch, so its fullscreen action must not fire"
     );
 }
+
+/// The positive control for the case above: with no `pass_mouse` rule, the
+/// same off-bbox notch runs the fullscreen toggle.
+#[test]
+fn an_unclaimed_notch_on_a_fullscreen_window_runs_its_action() {
+    let mut f = Fixture::with_config(config(NOTCH_FULLSCREEN));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let off_bbox = center_of(&mut f, &window) + Point::from((0.0, 400.0));
+    aim_and_hold(&mut f, KEY_LEFTALT, off_bbox);
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+
+    assert!(
+        !f.state().is_fullscreen(),
+        "an unclaimed notch runs its bound action"
+    );
+}

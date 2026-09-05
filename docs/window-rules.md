@@ -284,8 +284,8 @@ still pans the camera to the window.
 
 Below `[zoom] interact_min` a canvas window has no pointer focus to forward to,
 so a *canvas window's* `pass_mouse` claims are ignored there and the compositor
-bindings stay live. Pinned and fullscreen windows keep their pointer focus, so
-their claims still apply.
+bindings stay live. A pinned window's *button* claims and a fullscreen
+window's claims still apply.
 
 When multiple rules match the same window, combo lists are **unioned** and
 `true` beats a list.
