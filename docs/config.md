@@ -605,7 +605,7 @@ focused border. Same default as above — set this to a different color to get a
 
 Default: `1.0`
 
-Focus-dependent opacity for windows that carry no `opacity` of their own. A window rule `opacity` or `driftwm msg opacity` pins a window at one value in both focus states, so `opacity = 1.0` in a rule is how a PiP window stays opaque under a global dim. Fullscreen windows and widgets ignore these defaults and draw opaque unless pinned — a translucent fullscreen window costs its output direct scan-out. Layer-shell surfaces (bars, wallpapers) are unaffected: they only take an `opacity` from a window rule. With an animated [background], any translucent window forces a full recomposite each frame — under a global dim, that is every unfocused window.
+Focus-dependent opacity for windows that carry no `opacity` of their own. A window rule `opacity` or `driftwm msg opacity` pins a window at one value in both focus states and opts it out of these defaults. Fullscreen windows and widgets stay opaque unless pinned. With an animated [background], any translucent window forces a full recomposite each frame — under a global dim, that is every unfocused window.
 
 unfocused windows
 
@@ -619,7 +619,7 @@ focused windows
 
 Default: `false`
 
-Frost the backdrop of every window whose rules never set `blur` — the same per-window cost and caching as the rule, on every window. A rule `blur = true` still wins per window; fullscreen windows are left alone (same scan-out reason as above), and so are layer-shell surfaces.
+Frost the backdrop of every window whose rules never set `blur` — the same per-window cost and caching as the rule, on every window. A rule `blur = true` still wins per window; fullscreen windows and layer-shell surfaces are left alone.
 
 **Example: dim + frost**
 

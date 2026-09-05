@@ -137,12 +137,6 @@ driftwm msg --json subscribe \
   | jq --unbuffered -r '.State.windows[] | select(.is_focused) | .app_id'
 ```
 
-Dimming whatever loses focus no longer needs a daemon on this feed: set
-`opacity` and `opacity_focused` in
-[`[decorations]`](config.md#decorations) and the compositor does it.
-`driftwm msg opacity <value>` pins a window at one value in both focus states,
-opting it out of those defaults.
-
 ### Debug counters
 
 `debug-counters` reports the sizes of the compositor's internal per-window,

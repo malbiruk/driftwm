@@ -739,11 +739,9 @@ fn cmd_resize(
     })
 }
 
-/// Runtime per-window opacity. A get reports the value the window is drawn at
-/// right now, which is the `[decorations]` focus-dependent default unless a
-/// window rule or an earlier set pinned the window. A set writes that pin into
-/// the stored `AppliedWindowRule`, and applies to anything the compositor
-/// renders, so no widget/pinned/fullscreen guard.
+/// Runtime per-window opacity. A set writes a pin into the stored
+/// `AppliedWindowRule`, and applies to anything the compositor renders, so no
+/// widget/pinned/fullscreen guard.
 fn cmd_opacity(window: Option<WindowSelector>, value: Option<f64>, state: &mut DriftWm) -> Reply {
     let window = window_by_selector(state, window.as_ref())?;
     let surface = window
