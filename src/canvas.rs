@@ -150,6 +150,21 @@ impl Chrome {
     }
 }
 
+/// Whether a window's screen-space visual `frame` covers the output's `usable`
+/// area, up to less than one logical pixel of shortfall per edge.
+///
+/// The tolerance is exactly the "pan one pixel and the chrome comes back"
+/// boundary the render rule promises, and it absorbs the sub-pixel residue a
+/// fractional output scale or a fractional camera leaves on an otherwise flush
+/// edge. Exact equality and any oversize count as covering.
+pub fn covers_usable_area(frame: Rectangle<f64, Logical>, usable: Rectangle<i32, Logical>) -> bool {
+    let usable = usable.to_f64();
+    frame.loc.x - usable.loc.x < 1.0
+        && frame.loc.y - usable.loc.y < 1.0
+        && (usable.loc.x + usable.size.w) - (frame.loc.x + frame.size.w) < 1.0
+        && (usable.loc.y + usable.size.h) - (frame.loc.y + frame.size.h) < 1.0
+}
+
 /// User-facing coordinates for a window whose content sits at `loc` with content
 /// `size`: its visual frame's center, Y-up. The chrome-aware form of
 /// [`internal_to_rule`].

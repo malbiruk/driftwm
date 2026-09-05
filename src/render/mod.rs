@@ -2,6 +2,7 @@ mod background;
 mod blur;
 mod capture;
 mod capture_background;
+mod chrome;
 mod closing;
 mod cursor;
 mod elements;
@@ -47,6 +48,7 @@ pub use tile_chunks::BgChunkCache;
 pub(crate) use suspended::{ensure_body, ensure_label};
 
 use blur::{BlurLayer, BlurRequestData, process_blur_requests};
+use chrome::DrawnChrome;
 use layers::{build_canvas_layer_elements, build_layer_elements};
 use shaders::{push_border_element, push_shadow_element};
 
@@ -351,10 +353,6 @@ pub(crate) fn compose_capture_elements(
             continue;
         };
         let is_fullscreen = state.stage.is_fullscreen(window);
-        let has_ssd = !is_fullscreen
-            && state
-                .decorations
-                .contains_key(&DecorationKey::Surface(wl_surface.id()));
 
         let applied = driftwm::config::applied_rule(&wl_surface);
         let is_widget = applied.as_ref().is_some_and(|r| r.widget);
@@ -376,15 +374,32 @@ pub(crate) fn compose_capture_elements(
             applied.as_ref().and_then(|r| r.decoration.as_ref()),
             &state.config.decorations.default_mode,
         );
-        let effective_bw = if is_fullscreen {
-            0
-        } else {
-            driftwm::config::effective_border_width(
+        let configured = DrawnChrome {
+            ssd_bar: state
+                .decorations
+                .contains_key(&DecorationKey::Surface(wl_surface.id())),
+            border_width: driftwm::config::effective_border_width(
                 applied.as_ref(),
                 effective_mode,
                 &state.config.decorations,
-            )
+            ),
+            corner_radius: driftwm::config::effective_corner_radius(
+                applied.as_ref(),
+                effective_mode,
+                &state.config.decorations,
+            ),
+            shadow: driftwm::config::effective_shadow_enabled(
+                applied.as_ref(),
+                effective_mode,
+                &state.config.decorations,
+            ),
         };
+        // No output here, so there is no usable area a window could cover.
+        let chrome = configured.drawn(is_fullscreen, false);
+        let has_ssd = chrome.ssd_bar;
+        let effective_bw = chrome.border_width;
+        let effective_corner_radius = chrome.corner_radius;
+        let effective_shadow = chrome.shadow;
         let border_color = if is_focused {
             driftwm::config::effective_border_color_focused(
                 applied.as_ref(),
@@ -393,17 +408,6 @@ pub(crate) fn compose_capture_elements(
         } else {
             driftwm::config::effective_border_color(applied.as_ref(), &state.config.decorations)
         };
-        let effective_corner_radius = driftwm::config::effective_corner_radius(
-            applied.as_ref(),
-            effective_mode,
-            &state.config.decorations,
-        );
-        let effective_shadow = !is_fullscreen
-            && driftwm::config::effective_shadow_enabled(
-                applied.as_ref(),
-                effective_mode,
-                &state.config.decorations,
-            );
 
         let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
@@ -784,6 +788,8 @@ pub fn compose_frame(
     // live view below, since that is the frame its growth was seeded in.
     let entering_fullscreen = state.fullscreen_entry_on(output);
     let (camera, zoom) = state.world_view(output);
+    // The rect every window's destination frame is tested against below.
+    let usable = state.usable_area_on(output);
 
     // A just-re-created `cached_bg` carries placeholder camera=(0,0)/zoom=1.0
     // (see `init_background`), so without this it renders one frame at the wrong
@@ -926,10 +932,6 @@ pub fn compose_frame(
         // is built for as long as any of it is still visible.
         let chrome_alpha = state.chrome_alpha_of(element_id, window);
         let is_fullscreen = chrome_alpha <= 0.0;
-        let has_ssd = !is_fullscreen
-            && state
-                .decorations
-                .contains_key(&DecorationKey::Surface(wl_surface.id()));
 
         let applied = driftwm::config::applied_rule(&wl_surface);
         let is_widget = applied.as_ref().is_some_and(|r| r.widget);
@@ -948,15 +950,32 @@ pub fn compose_frame(
             applied.as_ref().and_then(|r| r.decoration.as_ref()),
             &state.config.decorations.default_mode,
         );
-        let effective_bw = if is_fullscreen {
-            0
-        } else {
-            driftwm::config::effective_border_width(
+        let configured = DrawnChrome {
+            ssd_bar: state
+                .decorations
+                .contains_key(&DecorationKey::Surface(wl_surface.id())),
+            border_width: driftwm::config::effective_border_width(
                 applied.as_ref(),
                 effective_mode,
                 &state.config.decorations,
-            )
+            ),
+            corner_radius: driftwm::config::effective_corner_radius(
+                applied.as_ref(),
+                effective_mode,
+                &state.config.decorations,
+            ),
+            shadow: driftwm::config::effective_shadow_enabled(
+                applied.as_ref(),
+                effective_mode,
+                &state.config.decorations,
+            ),
         };
+        // Bar and border are what the frame carries and what the culling box
+        // below measures; covering the usable area never changes either, so they
+        // can be read before there is a render transform to decide coverage from.
+        let frame_chrome = configured.drawn(is_fullscreen, false);
+        let has_ssd = frame_chrome.ssd_bar;
+        let effective_bw = frame_chrome.border_width;
         let border_color = if is_focused {
             driftwm::config::effective_border_color_focused(
                 applied.as_ref(),
@@ -965,17 +984,6 @@ pub fn compose_frame(
         } else {
             driftwm::config::effective_border_color(applied.as_ref(), &state.config.decorations)
         };
-        let effective_corner_radius = driftwm::config::effective_corner_radius(
-            applied.as_ref(),
-            effective_mode,
-            &state.config.decorations,
-        );
-        let effective_shadow = !is_fullscreen
-            && driftwm::config::effective_shadow_enabled(
-                applied.as_ref(),
-                effective_mode,
-                &state.config.decorations,
-            );
 
         let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
@@ -1013,6 +1021,36 @@ pub fn compose_frame(
         else {
             continue;
         };
+
+        // Measured on the destination frame, never on the animated picture: a
+        // window animation is eye candy over a state change that is already
+        // complete, and input hit-tests the destination too, so the chrome flips
+        // at the action and back at its undo. `render_loc + geom_loc` is the
+        // content origin fit, fill and parking produced, and committed geometry
+        // still reports the pre-fit size until the client acks.
+        let covers = {
+            let bw = effective_bw as f64;
+            let bar = if has_ssd {
+                state.config.decorations.title_bar_height as f64
+            } else {
+                0.0
+            };
+            let content = crate::state::configured_window_size(window);
+            let frame = Rectangle::new(
+                Point::from((
+                    (render_loc.x + geom_loc.x as f64 - bw) * zoom,
+                    (render_loc.y + geom_loc.y as f64 - bar - bw) * zoom,
+                )),
+                Size::from((
+                    (content.w as f64 + 2.0 * bw) * zoom,
+                    (content.h as f64 + bar + 2.0 * bw) * zoom,
+                )),
+            );
+            canvas::covers_usable_area(frame, usable)
+        };
+        let chrome = configured.drawn(is_fullscreen, covers);
+        let effective_corner_radius = chrome.corner_radius;
+        let effective_shadow = chrome.shadow;
 
         // Per-window lifecycle/geometry animation. A pinned window's chase runs
         // in screen space against its pin's content-box origin (`site.screen_pos`),
