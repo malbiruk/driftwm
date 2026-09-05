@@ -136,7 +136,7 @@ fn push_layer_chrome(
             crate::decorations::DecorationKey::Surface(surface_id),
             ss,
             body_logical,
-            (corner_radius + border_width) as f32,
+            super::shaders::outer_corner_radius(corner_radius as f32, border_width as f32),
             opacity,
             scale,
             zoom,

@@ -2,7 +2,7 @@
 precision mediump float;
 varying vec2 v_coords;
 uniform float alpha;
-uniform vec2 size;        // element size in pixels
+uniform vec2 size;        // element size in shader-logical units
 uniform vec4 u_window_rect; // (x, y, w, h) window rect within element
 uniform float u_radius;     // shadow extent (= 3σ)
 uniform vec4 u_color;
@@ -14,6 +14,11 @@ vec2 erf_approx(vec2 v) {
     vec2 r1 = 1.0 + (0.278393 + (0.230389 + (0.000972 + 0.078108 * a) * a) * a) * a;
     vec2 r2 = r1 * r1;
     return s - s / (r2 * r2);
+}
+
+float sd_rounded_box(vec2 p, vec2 half_size, float r) {
+    vec2 q = abs(p) - half_size + vec2(r);
+    return length(max(q, vec2(0.0))) + min(max(q.x, q.y), 0.0) - r;
 }
 
 float gaussian(float x, float sigma) {
@@ -54,8 +59,10 @@ void main() {
         y += step_size;
     }
 
-    // Mask interior (shadow is behind the window)
-    float dist = length(max(abs(p) - half_size + vec2(corner), 0.0)) - corner;
+    // Mask interior (shadow is behind the window). The full SDF, not just its
+    // exterior term: with a square corner that term is 0 across the whole
+    // interior, so step() would leave the body unmasked.
+    float dist = sd_rounded_box(p, half_size, corner);
     float outside = step(0.0, dist);
 
     gl_FragColor = u_color * shadow * outside * alpha;

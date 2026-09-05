@@ -71,6 +71,16 @@ pub fn compile_shadow_shader(renderer: &mut GlesRenderer) -> Option<GlesPixelPro
 /// during fully static frames).
 pub type ShadowPhysKey = [i32; 8];
 
+/// Outer radius of the border stroke (and the shadow that grades from it):
+/// a rounded rect grows by the stroke width, a square rect stays square.
+pub(super) fn outer_corner_radius(inner: f32, border_width: f32) -> f32 {
+    if inner > 0.0 {
+        inner + border_width
+    } else {
+        0.0
+    }
+}
+
 /// Compute both the uniforms and the phys key for a shadow element.
 ///
 /// * `body_pre_zoom` — the body's pre-zoom physical rect, computed via
@@ -371,6 +381,14 @@ pub(super) const BORDER_UNIFORMS: &[UniformName<'static>] = &[
         type_: UniformType::_1f,
     },
     UniformName {
+        name: Cow::Borrowed("u_outer_radius"),
+        type_: UniformType::_1f,
+    },
+    UniformName {
+        name: Cow::Borrowed("u_aa_scale"),
+        type_: UniformType::_1f,
+    },
+    UniformName {
         name: Cow::Borrowed("u_color"),
         type_: UniformType::_4f,
     },
@@ -435,6 +453,13 @@ fn border_uniforms_precise(
         ),
         Uniform::new("u_inner_radius", inner_r_logical as f32),
         Uniform::new("u_border_width", border_w_logical as f32),
+        Uniform::new(
+            "u_outer_radius",
+            outer_corner_radius(inner_r_logical as f32, border_w_logical as f32),
+        ),
+        // Signed distances are shader-logical; scale them so the anti-aliasing
+        // band is one output pixel rather than one logical unit.
+        Uniform::new("u_aa_scale", px as f32),
         Uniform::new(
             "u_color",
             (
@@ -676,4 +701,17 @@ pub(super) fn compile_textured_bg_shader(
     renderer
         .compile_custom_texture_shader(src, BG_TEX_UNIFORMS)
         .map_err(|e| format!("compile error: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn outer_corner_radius_only_grows_a_rounded_corner() {
+        assert_eq!(outer_corner_radius(0.0, 2.0), 0.0);
+        assert_eq!(outer_corner_radius(10.0, 2.0), 12.0);
+        assert_eq!(outer_corner_radius(1.0, 0.0), 1.0);
+        assert_eq!(outer_corner_radius(-1.0, 2.0), 0.0);
+    }
 }

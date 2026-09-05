@@ -580,7 +580,7 @@ fn flatten(
         shaders::bake_shadow_element(
             shader,
             body,
-            (chrome.corner_radius[2] + chrome.border_width as f32).max(0.0),
+            shaders::outer_corner_radius(chrome.corner_radius[2], chrome.border_width as f32),
             scale,
         )
     });

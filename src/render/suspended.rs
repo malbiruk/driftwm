@@ -19,7 +19,7 @@ use driftwm::config::DecorationConfig;
 
 use crate::decorations::{DecorationKey, WindowDecoration};
 use crate::render::elements::OutputRenderElements;
-use crate::render::shaders::{push_border_element, push_shadow_element};
+use crate::render::shaders::{outer_corner_radius, push_border_element, push_shadow_element};
 use crate::render::{PixelSnapRescaleElement, TrimmedElement, painted_size};
 use crate::state::{BorderCacheEntry, ShadowCacheEntry, SuspendedWindow};
 
@@ -348,7 +348,7 @@ pub(super) fn push_suspended_element(
             key,
             shader,
             body_logical,
-            (corner_radius + border_width) as f32,
+            outer_corner_radius(corner_radius as f32, border_width as f32),
             alpha as f64,
             scale,
             zoom,

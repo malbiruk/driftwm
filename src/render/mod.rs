@@ -50,7 +50,7 @@ pub(crate) use suspended::{ensure_body, ensure_label};
 use blur::{BlurLayer, BlurRequestData, process_blur_requests};
 use chrome::DrawnChrome;
 use layers::{build_canvas_layer_elements, build_layer_elements};
-use shaders::{push_border_element, push_shadow_element};
+use shaders::{outer_corner_radius, push_border_element, push_shadow_element};
 
 /// The per-window affine transform for an in-flight open/close/geometry
 /// animation, threaded through the chrome push helpers so the surface, border,
@@ -608,7 +608,7 @@ pub(crate) fn compose_capture_elements(
                     wl_surface.id().into(),
                     &shader,
                     body_logical,
-                    (effective_corner_radius + effective_bw) as f32,
+                    outer_corner_radius(effective_corner_radius as f32, effective_bw as f32),
                     opacity,
                     scale,
                     zoom,
@@ -675,7 +675,7 @@ pub(crate) fn compose_capture_elements(
                         wl_surface.id().into(),
                         &shader,
                         body_logical,
-                        (effective_corner_radius + effective_bw) as f32,
+                        outer_corner_radius(effective_corner_radius as f32, effective_bw as f32),
                         opacity,
                         scale,
                         zoom,
@@ -1382,8 +1382,9 @@ pub fn compose_frame(
 
             // Shadow encloses title bar + content + border; cached per-surface
             // so the damage tracker can skip unchanged regions. With a border,
-            // footprint and corner radius grow by border_width so the shadow
-            // grades from the border's outer perimeter (matches niri).
+            // the footprint grows by border_width so the shadow grades from the
+            // border's outer perimeter; the radius follows `outer_corner_radius`,
+            // so a square window keeps a square shadow.
             if effective_shadow && let Some(shader) = state.render.shadow_shader.clone() {
                 let bw = effective_bw as f64;
                 let body_logical: Rectangle<f64, Logical> = Rectangle::new(
@@ -1400,7 +1401,7 @@ pub fn compose_frame(
                     wl_surface.id().into(),
                     &shader,
                     body_logical,
-                    (effective_corner_radius + effective_bw) as f32,
+                    outer_corner_radius(effective_corner_radius as f32, effective_bw as f32),
                     chrome_opacity,
                     scale,
                     zoom,
@@ -1464,8 +1465,10 @@ pub fn compose_frame(
                     );
                 }
 
-                // Footprint and corner radius grow by border_width so the
-                // shadow grades from the border's outer edge, not the content edge.
+                // The footprint grows by border_width so the shadow grades from
+                // the border's outer edge, not the content edge; the radius
+                // follows `outer_corner_radius`, so a square window keeps a
+                // square shadow.
                 if effective_shadow && let Some(shader) = state.render.shadow_shader.clone() {
                     let bw = effective_bw as f64;
                     let body_logical: Rectangle<f64, Logical> = Rectangle::new(
@@ -1482,7 +1485,7 @@ pub fn compose_frame(
                         wl_surface.id().into(),
                         &shader,
                         body_logical,
-                        (effective_corner_radius + effective_bw) as f32,
+                        outer_corner_radius(effective_corner_radius as f32, effective_bw as f32),
                         chrome_opacity,
                         scale,
                         zoom,
