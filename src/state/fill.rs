@@ -99,6 +99,7 @@ impl DriftWm {
             current,
             &obstacles,
             bounds,
+            self.config.outer_frame_inset(bw),
             self.config.snap_gap,
             min_size,
             max_size,

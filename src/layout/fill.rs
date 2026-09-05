@@ -1,30 +1,34 @@
 //! Geometry for `fill-window`: grow a window in place to fill the free space
-//! around it, stopping at neighboring windows and the usable-area edge (both
-//! with a snap-gap margin), and pulling edges back in where they stick out past
-//! the usable area or into a neighbor. Pure frame-space canvas math — the
-//! compositor glue in `state/fill.rs` supplies the rects and converts the
-//! result back to a client size + map location.
+//! around it, stopping a gap short of neighboring windows and an outer-gap
+//! inset short of the usable-area edge, and pulling edges back in where they
+//! stick out past the usable area or into a neighbor. Pure frame-space canvas
+//! math — the compositor glue in `state/fill.rs` supplies the rects and
+//! converts the result back to a client size + map location.
 
 use super::snap::SnapRect;
 
-/// Grow `current` outward inside `bounds` (inset by `gap`), never covering an
-/// obstacle and never crossing the gap margin, then apply frame-space size
-/// constraints. `min_size` / `max_size` use `0.0` as the "unconstrained on this
-/// axis" sentinel. Returns `None` when `current` lies entirely outside the
-/// gap-inset bounds — such a window can't be filled without being moved.
+/// Grow `current` outward inside `bounds` (inset by `bounds_inset`), never
+/// covering an obstacle and never crossing the `gap` margin around one, then
+/// apply frame-space size constraints. `bounds_inset` is the screen-edge inset
+/// and may be negative (a frame whose border hangs off the usable area); `gap`
+/// is the spacing kept from obstacles. `min_size` / `max_size` use `0.0` as the
+/// "unconstrained on this axis" sentinel. Returns `None` when `current` lies
+/// entirely outside the inset bounds — such a window can't be filled without
+/// being moved.
 pub fn fill_rect(
     current: SnapRect,
     obstacles: &[SnapRect],
     bounds: SnapRect,
+    bounds_inset: f64,
     gap: f64,
     min_size: (f64, f64),
     max_size: (f64, f64),
 ) -> Option<SnapRect> {
     let b = SnapRect {
-        x_low: bounds.x_low + gap,
-        x_high: bounds.x_high - gap,
-        y_low: bounds.y_low + gap,
-        y_high: bounds.y_high - gap,
+        x_low: bounds.x_low + bounds_inset,
+        x_high: bounds.x_high - bounds_inset,
+        y_low: bounds.y_low + bounds_inset,
+        y_high: bounds.y_high - bounds_inset,
     };
     if !current.overlaps(&b) {
         return None;
@@ -310,7 +314,7 @@ mod tests {
     #[test]
     fn no_obstacles_grows_to_inset_bounds() {
         let cur = rect(400.0, 400.0, 100.0, 100.0);
-        let out = fill_rect(cur, &[], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(cur, &[], room(), 10.0, 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
         assert!(rect_approx(out, rect(10.0, 10.0, 980.0, 980.0)));
     }
 
@@ -318,7 +322,16 @@ mod tests {
     fn right_obstacle_stops_at_gap() {
         let cur = rect(100.0, 400.0, 100.0, 100.0);
         let neighbor = rect(600.0, 300.0, 200.0, 300.0);
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         // Right edge stops a gap short of the neighbor's left edge (590),
         // other edges reach the inset bounds.
         assert!(approx(out.x_high, 590.0), "x_high = {}", out.x_high);
@@ -333,7 +346,16 @@ mod tests {
         // right edge (500): the right edge must stay, not retreat.
         let cur = rect(100.0, 400.0, 400.0, 100.0);
         let neighbor = rect(505.0, 300.0, 200.0, 300.0);
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 500.0), "x_high = {}", out.x_high);
     }
 
@@ -349,6 +371,7 @@ mod tests {
             &[enclosing],
             room(),
             10.0,
+            10.0,
             UNCONSTRAINED,
             UNCONSTRAINED,
         )
@@ -363,7 +386,16 @@ mod tests {
         // the inset bounds.
         let cur = rect(400.0, 400.0, 200.0, 100.0); // [400,600]×[400,500]
         let neighbor = rect(550.0, 300.0, 200.0, 300.0); // [550,750]×[300,600]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 540.0), "x_high = {}", out.x_high); // 550 − gap
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
         assert!(approx(out.y_low, 10.0));
@@ -376,7 +408,16 @@ mod tests {
         // neighbor's right edge, then the free sides grow to bounds.
         let cur = rect(400.0, 400.0, 200.0, 200.0); // [400,600]²
         let neighbor = rect(250.0, 300.0, 200.0, 400.0); // [250,450]×[300,700]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_low, 460.0), "x_low = {}", out.x_low); // 450 + gap
         assert!(approx(out.x_high, 990.0));
         assert!(approx(out.y_low, 10.0));
@@ -390,7 +431,16 @@ mod tests {
         // left free (reaches the bounds rather than the y-escape at 540).
         let cur = rect(400.0, 400.0, 200.0, 200.0); // [400,600]²
         let neighbor = rect(580.0, 550.0, 200.0, 200.0); // [580,780]×[550,750]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 570.0), "x_high = {}", out.x_high); // 580 − gap
         assert!(approx(out.y_high, 990.0), "y_high = {}", out.y_high);
     }
@@ -402,7 +452,16 @@ mod tests {
         // growth is untouched.
         let cur = rect(400.0, 400.0, 200.0, 200.0); // [400,600]²
         let neighbor = rect(590.0, 590.0, 200.0, 200.0); // [590,790]²
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 580.0), "x_high = {}", out.x_high); // 590 − gap
         assert!(approx(out.y_high, 990.0), "y_high = {}", out.y_high);
     }
@@ -415,11 +474,28 @@ mod tests {
         let cur = rect(400.0, 400.0, 200.0, 200.0); // [400,600]²
         let neighbor = rect(550.0, 300.0, 200.0, 400.0); // [550,750]×[300,700]
 
-        let free = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let free = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(free.x_high, 540.0), "x_high = {}", free.x_high);
 
-        let blocked =
-            fill_rect(cur, &[neighbor], room(), 10.0, (200.0, 0.0), UNCONSTRAINED).unwrap();
+        let blocked = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            (200.0, 0.0),
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(rect_approx(blocked, rect(10.0, 10.0, 980.0, 980.0)));
     }
 
@@ -435,6 +511,7 @@ mod tests {
             cur,
             &[right, below],
             room(),
+            10.0,
             10.0,
             UNCONSTRAINED,
             UNCONSTRAINED,
@@ -460,6 +537,7 @@ mod tests {
             &[first, second],
             room(),
             10.0,
+            10.0,
             UNCONSTRAINED,
             UNCONSTRAINED,
         )
@@ -477,7 +555,16 @@ mod tests {
         // (the outer max-guard keeps the too-close edge from retreating).
         let cur = rect(100.0, 100.0, 100.0, 100.0); // [100,200]²
         let neighbor = rect(100.0, 205.0, 100.0, 200.0); // [100,200]×[205,405]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
         assert!(approx(out.x_high, 990.0), "x_high = {}", out.x_high);
         assert!(approx(out.y_low, 10.0), "y_low = {}", out.y_low);
@@ -492,7 +579,16 @@ mod tests {
         // freezes, the left still grows to the bounds.
         let cur = rect(100.0, 100.0, 100.0, 100.0); // [100,200]²
         let neighbor = rect(150.0, 205.0, 250.0, 200.0); // [150,400]×[205,405]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 200.0), "x_high = {}", out.x_high);
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
     }
@@ -503,7 +599,16 @@ mod tests {
         // only the left edge freezes and the right grows to the bounds.
         let cur = rect(100.0, 100.0, 100.0, 100.0); // [100,200]²
         let neighbor = rect(50.0, 205.0, 100.0, 200.0); // [50,150]×[205,405]
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_low, 100.0), "x_low = {}", out.x_low);
         assert!(approx(out.x_high, 990.0), "x_high = {}", out.x_high);
     }
@@ -515,7 +620,16 @@ mod tests {
         // considered and horizontal growth reaches the bounds unfrozen.
         let cur = rect(100.0, 100.0, 100.0, 100.0); // [100,200]²
         let neighbor = rect(150.0, 210.0, 250.0, 200.0); // y_low = 200 + gap
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 990.0), "x_high = {}", out.x_high);
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
     }
@@ -528,7 +642,16 @@ mod tests {
         let cur = rect(100.0, 100.0, 100.0, 100.0);
         // window y: [100,200]. neighbor y_low = 205 → within gap (10) of 200.
         let neighbor = rect(600.0, 205.0, 200.0, 200.0);
-        let out = fill_rect(cur, &[neighbor], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[neighbor],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         assert!(approx(out.x_high, 590.0), "x_high = {}", out.x_high);
     }
 
@@ -540,7 +663,16 @@ mod tests {
         let cur = rect(100.0, 100.0, 100.0, 100.0);
         // Blocks the right for y in [300, 990]; leaves the top-right open.
         let obstacle = rect(400.0, 300.0, 590.0, 690.0);
-        let out = fill_rect(cur, &[obstacle], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(
+            cur,
+            &[obstacle],
+            room(),
+            10.0,
+            10.0,
+            UNCONSTRAINED,
+            UNCONSTRAINED,
+        )
+        .unwrap();
         // Neither candidate may overlap the obstacle.
         assert!(!out.overlaps(&obstacle));
         // Vertical-first arm: full height [10,990], width capped at 390 (gap
@@ -558,14 +690,14 @@ mod tests {
         // Window overhangs the left and top of the usable area; fill pulls those
         // edges in to the inset bounds while growing the others out.
         let cur = rect(-200.0, -200.0, 400.0, 400.0);
-        let out = fill_rect(cur, &[], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(cur, &[], room(), 10.0, 10.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
         assert!(rect_approx(out, rect(10.0, 10.0, 980.0, 980.0)));
     }
 
     #[test]
     fn fully_outside_returns_none() {
         let cur = rect(1200.0, 1200.0, 100.0, 100.0);
-        assert!(fill_rect(cur, &[], room(), 10.0, UNCONSTRAINED, UNCONSTRAINED).is_none());
+        assert!(fill_rect(cur, &[], room(), 10.0, 10.0, UNCONSTRAINED, UNCONSTRAINED).is_none());
     }
 
     #[test]
@@ -573,7 +705,7 @@ mod tests {
         // A min width larger than the free region: keep the target's low edge
         // and overflow on the high side.
         let cur = rect(400.0, 400.0, 100.0, 100.0);
-        let out = fill_rect(cur, &[], room(), 10.0, (2000.0, 0.0), UNCONSTRAINED).unwrap();
+        let out = fill_rect(cur, &[], room(), 10.0, 10.0, (2000.0, 0.0), UNCONSTRAINED).unwrap();
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
         assert!(approx(out.x_high - out.x_low, 2000.0));
     }
@@ -583,7 +715,7 @@ mod tests {
         // Window sits at the left; a max width smaller than the free region caps
         // growth on the right, keeping the viewport-clamped left edge.
         let cur = rect(10.0, 400.0, 100.0, 100.0);
-        let out = fill_rect(cur, &[], room(), 10.0, UNCONSTRAINED, (300.0, 0.0)).unwrap();
+        let out = fill_rect(cur, &[], room(), 10.0, 10.0, UNCONSTRAINED, (300.0, 0.0)).unwrap();
         assert!(approx(out.x_low, 10.0), "x_low = {}", out.x_low);
         assert!(approx(out.x_high, 310.0), "x_high = {}", out.x_high);
     }
@@ -591,7 +723,7 @@ mod tests {
     #[test]
     fn respects_gap_against_bounds() {
         let cur = rect(400.0, 400.0, 100.0, 100.0);
-        let out = fill_rect(cur, &[], room(), 25.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
+        let out = fill_rect(cur, &[], room(), 25.0, 25.0, UNCONSTRAINED, UNCONSTRAINED).unwrap();
         assert!(approx(out.x_low, 25.0) && approx(out.x_high, 975.0));
         assert!(approx(out.y_low, 25.0) && approx(out.y_high, 975.0));
     }
@@ -607,12 +739,12 @@ mod tests {
             .prop_map(|(x, y, w, h)| rect(x, y, w, h))
     }
 
-    fn gap_inset(bounds: SnapRect, gap: f64) -> SnapRect {
+    fn inset_bounds(bounds: SnapRect, inset: f64) -> SnapRect {
         SnapRect {
-            x_low: bounds.x_low + gap,
-            x_high: bounds.x_high - gap,
-            y_low: bounds.y_low + gap,
-            y_high: bounds.y_high - gap,
+            x_low: bounds.x_low + inset,
+            x_high: bounds.x_high - inset,
+            y_low: bounds.y_low + inset,
+            y_high: bounds.y_high - inset,
         }
     }
 
@@ -642,8 +774,8 @@ mod tests {
             gap in 0.0..30.0f64,
         ) {
             let bounds = rect(-800.0, -800.0, 1600.0, 1600.0);
-            if let Some(out) = fill_rect(current, &obstacles, bounds, gap, UNCONSTRAINED, UNCONSTRAINED) {
-                let b = gap_inset(bounds, gap);
+            if let Some(out) = fill_rect(current, &obstacles, bounds, gap, gap, UNCONSTRAINED, UNCONSTRAINED) {
+                let b = inset_bounds(bounds, gap);
                 // Unconstrained, so the result fits the gap-inset bounds.
                 prop_assert!(within(out, b), "result {out:?} escaped inset bounds {b:?}");
 
@@ -676,12 +808,12 @@ mod tests {
             gap in 0.0..30.0f64,
         ) {
             let bounds = rect(-800.0, -800.0, 1600.0, 1600.0);
-            if let Some(first) = fill_rect(current, &obstacles, bounds, gap, UNCONSTRAINED, UNCONSTRAINED) {
+            if let Some(first) = fill_rect(current, &obstacles, bounds, gap, gap, UNCONSTRAINED, UNCONSTRAINED) {
                 // Once a fill no longer overlaps any obstacle — the steady state a
                 // fill reaches unless it had to grow over an unresolvable
                 // enclosing obstacle — re-filling reproduces it exactly.
                 if obstacles.iter().all(|o| !first.overlaps(o)) {
-                    let second = fill_rect(first, &obstacles, bounds, gap, UNCONSTRAINED, UNCONSTRAINED)
+                    let second = fill_rect(first, &obstacles, bounds, gap, gap, UNCONSTRAINED, UNCONSTRAINED)
                         .expect("filled rect still intersects bounds");
                     prop_assert!(rect_approx(first, second), "not idempotent: {first:?} -> {second:?}");
                 }
