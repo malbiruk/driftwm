@@ -775,9 +775,15 @@ pub fn compose_frame(
 
     // Read per-output state directly — active_output() follows the pointer,
     // which is wrong when rendering an output the pointer isn't on.
-    let (live_camera, live_zoom) = {
+    // `fullscreen_return` doubles as the view a fullscreen entry is leaving,
+    // which the coverage test below judges the entering window on.
+    let (live_camera, live_zoom, pre_fullscreen_view) = {
         let os = crate::state::output_state(output);
-        (os.camera, os.zoom)
+        (
+            os.camera,
+            os.zoom,
+            os.fullscreen_return.as_ref().map(|r| (r.camera, r.zoom)),
+        )
     };
     // Entering fullscreen parks the viewport at zoom 1 in one step, but the
     // window only covers the output at the end of its growth — so for those few
@@ -1024,10 +1030,12 @@ pub fn compose_frame(
 
         // Measured on the destination frame, never on the animated picture: a
         // window animation is eye candy over a state change that is already
-        // complete, and input hit-tests the destination too, so the chrome flips
-        // at the action and back at its undo. `render_loc + geom_loc` is the
-        // content origin fit, fill and parking produced, and committed geometry
-        // still reports the pre-fit size until the client acks.
+        // complete, and input hit-tests the destination too. The camera half is
+        // the opposite — the frame is mapped through the live view, so a fit's
+        // camera flight keeps the chrome until the camera lands.
+        // `render_loc + geom_loc` is the content origin fit, fill and parking
+        // produced, or a pin's screen site, and committed geometry still reports
+        // the pre-fit size until the client acks.
         let covers = {
             let bw = effective_bw as f64;
             let bar = if has_ssd {
@@ -1035,15 +1043,38 @@ pub fn compose_frame(
             } else {
                 0.0
             };
-            let content = crate::state::configured_window_size(window);
+            // A fullscreen entry parks the window on the output at the action,
+            // long before the chrome has finished fading out, so through the
+            // ramp coverage is judged on the rect it is leaving, in the view
+            // that drew it — the park re-seeds the growth so that rect is
+            // exactly where the picture still sits. An ordinary window fades
+            // its corners and shadow as before; a fitted one was already square
+            // and stays so.
+            let leaving = state
+                .stage
+                .fullscreen_on(&name)
+                .filter(|fs| fs.window == *window)
+                .zip(pre_fullscreen_view);
+            let (origin, content, scale) = match leaving {
+                Some((fs, (from_camera, from_zoom))) => (
+                    Point::from((
+                        fs.saved_location.x as f64 - from_camera.x,
+                        fs.saved_location.y as f64 - from_camera.y,
+                    )),
+                    fs.saved_size,
+                    from_zoom,
+                ),
+                None => (
+                    render_loc + geom_loc.to_f64(),
+                    crate::state::configured_window_size(window),
+                    zoom,
+                ),
+            };
             let frame = Rectangle::new(
-                Point::from((
-                    (render_loc.x + geom_loc.x as f64 - bw) * zoom,
-                    (render_loc.y + geom_loc.y as f64 - bar - bw) * zoom,
-                )),
+                Point::from(((origin.x - bw) * scale, (origin.y - bar - bw) * scale)),
                 Size::from((
-                    (content.w as f64 + 2.0 * bw) * zoom,
-                    (content.h as f64 + bar + 2.0 * bw) * zoom,
+                    (content.w as f64 + 2.0 * bw) * scale,
+                    (content.h as f64 + bar + 2.0 * bw) * scale,
                 )),
             );
             canvas::covers_usable_area(frame, usable)
