@@ -128,6 +128,29 @@ impl DriftWm {
         }
     }
 
+    /// Whether the fullscreen window on the active output claims `trigger`.
+    fn fullscreen_claims(
+        &self,
+        mods: &smithay::input::keyboard::ModifiersState,
+        trigger: config::MouseTrigger,
+    ) -> bool {
+        self.active_fullscreen_window()
+            .is_some_and(|w| self.pass_mouse_claims(&w, mods, trigger))
+    }
+
+    /// Whether the toplevel whose content is under `pos` claims `trigger`.
+    /// Callers own the pick-mode gate: it holds for canvas subjects but not
+    /// for pinned windows, which keep pointer focus below `interact_min`.
+    fn target_claims(
+        &self,
+        pos: Point<f64, smithay::utils::Logical>,
+        mods: &smithay::input::keyboard::ModifiersState,
+        trigger: config::MouseTrigger,
+    ) -> bool {
+        self.pass_mouse_target_under(pos)
+            .is_some_and(|w| self.pass_mouse_claims(&w, mods, trigger))
+    }
+
     /// Whether the subject of a wheel notch at `pos` claims it via `pass_mouse`.
     /// On a fullscreen output the subject is the fullscreen window, since the
     /// parked canvas bbox there is not what the notch acts over.
@@ -141,19 +164,14 @@ impl DriftWm {
         up: bool,
         context: BindingContext,
     ) -> bool {
-        let subject = if self.is_fullscreen() {
-            self.active_fullscreen_window()
+        let trigger = config::MouseTrigger::for_wheel_step(up);
+        if self.is_fullscreen() {
+            self.fullscreen_claims(mods, trigger)
         } else if context == BindingContext::OnWindow && !self.pick_mode() {
-            self.pass_mouse_target_under(pos)
+            self.target_claims(pos, mods, trigger)
         } else {
-            return false;
-        };
-        let trigger = if up {
-            config::MouseTrigger::WheelUp
-        } else {
-            config::MouseTrigger::WheelDown
-        };
-        subject.is_some_and(|w| self.pass_mouse_claims(&w, mods, trigger))
+            false
+        }
     }
 
     /// Keep `held_buttons` in sync with a button event, and drain the
@@ -273,8 +291,7 @@ impl DriftWm {
                 // needs its own gate here: the `Action(_)` arm falls through
                 // without returning.
                 if fs_lookup.is_some()
-                    && let Some(window) = self.active_fullscreen_window()
-                    && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+                    && self.fullscreen_claims(&mods, config::MouseTrigger::Button(button))
                 {
                     fs_lookup = None;
                 }
@@ -385,8 +402,7 @@ impl DriftWm {
             if binding.is_some()
                 && context == BindingContext::OnWindow
                 && !self.pick_mode()
-                && let Some(window) = self.pass_mouse_target_under(pos)
-                && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+                && self.target_claims(pos, &mods, config::MouseTrigger::Button(button))
             {
                 binding = None;
                 modifier_binding = false;
@@ -1103,9 +1119,7 @@ impl DriftWm {
         // `pass_mouse` resolves its subject here rather than reusing the
         // `pinned_window_under` below: the chrome arm in between deliberately
         // hits outside the surface, and clearing `modifier_binding` has to reach it.
-        if binding.is_some()
-            && let Some(window) = self.pass_mouse_target_under(pos)
-            && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+        if binding.is_some() && self.target_claims(pos, &mods, config::MouseTrigger::Button(button))
         {
             binding = None;
             modifier_binding = false;
@@ -1464,12 +1478,7 @@ impl DriftWm {
                 .mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow)
                 .cloned();
             if fs_scroll.is_some()
-                && let Some(window) = self.active_fullscreen_window()
-                && self.pass_mouse_claims(
-                    &window,
-                    &mods,
-                    config::MouseTrigger::for_axis_source(source),
-                )
+                && self.fullscreen_claims(&mods, config::MouseTrigger::for_axis_source(source))
             {
                 fs_scroll = None;
             }
@@ -1512,12 +1521,7 @@ impl DriftWm {
         if action.is_some()
             && context == BindingContext::OnWindow
             && !self.pick_mode()
-            && let Some(window) = self.pass_mouse_target_under(pos)
-            && self.pass_mouse_claims(
-                &window,
-                &mods,
-                config::MouseTrigger::for_axis_source(source),
-            )
+            && self.target_claims(pos, &mods, config::MouseTrigger::for_axis_source(source))
         {
             action = None;
         }

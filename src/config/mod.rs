@@ -348,11 +348,7 @@ impl Config {
     ) -> Option<&MouseAction> {
         let binding = MouseBinding {
             modifiers: Modifiers::from_state(modifiers),
-            trigger: if up {
-                MouseTrigger::WheelUp
-            } else {
-                MouseTrigger::WheelDown
-            },
+            trigger: MouseTrigger::for_wheel_step(up),
         };
         self.mouse.lookup(&binding, context)
     }

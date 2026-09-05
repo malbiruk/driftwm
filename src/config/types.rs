@@ -293,6 +293,12 @@ impl MouseTrigger {
             _ => Self::WheelScroll,
         }
     }
+
+    /// The discrete notch trigger for a wheel step, shared by the binding
+    /// lookup and the `pass_mouse` claim for the same reason.
+    pub fn for_wheel_step(up: bool) -> Self {
+        if up { Self::WheelUp } else { Self::WheelDown }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -766,9 +772,9 @@ impl PassList<KeyCombo> {
     /// Constructs and normalises a `KeyCombo` internally — no import needed at call sites.
     pub fn allows_raw(&self, modifiers: &ModifiersState, sym: Keysym) -> bool {
         match self {
-            PassKeys::None => false,
-            PassKeys::All => true,
-            PassKeys::Only(combos) => {
+            PassList::None => false,
+            PassList::All => true,
+            PassList::Only(combos) => {
                 let mut current = KeyCombo {
                     modifiers: Modifiers::from_state(modifiers),
                     sym,
