@@ -18,6 +18,7 @@ use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use crate::decorations::DecorationHit;
 use crate::state::StageWindow;
 
+use super::real::TempDir;
 use super::{Fixture, config, give_ssd, is_activated, map_window, window_by_app_id};
 
 fn pt(x: f64, y: f64) -> Point<f64, Logical> {
@@ -289,6 +290,81 @@ fn touch_gesture_move_lands_client_and_stand_in_alike() {
         );
         lift_finger(&mut f);
         f.state().dismiss_suspended(sid);
+    }
+}
+
+/// A settled touch drag is durable session state exactly as a pointer drag is:
+/// the canvas point the finger dropped the window on is where a restart has to
+/// bring it back, for a live client as much as for a stand-in.
+#[test]
+fn touch_move_marks_the_session_store_dirty_for_live_and_stand_in() {
+    let tmp = TempDir::new();
+
+    {
+        let mut f = Fixture::new();
+        let out = f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        // Without a path the mark-dirty sites all return early.
+        f.state().session_store.path = Some(tmp.path().join("client.json"));
+
+        let id = f.add_client();
+        map_window(&mut f, id, "c", (400, 300));
+        let window = window_by_app_id(&mut f, "c").unwrap();
+        f.state()
+            .map_window(StageWindow::Client(window), INITIAL, true);
+        assert!(
+            start_touch_gesture_move(&mut f, grab_point(), out),
+            "precondition: the touch gesture found the client under the finger"
+        );
+        for m in drag_path() {
+            touch_motion(&mut f, m);
+        }
+
+        // The map and the grab install's raise-and-focus arm the write as well,
+        // so flush here: past this point only the lift can arm it again.
+        f.state().session_store_write_now();
+        assert!(!f.state().session_store_dirty());
+
+        lift_finger(&mut f);
+        assert!(
+            f.state().session_store_dirty(),
+            "the client's dropped position is queued for the durable write"
+        );
+        // Cancel the debounce timer the lift armed; `debug_counters` has no
+        // entry for event-loop timers, so teardown would not catch it.
+        f.state().session_store_write_now();
+    }
+
+    {
+        let mut f = Fixture::new();
+        let out = f.add_output(1, (1920, 1080));
+        origin_view(&mut f);
+        f.state().session_store.path = Some(tmp.path().join("stand-in.json"));
+
+        let sid = f
+            .state()
+            .insert_suspended_for_test(1, INITIAL, Size::from((400, 300)), "s", "S");
+        assert!(
+            start_touch_gesture_move(&mut f, grab_point(), out),
+            "precondition: the touch gesture found the stand-in under the finger"
+        );
+        for m in drag_path() {
+            touch_motion(&mut f, m);
+        }
+
+        f.state().session_store_write_now();
+        assert!(!f.state().session_store_dirty());
+
+        lift_finger(&mut f);
+        assert!(
+            f.state().session_store_dirty(),
+            "the stand-in's dropped position is queued for the same write"
+        );
+
+        // Dismiss clears the stand-in; the flush still cancels the debounce
+        // timer the lift armed, as in the block above.
+        f.state().dismiss_suspended(sid);
+        f.state().session_store_write_now();
     }
 }
 

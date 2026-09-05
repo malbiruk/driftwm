@@ -457,12 +457,7 @@ impl PointerGrab<DriftWm> for MoveGrab {
         data.disarm_interactive_move(&self.target);
         // A settled position (including a cross-output teleport) is durable —
         // persist it on the session-store debounce, live or stand-in alike.
-        if matches!(
-            self.target,
-            ClusterMember::Client(_) | ClusterMember::Suspended(_)
-        ) {
-            data.session_store_mark_dirty();
-        }
+        data.session_store_mark_dirty();
         // A pick-mode promote is the only move that sets grab_cursor (title-bar
         // / alt+drag / gesture / pinned moves never do, and resize grabs can't
         // be concurrent), so this restores only that case. Defer to the next
@@ -780,12 +775,8 @@ impl TouchGrab<DriftWm> for MoveGrab {
     fn unset(&mut self, data: &mut DriftWm) {
         data.clear_edge_pan(&self.output);
         data.touch_state.edge_pan = None;
-        // Mirrors the pointer unset so touch and pointer can't diverge on how
-        // they persist a settled move, regardless of which arm actually fires
-        // for touch.
         data.disarm_interactive_move(&self.target);
-        if matches!(self.target, ClusterMember::Suspended(_)) {
-            data.session_store_mark_dirty();
-        }
+        // A settled touch move is durable exactly like a pointer one.
+        data.session_store_mark_dirty();
     }
 }
