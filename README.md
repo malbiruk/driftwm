@@ -489,7 +489,7 @@ it all together. Use it as a starting point or steal pieces.
 
 ## Community
 
-- [driftwm-desktop](https://github.com/C10udburst/driftwm-desktop) - A layer for displaying `~/Desktop` contents on canvas as draggable icons.
+- [driftwm-desktop](https://github.com/C10udburst/driftwm-desktop) — A layer for displaying `~/Desktop` contents on canvas as draggable icons.
 - [driftwm-settings](https://github.com/wwmaxik/driftwm-settings) — GTK4 GUI config editor
 - [driftwm-noctalia](https://github.com/youssefvdel/driftwm-noctalia) — noctalia shell fork adapted for driftwm
 - [Just Enough Shell](https://github.com/ORFLEM/just_enough_shell) — minimal QuickShell desktop shell, driftwm-focused

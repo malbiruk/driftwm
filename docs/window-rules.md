@@ -255,6 +255,11 @@ widget     = true
 decoration = "none"
 ```
 
+A widget ignores drags, gestures and nudges, so `position` is where it stays —
+but `driftwm msg move <X> <Y> --id <ID>` still repositions one at runtime, which
+is how external desktop-icon clients scatter icons across the canvas. That move
+lasts only for the session.
+
 ### Pictures and text on the canvas (decals)
 
 To pin arbitrary images to canvas spots — hand-drawn shortcut sheets, logos,

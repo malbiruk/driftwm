@@ -778,8 +778,9 @@ pub struct WindowRule {
     /// `Some(false)` maps the window without focusing it or moving the camera
     /// to it. `None` keeps the default focus-on-map behavior.
     pub focus_on_open: Option<bool>,
-    /// Widget windows are pinned (immovable), excluded from navigation/alt-tab,
-    /// and always stacked below normal windows.
+    /// Widget windows are immovable by hand (only `driftwm msg move`
+    /// repositions them), excluded from navigation/alt-tab, and always
+    /// stacked below normal windows.
     pub widget: bool,
     /// Pin the window to one output's screen space (ignores pan/zoom, renders
     /// above normal windows). When set, `position` is output-relative

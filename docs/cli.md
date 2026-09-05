@@ -126,7 +126,7 @@ driftwm msg move [OPTIONS] [X] [Y]
 
 Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
 
-Pinned and fullscreen windows live in screen space, not on the canvas, so `move` refuses to reposition them.
+Pinned and fullscreen windows live in screen space, not on the canvas, so `move` refuses to reposition them. A widget has a canvas position and can be moved only this way, since it ignores drags and nudges — but the new position lasts only until the compositor exits.
 
 `--json` reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
 
@@ -145,7 +145,7 @@ driftwm msg resize [OPTIONS] [WIDTH] [HEIGHT]
 
 Get a window's size, or resize it to `<width> <height>`.
 
-Dimensions are the visible frame, including any compositor-drawn title bar and border. A request is clamped to the client's declared limits — which describe the content inside that frame — and the reply echoes what was configured, not what the client went on to commit. Refused for pinned and fullscreen windows as with `move`, and while the window is under an interactive move or resize.
+Dimensions are the visible frame, including any compositor-drawn title bar and border. A request is clamped to the client's declared limits — which describe the content inside that frame — and the reply echoes what was configured, not what the client went on to commit. Refused for pinned, fullscreen and widget windows, and while the window is under an interactive move or resize.
 
 `--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
 

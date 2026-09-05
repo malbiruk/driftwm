@@ -647,11 +647,15 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // focus; a selector can reach any window. Widgets never activate.
             let activate = state.focused_window().as_ref() == Some(&window) && !window.is_widget();
             state.map_window_to_rule_point(&window, x, y, activate);
+            // `stage.map` always raises and nothing re-asserts stacking until
+            // the next raise. The render buckets keep a widget painted below
+            // windows either way, but the input hit-tests walk raw stage order.
             if window.is_widget() {
                 state.enforce_below_windows();
             }
-            // The new position is durable — persist it on the session-store
-            // debounce, matching the stand-in arm above.
+            // Persist on the session-store debounce, matching the stand-in arm
+            // above. Widgets are excluded from the store, so their move lasts
+            // only this session.
             state.session_store_mark_dirty();
             Ok(Response::Position { x, y })
         }

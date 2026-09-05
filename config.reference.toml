@@ -833,8 +833,9 @@
 # #                Pairs well with pinned_to_screen for unobtrusive overlays; the
 # #                window still takes focus later through normal interaction
 # #                (hover or click). (default: true)
-# #   widget     — true: pinned (immovable), below normal windows, excluded from
-# #                navigation and alt-tab (default: false)
+# #   widget     — true: immovable by hand (no drag, gesture or nudge) though
+# #                `driftwm msg move` still repositions it, below normal windows,
+# #                excluded from navigation and alt-tab (default: false)
 # #   pinned_to_screen — true: lock the window to the output's screen space —
 # #                ignores pan/zoom, floats above normal windows (PiP, toolbars).
 # #                `position` becomes output-relative; movable unless widget = true.

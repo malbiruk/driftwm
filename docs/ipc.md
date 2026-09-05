@@ -36,6 +36,11 @@ Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
 still works.
 
+Widgets are the mirror image: they hold a canvas position but ignore drags,
+gestures and nudges, so `move` is the only way to reposition one. `resize` still
+refuses them, and the move lasts only for the session — widgets never enter the
+session store.
+
 `camera` and `zoom` take the opposite policy. A fullscreen window parks the
 viewport, so **setting** either one exits fullscreen first and then applies,
 rather than refusing. The practical consequence: a script that polls `camera` and
