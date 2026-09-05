@@ -775,15 +775,9 @@ pub fn compose_frame(
 
     // Read per-output state directly — active_output() follows the pointer,
     // which is wrong when rendering an output the pointer isn't on.
-    // `fullscreen_return` doubles as the view a fullscreen entry is leaving,
-    // which the coverage test below judges the entering window on.
-    let (live_camera, live_zoom, pre_fullscreen_view) = {
+    let (live_camera, live_zoom) = {
         let os = crate::state::output_state(output);
-        (
-            os.camera,
-            os.zoom,
-            os.fullscreen_return.as_ref().map(|r| (r.camera, r.zoom)),
-        )
+        (os.camera, os.zoom)
     };
     // Entering fullscreen parks the viewport at zoom 1 in one step, but the
     // window only covers the output at the end of its growth — so for those few
@@ -1011,6 +1005,10 @@ pub fn compose_frame(
             continue;
         }
 
+        // Captured before the per-window transform shadows `zoom`: the coverage
+        // test below judges an entering window in the view the rest of the world
+        // is still drawn through.
+        let (world_camera, world_zoom) = (camera, zoom);
         // Centralized canvas↔screen decision: pinned windows render at their
         // output-relative `screen_pos` with zoom 1.0 (identity), normal windows
         // use the camera transform. `zoom` is shadowed so every downstream
@@ -1047,24 +1045,22 @@ pub fn compose_frame(
             };
             // A fullscreen entry parks the window on the output at the action,
             // long before the chrome has finished fading out, so through the
-            // ramp coverage is judged on the rect it is leaving, in the view
-            // that drew it — the park re-seeds the growth so that rect is
-            // exactly where the picture still sits. An ordinary window fades
-            // its corners and shadow as before; a fitted one was already square
-            // and stays so.
-            let leaving = state
-                .stage
-                .fullscreen_on(&name)
-                .filter(|fs| fs.window == *window)
-                .zip(pre_fullscreen_view);
+            // ramp coverage is judged on the rect it is growing out of — where
+            // the picture is coming from — mapped through the view the world
+            // behind it still renders through. An ordinary window fades its
+            // corners and shadow as before; a fitted one was already square and
+            // stays so.
+            let leaving = (entering_fullscreen.as_ref() == Some(window))
+                .then(|| state.stage.fullscreen_on(&name))
+                .flatten();
             let (origin, content, scale) = match leaving {
-                Some((fs, (from_camera, from_zoom))) => (
+                Some(fs) => (
                     Point::from((
-                        fs.saved_location.x as f64 - from_camera.x,
-                        fs.saved_location.y as f64 - from_camera.y,
+                        fs.saved_location.x as f64 - world_camera.x,
+                        fs.saved_location.y as f64 - world_camera.y,
                     )),
                     fs.saved_size,
-                    from_zoom,
+                    world_zoom,
                 ),
                 None => (
                     render_loc + geom_loc.to_f64(),
