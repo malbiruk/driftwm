@@ -633,17 +633,23 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // camera park, and one held back for a deferred adopt is about to be
             // teleported into a slot — writing the canvas position would
             // silently do nothing, displace the park, or be overwritten.
-            if !state.is_canvas_window(&window) {
+            if state.is_pinned(&window)
+                || state.is_window_fullscreen(&window)
+                || state.hidden_by_deferred_adopt(&window)
+            {
                 return Err(
-                    "this window has no canvas position to move: it is pinned, fullscreen, a \
-                     widget, or not on screen yet"
+                    "this window has no canvas position to move: it is pinned, fullscreen, or \
+                     not on screen yet"
                         .into(),
                 );
             }
             // Activating is only consistent when the target already holds
-            // focus; a selector can reach any window.
-            let activate = state.focused_window().as_ref() == Some(&window);
+            // focus; a selector can reach any window. Widgets never activate.
+            let activate = state.focused_window().as_ref() == Some(&window) && !window.is_widget();
             state.map_window_to_rule_point(&window, x, y, activate);
+            if window.is_widget() {
+                state.enforce_below_windows();
+            }
             // The new position is durable — persist it on the session-store
             // debounce, matching the stand-in arm above.
             state.session_store_mark_dirty();
