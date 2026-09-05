@@ -45,10 +45,10 @@
 # # centering wastes both flanks, or a vertical panel, where it wastes both ends.
 # #
 # # An edge or corner puts the window's title bar / content edge snap.outer_gap
-# # in from the usable area, the border hanging outside it — the same edge
-# # fit-window and fill-window produce, so a placed window and a filled one line
-# # up. That inset is canvas px, so it shrinks as you zoom out: 12.0 renders as
-# # 4.8 screen px at zoom 0.4.
+# # in from the usable area (border outside) — the same edge fit-window and
+# # fill-window produce, so a placed window and a filled one line up. The inset
+# # is canvas px, so it shrinks as you zoom out: 12.0 renders as 4.8 screen px
+# # at zoom 0.4.
 # #
 # # A window too big to fit on an axis with its two gutters centers on that axis
 # # rather than hanging off screen; the other axis still places, so a tall window
@@ -247,15 +247,9 @@
                                # snapping, auto placement, clusters, and
                                # fill-window's clearance from its neighbours
 # outer_gap = 0.0              # inset from the usable area's edge to a window's
-                               # title bar or content edge, in canvas px —
-                               # fit-window, fill-window and focus_placement
-                               # measure it. The border lies outside it. 0 is
-                               # the maximize setup: fitted and filled windows
-                               # land edge to edge, and a window covering the
-                               # usable area draws square with no shadow until
-                               # you pan away — and a border that would hang
-                               # outside the usable area is not drawn. Set it to
-                               # gap for a margin
+                               # title bar or content edge (border outside), in
+                               # canvas px — fit-window, fill-window and
+                               # focus_placement measure it; 0 is edge to edge
 # distance = 24.0              # activation threshold (screen px from edge)
 # break_force = 32.0           # screen px past snap to break free
 # corners = false              # also align corners (parallel edges line up: top-to-top, left-to-left)
@@ -264,12 +258,10 @@
 [decorations]
 # bg_color = "#303030"           # title bar background
 # fg_color = "#FFFFFF"           # title text + close button × color
-# corner_radius = 10             # clip window corners to this radius —
-                                 # suppressed while the window's frame covers
-                                 # the output's usable area
-# shadow = true                  # drop shadow under window chrome — suppressed
-                                 # while the window's frame covers the output's
-                                 # usable area
+# corner_radius = 10             # clip window corners to this radius; off while
+                                 # the window covers the output's usable area
+# shadow = true                  # drop shadow under window chrome; off while the
+                                 # window covers the output's usable area
 
 # # SSD title bar text. The font is resolved via fontconfig — install the
 # # `adwaita-fonts` package for the default look; otherwise a generic sans is
@@ -292,9 +284,8 @@
 
 # # Borders apply to "client", "server", and "minimal" modes. "none" mode has
 # # no border unless one is set per-app in [[window_rules]].
-# border_width = 0               # px; 0 disables the border. Not drawn while it
-                                 # hangs outside the usable area (see
-                                 # snap.outer_gap)
+# border_width = 0               # px; 0 disables the border; not drawn while it
+                                 # hangs outside the usable area
 # border_color = "#303030"       # unfocused border
 # border_color_focused = "#303030"  # focused border. Same default as above —
                                     # set this to a different color to get a
@@ -431,7 +422,7 @@
 # #   toggle-fullscreen       — toggle focused window fullscreen
 # #   fit-window              — toggle maximize: centers + resets zoom + fills viewport; restore only resizes back
 # #   fit-window-snapped      — fit-window for the focused window's whole snap cluster
-# #   fill-window             — grow in place to fill free space, stopping snap.outer_gap short of the usable area's edge and snap.gap short of a neighbour; edges outside those bounds pull back; clears maximize; press again to restore
+# #   fill-window             — grow in place to fill free space, up to snap.outer_gap from the usable area's edge and snap.gap from a neighbour; edges past those pull back; clears maximize; press again to restore
 # #   toggle-pin-to-screen    — pin/unpin the focused window to the screen (ignores pan/zoom, floats above)
 # #   reload-config           — hot-reload config file
 # #   toggle-cursor-pan       — toggle cursor edge-pan (see [navigation.edge_pan])

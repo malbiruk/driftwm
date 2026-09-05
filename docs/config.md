@@ -39,7 +39,7 @@ Default: `"center"`
 
 Where a centering navigation parks the focused window in the viewport. One of "center" (default), "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right". Handy on a widescreen, where centering wastes both flanks, or a vertical panel, where it wastes both ends.
 
-An edge or corner puts the window's title bar / content edge snap.outer_gap in from the usable area, the border hanging outside it — the same edge fit-window and fill-window produce, so a placed window and a filled one line up. That inset is canvas px, so it shrinks as you zoom out: 12.0 renders as 4.8 screen px at zoom 0.4.
+An edge or corner puts the window's title bar / content edge snap.outer_gap in from the usable area (border outside) — the same edge fit-window and fill-window produce, so a placed window and a filled one line up. The inset is canvas px, so it shrinks as you zoom out: 12.0 renders as 4.8 screen px at zoom 0.4.
 
 A window too big to fit on an axis with its two gutters centers on that axis rather than hanging off screen; the other axis still places, so a tall window under "top-left" still goes left.
 
@@ -491,7 +491,7 @@ spacing kept between windows, in canvas px — snapping, auto placement, cluster
 
 Default: `0.0`
 
-inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away — and a border that would hang outside the usable area is not drawn. Set it to gap for a margin
+inset from the usable area's edge to a window's title bar or content edge (border outside), in canvas px — fit-window, fill-window and focus_placement measure it; 0 is edge to edge
 
 ### `distance`
 
@@ -535,13 +535,13 @@ title text + close button × color
 
 Default: `10`
 
-clip window corners to this radius — suppressed while the window's frame covers the output's usable area
+clip window corners to this radius; off while the window covers the output's usable area
 
 ### `shadow`
 
 Default: `true`
 
-drop shadow under window chrome — suppressed while the window's frame covers the output's usable area
+drop shadow under window chrome; off while the window covers the output's usable area
 
 ### `title_bar_height`
 
@@ -593,7 +593,7 @@ Default: `0`
 
 Borders apply to "client", "server", and "minimal" modes. "none" mode has no border unless one is set per-app in [[window_rules]].
 
-px; 0 disables the border. Not drawn while it hangs outside the usable area (see snap.outer_gap)
+px; 0 disables the border; not drawn while it hangs outside the usable area
 
 ### `border_color`
 
@@ -778,7 +778,7 @@ Actions:
 - `toggle-fullscreen` — toggle focused window fullscreen
 - `fit-window` — toggle maximize: centers + resets zoom + fills viewport; restore only resizes back
 - `fit-window-snapped` — fit-window for the focused window's whole snap cluster
-- `fill-window` — grow in place to fill free space, stopping snap.outer_gap short of the usable area's edge and snap.gap short of a neighbour; edges outside those bounds pull back; clears maximize; press again to restore
+- `fill-window` — grow in place to fill free space, up to snap.outer_gap from the usable area's edge and snap.gap from a neighbour; edges past those pull back; clears maximize; press again to restore
 - `toggle-pin-to-screen` — pin/unpin the focused window to the screen (ignores pan/zoom, floats above)
 - `reload-config` — hot-reload config file
 - `toggle-cursor-pan` — toggle cursor edge-pan (see [navigation.edge_pan])
