@@ -151,18 +151,20 @@ impl Chrome {
 }
 
 /// Whether a window's screen-space visual `frame` covers the output's `usable`
-/// area, up to less than one logical pixel of shortfall per edge.
+/// area, tolerating float noise — but nothing wider — of shortfall per edge.
 ///
-/// The tolerance is exactly the "pan one pixel and the chrome comes back"
-/// boundary the render rule promises, and it absorbs the sub-pixel residue a
-/// fractional output scale or a fractional camera leaves on an otherwise flush
-/// edge. Exact equality and any oversize count as covering.
+/// A frame short by even a fraction of a pixel leaves a hairline of wallpaper
+/// along that edge, and square corners over a visible sliver read as a bug
+/// where rounded ones read as a floating window. Exact equality and any
+/// oversize count as covering, so panning a covering window by a pixel brings
+/// its chrome straight back.
 pub fn covers_usable_area(frame: Rectangle<f64, Logical>, usable: Rectangle<i32, Logical>) -> bool {
+    const NOISE: f64 = 1e-6;
     let usable = usable.to_f64();
-    frame.loc.x - usable.loc.x < 1.0
-        && frame.loc.y - usable.loc.y < 1.0
-        && (usable.loc.x + usable.size.w) - (frame.loc.x + frame.size.w) < 1.0
-        && (usable.loc.y + usable.size.h) - (frame.loc.y + frame.size.h) < 1.0
+    frame.loc.x - usable.loc.x <= NOISE
+        && frame.loc.y - usable.loc.y <= NOISE
+        && (usable.loc.x + usable.size.w) - (frame.loc.x + frame.size.w) <= NOISE
+        && (usable.loc.y + usable.size.h) - (frame.loc.y + frame.size.h) <= NOISE
 }
 
 /// User-facing coordinates for a window whose content sits at `loc` with content
