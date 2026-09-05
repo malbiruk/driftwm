@@ -150,21 +150,46 @@ impl Chrome {
     }
 }
 
-/// Whether a window's screen-space visual `frame` covers the output's `usable`
-/// area, tolerating float noise — but nothing wider — of shortfall per edge.
+/// How a window's screen-space visual frame sits against an output's usable
+/// area.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Coverage {
+    /// An edge falls short, leaving the canvas showing along it.
+    None,
+    /// Flush with the usable area on every edge.
+    Exact,
+    /// Covers it, and spills past at least one edge.
+    Overhang,
+}
+
+/// How `frame` (output-local logical px) relates to `usable`, tolerating float
+/// noise — but nothing wider — per edge.
 ///
 /// A frame short by even a fraction of a pixel leaves a hairline of wallpaper
 /// along that edge, and square corners over a visible sliver read as a bug
-/// where rounded ones read as a floating window. Exact equality and any
-/// oversize count as covering, so panning a covering window by a pixel brings
-/// its chrome straight back.
-pub fn covers_usable_area(frame: Rectangle<f64, Logical>, usable: Rectangle<i32, Logical>) -> bool {
+/// where rounded ones read as a floating window, so anything short is
+/// [`Coverage::None`] and panning a covering window by a pixel brings its
+/// chrome straight back. [`Coverage::Overhang`] is kept apart from
+/// [`Coverage::Exact`] because chrome drawn past the usable edge lands under a
+/// panel or off the output rather than around the window.
+pub fn coverage(frame: Rectangle<f64, Logical>, usable: Rectangle<i32, Logical>) -> Coverage {
     const NOISE: f64 = 1e-6;
     let usable = usable.to_f64();
-    frame.loc.x - usable.loc.x <= NOISE
-        && frame.loc.y - usable.loc.y <= NOISE
-        && (usable.loc.x + usable.size.w) - (frame.loc.x + frame.size.w) <= NOISE
-        && (usable.loc.y + usable.size.h) - (frame.loc.y + frame.size.h) <= NOISE
+    // Per edge, how far the frame falls short of the usable area; negative
+    // means it reaches past. NaN fails the `all` and reads as no coverage.
+    let shortfall = [
+        frame.loc.x - usable.loc.x,
+        frame.loc.y - usable.loc.y,
+        (usable.loc.x + usable.size.w) - (frame.loc.x + frame.size.w),
+        (usable.loc.y + usable.size.h) - (frame.loc.y + frame.size.h),
+    ];
+    if !shortfall.iter().all(|d| *d <= NOISE) {
+        return Coverage::None;
+    }
+    if shortfall.iter().any(|d| *d < -NOISE) {
+        return Coverage::Overhang;
+    }
+    Coverage::Exact
 }
 
 /// User-facing coordinates for a window whose content sits at `loc` with content
@@ -1220,65 +1245,111 @@ mod tests {
     }
 
     #[test]
-    fn covers_usable_area_true_at_exact_equality() {
-        assert!(covers_usable_area(
-            frame_rect(0.0, 0.0, 1920.0, 1080.0),
-            usable_rect(0, 0, 1920, 1080)
-        ));
+    fn coverage_is_exact_at_exact_equality() {
+        assert_eq!(
+            coverage(
+                frame_rect(0.0, 0.0, 1920.0, 1080.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::Exact
+        );
     }
 
     #[test]
-    fn covers_usable_area_true_when_oversize() {
-        assert!(covers_usable_area(
-            frame_rect(-10.0, -10.0, 1940.0, 1100.0),
-            usable_rect(0, 0, 1920, 1080)
-        ));
+    fn coverage_is_overhang_when_oversize() {
+        assert_eq!(
+            coverage(
+                frame_rect(-10.0, -10.0, 1940.0, 1100.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::Overhang
+        );
     }
 
     #[test]
-    fn covers_usable_area_true_with_negligible_float_noise() {
-        assert!(covers_usable_area(
-            frame_rect(1e-9, 0.0, 1920.0 - 1e-9, 1080.0),
-            usable_rect(0, 0, 1920, 1080)
-        ));
+    fn coverage_is_exact_with_negligible_float_noise() {
+        let usable = usable_rect(0, 0, 1920, 1080);
+        assert_eq!(
+            coverage(frame_rect(1e-9, 0.0, 1920.0 - 1e-9, 1080.0), usable),
+            Coverage::Exact,
+            "a hair short is still flush"
+        );
+        assert_eq!(
+            coverage(frame_rect(-1e-9, 0.0, 1920.0 + 2e-9, 1080.0), usable),
+            Coverage::Exact,
+            "a hair over is still flush"
+        );
     }
 
     #[test]
-    fn covers_usable_area_false_half_a_pixel_short_on_one_edge() {
+    fn coverage_is_overhang_half_a_pixel_past_one_edge() {
+        assert_eq!(
+            coverage(
+                frame_rect(-0.5, 0.0, 1920.5, 1080.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::Overhang
+        );
+    }
+
+    #[test]
+    fn coverage_is_none_half_a_pixel_short_on_one_edge() {
         // Half a pixel is a real, visible sliver (a fractional pan can leave a
         // fill exactly this short), not float noise — must not cover.
-        assert!(!covers_usable_area(
-            frame_rect(0.5, 0.0, 1919.5, 1080.0),
-            usable_rect(0, 0, 1920, 1080)
-        ));
+        assert_eq!(
+            coverage(
+                frame_rect(0.5, 0.0, 1919.5, 1080.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::None
+        );
     }
 
     #[test]
-    fn covers_usable_area_false_when_exactly_one_pixel_short_on_each_edge() {
+    fn coverage_is_none_when_exactly_one_pixel_short_on_each_edge() {
         let usable = usable_rect(0, 0, 1920, 1080);
-        assert!(
-            !covers_usable_area(frame_rect(1.0, 0.0, 1919.0, 1080.0), usable),
+        assert_eq!(
+            coverage(frame_rect(1.0, 0.0, 1919.0, 1080.0), usable),
+            Coverage::None,
             "left edge a pixel short"
         );
-        assert!(
-            !covers_usable_area(frame_rect(0.0, 1.0, 1920.0, 1079.0), usable),
+        assert_eq!(
+            coverage(frame_rect(0.0, 1.0, 1920.0, 1079.0), usable),
+            Coverage::None,
             "top edge a pixel short"
         );
-        assert!(
-            !covers_usable_area(frame_rect(0.0, 0.0, 1919.0, 1080.0), usable),
+        assert_eq!(
+            coverage(frame_rect(0.0, 0.0, 1919.0, 1080.0), usable),
+            Coverage::None,
             "right edge a pixel short"
         );
-        assert!(
-            !covers_usable_area(frame_rect(0.0, 0.0, 1920.0, 1079.0), usable),
+        assert_eq!(
+            coverage(frame_rect(0.0, 0.0, 1920.0, 1079.0), usable),
+            Coverage::None,
             "bottom edge a pixel short"
         );
     }
 
     #[test]
-    fn covers_usable_area_false_when_far_away() {
-        assert!(!covers_usable_area(
-            frame_rect(5000.0, 5000.0, 1920.0, 1080.0),
-            usable_rect(0, 0, 1920, 1080)
-        ));
+    fn coverage_is_none_when_short_on_one_edge_and_past_another() {
+        // Overhang must not outrank a shortfall: a sliver of canvas still shows.
+        assert_eq!(
+            coverage(
+                frame_rect(-10.0, 0.0, 1925.0, 1080.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::None
+        );
+    }
+
+    #[test]
+    fn coverage_is_none_when_far_away() {
+        assert_eq!(
+            coverage(
+                frame_rect(5000.0, 5000.0, 1920.0, 1080.0),
+                usable_rect(0, 0, 1920, 1080)
+            ),
+            Coverage::None
+        );
     }
 }

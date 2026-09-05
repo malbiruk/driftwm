@@ -395,7 +395,7 @@ pub(crate) fn compose_capture_elements(
             ),
         };
         // No output here, so there is no usable area a window could cover.
-        let chrome = configured.drawn(is_fullscreen, false);
+        let chrome = configured.drawn(is_fullscreen, canvas::Coverage::None);
         let has_ssd = chrome.ssd_bar;
         let effective_bw = chrome.border_width;
         let effective_corner_radius = chrome.corner_radius;
@@ -970,10 +970,11 @@ pub fn compose_frame(
                 &state.config.decorations,
             ),
         };
-        // Bar and border are what the frame carries and what the culling box
-        // below measures; covering the usable area never changes either, so they
-        // can be read before there is a render transform to decide coverage from.
-        let frame_chrome = configured.drawn(is_fullscreen, false);
+        // The frame the window occupies — what the culling box below measures,
+        // and what coverage is then judged on — carries bar and border whether or
+        // not the border ends up drawn, so both can be read before there is a
+        // render transform to decide coverage from.
+        let frame_chrome = configured.drawn(is_fullscreen, canvas::Coverage::None);
         let has_ssd = frame_chrome.ssd_bar;
         let effective_bw = frame_chrome.border_width;
         let border_color = if is_focused {
@@ -1036,48 +1037,57 @@ pub fn compose_frame(
         // the pre-fit size until the client acks. Skipped outright when there is
         // nothing to suppress: the size read below takes a surface lock per
         // window per output per frame.
-        let covers = (configured.corner_radius > 0 || configured.shadow) && !is_fullscreen && {
-            let bw = effective_bw as f64;
-            let bar = if has_ssd {
-                state.config.decorations.title_bar_height as f64
-            } else {
-                0.0
-            };
-            // A fullscreen entry parks the window on the output at the action,
-            // long before the chrome has finished fading out, so through the
-            // ramp coverage is judged on the rect it is growing out of — where
-            // the picture is coming from — mapped through the view the world
-            // behind it still renders through. An ordinary window fades its
-            // corners and shadow as before; a fitted one was already square and
-            // stays so.
-            let leaving = (entering_fullscreen.as_ref() == Some(window))
-                .then(|| state.stage.fullscreen_on(&name))
-                .flatten();
-            let (origin, content, scale) = match leaving {
-                Some(fs) => (
-                    Point::from((
-                        fs.saved_location.x as f64 - world_camera.x,
-                        fs.saved_location.y as f64 - world_camera.y,
+        let coverage =
+            if (configured.corner_radius > 0 || configured.shadow || configured.border_width > 0)
+                && !is_fullscreen
+            {
+                let bw = effective_bw as f64;
+                let bar = if has_ssd {
+                    state.config.decorations.title_bar_height as f64
+                } else {
+                    0.0
+                };
+                // A fullscreen entry parks the window on the output at the action,
+                // long before the chrome has finished fading out, so through the
+                // ramp coverage is judged on the rect it is growing out of — where
+                // the picture is coming from — mapped through the view the world
+                // behind it still renders through. An ordinary window fades its
+                // corners and shadow as before; a fitted one was already square and
+                // stays so.
+                let leaving = (entering_fullscreen.as_ref() == Some(window))
+                    .then(|| state.stage.fullscreen_on(&name))
+                    .flatten();
+                let (origin, content, scale) = match leaving {
+                    Some(fs) => (
+                        Point::from((
+                            fs.saved_location.x as f64 - world_camera.x,
+                            fs.saved_location.y as f64 - world_camera.y,
+                        )),
+                        fs.saved_size,
+                        world_zoom,
+                    ),
+                    None => (
+                        render_loc + geom_loc.to_f64(),
+                        crate::state::configured_window_size(window),
+                        zoom,
+                    ),
+                };
+                let frame = Rectangle::new(
+                    Point::from(((origin.x - bw) * scale, (origin.y - bar - bw) * scale)),
+                    Size::from((
+                        (content.w as f64 + 2.0 * bw) * scale,
+                        (content.h as f64 + bar + 2.0 * bw) * scale,
                     )),
-                    fs.saved_size,
-                    world_zoom,
-                ),
-                None => (
-                    render_loc + geom_loc.to_f64(),
-                    crate::state::configured_window_size(window),
-                    zoom,
-                ),
+                );
+                canvas::coverage(frame, usable)
+            } else {
+                canvas::Coverage::None
             };
-            let frame = Rectangle::new(
-                Point::from(((origin.x - bw) * scale, (origin.y - bar - bw) * scale)),
-                Size::from((
-                    (content.w as f64 + 2.0 * bw) * scale,
-                    (content.h as f64 + bar + 2.0 * bw) * scale,
-                )),
-            );
-            canvas::covers_usable_area(frame, usable)
-        };
-        let chrome = configured.drawn(is_fullscreen, covers);
+        // Every chrome consumer below reads the decision, not the config: a
+        // border hanging past the usable area is not drawn, even though the
+        // frame measured above still counts it.
+        let chrome = configured.drawn(is_fullscreen, coverage);
+        let effective_bw = chrome.border_width;
         let effective_corner_radius = chrome.corner_radius;
         let effective_shadow = chrome.shadow;
 
