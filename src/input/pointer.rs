@@ -121,9 +121,6 @@ impl DriftWm {
                 PinnedChrome::Covered => return self.pinned_element_under(screen_pos),
                 PinnedChrome::Miss => {}
             }
-            if let Some(window) = self.pinned_element_under(screen_pos) {
-                return Some(window);
-            }
         }
         match self.topmost_under(pos, |_, _| true)? {
             (StageWindow::Client(w), HitKind::Content) => Some(w),
@@ -135,9 +132,8 @@ impl DriftWm {
     /// On a fullscreen output the subject is the fullscreen window, since the
     /// parked canvas bbox there is not what the notch acts over.
     ///
-    /// A canvas subject is skipped in pick mode: this site has no OnCanvas
-    /// retry like the continuous scroll lookup, so a claim below
-    /// `interact_min` would leave the notch doing nothing at all.
+    /// A canvas subject is skipped in pick mode: below `interact_min` a
+    /// canvas window has no pointer focus to forward to.
     fn pass_mouse_claims_notch(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
@@ -385,7 +381,7 @@ impl DriftWm {
 
             // `pass_mouse`: clearing `modifier_binding` too keeps the decoration
             // branch below live, so chrome always stays compositor-owned. Off in
-            // pick mode: there the window has no pointer focus to forward to.
+            // pick mode: there a canvas window has no pointer focus to forward to.
             if binding.is_some()
                 && context == BindingContext::OnWindow
                 && !self.pick_mode()
@@ -1515,6 +1511,7 @@ impl DriftWm {
         // OnCanvas, so a claim here can't fire mid-pan.
         if action.is_some()
             && context == BindingContext::OnWindow
+            && !self.pick_mode()
             && let Some(window) = self.pass_mouse_target_under(pos)
             && self.pass_mouse_claims(
                 &window,

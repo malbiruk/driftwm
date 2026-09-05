@@ -787,9 +787,9 @@ impl PassList<MouseBinding> {
     /// equality is the right test.
     pub fn allows(&self, modifiers: &ModifiersState, trigger: MouseTrigger) -> bool {
         match self {
-            PassMouse::None => false,
-            PassMouse::All => true,
-            PassMouse::Only(list) => list.contains(&MouseBinding {
+            PassList::None => false,
+            PassList::All => true,
+            PassList::Only(list) => list.contains(&MouseBinding {
                 modifiers: Modifiers::from_state(modifiers),
                 trigger,
             }),
