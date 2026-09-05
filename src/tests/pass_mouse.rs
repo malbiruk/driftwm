@@ -197,35 +197,25 @@ fn window_under_pointer(f: &mut Fixture, held: u32) -> (ClientId, Window) {
 }
 
 /// A listed combo over the window is handed to the app: it lands on the client
-/// as a real `wl_pointer.button` instead of starting the bound move.
+/// as a real `wl_pointer.button` instead of starting the compositor's `alt+left`
+/// move. Forwarding a press installs smithay's own click grab, so the second
+/// half's observable is the window standing still under a drag, not the absence
+/// of a grab.
 #[test]
-fn a_claimed_press_reaches_the_client() {
+fn a_claimed_drag_reaches_the_client_and_leaves_the_window_put() {
     let mut f = Fixture::with_config(config(CLAIM_ALT_LEFT));
-    let (id, _) = window_under_pointer(&mut f, KEY_LEFTALT);
-
-    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
-
-    assert_eq!(
-        client_buttons(&mut f, id),
-        vec![(BTN_LEFT, PRESSED)],
-        "the app owns alt+left, so it must see the press"
-    );
-}
-
-/// The other half of the same press: the compositor's own `alt+left` move
-/// binding must not have run. Forwarding a press installs smithay's own click
-/// grab, so the observable is the window standing still under a drag, not the
-/// absence of a grab.
-#[test]
-fn a_claimed_drag_does_not_move_the_window() {
-    let mut f = Fixture::with_config(config(CLAIM_ALT_LEFT));
-    let (_, window) = window_under_pointer(&mut f, KEY_LEFTALT);
+    let (id, window) = window_under_pointer(&mut f, KEY_LEFTALT);
     let before = f.state().stage.position_of(&window).expect("staged");
 
     press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
     let dragged = center_of(&mut f, &window) + Point::from((100.0, 0.0));
     motion(&mut f, dragged);
 
+    assert_eq!(
+        client_buttons(&mut f, id),
+        vec![(BTN_LEFT, PRESSED)],
+        "the app owns alt+left, so it must see the press"
+    );
     assert_eq!(
         f.state().stage.position_of(&window).expect("staged"),
         before,
@@ -301,7 +291,7 @@ fn an_unclaimed_anywhere_binding_still_pans() {
 /// A claimed scroll forwards as a scroll: the default `mod+wheel-scroll` zoom
 /// never fires and the wheel reaches the app.
 #[test]
-fn a_claimed_scroll_reaches_the_client() {
+fn a_claimed_scroll_reaches_the_client_without_zooming() {
     let mut f = Fixture::with_config(config(CLAIM_WHEEL_SCROLL));
     let (id, _) = window_under_pointer(&mut f, KEY_LEFTMETA);
 
@@ -312,15 +302,6 @@ fn a_claimed_scroll_reaches_the_client() {
         vec![15.0],
         "the app owns the wheel over its own window"
     );
-}
-
-#[test]
-fn a_claimed_scroll_does_not_zoom() {
-    let mut f = Fixture::with_config(config(CLAIM_WHEEL_SCROLL));
-    window_under_pointer(&mut f, KEY_LEFTMETA);
-
-    wheel_notch_down(&mut f, &FakeDevice::mouse());
-
     assert_eq!(
         f.state().zoom_target(),
         None,
@@ -438,33 +419,10 @@ fn a_reloaded_rule_applies_without_remapping_the_window() {
     f.state().pending_mode_changes.clear();
 }
 
-/// Compositor chrome is never passed: a claimed combo on the SSD title bar
-/// falls through to the ordinary title-bar move, so a `pass_mouse` window can
-/// still be dragged by its bar.
-#[test]
-fn a_claimed_combo_on_the_title_bar_still_moves_the_window() {
-    let mut f = Fixture::with_config(config(CLAIM_ALT_LEFT));
-    let (id, window) = mapped_window(&mut f);
-    give_ssd(&mut f, &window);
-    let on_bar = title_bar_point(&mut f, &window);
-    aim_and_hold(&mut f, KEY_LEFTALT, on_bar);
-
-    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
-
-    assert!(
-        grab_is::<MoveGrab>(&mut f),
-        "the title bar stays compositor-owned whatever pass_mouse says"
-    );
-    assert_eq!(
-        client_buttons(&mut f, id),
-        Vec::new(),
-        "a chrome click is not the app's"
-    );
-}
-
-/// The same for a button the decoration branch itself ignores: `alt+right` on
-/// the title bar of a claiming window still runs the compositor's resize, which
-/// is the half a left-only chrome check would drop.
+/// Compositor chrome is never passed: `alt+right` on the title bar of a
+/// claiming window still runs the compositor's resize. Right is the
+/// discriminating button — the decoration branch ignores it, so this is the
+/// half a left-only chrome check would drop.
 #[test]
 fn a_claimed_combo_on_the_title_bar_still_resizes_the_window() {
     let mut f = Fixture::with_config(config(CLAIM_ALT_RIGHT));
@@ -532,32 +490,23 @@ fn a_claimed_notch_below_interact_min_still_runs_its_action() {
 
 /// A screen-pinned window is dispatched through its own screen-space arm, which
 /// resolves the claim separately. The forward there also installs a
-/// `ScreenSpaceClickGrab`, so "the window stayed put" is the observable, not
-/// the absence of a grab.
+/// `ScreenSpaceClickGrab`, so "the pin stayed put" is the observable, not the
+/// absence of a grab.
 #[test]
-fn a_claimed_press_on_a_pinned_window_reaches_the_client() {
+fn a_claimed_press_on_a_pinned_window_reaches_the_client_without_dragging_it() {
     let mut f = Fixture::with_config(config(PIN_AND_CLAIM));
-    let (id, _) = window_under_pointer(&mut f, KEY_LEFTALT);
-
-    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
-
-    assert_eq!(
-        client_buttons(&mut f, id),
-        vec![(BTN_LEFT, PRESSED)],
-        "a pinned window claims its combos like any other"
-    );
-}
-
-#[test]
-fn a_claimed_press_on_a_pinned_window_does_not_drag_it() {
-    let mut f = Fixture::with_config(config(PIN_AND_CLAIM));
-    let (_, window) = window_under_pointer(&mut f, KEY_LEFTALT);
+    let (id, window) = window_under_pointer(&mut f, KEY_LEFTALT);
     let before = f.state().stage.pin_of(&window).unwrap().screen_pos;
 
     press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
     let dragged = center_of(&mut f, &window) + Point::from((100.0, 0.0));
     motion(&mut f, dragged);
 
+    assert_eq!(
+        client_buttons(&mut f, id),
+        vec![(BTN_LEFT, PRESSED)],
+        "a pinned window claims its combos like any other"
+    );
     assert_eq!(
         f.state().stage.pin_of(&window).unwrap().screen_pos,
         before,
@@ -627,5 +576,53 @@ fn a_claimed_press_on_a_fullscreen_window_reaches_the_client() {
     assert!(
         f.state().is_fullscreen(),
         "a claimed click must not exit fullscreen"
+    );
+}
+
+/// The fullscreen scroll site resolves its own claim as well: `mod+wheel-scroll`
+/// is the zoom binding, which would exit fullscreen and zoom the restored canvas.
+#[test]
+fn a_claimed_scroll_on_a_fullscreen_window_reaches_the_client() {
+    let mut f = Fixture::with_config(config(CLAIM_WHEEL_SCROLL));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTMETA, target);
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+
+    assert_eq!(
+        client_axes(&mut f, id),
+        vec![15.0],
+        "a claimed wheel over a fullscreen window is the app's"
+    );
+    assert!(
+        f.state().is_fullscreen(),
+        "a claimed scroll must not exit fullscreen to zoom"
+    );
+}
+
+/// The notch site's subject on a fullscreen output is the fullscreen window,
+/// not whatever the parked canvas bbox puts under the pointer — so the pointer
+/// rests off that bbox here, where a canvas-space lookup would find nothing.
+#[test]
+fn a_claimed_notch_on_a_fullscreen_window_runs_no_action() {
+    let mut f = Fixture::with_config(config(NOTCH_FULLSCREEN_CLAIMED));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let off_bbox = center_of(&mut f, &window) + Point::from((0.0, 400.0));
+    aim_and_hold(&mut f, KEY_LEFTALT, off_bbox);
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+
+    assert!(
+        f.state().is_fullscreen(),
+        "the window claimed the notch, so its fullscreen action must not fire"
     );
 }
