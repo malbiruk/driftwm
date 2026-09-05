@@ -33,7 +33,7 @@ use wayland_client::protocol::wl_shm::{self, WlShm};
 use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
-use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle, WEnum};
 use wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_manager_v1::ExtSessionLockManagerV1,
     ext_session_lock_surface_v1::{self, ExtSessionLockSurfaceV1},
@@ -120,6 +120,14 @@ pub struct State {
     /// with `pointer_positions.len()` catches an empty frame a plain position
     /// count would miss.
     pub pointer_frames: usize,
+    /// Every `wl_pointer.button` this client has received as
+    /// `(button code, state)`, oldest first — the record of which clicks the
+    /// compositor forwarded rather than acting on itself.
+    pub pointer_buttons: Vec<(u32, u32)>,
+    /// Vertical scroll amounts from every `wl_pointer.axis` this client has
+    /// received, oldest first. A scroll a compositor binding consumed sends a
+    /// bare frame with no axis inside it, so this stays empty for one.
+    pub pointer_axes: Vec<f64>,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -436,6 +444,8 @@ impl Client {
             touch_events: Vec::new(),
             pointer_positions: Vec::new(),
             pointer_frames: 0,
+            pointer_buttons: Vec::new(),
+            pointer_axes: Vec::new(),
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -1976,6 +1986,14 @@ impl Dispatch<WlPointer, ()> for State {
                 surface_y,
                 ..
             } => state.pointer_positions.push((surface_x, surface_y)),
+            wl_pointer::Event::Button {
+                button, state: s, ..
+            } => state.pointer_buttons.push((button, u32::from(s))),
+            wl_pointer::Event::Axis {
+                axis: WEnum::Value(wl_pointer::Axis::VerticalScroll),
+                value,
+                ..
+            } => state.pointer_axes.push(value),
             wl_pointer::Event::Frame => state.pointer_frames += 1,
             _ => (),
         }

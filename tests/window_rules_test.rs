@@ -1,5 +1,6 @@
 use driftwm::config::{
-    AppliedWindowRule, Config, DecorationConfig, DecorationMode, PassKeys, PassMouse, Pattern,
+    AppliedWindowRule, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, DecorationConfig,
+    DecorationMode, Modifiers, MouseBinding, MouseTrigger, PassKeys, PassMouse, Pattern,
     WindowRule, effective_blur, effective_opacity, glob_matches,
 };
 
@@ -824,4 +825,177 @@ fn effective_blur_is_off_when_neither_the_rule_nor_the_global_asks() {
     let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
     let dec = decorations(1.0, 1.0, false);
     assert!(!effective_blur(Some(&applied), &dec, false));
+}
+
+// ── pass_mouse ───────────────────────────────────────────────────────────────
+
+fn mouse_combo(modifiers: Modifiers, trigger: MouseTrigger) -> MouseBinding {
+    MouseBinding { modifiers, trigger }
+}
+
+fn alt() -> Modifiers {
+    Modifiers {
+        alt: true,
+        ..Modifiers::EMPTY
+    }
+}
+
+/// Warnings raised while parsing `toml`, which the compositor surfaces on the
+/// error bar rather than failing the load over.
+fn warnings_for(toml: &str) -> Vec<String> {
+    Config::from_toml_collect(toml)
+        .expect("a bad combo must not fail the parse")
+        .1
+}
+
+fn pass_mouse_of(toml: &str) -> PassMouse {
+    Config::from_toml(toml)
+        .unwrap()
+        .resolve_window_rules("app", "title")
+        .unwrap()
+        .pass_mouse
+}
+
+#[test]
+fn pass_mouse_omitted_defaults_to_none() {
+    let rule = bare_rule(Some("app"), None);
+    assert_eq!(AppliedWindowRule::from(&rule).pass_mouse, PassMouse::None);
+}
+
+#[test]
+fn pass_mouse_true_forwards_every_mouse_binding() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = true
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::All);
+}
+
+#[test]
+fn pass_mouse_false_forwards_nothing() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = false
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::None);
+}
+
+#[test]
+fn pass_mouse_list_forwards_only_the_listed_combos() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = ["alt+left", "mod+wheel-scroll"]
+    "#;
+    assert_eq!(
+        pass_mouse_of(toml),
+        PassMouse::Only(vec![
+            mouse_combo(alt(), MouseTrigger::Button(BTN_LEFT)),
+            // `mod` resolves through the default mod_key, super.
+            mouse_combo(
+                Modifiers {
+                    logo: true,
+                    ..Modifiers::EMPTY
+                },
+                MouseTrigger::WheelScroll
+            ),
+        ])
+    );
+}
+
+#[test]
+fn pass_mouse_keeps_the_valid_combos_beside_an_invalid_one() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = ["alt+left", "alt+scrollwheel"]
+    "#;
+    assert_eq!(
+        pass_mouse_of(toml),
+        PassMouse::Only(vec![mouse_combo(alt(), MouseTrigger::Button(BTN_LEFT))])
+    );
+}
+
+#[test]
+fn pass_mouse_warns_about_the_combo_it_dropped() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = ["alt+left", "alt+scrollwheel"]
+    "#;
+    let warnings = warnings_for(toml);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("pass_mouse") && w.contains("alt+scrollwheel")),
+        "the warning must name the field and the combo: {warnings:?}"
+    );
+}
+
+#[test]
+fn pass_mouse_with_no_usable_combo_forwards_nothing() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = ["alt+scrollwheel", "ctrl+nonsense"]
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::None);
+}
+
+#[test]
+fn pass_mouse_all_is_sticky_against_only() {
+    let mut base = PassMouse::All;
+    base.merge_from(&PassMouse::Only(vec![mouse_combo(
+        alt(),
+        MouseTrigger::Button(BTN_LEFT),
+    )]));
+    assert_eq!(base, PassMouse::All);
+}
+
+#[test]
+fn pass_mouse_only_union_deduplicates() {
+    let left = mouse_combo(alt(), MouseTrigger::Button(BTN_LEFT));
+    let right = mouse_combo(alt(), MouseTrigger::Button(BTN_RIGHT));
+    let middle = mouse_combo(alt(), MouseTrigger::Button(BTN_MIDDLE));
+
+    let mut base = PassMouse::Only(vec![left.clone(), right.clone()]);
+    base.merge_from(&PassMouse::Only(vec![right.clone(), middle.clone()]));
+
+    assert_eq!(base, PassMouse::Only(vec![left, right, middle]));
+}
+
+#[test]
+fn resolve_window_rules_unions_pass_mouse_across_two_matching_rules() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "*"
+        pass_mouse = ["alt+left"]
+
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = ["alt+right"]
+    "#;
+    assert_eq!(
+        pass_mouse_of(toml),
+        PassMouse::Only(vec![
+            mouse_combo(alt(), MouseTrigger::Button(BTN_LEFT)),
+            mouse_combo(alt(), MouseTrigger::Button(BTN_RIGHT)),
+        ])
+    );
+}
+
+#[test]
+fn resolve_window_rules_pass_mouse_true_beats_a_list() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "*"
+        pass_mouse = ["alt+left"]
+
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = true
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::All);
 }

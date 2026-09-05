@@ -46,6 +46,7 @@ mod layer_destroy_focus;
 mod layer_frame_gating;
 mod opacity;
 mod outer_gap;
+mod pass_mouse;
 mod pinned_phantom;
 mod pointer_constraints;
 mod pointer_motion_dedup;

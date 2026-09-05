@@ -8,8 +8,7 @@
 //! Frame grouping under a live grab (motion + `relative_motion` in one frame)
 //! is not covered here: the fixture records positions in a `Vec` and frames in
 //! a separate counter, losing the interleaving such an assertion would need.
-//! The scroll-pan axis path can't be driven at all — `PointerAxisEvent =
-//! UnusedEvent` means an axis event can't be constructed.
+//! The scroll-pan axis path is not covered here either.
 
 use smithay::input::pointer::{Focus, GrabStartData};
 use smithay::utils::{Point, SERIAL_COUNTER};

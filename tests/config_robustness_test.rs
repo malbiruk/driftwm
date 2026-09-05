@@ -64,6 +64,7 @@ const FIELDS: &[&str] = &[
     "opacity",
     "border_color",
     "pass_keys",
+    "pass_mouse",
     "name",
     "scale",
     "mode",
@@ -137,8 +138,8 @@ fn pattern_value() -> impl Strategy<Value = String> {
     ]
 }
 
-/// `pass_keys`: a bool or a list of arbitrary combo strings.
-fn pass_keys_value() -> impl Strategy<Value = String> {
+/// `pass_keys` / `pass_mouse`: a bool or a list of arbitrary combo strings.
+fn pass_list_value() -> impl Strategy<Value = String> {
     prop_oneof![
         Just("true".to_string()),
         Just("false".to_string()),
@@ -179,21 +180,27 @@ fn window_rule_block() -> impl Strategy<Value = String> {
         pattern_value(),
         prop::option::of(hostile_text()),
         prop::option::of(hostile_text()),
-        prop::option::of(pass_keys_value()),
+        prop::option::of(pass_list_value()),
+        prop::option::of(pass_list_value()),
     )
-        .prop_map(|(app_id, border_color, decoration, pass_keys)| {
-            let mut s = format!("[[window_rules]]\napp_id = {}\n", quote(&app_id));
-            if let Some(c) = border_color {
-                s.push_str(&format!("border_color = {}\n", quote(&c)));
-            }
-            if let Some(d) = decoration {
-                s.push_str(&format!("decoration = {}\n", quote(&d)));
-            }
-            if let Some(p) = pass_keys {
-                s.push_str(&format!("pass_keys = {p}\n"));
-            }
-            s
-        })
+        .prop_map(
+            |(app_id, border_color, decoration, pass_keys, pass_mouse)| {
+                let mut s = format!("[[window_rules]]\napp_id = {}\n", quote(&app_id));
+                if let Some(c) = border_color {
+                    s.push_str(&format!("border_color = {}\n", quote(&c)));
+                }
+                if let Some(d) = decoration {
+                    s.push_str(&format!("decoration = {}\n", quote(&d)));
+                }
+                if let Some(p) = pass_keys {
+                    s.push_str(&format!("pass_keys = {p}\n"));
+                }
+                if let Some(p) = pass_mouse {
+                    s.push_str(&format!("pass_mouse = {p}\n"));
+                }
+                s
+            },
+        )
 }
 
 fn output_block() -> impl Strategy<Value = String> {

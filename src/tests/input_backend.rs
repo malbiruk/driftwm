@@ -16,12 +16,13 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use driftwm::canvas::{CanvasPos, canvas_to_screen};
 use smithay::backend::input::{
-    AbsolutePositionEvent, ButtonState, Device, DeviceCapability, Event, InputBackend, InputEvent,
-    KeyState, KeyboardKeyEvent, Keycode, PointerButtonEvent, PointerMotionAbsoluteEvent,
-    PointerMotionEvent, ProximityState, TabletToolAxisEvent, TabletToolButtonEvent,
-    TabletToolCapabilities, TabletToolDescriptor, TabletToolEvent, TabletToolProximityEvent,
-    TabletToolTipEvent, TabletToolTipState, TabletToolType, TouchCancelEvent, TouchDownEvent,
-    TouchEvent, TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
+    AbsolutePositionEvent, Axis, AxisRelativeDirection, AxisSource, ButtonState, Device,
+    DeviceCapability, Event, InputBackend, InputEvent, KeyState, KeyboardKeyEvent, Keycode,
+    PointerAxisEvent, PointerButtonEvent, PointerMotionAbsoluteEvent, PointerMotionEvent,
+    ProximityState, TabletToolAxisEvent, TabletToolButtonEvent, TabletToolCapabilities,
+    TabletToolDescriptor, TabletToolEvent, TabletToolProximityEvent, TabletToolTipEvent,
+    TabletToolTipState, TabletToolType, TouchCancelEvent, TouchDownEvent, TouchEvent,
+    TouchMotionEvent, TouchSlot, TouchUpEvent, UnusedEvent,
 };
 use smithay::utils::{Logical, Point};
 
@@ -240,6 +241,35 @@ impl PointerMotionEvent<FakeInput> for FakeRelativeEvent {
 
     fn delta_y_unaccel(&self) -> f64 {
         self.delta.y
+    }
+}
+
+/// A scroll on the vertical axis. `amount` is the pixel distance libinput
+/// reports; `v120` is the discrete fraction a wheel reports alongside it, and
+/// is `None` for a trackpad, which has no notches.
+pub struct FakeAxisEvent {
+    device: FakeDevice,
+    source: AxisSource,
+    amount: f64,
+    v120: Option<f64>,
+    time: u32,
+}
+
+impl PointerAxisEvent<FakeInput> for FakeAxisEvent {
+    fn amount(&self, axis: Axis) -> Option<f64> {
+        (axis == Axis::Vertical).then_some(self.amount)
+    }
+
+    fn amount_v120(&self, axis: Axis) -> Option<f64> {
+        self.v120.filter(|_| axis == Axis::Vertical)
+    }
+
+    fn source(&self) -> AxisSource {
+        self.source
+    }
+
+    fn relative_direction(&self, _axis: Axis) -> AxisRelativeDirection {
+        AxisRelativeDirection::Identical
     }
 }
 
@@ -504,6 +534,7 @@ impl_event!(
     FakeButtonEvent,
     FakeAbsoluteEvent,
     FakeRelativeEvent,
+    FakeAxisEvent,
     FakeTouchDownEvent,
     FakeTouchMotionEvent,
     FakeTouchUpEvent,
@@ -533,8 +564,8 @@ impl InputBackend for FakeInput {
     type TouchUpEvent = FakeTouchUpEvent;
     type TouchCancelEvent = FakeTouchCancelEvent;
     type TouchMotionEvent = FakeTouchMotionEvent;
+    type PointerAxisEvent = FakeAxisEvent;
 
-    type PointerAxisEvent = UnusedEvent;
     type GestureSwipeBeginEvent = UnusedEvent;
     type GestureSwipeUpdateEvent = UnusedEvent;
     type GestureSwipeEndEvent = UnusedEvent;
@@ -684,6 +715,22 @@ pub fn click(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>, butt
     pointer_to(f, device, at);
     press(f, device, button_code);
     release(f, device, button_code);
+}
+
+/// Turn the mouse wheel one notch toward the user, wherever the pointer already
+/// is. libinput pairs the 15 px step with the v120 fraction that says how much
+/// of a notch it was, and both are read on the scroll path.
+pub fn wheel_notch_down(f: &mut Fixture, device: &FakeDevice) {
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::PointerAxis {
+            event: FakeAxisEvent {
+                device: device.clone(),
+                source: AxisSource::Wheel,
+                amount: 15.0,
+                v120: Some(120.0),
+                time: next_time(),
+            },
+        });
 }
 
 /// Put one finger down on canvas-space `at`.
