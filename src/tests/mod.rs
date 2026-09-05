@@ -650,10 +650,8 @@ fn map_top_layer(
     id: client::ClientId,
     namespace: &str,
     size: (u32, u32),
-    anchor: Option<wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1::Anchor>,
+    anchor: Option<zwlr_layer_surface_v1::Anchor>,
 ) -> wayland_client::protocol::wl_surface::WlSurface {
-    use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1;
-
     let created = f
         .client(id)
         .create_layer(None, zwlr_layer_shell_v1::Layer::Top, namespace);

@@ -1240,8 +1240,9 @@ fn fullscreen_exit_restores_the_filled_rect_when_it_beats_the_fill_ack() {
     f.double_roundtrip(id);
     adopt_last_configure(&mut f, id, &surface);
 
-    // Usable 1920×1080 minus a 12px gap on every side, no SSD bar or border on a
-    // default CSD window — the same rect `fill_grows_to_usable_minus_gap` pins.
+    // Usable 1920×1080 minus a 12px outer gap on every side, no SSD bar or
+    // border on a default CSD window — the same rect
+    // `fill_grows_to_usable_minus_outer_gap` pins.
     assert_eq!(
         (
             f.state().stage.position_of(&window).unwrap(),
@@ -1307,7 +1308,7 @@ fn fullscreen_exit_restores_the_fit_rect_when_it_beats_the_fit_ack() {
 }
 
 #[test]
-fn fill_grows_to_usable_minus_gap() {
+fn fill_grows_to_usable_minus_outer_gap() {
     let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
@@ -1319,8 +1320,8 @@ fn fill_grows_to_usable_minus_gap() {
     f.state().toggle_fill_window(&window);
     f.double_roundtrip(id);
 
-    // Usable 1920×1080 minus a 12px gap on every side, no SSD bar / border on a
-    // default CSD window → the content fills 1896×1056.
+    // Usable 1920×1080 minus a 12px outer gap on every side, no SSD bar / border
+    // on a default CSD window → the content fills 1896×1056.
     let configures = f.client(id).window(&surface).format_recent_configures();
     assert!(
         configures.contains("size: 1896 × 1056"),
@@ -1931,9 +1932,8 @@ fn fill_beside_left_neighbor(
     let b = window_by_app_id(f, "b").unwrap();
 
     park_view(f, Point::from((0.0, 0.0)), 1.0);
-    let outer_gap = f.state().config.snap_outer_gap as i32;
-    f.state()
-        .map_window(b, Point::from((outer_gap, outer_gap)), false);
+    let gap = f.state().config.snap_gap as i32;
+    f.state().map_window(b, Point::from((gap, gap)), false);
     f.state()
         .map_window(a.clone(), Point::from((800, 300)), false);
 
@@ -2124,9 +2124,9 @@ fn a_fill_camera_off_the_integer_grid_still_restores() {
     // "b" pinned to the left edge so the fill stops short of it and the
     // centering fallback would land the camera ~200px away.
     let origin = Point::from((1000, -988));
-    let outer_gap = f.state().config.snap_outer_gap as i32;
+    let gap = f.state().config.snap_gap as i32;
     f.state()
-        .map_window(b, origin + Point::from((outer_gap, outer_gap)), false);
+        .map_window(b, origin + Point::from((gap, gap)), false);
     f.state()
         .map_window(a.clone(), origin + Point::from((800, 300)), false);
 

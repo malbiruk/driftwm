@@ -283,7 +283,14 @@ fn a_too_wide_frame_centers_on_x_but_still_places_on_y() {
 /// anchor branch runs for Keep exactly as it does for Reset.
 #[test]
 fn keep_zoom_navigation_settles_at_the_placed_spot() {
-    let mut f = Fixture::with_config(config(r#"focus_placement = "left""#));
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "left"
+
+        [snap]
+        outer_gap = 12.0
+        "#,
+    ));
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -357,7 +364,7 @@ fn center_window_on_a_filled_window_restores_its_view_ignoring_focus_placement()
     // right, stopping short of the usable area's own left edge.
     let _b_surface = map_window(&mut f, id, "b", (400, 1056));
     let b = window_by_app_id(&mut f, "b").unwrap();
-    let gap = f.state().config.snap_outer_gap as i32;
+    let gap = f.state().config.snap_gap as i32;
     park_view(&mut f, Point::from((0.0, 0.0)), 1.0);
     f.state().map_window(b, Point::from((gap, gap)), false);
 

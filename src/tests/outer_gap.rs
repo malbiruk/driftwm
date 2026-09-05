@@ -225,10 +225,10 @@ fn fit_respects_a_panels_exclusive_zone_not_the_bare_output_rect() {
     );
 }
 
-/// A lone window's fill lands on the same content rect its fit would: both
-/// grow to the same `outer_gap`-inset usable area.
+/// A lone window's fill lands its content on the `outer_gap`-inset usable area
+/// — the same rect a fit grows to.
 #[test]
-fn fill_on_a_lone_window_matches_what_fit_produces() {
+fn fill_on_a_lone_window_lands_content_on_the_usable_area() {
     let mut f = Fixture::with_config(config(
         r#"
         [snap]
