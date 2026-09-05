@@ -730,8 +730,6 @@ mod tests {
 
     #[test]
     fn zero_bounds_inset_reaches_the_room_edge_but_keeps_the_gap_from_a_neighbor() {
-        // No inset from the room itself (bounds_inset = 0), but a neighbor still
-        // keeps its full gap.
         let cur = rect(400.0, 400.0, 100.0, 100.0);
         let neighbor = rect(600.0, 300.0, 200.0, 300.0);
         let out = fill_rect(

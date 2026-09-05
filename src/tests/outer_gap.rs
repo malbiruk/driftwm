@@ -260,10 +260,9 @@ fn fill_on_a_lone_window_lands_content_on_the_usable_area() {
     );
 }
 
-/// Regression test for the fit camera rounding: an odd content height (no SSD
-/// bar to balance it) used to leave the fitted frame half a pixel inside the
-/// usable edge. The camera must land on a whole pixel and the content edge
-/// exactly on `usable.loc + outer_gap`.
+/// An odd content height (no SSD bar to balance it) can leave the pre-round
+/// camera on a half-pixel value; it must still land on a whole pixel, with
+/// the content edge exactly on `usable.loc + outer_gap`.
 #[test]
 fn fit_rounds_the_camera_to_a_whole_pixel_even_with_an_odd_height_window() {
     let mut f = Fixture::with_config(config("[snap]\nouter_gap = 12.0\n"));

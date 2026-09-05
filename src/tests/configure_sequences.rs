@@ -1535,10 +1535,8 @@ fn fill_on_fit_window_with_a_neighbor_fires() {
 /// its usable space — fill must leave it untouched.
 ///
 /// The exact no-op needs the fit's canvas rect and its camera to land on the
-/// same integers, which `compute_fit_geometry` gets by rounding the camera. The
-/// sibling below repeats the check on the odd pre-fit dimensions that used to
-/// leave the window half a pixel off the usable area, and gave fill a gap of
-/// its own to close.
+/// same integers, which `compute_fit_geometry` gets by rounding the camera.
+/// The sibling below repeats the check with an odd pre-fit size.
 #[test]
 fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
     let mut f = Fixture::new();
