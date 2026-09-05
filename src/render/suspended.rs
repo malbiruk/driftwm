@@ -18,9 +18,9 @@ use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size, Transform
 use driftwm::config::DecorationConfig;
 
 use crate::decorations::{DecorationKey, WindowDecoration};
-use crate::render::PixelSnapRescaleElement;
 use crate::render::elements::OutputRenderElements;
 use crate::render::shaders::{push_border_element, push_shadow_element};
+use crate::render::{PixelSnapRescaleElement, TrimmedElement, painted_size};
 use crate::state::{BorderCacheEntry, ShadowCacheEntry, SuspendedWindow};
 
 /// Points → logical pixels (96 dpi), matching the title bar's font sizing.
@@ -123,16 +123,18 @@ pub(crate) fn ensure_body(
 /// Push one stand-in chrome buffer, wrapped in the fade transform when the
 /// caller supplied one (a dismiss shrinks; the adoption crossfade passes `None`
 /// so its elements stay exactly what they were).
-fn push_chrome(
+fn push_chrome<E>(
     target: &mut Vec<OutputRenderElements>,
-    elem: PixelSnapRescaleElement<MemoryRenderBufferRenderElement<GlesRenderer>>,
+    elem: PixelSnapRescaleElement<E>,
     animation: Option<super::WindowRenderAnimation>,
-) {
+) where
+    OutputRenderElements: From<PixelSnapRescaleElement<E>>
+        + From<super::WindowTransformElement<PixelSnapRescaleElement<E>>>,
+{
     match animation {
-        Some(a) => target.push(OutputRenderElements::AnimatedDecoration(
-            super::WindowTransformElement::new(elem, a.origin, a.offset, a.scale),
-        )),
-        None => target.push(OutputRenderElements::Decoration(elem)),
+        Some(a) => target
+            .push(super::WindowTransformElement::new(elem, a.origin, a.offset, a.scale).into()),
+        None => target.push(elem.into()),
     }
 }
 
@@ -225,6 +227,7 @@ pub(super) fn push_suspended_element(
         if let Some(buf) = chrome.body.as_ref() {
             let body_phys: Point<f64, Physical> =
                 Point::from((loc_phys.x as f64, loc_phys.y as f64));
+            let body_dst = Rectangle::new(loc_phys, painted_size(size.to_f64(), scale));
             if let Ok(body_elem) = MemoryRenderBufferRenderElement::from_buffer(
                 renderer,
                 body_phys,
@@ -237,7 +240,7 @@ pub(super) fn push_suspended_element(
                 push_chrome(
                     target,
                     PixelSnapRescaleElement::from_element(
-                        body_elem,
+                        TrimmedElement::from_element(body_elem, body_dst),
                         Point::<i32, Physical>::from((0, 0)),
                         zoom,
                     ),
@@ -269,6 +272,13 @@ pub(super) fn push_suspended_element(
     );
     let bar_physical: Point<f64, Physical> =
         Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
+    let bar_dst = Rectangle::new(
+        Point::from((loc_phys.x, loc_phys.y - bar_h_phys as i32)),
+        painted_size(
+            Size::<f64, Logical>::from((size.w as f64, bar_h_logical)),
+            scale,
+        ),
+    );
     if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
         renderer,
         bar_physical,
@@ -281,7 +291,7 @@ pub(super) fn push_suspended_element(
         push_chrome(
             target,
             PixelSnapRescaleElement::from_element(
-                bar_elem,
+                TrimmedElement::from_element(bar_elem, bar_dst),
                 Point::<i32, Physical>::from((0, 0)),
                 zoom,
             ),

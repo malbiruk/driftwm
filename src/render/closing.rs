@@ -7,7 +7,7 @@ use smithay::backend::renderer::element::memory::{
     MemoryRenderBuffer, MemoryRenderBufferRenderElement,
 };
 use smithay::backend::renderer::element::texture::{TextureBuffer, TextureRenderElement};
-use smithay::backend::renderer::element::{Kind, RenderElement};
+use smithay::backend::renderer::element::{Element as _, Kind, RenderElement};
 use smithay::backend::renderer::gles::{
     GlesPixelProgram, GlesRenderer, GlesTexProgram, GlesTexture, Uniform, UniformValue,
 };
@@ -22,7 +22,10 @@ use driftwm::stage::ElementId;
 
 use crate::state::SuspendedWindow;
 
-use super::{OutputRenderElements, WindowRenderAnimation, WindowTransformElement, shaders};
+use super::{
+    OutputRenderElements, TrimmedElement, WindowRenderAnimation, WindowTransformElement,
+    painted_rect, shaders,
+};
 
 /// A progress-based effect ends when within this of 1.0 (a 1% alpha residue is
 /// invisible; a tighter epsilon leaves a long, dead tail past the motion).
@@ -625,7 +628,7 @@ fn flatten(
     );
     let bar_element = chrome.bar.and_then(|(buf, bar_rect)| {
         let loc = bar_rect.loc - bounds.loc;
-        MemoryRenderBufferRenderElement::from_buffer(
+        let elem = MemoryRenderBufferRenderElement::from_buffer(
             renderer,
             Point::<f64, Physical>::from((loc.x * flatten_scale, loc.y * flatten_scale)),
             buf,
@@ -634,28 +637,49 @@ fn flatten(
             Some(bar_rect.size.to_i32_round()),
             Kind::Unspecified,
         )
-        .ok()
+        .ok()?;
+        // Same trim as the live bar, so the baked ring keeps its inner stroke.
+        let mut dst = painted_rect(Rectangle::new(loc, bar_rect.size), scale);
+        // The bar's bottom is the content's top, not a ring edge; smithay's own
+        // rounding of both lands on the same row.
+        dst.size.h = elem.geometry(scale).size.h;
+        Some(TrimmedElement::from_element(elem, dst))
     });
     // Clamp radii like the live clip so a tiny window can't get corners wider
     // than half its side.
     let max_r = ((content_rect.size.w.min(content_rect.size.h) as f32) * 0.5).max(0.0);
     let clamped = chrome.corner_radius.map(|r| r.clamp(0.0, max_r));
+    let painted = painted_rect(Rectangle::from_size(content_rect.size), scale);
     let clip_uniforms = vec![
         Uniform::new("aa_scale", flatten_scale as f32),
         Uniform::new(
             "geo_size",
-            (content_rect.size.w as f32, content_rect.size.h as f32),
+            (
+                painted.size.w as f32 / flatten_scale as f32,
+                painted.size.h as f32 / flatten_scale as f32,
+            ),
         ),
         Uniform::new(
             "corner_radius",
             (clamped[0], clamped[1], clamped[2], clamped[3]),
         ),
-        // Identity: the content texture covers exactly the geometry rect, so its
-        // buffer UV already *is* geometry-normalized.
+        // A scale, not the identity: the content texture covers the rounded-up
+        // extent, so mapping the painted rect onto [0,1] leaves the tie column
+        // past 1.0 where the shader discards it, as the live clip does.
         Uniform::new(
             "input_to_geo",
             UniformValue::Matrix3x3 {
-                matrices: vec![[1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]],
+                matrices: vec![[
+                    content_phys.w as f32 / painted.size.w.max(1) as f32,
+                    0.0,
+                    0.0,
+                    0.0,
+                    content_phys.h as f32 / painted.size.h.max(1) as f32,
+                    0.0,
+                    0.0,
+                    0.0,
+                    1.0,
+                ]],
                 transpose: false,
             },
         ),

@@ -9,7 +9,7 @@ use smithay::backend::renderer::{
 };
 use smithay::utils::{Logical, Physical, Point, Rectangle, Scale, Size};
 
-use super::elements::{OutputRenderElements, corner_round_rect};
+use super::elements::{OutputRenderElements, corner_round_rect, painted_rect};
 
 /// Uniform declarations for background shaders. All three are optional:
 /// shaders reference only what they need; undeclared uniforms get location -1
@@ -74,8 +74,8 @@ pub type ShadowPhysKey = [i32; 8];
 /// Compute both the uniforms and the phys key for a shadow element.
 ///
 /// * `body_pre_zoom` — the body's pre-zoom physical rect, computed via
-///   `to_physical_precise_round(output_scale)` at the call site. For SSD
-///   this includes the title-bar strip; for CSD it's the content rect.
+///   `painted_rect(output_scale)` at the call site. For SSD this includes the
+///   title-bar strip; for CSD it's the content rect.
 /// * `shadow_area` — logical rect of the shadow PixelShaderElement (body ± padding).
 /// * `output_scale` — the output's fractional scale.
 /// * `zoom` — current viewport zoom.
@@ -85,8 +85,8 @@ pub type ShadowPhysKey = [i32; 8];
 /// The body's post-zoom rect is obtained via `corner_round_rect` (same chain
 /// as `PixelSnapRescaleElement`); the shadow's post-zoom rect via
 /// `upscale(zoom).to_i32_round()` (same chain as `RescaleRenderElement`).
-/// Both go through `to_physical_precise_round` for the output-scale step first,
-/// so this stays correct at fractional HiDPI — not just fractional zoom.
+/// Both resolve the output-scale step before the zoom one, so this stays
+/// correct at fractional HiDPI — not just fractional zoom.
 fn shadow_uniforms_precise(
     body_pre_zoom: Rectangle<i32, Physical>,
     shadow_area: Rectangle<i32, Logical>,
@@ -211,7 +211,7 @@ pub(super) fn bake_shadow_element(
     let shadow_radius = driftwm::config::DecorationConfig::SHADOW_RADIUS;
     let shadow_area = shadow_area_for(body_logical);
     let (uniforms, _key) = shadow_uniforms_precise(
-        body_logical.to_physical_precise_round(output_scale),
+        painted_rect(body_logical, output_scale),
         shadow_area,
         output_scale,
         1.0,
@@ -248,7 +248,7 @@ pub(super) fn bake_border_element(
     let (border_area, border_w_phys) =
         border_area_for(inner_logical, border_width_logical, output_scale.x);
     let (uniforms, _key) = border_uniforms_precise(
-        inner_logical.to_physical_precise_round(output_scale),
+        painted_rect(inner_logical, output_scale),
         border_area,
         output_scale,
         1.0,
@@ -300,8 +300,7 @@ pub(super) fn push_shadow_element(
     let shadow_radius = DecorationConfig::SHADOW_RADIUS;
     let shadow_area = shadow_area_for(body_logical);
 
-    let body_pre_zoom: Rectangle<i32, Physical> =
-        body_logical.to_physical_precise_round(output_scale);
+    let body_pre_zoom = painted_rect(body_logical, output_scale);
     let corner_r_phys = corner_radius_logical * output_scale.x as f32 * zoom as f32;
     let (fresh_uniforms, fresh_key) = shadow_uniforms_precise(
         body_pre_zoom,
@@ -499,8 +498,7 @@ pub(super) fn push_border_element(
     let (border_area, border_w_phys) =
         border_area_for(inner_logical, border_width_logical, output_scale.x * zoom);
 
-    let inner_pre_zoom: Rectangle<i32, Physical> =
-        inner_logical.to_physical_precise_round(output_scale);
+    let inner_pre_zoom = painted_rect(inner_logical, output_scale);
     let inner_r_phys = inner_radius_logical * output_scale.x as f32 * zoom as f32;
 
     let (fresh_uniforms, fresh_key) = border_uniforms_precise(

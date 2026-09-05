@@ -29,7 +29,7 @@ pub(crate) use closing::{
 pub use cursor::build_cursor_elements;
 pub use elements::{
     OutputRenderElements, PixelSnapRescaleElement, RoundedCornerElement, TileShaderElement,
-    WindowTransformElement,
+    TrimmedElement, WindowTransformElement, painted_rect, painted_size,
 };
 pub use error_bar::ErrorBarCache;
 pub use lifecycle::{
@@ -513,6 +513,13 @@ pub(crate) fn compose_capture_elements(
                 } else {
                     None
                 };
+                let bar_dst = Rectangle::new(
+                    Point::from((loc_phys.x, loc_phys.y - bar_h_phys as i32)),
+                    painted_size(
+                        Size::<f64, Logical>::from((geom_size.w as f64, bar_h_logical)),
+                        scale,
+                    ),
+                );
                 if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     bar_physical,
@@ -522,9 +529,9 @@ pub(crate) fn compose_capture_elements(
                     None,
                     Kind::Unspecified,
                 ) {
-                    target.push(OutputRenderElements::Decoration(
+                    target.push(OutputRenderElements::TrimmedDecoration(
                         PixelSnapRescaleElement::from_element(
-                            bar_elem,
+                            TrimmedElement::from_element(bar_elem, bar_dst),
                             Point::<i32, Physical>::from((0, 0)),
                             zoom,
                         ),
@@ -535,7 +542,7 @@ pub(crate) fn compose_capture_elements(
             // Only bottom corners round (title bar covers the top edge).
             if let Some(ref shader) = state.render.corner_clip_shader {
                 let radius = effective_corner_radius as f32;
-                if radius > 0.0 {
+                if effective_bw > 0 || radius > 0.0 {
                     let wg = window.geometry();
                     let geometry = Rectangle::new(
                         Point::<f64, Logical>::from((
@@ -1279,6 +1286,15 @@ pub fn compose_frame(
                 } else {
                     None
                 };
+                // The bar takes the border's inner width so it stops where the
+                // content does instead of covering the ring's inner stroke.
+                let bar_dst = Rectangle::new(
+                    Point::from((loc_phys.x, loc_phys.y - bar_h_phys as i32)),
+                    painted_size(
+                        Size::<f64, Logical>::from((geom_size.w as f64, bar_h_logical)),
+                        scale,
+                    ),
+                );
                 if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
                     renderer,
                     bar_physical,
@@ -1289,12 +1305,12 @@ pub fn compose_frame(
                     Kind::Unspecified,
                 ) {
                     let bar_elem = PixelSnapRescaleElement::from_element(
-                        bar_elem,
+                        TrimmedElement::from_element(bar_elem, bar_dst),
                         Point::<i32, Physical>::from((0, 0)),
                         zoom,
                     );
                     if let Some(animation) = window_animation {
-                        target.push(OutputRenderElements::AnimatedDecoration(
+                        target.push(OutputRenderElements::AnimatedTrimmedDecoration(
                             WindowTransformElement::new(
                                 bar_elem,
                                 animation.origin,
@@ -1303,7 +1319,7 @@ pub fn compose_frame(
                             ),
                         ));
                     } else {
-                        target.push(OutputRenderElements::Decoration(bar_elem));
+                        target.push(OutputRenderElements::TrimmedDecoration(bar_elem));
                     }
                 }
             }
@@ -1312,7 +1328,7 @@ pub fn compose_frame(
             // Only bottom corners round (title bar covers the top edge).
             if let Some(ref shader) = state.render.corner_clip_shader {
                 let radius = effective_corner_radius as f32;
-                if radius > 0.0 {
+                if effective_bw > 0 || radius > 0.0 {
                     let wg = window.geometry();
                     let geometry = Rectangle::new(
                         Point::<f64, Logical>::from((
@@ -1506,24 +1522,27 @@ pub fn compose_frame(
                 )
                     .into()
             };
-            let screen_rect = Rectangle::new(
-                if has_ssd {
-                    Point::from((
-                        screen_loc.x,
-                        screen_loc.y
-                            - (state.config.decorations.title_bar_height as f64 * zoom) as i32,
-                    ))
-                } else {
-                    // CSD: geometry starts at render_loc + geo.loc.
-                    let geo = window.geometry();
-                    Point::from((
-                        ((render_loc.x + geo.loc.x as f64) * zoom) as i32,
-                        ((render_loc.y + geo.loc.y as f64) * zoom) as i32,
-                    ))
-                },
-                screen_size,
-            )
-            .to_physical_precise_round(output_scale);
+            let screen_rect = painted_rect(
+                Rectangle::new(
+                    if has_ssd {
+                        Point::from((
+                            screen_loc.x,
+                            screen_loc.y
+                                - (state.config.decorations.title_bar_height as f64 * zoom) as i32,
+                        ))
+                    } else {
+                        // CSD: geometry starts at render_loc + geo.loc.
+                        let geo = window.geometry();
+                        Point::from((
+                            ((render_loc.x + geo.loc.x as f64) * zoom) as i32,
+                            ((render_loc.y + geo.loc.y as f64) * zoom) as i32,
+                        ))
+                    },
+                    screen_size,
+                )
+                .to_f64(),
+                Scale::from(output_scale),
+            );
             // Frost tracks the animated window's visual rect, not its instant
             // logical position (accepted cost: a frosted animation re-blurs at
             // frame rate, throttled by `animate_blur_fps` like a drag).

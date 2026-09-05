@@ -15,7 +15,7 @@ use smithay::wayland::compositor::with_states;
 use smithay::wayland::shell::wlr_layer::Layer as WlrLayer;
 
 use super::blur::{BlurLayer, BlurRequestData};
-use super::elements::OutputRenderElements;
+use super::elements::{OutputRenderElements, painted_rect};
 
 /// Push compositor chrome (corner clip on surface, border, shadow) for one
 /// layer surface, plus any popup elements anchored to it. Returns the number
@@ -30,9 +30,10 @@ use super::elements::OutputRenderElements;
 ///
 /// `push_plain` is the caller's choice of variant for non-clipped surfaces:
 /// canvas layers push as `Window` (zoom-rescaled), screen-anchored layers
-/// push as `Layer` (no rescale). When `corner_radius > 0`, this function
-/// pushes `CsdWindow` regardless — corner clipping wraps in PixelSnap, and at
-/// `zoom = 1.0` PixelSnap collapses to identity.
+/// push as `Layer` (no rescale). Whenever chrome is drawn at all — a border
+/// width or a corner radius — this function pushes `CsdWindow` regardless:
+/// corner clipping wraps in PixelSnap, and at `zoom = 1.0` PixelSnap collapses
+/// to identity.
 #[allow(clippy::too_many_arguments)]
 fn push_layer_chrome(
     target: &mut Vec<OutputRenderElements>,
@@ -75,7 +76,9 @@ fn push_layer_chrome(
     // above the (possibly corner-clipped) surface body and any border/shadow.
     push_plain(target, popup_elements);
 
-    if corner_radius > 0
+    // Clip whenever chrome is drawn, not only when the corners round: an
+    // unclipped surface's rounded-up extent covers the ring's inner stroke.
+    if (border_width > 0 || corner_radius > 0)
         && let Some(ref ccs) = corner_clip_shader
     {
         let r = corner_radius as f32;
@@ -352,7 +355,7 @@ pub(super) fn build_layer_elements(
             let client_blur = client_blur_rects.as_ref().is_some_and(|r| !r.is_empty());
 
             if rule_blur || client_blur {
-                let screen_rect = geo.to_physical_precise_round(output_scale);
+                let screen_rect = painted_rect(geo.to_f64(), scale);
 
                 let region_rects = if client_blur {
                     let rects = client_blur_rects.as_ref().unwrap();
