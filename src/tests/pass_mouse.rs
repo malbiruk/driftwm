@@ -16,7 +16,9 @@ use crate::grabs::{MoveGrab, PanGrab, ResizeGrab};
 use crate::state::DriftWm;
 
 use super::client::ClientId;
-use super::input_backend::{FakeDevice, key_press, pointer_to, press, release, wheel_notch_down};
+use super::input_backend::{
+    FakeDevice, key_press, pointer_to, press, release, trackpad_scroll, wheel_notch_down,
+};
 use super::{Fixture, config, give_ssd, map_window, motion, window_by_app_id};
 
 /// evdev codes, the space `key_press` reports in. Super is the default
@@ -34,10 +36,42 @@ app_id = "app"
 pass_mouse = ["alt+left"]
 "#;
 
+const CLAIM_ALT_RIGHT: &str = r#"
+[[window_rules]]
+app_id = "app"
+pass_mouse = ["alt+right"]
+"#;
+
 const CLAIM_EVERYTHING: &str = r#"
 [[window_rules]]
 app_id = "app"
 pass_mouse = true
+"#;
+
+/// The continuous scroll trigger a wheel reports, which is what the default
+/// `mod+wheel-scroll` zoom is bound to.
+const CLAIM_WHEEL_SCROLL: &str = r#"
+[[window_rules]]
+app_id = "app"
+pass_mouse = ["mod+wheel-scroll"]
+"#;
+
+/// A trackpad scrolls under its own trigger, not the wheel's.
+const CLAIM_TRACKPAD_SCROLL: &str = r#"
+[[window_rules]]
+app_id = "app"
+pass_mouse = ["mod+trackpad-scroll"]
+"#;
+
+/// Pick mode armed with a claim: below the threshold the window has no pointer
+/// focus to forward to, so the binding must survive.
+const CLAIM_BELOW_INTERACT_MIN: &str = r#"
+[zoom]
+interact_min = 0.5
+
+[[window_rules]]
+app_id = "app"
+pass_mouse = ["alt+left"]
 "#;
 
 const PIN: &str = r#"
@@ -55,6 +89,14 @@ size = [400, 300]
 pass_mouse = ["alt+left"]
 "#;
 
+const PIN_AND_CLAIM_SCROLL: &str = r#"
+[[window_rules]]
+app_id = "app"
+pinned_to_screen = true
+size = [400, 300]
+pass_mouse = ["mod+wheel-scroll"]
+"#;
+
 /// A wheel notch bound to an action, which is the discrete site — a separate
 /// lookup from the continuous `wheel-scroll` one below it.
 const NOTCH_FULLSCREEN: &str = r#"
@@ -68,7 +110,7 @@ const NOTCH_FULLSCREEN_CLAIMED: &str = r#"
 
 [[window_rules]]
 app_id = "app"
-pass_mouse = true
+pass_mouse = ["alt+wheel-down"]
 "#;
 
 /// Canvas-space center of `window`'s current geometry.
@@ -102,9 +144,8 @@ fn client_axes(f: &mut Fixture, id: ClientId) -> Vec<f64> {
     f.client(id).state.pointer_axes.clone()
 }
 
-/// A single mapped 400x300 window on one output, with the pointer resting on
-/// its center and `held` (a modifier keycode) down.
-fn window_under_pointer(f: &mut Fixture, held: u32) -> (ClientId, Window) {
+/// A single mapped 400x300 window on one output.
+fn mapped_window(f: &mut Fixture) -> (ClientId, Window) {
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
     map_window(f, id, "app", (400, 300));
@@ -115,9 +156,30 @@ fn window_under_pointer(f: &mut Fixture, held: u32) -> (ClientId, Window) {
         os.camera_target = None;
         os.zoom_target = None;
     });
+    (id, window)
+}
+
+/// Hold `held` (a modifier keycode) and rest the pointer on canvas-space `at`.
+fn aim_and_hold(f: &mut Fixture, held: u32, at: Point<f64, Logical>) {
     key_press(f, held);
+    pointer_to(f, &FakeDevice::mouse(), at);
+}
+
+/// The middle of `window`'s SSD title bar, which sits above its geometry.
+fn title_bar_point(f: &mut Fixture, window: &Window) -> Point<f64, Logical> {
+    let loc = f.state().stage.position_of(window).expect("staged");
+    let bar = f.state().config.decorations.title_bar_height as f64;
+    Point::from((
+        loc.x as f64 + window.geometry().size.w as f64 / 2.0,
+        loc.y as f64 - bar / 2.0,
+    ))
+}
+
+/// [`mapped_window`] with the pointer resting on its center and `held` down.
+fn window_under_pointer(f: &mut Fixture, held: u32) -> (ClientId, Window) {
+    let (id, window) = mapped_window(f);
     let target = center_of(f, &window);
-    pointer_to(f, &FakeDevice::mouse(), target);
+    aim_and_hold(f, held, target);
     (id, window)
 }
 
@@ -158,16 +220,23 @@ fn a_claimed_drag_does_not_move_the_window() {
     );
 }
 
-/// Control for the two above: with no rule the same press is the compositor's,
-/// so it starts the move and the app never hears about it.
+/// Control for the two above: with no rule the same drag is the compositor's,
+/// so it moves the window and the app never hears about it.
 #[test]
-fn an_unclaimed_press_starts_the_move_and_stays_off_the_wire() {
+fn an_unclaimed_drag_moves_the_window_and_stays_off_the_wire() {
     let mut f = Fixture::new();
-    let (id, _) = window_under_pointer(&mut f, KEY_LEFTALT);
+    let (id, window) = window_under_pointer(&mut f, KEY_LEFTALT);
+    let before = f.state().stage.position_of(&window).expect("staged");
 
     press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+    let dragged = center_of(&mut f, &window) + Point::from((100.0, 0.0));
+    motion(&mut f, dragged);
 
-    assert!(grab_is::<MoveGrab>(&mut f), "alt+left is the move binding");
+    assert_ne!(
+        f.state().stage.position_of(&window).expect("staged"),
+        before,
+        "alt+left is the move binding when nothing claims it"
+    );
     assert_eq!(
         client_buttons(&mut f, id),
         Vec::new(),
@@ -220,7 +289,7 @@ fn an_unclaimed_anywhere_binding_still_pans() {
 /// never fires and the wheel reaches the app.
 #[test]
 fn a_claimed_scroll_reaches_the_client() {
-    let mut f = Fixture::with_config(config(CLAIM_EVERYTHING));
+    let mut f = Fixture::with_config(config(CLAIM_WHEEL_SCROLL));
     let (id, _) = window_under_pointer(&mut f, KEY_LEFTMETA);
 
     wheel_notch_down(&mut f, &FakeDevice::mouse());
@@ -234,7 +303,7 @@ fn a_claimed_scroll_reaches_the_client() {
 
 #[test]
 fn a_claimed_scroll_does_not_zoom() {
-    let mut f = Fixture::with_config(config(CLAIM_EVERYTHING));
+    let mut f = Fixture::with_config(config(CLAIM_WHEEL_SCROLL));
     window_under_pointer(&mut f, KEY_LEFTMETA);
 
     wheel_notch_down(&mut f, &FakeDevice::mouse());
@@ -261,6 +330,43 @@ fn an_unclaimed_scroll_zooms() {
     assert!(
         client_axes(&mut f, id).is_empty(),
         "a scroll the zoom consumed must not also reach the app"
+    );
+}
+
+/// A trackpad scrolls under `trackpad-scroll`, not `wheel-scroll`, and a claim
+/// on that trigger hands it over: the default `mod` pan never runs.
+#[test]
+fn a_claimed_trackpad_scroll_reaches_the_client_without_panning() {
+    let mut f = Fixture::with_config(config(CLAIM_TRACKPAD_SCROLL));
+    let (id, _) = window_under_pointer(&mut f, KEY_LEFTMETA);
+    let before = f.state().camera();
+
+    trackpad_scroll(&mut f, &FakeDevice::touchpad());
+
+    assert_eq!(
+        client_axes(&mut f, id),
+        vec![15.0],
+        "the app owns the trackpad over its own window"
+    );
+    assert_eq!(
+        f.state().camera(),
+        before,
+        "a claimed trackpad scroll must leave the camera alone"
+    );
+}
+
+#[test]
+fn an_unclaimed_trackpad_scroll_pans() {
+    let mut f = Fixture::new();
+    window_under_pointer(&mut f, KEY_LEFTMETA);
+    let before = f.state().camera();
+
+    trackpad_scroll(&mut f, &FakeDevice::touchpad());
+
+    assert_ne!(
+        f.state().camera(),
+        before,
+        "mod+trackpad-scroll pans the viewport"
     );
 }
 
@@ -325,17 +431,10 @@ fn a_reloaded_rule_applies_without_remapping_the_window() {
 #[test]
 fn a_claimed_combo_on_the_title_bar_still_moves_the_window() {
     let mut f = Fixture::with_config(config(CLAIM_ALT_LEFT));
-    f.add_output(1, (1920, 1080));
-    let id = f.add_client();
-    map_window(&mut f, id, "app", (400, 300));
-    let window = window_by_app_id(&mut f, "app").unwrap();
+    let (id, window) = mapped_window(&mut f);
     give_ssd(&mut f, &window);
-
-    let loc = f.state().stage.position_of(&window).expect("staged");
-    let bar = f.state().config.decorations.title_bar_height as f64;
-    let on_bar = Point::from((loc.x as f64 + 200.0, loc.y as f64 - bar / 2.0));
-    key_press(&mut f, KEY_LEFTALT);
-    pointer_to(&mut f, &FakeDevice::mouse(), on_bar);
+    let on_bar = title_bar_point(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, on_bar);
 
     press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
 
@@ -347,6 +446,54 @@ fn a_claimed_combo_on_the_title_bar_still_moves_the_window() {
         client_buttons(&mut f, id),
         Vec::new(),
         "a chrome click is not the app's"
+    );
+}
+
+/// The same for a button the decoration branch itself ignores: `alt+right` on
+/// the title bar of a claiming window still runs the compositor's resize, which
+/// is the half a left-only chrome check would drop.
+#[test]
+fn a_claimed_combo_on_the_title_bar_still_resizes_the_window() {
+    let mut f = Fixture::with_config(config(CLAIM_ALT_RIGHT));
+    let (id, window) = mapped_window(&mut f);
+    give_ssd(&mut f, &window);
+    let on_bar = title_bar_point(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, on_bar);
+
+    press(&mut f, &FakeDevice::mouse(), BTN_RIGHT);
+
+    assert!(
+        grab_is::<ResizeGrab>(&mut f),
+        "the title bar stays compositor-owned for every button, not just left"
+    );
+    assert_eq!(
+        client_buttons(&mut f, id),
+        Vec::new(),
+        "a chrome click is not the app's"
+    );
+}
+
+/// Below `interact_min` a canvas window has no pointer focus, so a claim there
+/// would leave the click doing nothing at all. The binding wins instead, which
+/// is what the same press does with no rule (see `interact_min.rs`).
+#[test]
+fn a_claim_below_interact_min_leaves_the_binding_alone() {
+    let mut f = Fixture::with_config(config(CLAIM_BELOW_INTERACT_MIN));
+    let (id, window) = mapped_window(&mut f);
+    f.state().set_zoom(0.3);
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, target);
+
+    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+
+    assert!(
+        grab_is::<MoveGrab>(&mut f),
+        "pick mode keeps alt+left as the move binding"
+    );
+    assert_eq!(
+        client_buttons(&mut f, id),
+        Vec::new(),
+        "the press the compositor ran must not also reach the app"
     );
 }
 
@@ -402,22 +549,40 @@ fn an_unclaimed_press_on_a_pinned_window_drags_it() {
     );
 }
 
+/// The pinned arm of the claim's window lookup, which the button path resolves
+/// earlier and so never reaches: a scroll over a pinned window still finds it.
+#[test]
+fn a_claimed_scroll_over_a_pinned_window_does_not_zoom() {
+    let mut f = Fixture::with_config(config(PIN_AND_CLAIM_SCROLL));
+    let (id, _) = window_under_pointer(&mut f, KEY_LEFTMETA);
+
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+
+    assert_eq!(
+        f.state().zoom_target(),
+        None,
+        "a pinned window claims its combos like any other"
+    );
+    assert_eq!(
+        client_axes(&mut f, id),
+        vec![15.0],
+        "the wheel forwards to the app instead"
+    );
+}
+
 /// A fullscreen window resolves its own claim (the fullscreen branch returns
 /// before the canvas one runs), and the forward there leaves fullscreen intact.
 #[test]
 fn a_claimed_press_on_a_fullscreen_window_reaches_the_client() {
     let mut f = Fixture::with_config(config(CLAIM_ALT_LEFT));
     f.skip_baseline_check();
-    let output = f.add_output(1, (1920, 1080));
-    let id = f.add_client();
-    map_window(&mut f, id, "app", (400, 300));
-    let window = window_by_app_id(&mut f, "app").unwrap();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
     f.state().enter_fullscreen(&window, Some(output));
     f.double_roundtrip(id);
 
-    key_press(&mut f, KEY_LEFTALT);
     let target = center_of(&mut f, &window);
-    pointer_to(&mut f, &FakeDevice::mouse(), target);
+    aim_and_hold(&mut f, KEY_LEFTALT, target);
     press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
     release(&mut f, &FakeDevice::mouse(), BTN_LEFT);
 

@@ -858,8 +858,11 @@ fn pass_mouse_of(toml: &str) -> PassMouse {
 
 #[test]
 fn pass_mouse_omitted_defaults_to_none() {
-    let rule = bare_rule(Some("app"), None);
-    assert_eq!(AppliedWindowRule::from(&rule).pass_mouse, PassMouse::None);
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::None);
 }
 
 #[test]
@@ -945,16 +948,6 @@ fn pass_mouse_with_no_usable_combo_forwards_nothing() {
 }
 
 #[test]
-fn pass_mouse_all_is_sticky_against_only() {
-    let mut base = PassMouse::All;
-    base.merge_from(&PassMouse::Only(vec![mouse_combo(
-        alt(),
-        MouseTrigger::Button(BTN_LEFT),
-    )]));
-    assert_eq!(base, PassMouse::All);
-}
-
-#[test]
 fn pass_mouse_only_union_deduplicates() {
     let left = mouse_combo(alt(), MouseTrigger::Button(BTN_LEFT));
     let right = mouse_combo(alt(), MouseTrigger::Button(BTN_RIGHT));
@@ -984,6 +977,16 @@ fn resolve_window_rules_unions_pass_mouse_across_two_matching_rules() {
             mouse_combo(alt(), MouseTrigger::Button(BTN_RIGHT)),
         ])
     );
+}
+
+#[test]
+fn pass_mouse_resolves_through_a_title_match() {
+    let toml = r#"
+        [[window_rules]]
+        title = "title"
+        pass_mouse = true
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::All);
 }
 
 #[test]

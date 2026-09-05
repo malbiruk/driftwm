@@ -717,20 +717,31 @@ pub fn click(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>, butt
     release(f, device, button_code);
 }
 
-/// Turn the mouse wheel one notch toward the user, wherever the pointer already
-/// is. libinput pairs the 15 px step with the v120 fraction that says how much
-/// of a notch it was, and both are read on the scroll path.
-pub fn wheel_notch_down(f: &mut Fixture, device: &FakeDevice) {
+fn axis(f: &mut Fixture, device: &FakeDevice, source: AxisSource, amount: f64, v120: Option<f64>) {
     f.state()
         .process_input_event::<FakeInput>(InputEvent::PointerAxis {
             event: FakeAxisEvent {
                 device: device.clone(),
-                source: AxisSource::Wheel,
-                amount: 15.0,
-                v120: Some(120.0),
+                source,
+                amount,
+                v120,
                 time: next_time(),
             },
         });
+}
+
+/// Turn the mouse wheel one notch toward the user, wherever the pointer already
+/// is. libinput pairs the 15 px step with the v120 fraction that says how much
+/// of a notch it was, and both are read on the scroll path.
+pub fn wheel_notch_down(f: &mut Fixture, device: &FakeDevice) {
+    axis(f, device, AxisSource::Wheel, 15.0, Some(120.0));
+}
+
+/// Drag two fingers down the trackpad, wherever the pointer already is. A finger
+/// scroll is a pixel distance with no v120 alongside it — a trackpad has no
+/// notches — and reaches a different trigger than the wheel above.
+pub fn trackpad_scroll(f: &mut Fixture, device: &FakeDevice) {
+    axis(f, device, AxisSource::Finger, 15.0, None);
 }
 
 /// Put one finger down on canvas-space `at`.
