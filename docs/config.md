@@ -491,7 +491,7 @@ spacing kept between windows, in canvas px — snapping, auto placement, cluster
 
 Default: `0.0`
 
-inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away. Set it to gap for a margin
+inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away — and a border that would hang outside the usable area is not drawn. Set it to gap for a margin
 
 ### `distance`
 
@@ -593,7 +593,7 @@ Default: `0`
 
 Borders apply to "client", "server", and "minimal" modes. "none" mode has no border unless one is set per-app in [[window_rules]].
 
-px; 0 disables the border
+px; 0 disables the border. Not drawn while it hangs outside the usable area (see snap.outer_gap)
 
 ### `border_color`
 

@@ -253,7 +253,9 @@
                                # the maximize setup: fitted and filled windows
                                # land edge to edge, and a window covering the
                                # usable area draws square with no shadow until
-                               # you pan away. Set it to gap for a margin
+                               # you pan away — and a border that would hang
+                               # outside the usable area is not drawn. Set it to
+                               # gap for a margin
 # distance = 24.0              # activation threshold (screen px from edge)
 # break_force = 32.0           # screen px past snap to break free
 # corners = false              # also align corners (parallel edges line up: top-to-top, left-to-left)
@@ -290,7 +292,9 @@
 
 # # Borders apply to "client", "server", and "minimal" modes. "none" mode has
 # # no border unless one is set per-app in [[window_rules]].
-# border_width = 0               # px; 0 disables the border
+# border_width = 0               # px; 0 disables the border. Not drawn while it
+                                 # hangs outside the usable area (see
+                                 # snap.outer_gap)
 # border_color = "#303030"       # unfocused border
 # border_color_focused = "#303030"  # focused border. Same default as above —
                                     # set this to a different color to get a
