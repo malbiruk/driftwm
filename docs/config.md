@@ -1306,6 +1306,11 @@ Supported fields:
   - pass_keys = ["mod+q", "ctrl+q"] — forward ONLY these combos; all other compositor shortcuts stay active
   - pass_keys = false / omit — compositor handles everything (default)
   - VT switching (Ctrl+Alt+F1–F12) — always stays in the compositor
+- `pass_mouse` — controls which compositor mouse bindings ([mouse.*]) are forwarded to the app:
+  - pass_mouse = true — forward ALL mouse bindings over this window
+  - pass_mouse = ["alt+left", "alt+right"] — forward ONLY these combos; all other mouse bindings stay active
+  - pass_mouse = false / omit — compositor handles everything (default)
+  - SSD title bar, resize borders and close button — always stay with the compositor
 - `layer_order` — stacking among layer surfaces sharing the same wlr-layer (higher = on top; ties stack by map order, newest on top). The protocol has no z-index within a layer, so two overlay clients (e.g. an on-screen keyboard and a touch visualizer) otherwise stack by launch order. Also orders canvas-positioned layers among themselves. Ignored for regular windows.
 
 Pattern syntax (applies to all match fields):
@@ -1339,6 +1344,14 @@ position         = [0, -300]   # output-relative: 300px below center; movable, d
 [[window_rules]]
 app_id    = "factorio"
 pass_keys = ["ctrl+q"]
+```
+
+**Example: Blender, let alt+drag reach the app (orbit / three-button emulation), keep all keys**
+
+```toml
+[[window_rules]]
+app_id     = "blender"
+pass_mouse = ["alt+left", "alt+middle", "alt+right"]
 ```
 
 **Example: Compose rules, blur from first rule, opacity from second (both apply)**

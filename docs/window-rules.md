@@ -22,6 +22,8 @@ in config order and merged together:
   writing `blur = false` or `widget = false` in a rule does nothing.
 - **`pass_keys`**: `All` is sticky-on; `Only` lists are unioned across
   rules (see [`pass_keys`](#pass_keys)).
+- **`pass_mouse`**: same shape — `true` is sticky-on; combo lists are unioned
+  across rules (see [`pass_mouse`](#pass_mouse)).
 
 This lets you compose independent rules for the same window:
 
@@ -250,6 +252,40 @@ When multiple rules match the same window, `["combo", …]` lists are **unioned*
 and `true` beats a list: if one rule says `true` and another says `["mod+q"]`,
 the result is `true`.
 
+### `pass_mouse`
+
+`pass_mouse` is the same idea for the `[mouse.*]` bindings: a claimed press or
+scroll reaches the app instead of running its compositor action. Apps that want
+`alt`-drag for themselves — Blender, Krita, GIMP, CAD three-button emulation —
+need it, since `alt+left`/`alt+middle`/`alt+right` are the on-window move / fit /
+resize defaults.
+
+Combo syntax is the `[mouse.*]` binding syntax: modifiers plus one of `left`,
+`right`, `middle`, `trackpad-scroll`, `wheel-scroll`, `wheel-up`, `wheel-down`.
+`mod` resolves through `mod_key` as everywhere else. To hand an app the default
+`mod+wheel-scroll` zoom, list `"mod+wheel-scroll"`.
+
+Unlike `pass_keys`, which follows the **focused** window, `pass_mouse` is
+resolved against the window **under the pointer** — canvas, pinned or
+fullscreen — because that is what a mouse binding's context comes from.
+
+Compositor chrome always stays with the compositor: the SSD title bar, the
+close button and the resize borders keep their normal behaviour, so `alt+left`
+on a title bar still starts a move.
+
+A claimed click behaves exactly as an unbound one, which also means it still
+focuses and raises the window — and with `auto_navigate_on_click = true` it
+still pans the camera to the window.
+
+When multiple rules match the same window, combo lists are **unioned** and
+`true` beats a list.
+
+```toml
+[[window_rules]]
+app_id     = "blender"
+pass_mouse = ["alt+left", "alt+middle", "alt+right"]
+```
+
 ## Examples
 
 ### Desktop widget (pinned clock/info panel)
@@ -323,6 +359,18 @@ Keep `mod+q` and other compositor shortcuts active, but pass `ctrl+q` to the gam
 [[window_rules]]
 app_id    = "factorio"
 pass_keys = ["ctrl+q", "ctrl+s"]
+```
+
+### Blender: let alt+drag reach the app
+
+Blender orbits and pans with `alt`-drag, which collides with the on-window
+move / fit / resize defaults. Hand it those three combos and leave every
+keybinding — and every other mouse binding — with the compositor:
+
+```toml
+[[window_rules]]
+app_id     = "blender"
+pass_mouse = ["alt+left", "alt+middle", "alt+right"]
 ```
 
 ### Initial size and position for a floating panel
@@ -416,8 +464,9 @@ config only affects windows opened afterwards, and a window that changes its
 title after mapping is **not** re-checked against `title` rules.
 
 A few things re-resolve live against the current config instead: `pass_keys` is
-evaluated per keypress (so a config reload — and a title change — takes effect
-immediately), layer-surface chrome is evaluated per frame (likewise),
+evaluated per keypress and `pass_mouse` per button press and scroll (so a config
+reload — and a title change — takes effect immediately), layer-surface chrome is
+evaluated per frame (likewise),
 `suspend_on_close` is evaluated when a window closes, and `restore_windows` when
 the session is saved or loaded. On load, `restore_windows` is matched against a
 saved record, which carries an `app_id` but no title, so only the `app_id`
