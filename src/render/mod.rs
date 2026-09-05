@@ -1035,8 +1035,10 @@ pub fn compose_frame(
         // camera flight keeps the chrome until the camera lands.
         // `render_loc + geom_loc` is the content origin fit, fill and parking
         // produced, or a pin's screen site, and committed geometry still reports
-        // the pre-fit size until the client acks.
-        let covers = {
+        // the pre-fit size until the client acks. Skipped outright when there is
+        // nothing to suppress: the size read below takes a surface lock per
+        // window per output per frame.
+        let covers = (configured.corner_radius > 0 || configured.shadow) && !is_fullscreen && {
             let bw = effective_bw as f64;
             let bar = if has_ssd {
                 state.config.decorations.title_bar_height as f64
