@@ -1120,19 +1120,24 @@ impl DriftWm {
             }
         }
 
-        let initial_configure_sent = with_states(&root, |states| {
-            states
-                .data_map
-                .get::<LayerSurfaceData>()
-                .map(|data| data.lock().unwrap().initial_configure_sent)
-                .unwrap_or(true)
+        // A 0 in the size request means fill the output; the protocol only
+        // allows it with both edges of that axis anchored. A changed request
+        // gets a fresh configure, which is how a self-sizing widget grows.
+        let requested = with_states(&root, |states| {
+            let mut guard = states.cached_state.get::<LayerSurfaceCachedState>();
+            guard.current().size
         });
-
-        if !initial_configure_sent {
-            self.canvas_layers[idx]
-                .surface
-                .layer_surface()
-                .send_configure();
+        let output_size = crate::state::output_logical_size(&self.canvas_layers[idx].output);
+        let fill = |requested: i32, output: i32| if requested > 0 { requested } else { output };
+        let size = smithay::utils::Size::from((
+            fill(requested.w, output_size.w),
+            fill(requested.h, output_size.h),
+        ));
+        if self.canvas_layers[idx].configured_size != Some(size) {
+            let layer = self.canvas_layers[idx].surface.layer_surface();
+            layer.with_pending_state(|state| state.size = Some(size));
+            layer.send_configure();
+            self.canvas_layers[idx].configured_size = Some(size);
         }
 
         self.update_keyboard_focus(smithay::utils::SERIAL_COUNTER.next_serial());

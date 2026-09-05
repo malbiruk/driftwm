@@ -21,6 +21,10 @@ pub struct CanvasLayer {
     /// Internal canvas position (Y-down, top-left). None until first commit reveals size.
     pub position: Option<Point<i32, Logical>>,
     pub namespace: String,
+    /// Its logical size fills a dimension the client requests as 0.
+    pub output: Output,
+    /// Last size sent in a configure; a changed request re-configures.
+    pub configured_size: Option<smithay::utils::Size<i32, Logical>>,
 }
 
 impl DriftWm {

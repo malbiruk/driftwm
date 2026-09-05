@@ -106,14 +106,9 @@ impl WlrLayerShellHandler for DriftWm {
         if let Some(ref rule) = rule
             && let Some((rx, ry)) = rule.position
         {
+            // No configure here: the size request arrives with the first
+            // commit, and the commit handler answers it.
             let desktop_surface = desktop::LayerSurface::new(surface, namespace.clone());
-
-            // Configure with output width; height left to client
-            let output_w = crate::state::output_logical_size(&resolved_output).w;
-            desktop_surface.layer_surface().with_pending_state(|state| {
-                state.size = Some((output_w, 0).into());
-            });
-            desktop_surface.layer_surface().send_configure();
 
             // Output::enter (vs raw wl_surface.enter) tells the client the
             // output's scale/transform and records the surface in enter
@@ -129,6 +124,8 @@ impl WlrLayerShellHandler for DriftWm {
                 rule_position: (rx, ry),
                 position: None,
                 namespace,
+                output: resolved_output,
+                configured_size: None,
             });
             return;
         }

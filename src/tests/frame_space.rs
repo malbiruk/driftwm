@@ -6,7 +6,7 @@
 //! signal for this conversion at all.
 
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
-use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1;
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
@@ -257,6 +257,102 @@ border_width = 6
         canvas_layers[0].size,
         [212, 162],
         "the border adds 2×6 to each axis: 200+12, 150+12"
+    );
+}
+
+/// A canvas layer's concrete size request is echoed verbatim — the output
+/// width never stands in for a dimension the client specified.
+#[test]
+fn canvas_layer_configure_echoes_a_requested_size() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "widget"
+position = [0, 0]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "widget");
+    let surface = layer.surface.clone();
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((320, 240)),
+        ..Default::default()
+    });
+    layer.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    assert_eq!(
+        layer
+            .recent_configures()
+            .map(|c| c.size)
+            .collect::<Vec<_>>(),
+        vec![(320, 240)],
+    );
+}
+
+/// A 0 on an axis anchored at both edges fills from the output; the other
+/// axis is echoed. A later commit changing the request gets its own
+/// configure — that is how a self-sizing bar grows.
+#[test]
+fn canvas_layer_configure_fills_an_anchored_axis_and_reconfigures_on_change() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "widget"
+position = [0, 0]
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "widget");
+    let surface = layer.surface.clone();
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((0, 240)),
+        anchor: Some(zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right),
+        ..Default::default()
+    });
+    layer.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    assert_eq!(
+        layer
+            .recent_configures()
+            .map(|c| c.size)
+            .collect::<Vec<_>>(),
+        vec![(1920, 240)],
+        "width fills from the output; the requested height is echoed"
+    );
+
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((0, 300)),
+        anchor: Some(zwlr_layer_surface_v1::Anchor::Left | zwlr_layer_surface_v1::Anchor::Right),
+        ..Default::default()
+    });
+    layer.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    assert_eq!(
+        layer
+            .recent_configures()
+            .map(|c| c.size)
+            .collect::<Vec<_>>(),
+        vec![(1920, 300)],
+        "a changed request gets a second configure"
+    );
+    assert_eq!(
+        layer.configures_received.len(),
+        2,
+        "exactly two configures total"
     );
 }
 
