@@ -1305,7 +1305,7 @@ impl Config {
     ///
     /// Rules are applied in config order; later rules override earlier ones for
     /// scalar fields (decoration, opacity, position, size). Boolean flags
-    /// (widget, blur, pass_keys) are sticky-on.
+    /// (widget, blur, pass_keys, pass_mouse) are sticky-on.
     pub fn resolve_window_rules(&self, app_id: &str, title: &str) -> Option<AppliedWindowRule> {
         let mut result: Option<AppliedWindowRule> = None;
         for rule in &self.window_rules {

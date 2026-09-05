@@ -275,18 +275,20 @@ pub(super) struct DecorationFileConfig {
     pub title_align: Option<String>,
 }
 
-/// Flexible `pass_keys` TOML value: `true`/`false` OR a list of key-combo strings.
+/// Flexible `pass_keys` / `pass_mouse` TOML value: `true`/`false` OR a list of
+/// combo strings.
 ///
 /// Examples:
 /// ```toml
-/// pass_keys = true                        # forward ALL keys
-/// pass_keys = ["mod+q", "ctrl+q"]         # forward only these combos
+/// pass_keys  = true                        # forward ALL keys
+/// pass_keys  = ["mod+q", "ctrl+q"]         # forward only these combos
+/// pass_mouse = ["alt+left"]                # forward only this mouse combo
 /// ```
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
-pub(super) enum PassKeysFile {
+pub(super) enum PassListFile {
     Bool(bool),
-    Keys(Vec<String>),
+    List(Vec<String>),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -326,7 +328,11 @@ pub(super) struct WindowRuleFile {
     /// `true` — forward all keys to the app (game-friendly).
     /// `["mod+q", "ctrl+q"]` — forward only those combos; all others stay active.
     /// Omit or `false` — compositor handles everything normally (default).
-    pub pass_keys: Option<PassKeysFile>,
+    pub pass_keys: Option<PassListFile>,
+    /// `true` — forward all `[mouse.*]` bindings over this window to the app.
+    /// `["alt+left"]` — forward only those combos; all others stay active.
+    /// Omit or `false` — compositor handles everything normally (default).
+    pub pass_mouse: Option<PassListFile>,
     pub border_width: Option<i32>,
     pub border_color: Option<String>,
     pub border_color_focused: Option<String>,

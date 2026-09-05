@@ -1,6 +1,6 @@
 use driftwm::config::{
-    AppliedWindowRule, Config, DecorationConfig, DecorationMode, PassKeys, Pattern, WindowRule,
-    effective_blur, effective_opacity, glob_matches,
+    AppliedWindowRule, Config, DecorationConfig, DecorationMode, PassKeys, PassMouse, Pattern,
+    WindowRule, effective_blur, effective_opacity, glob_matches,
 };
 
 fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
@@ -20,6 +20,7 @@ fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
         blur: false,
         opacity: None,
         pass_keys: PassKeys::None,
+        pass_mouse: PassMouse::None,
         border_width: None,
         border_color: None,
         border_color_focused: None,

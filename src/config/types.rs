@@ -709,21 +709,46 @@ pub fn glob_matches(pat: &str, val: &str) -> bool {
     true
 }
 
-/// Controls which compositor keybindings are forwarded to the focused window
+/// Controls which compositor bindings of one kind are forwarded to the app
 /// instead of being handled by the compositor.
 ///
 /// - `None`  — default; compositor handles everything.
-/// - `All`   — all keys forwarded (game/fullscreen-friendly).
+/// - `All`   — every binding of that kind is forwarded (game-friendly).
 /// - `Only`  — only the listed combos are forwarded; all others stay active.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub enum PassKeys {
+pub enum PassList<C> {
     #[default]
     None,
     All,
-    Only(Vec<KeyCombo>),
+    Only(Vec<C>),
 }
 
-impl PassKeys {
+pub type PassKeys = PassList<KeyCombo>;
+pub type PassMouse = PassList<MouseBinding>;
+
+impl<C: Clone + PartialEq> PassList<C> {
+    /// Merge `other` into `self`.
+    /// `All` is sticky-on; `Only` lists are unioned; `None` is a no-op.
+    pub fn merge_from(&mut self, other: &PassList<C>) {
+        match (&*self, other) {
+            (_, PassList::None) => {} // other adds nothing
+            (PassList::All, _) => {}  // already maximally permissive
+            (_, PassList::All) => *self = PassList::All,
+            (PassList::None, PassList::Only(v)) => *self = PassList::Only(v.clone()),
+            (PassList::Only(existing), PassList::Only(extra)) => {
+                let mut merged = existing.clone();
+                for c in extra {
+                    if !merged.contains(c) {
+                        merged.push(c.clone());
+                    }
+                }
+                *self = PassList::Only(merged);
+            }
+        }
+    }
+}
+
+impl PassList<KeyCombo> {
     /// Returns `true` if the given raw key event should be forwarded to the app.
     /// Constructs and normalises a `KeyCombo` internally — no import needed at call sites.
     pub fn allows_raw(&self, modifiers: &ModifiersState, sym: Keysym) -> bool {
@@ -740,24 +765,21 @@ impl PassKeys {
             }
         }
     }
+}
 
-    /// Merge `other` into `self`.
-    /// `All` is sticky-on; `Only` lists are unioned; `None` is a no-op.
-    pub fn merge_from(&mut self, other: &PassKeys) {
-        match (&*self, other) {
-            (_, PassKeys::None) => {} // other adds nothing
-            (PassKeys::All, _) => {}  // already maximally permissive
-            (_, PassKeys::All) => *self = PassKeys::All,
-            (PassKeys::None, PassKeys::Only(v)) => *self = PassKeys::Only(v.clone()),
-            (PassKeys::Only(existing), PassKeys::Only(extra)) => {
-                let mut merged = existing.clone();
-                for c in extra {
-                    if !merged.contains(c) {
-                        merged.push(c.clone());
-                    }
-                }
-                *self = PassKeys::Only(merged);
-            }
+impl PassList<MouseBinding> {
+    /// Returns `true` if a mouse binding with these modifiers and trigger should
+    /// be forwarded to the app. `MouseBinding` has no normalisation step, and the
+    /// `Config::mouse_*_lookup_ctx` methods build the same key verbatim, so exact
+    /// equality is the right test.
+    pub fn allows(&self, modifiers: &ModifiersState, trigger: MouseTrigger) -> bool {
+        match self {
+            PassMouse::None => false,
+            PassMouse::All => true,
+            PassMouse::Only(list) => list.contains(&MouseBinding {
+                modifiers: Modifiers::from_state(modifiers),
+                trigger,
+            }),
         }
     }
 }
@@ -802,6 +824,10 @@ pub struct WindowRule {
     pub blur: bool,
     pub opacity: Option<f64>,
     pub pass_keys: PassKeys,
+    /// Which compositor `[mouse.*]` bindings are forwarded to the app instead
+    /// of being handled by the compositor. Resolved against the window under
+    /// the pointer, not the focused one.
+    pub pass_mouse: PassMouse,
     /// Per-window border overrides. Ignored for `decoration = "none"` —
     /// use `minimal` mode for a titlebar-less window that still wants a
     /// border. `None` means inherit the global value.
@@ -857,6 +883,7 @@ pub struct AppliedWindowRule {
     pub blur: bool,
     pub opacity: Option<f64>,
     pub pass_keys: PassKeys,
+    pub pass_mouse: PassMouse,
     /// Explicit window position requested by the matching rule(s).
     pub position: Option<(i32, i32)>,
     /// Explicit window size requested by the matching rule(s).
@@ -873,7 +900,8 @@ pub struct AppliedWindowRule {
 impl AppliedWindowRule {
     /// Overlay `rule`'s effects on top of `self`.
     /// Boolean flags (widget, blur) are sticky-on.
-    /// `pass_keys`: `All` is sticky-on; `Only` lists are unioned (see `PassKeys::merge_from`).
+    /// `pass_keys` / `pass_mouse`: `All` is sticky-on; `Only` lists are unioned
+    /// (see `PassList::merge_from`).
     /// Scalar fields (decoration, opacity, position, size) use last-wins.
     pub fn merge_from(&mut self, rule: &WindowRule) {
         if rule.widget {
@@ -898,6 +926,7 @@ impl AppliedWindowRule {
             self.blur = true;
         }
         self.pass_keys.merge_from(&rule.pass_keys);
+        self.pass_mouse.merge_from(&rule.pass_mouse);
         if rule.decoration.is_some() {
             self.decoration = rule.decoration.clone();
         }
@@ -950,6 +979,7 @@ impl From<&WindowRule> for AppliedWindowRule {
             blur: rule.blur,
             opacity: rule.opacity,
             pass_keys: rule.pass_keys.clone(),
+            pass_mouse: rule.pass_mouse.clone(),
             position: rule.position,
             size: rule.size,
             fullscreen: rule.fullscreen,

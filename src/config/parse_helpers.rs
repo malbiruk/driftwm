@@ -8,15 +8,15 @@ use std::collections::HashMap;
 
 use smithay::utils::Transform;
 
-use super::parse::parse_key_combo;
+use super::parse::{parse_key_combo, parse_mouse_binding};
 use super::toml::{
     BackendFileConfig, DecorationFileConfig, EffectsFileConfig, HotCornersFile,
-    OutputOutlineConfig, OutputRuleFile, PassKeysFile, WindowRuleFile,
+    OutputOutlineConfig, OutputRuleFile, PassListFile, WindowRuleFile,
 };
 use super::types::{
     BackendConfig, DecorationConfig, DecorationMode, EffectsConfig, FocusPlacement, FontWeight,
-    HotCorners, KeyCombo, ModKey, OutputConfig, OutputMode, OutputOutlineSettings, OutputPosition,
-    PassKeys, Pattern, TitleAlign, WindowRule,
+    HotCorners, KeyCombo, ModKey, MouseBinding, OutputConfig, OutputMode, OutputOutlineSettings,
+    OutputPosition, PassKeys, PassMouse, Pattern, TitleAlign, WindowRule,
 };
 
 /// How actionable a config warning is. The error bar has room for one message,
@@ -388,9 +388,9 @@ pub(super) fn parse_window_rule(
         }
     };
     let pass_keys = match r.pass_keys {
-        None | Some(PassKeysFile::Bool(false)) => PassKeys::None,
-        Some(PassKeysFile::Bool(true)) => PassKeys::All,
-        Some(PassKeysFile::Keys(strs)) => {
+        None | Some(PassListFile::Bool(false)) => PassKeys::None,
+        Some(PassListFile::Bool(true)) => PassKeys::All,
+        Some(PassListFile::List(strs)) => {
             let combos: Vec<KeyCombo> = strs
                 .iter()
                 .filter_map(|s| match parse_key_combo(s, mod_key) {
@@ -411,6 +411,30 @@ pub(super) fn parse_window_rule(
                 PassKeys::None
             } else {
                 PassKeys::Only(combos)
+            }
+        }
+    };
+    let pass_mouse = match r.pass_mouse {
+        None | Some(PassListFile::Bool(false)) => PassMouse::None,
+        Some(PassListFile::Bool(true)) => PassMouse::All,
+        Some(PassListFile::List(strs)) => {
+            let combos: Vec<MouseBinding> = strs
+                .iter()
+                .filter_map(|s| match parse_mouse_binding(s, mod_key) {
+                    Ok(b) => Some(b),
+                    Err(e) => {
+                        collect_warn(
+                            errors,
+                            format!("config: pass_mouse invalid mouse combo '{s}': {e}"),
+                        );
+                        None
+                    }
+                })
+                .collect();
+            if combos.is_empty() {
+                PassMouse::None
+            } else {
+                PassMouse::Only(combos)
             }
         }
     };
@@ -472,6 +496,7 @@ pub(super) fn parse_window_rule(
         blur: r.blur.unwrap_or(false),
         opacity,
         pass_keys,
+        pass_mouse,
         border_width,
         border_color,
         border_color_focused,
