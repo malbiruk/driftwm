@@ -1,7 +1,7 @@
 use driftwm::config::{
-    AppliedWindowRule, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, DecorationConfig,
-    DecorationMode, Modifiers, MouseBinding, MouseTrigger, PassKeys, PassMouse, Pattern,
-    WindowRule, effective_blur, effective_opacity, glob_matches,
+    AppliedWindowRule, BTN_LEFT, BTN_MIDDLE, BTN_RIGHT, Config, DecorationConfig, DecorationMode,
+    Modifiers, MouseBinding, MouseTrigger, PassKeys, PassMouse, Pattern, WindowRule,
+    effective_blur, effective_opacity, glob_matches,
 };
 
 fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
