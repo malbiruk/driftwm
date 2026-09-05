@@ -39,9 +39,10 @@ pub(super) fn snap_rect_at(
 /// Fit geometry for a primary window: the canvas position, size, camera
 /// target, and zoom anchor the primary would have if fitted to the viewport
 /// right now. Shared between `fit_window` (which applies it) and
-/// `fit_window_snapped` (which feeds the exact post-fit rect into the
-/// cluster-shift helper — the camera lands on a whole pixel, so `new_loc`'s
-/// `as i32` is exact and that rect is the one the window settles on).
+/// `fit_window_snapped` (which feeds the post-fit rect into the cluster-shift
+/// helper — the camera term lands on a whole pixel, so that rect is the one the
+/// window settles on, up to the truncation a fractional inset still leaves in
+/// `new_loc`).
 struct FitGeometry {
     new_loc: Point<i32, Logical>,
     target_size: Size<i32, Logical>,
@@ -57,8 +58,9 @@ impl DriftWm {
         let usable = self.get_usable_area();
         let chrome = self.element_chrome(window);
         // The inset measures to the bar/content edge, not to the frame, so the
-        // frame deliberately overflows the usable area by one border per side
-        // and the content inside gives up the whole chrome.
+        // frame sits one border further out than the inset — past the usable
+        // area once `outer_gap` is under the border width, flush with it at 0
+        // with no border — and the content inside gives up the whole chrome.
         let inset = self.config.outer_frame_inset(chrome.border);
         let target_size = chrome.content_size(Size::from((
             usable.size.w - (2.0 * inset) as i32,

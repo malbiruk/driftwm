@@ -1534,9 +1534,10 @@ fn fill_on_fit_window_with_a_neighbor_fires() {
 /// its usable space — fill must leave it untouched.
 ///
 /// The exact no-op needs the fit's canvas rect and its camera to land on the
-/// same integers. `compute_fit_geometry` rounds the camera, so the odd pre-fit
-/// dimensions that used to leave the window half a pixel off the usable area —
-/// and gave fill a gap of its own to close — are inert here too.
+/// same integers, which `compute_fit_geometry` gets by rounding the camera. The
+/// sibling below repeats the check on the odd pre-fit dimensions that used to
+/// leave the window half a pixel off the usable area, and gave fill a gap of
+/// its own to close.
 #[test]
 fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
     let mut f = Fixture::new();
@@ -1572,6 +1573,37 @@ fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
         client_sees_maximized(&mut f, id, &surface),
         "an inert fill must not touch the client's Maximized state"
     );
+}
+
+/// The odd-dimension half of the case above: an odd pre-fit size lands the fit
+/// on whole pixels too, so fill has nothing to close there either.
+#[test]
+fn fill_on_lone_odd_fit_window_with_settled_camera_is_inert() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let surface = map_settled(&mut f, id, "a", (801, 601));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+    f.state()
+        .map_window(window.clone(), Point::from((400, 300)), false);
+
+    fit_and_settle(&mut f, &window, id, &surface);
+    assert!(f.state().stage.is_fit(&window), "precondition: fit");
+    let before_loc = f.state().stage.position_of(&window).unwrap();
+    let before_size = crate::state::configured_window_size(&window);
+
+    f.state().fill_window(&window);
+    f.double_roundtrip(id);
+
+    assert_eq!(f.state().stage.position_of(&window), Some(before_loc));
+    assert_eq!(crate::state::configured_window_size(&window), before_size);
+    assert!(
+        f.state().stage.is_fit(&window),
+        "an inert fill must leave fit membership alone"
+    );
+    assert!(!f.state().stage.is_fill(&window));
 }
 
 /// A fill taken straight out of fit inherits the *pre-fit* size as its
