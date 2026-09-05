@@ -1,9 +1,10 @@
-//! `focus_placement`: a centering navigation parks the focused window's visual
-//! frame against a viewport edge (inset by `snap.gap`) instead of the usable
-//! area's center. Every assertion here checks the settled **edge**, not the
-//! center — a center-only check can't distinguish a correct placement from a
-//! plain, wrong-by-half-a-window centering (see `align_point_on`'s doc comment
-//! on `DriftWm` for the math).
+//! `focus_placement`: a centering navigation parks the focused window against a
+//! viewport edge — its title bar / content edge `snap.outer_gap` in from the
+//! usable area, the border outside that — instead of the usable area's center.
+//! Every assertion here checks the settled **edge**, not the center — a
+//! center-only check can't distinguish a correct placement from a plain,
+//! wrong-by-half-a-window centering (see `align_point_on`'s doc comment on
+//! `DriftWm` for the math).
 
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
@@ -50,9 +51,9 @@ fn screen_edges(f: &mut Fixture, elem: &StageWindow) -> (f64, f64, f64, f64) {
     )
 }
 
-/// `center-window` under `focus_placement = "left"` parks the frame's left
-/// edge at `usable.loc.x + snap_gap * zoom`, not merely somewhere left of
-/// center.
+/// `center-window` under `focus_placement = "left"` parks the frame's left edge
+/// at `usable.loc.x + (snap.outer_gap - border_width) * zoom` — borderless here,
+/// so `snap_gap * zoom` — not merely somewhere left of center.
 #[test]
 fn center_window_left_placement_pins_the_left_edge_at_the_gap() {
     let mut f = Fixture::with_config(config(r#"focus_placement = "left""#));

@@ -1521,12 +1521,10 @@ fn fill_on_fit_window_with_a_neighbor_fires() {
 /// own target (not merely animating toward it), a fit window already fills
 /// its usable space — fill must leave it untouched.
 ///
-/// The exact no-op needs the fit's truncated canvas rect and its untruncated
-/// camera to land on the same integers, which needs every input to that
-/// centering half-pixel-free: even pre-fit dimensions, an even usable area, an
-/// integral snap gap, no SSD bar. See
-/// `fill_on_lone_fit_window_nudges_it_when_the_fit_left_a_subpixel_gap` for
-/// what one half-pixel does instead.
+/// The exact no-op needs the fit's canvas rect and its camera to land on the
+/// same integers. `compute_fit_geometry` rounds the camera, so the odd pre-fit
+/// dimensions that used to leave the window half a pixel off the usable area —
+/// and gave fill a gap of its own to close — are inert here too.
 #[test]
 fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
     let mut f = Fixture::new();
@@ -1561,62 +1559,6 @@ fn fill_on_lone_fit_window_with_settled_camera_is_inert() {
     assert!(
         client_sees_maximized(&mut f, id, &surface),
         "an inert fill must not touch the client's Maximized state"
-    );
-}
-
-/// The odd-dimension twin of the test above — and empirically not a no-op.
-/// `fit_window` maps the window at `target_camera.x as i32` while animating
-/// the camera onto the untruncated value, and `compute_fill_geometry` reads
-/// that camera back as an exact `f64`. An odd pre-fit width/height gives the
-/// pre-fit visual center — and so `target_camera` — a `.5` fraction on that
-/// axis, so the fit leaves the window half a pixel off the usable area it was
-/// meant to fill. With no neighbor to blame, fill closes that gap on its own:
-/// it nudges the window, drops fit membership, and clears the client's
-/// Maximized state.
-///
-/// This characterises a known defect. When `fit_window` stops truncating
-/// `target_camera`, this test becomes a duplicate of the even-dims inert test
-/// above and should be deleted rather than re-aimed.
-///
-/// `as i32` truncates toward zero, so which way the half-pixel lands follows
-/// the sign of `target_camera` — the fit here is off-center enough that x is
-/// negative and y positive, so the two axes are nudged opposite ways.
-#[test]
-fn fill_on_lone_fit_window_nudges_it_when_the_fit_left_a_subpixel_gap() {
-    let mut f = Fixture::new();
-    f.add_output(1, (1920, 1080));
-    f.skip_baseline_check();
-    let id = f.add_client();
-
-    let surface = map_settled(&mut f, id, "a", (801, 601));
-    let window = window_by_app_id(&mut f, "a").unwrap();
-    f.state()
-        .map_window(window.clone(), Point::from((400, 300)), false);
-
-    fit_and_settle(&mut f, &window, id, &surface);
-    assert!(f.state().stage.is_fit(&window), "precondition: fit");
-    let before_loc = f.state().stage.position_of(&window).unwrap();
-    let before_size = crate::state::configured_window_size(&window);
-
-    f.state().fill_window(&window);
-    f.double_roundtrip(id);
-
-    let loc = f.state().stage.position_of(&window).unwrap();
-    assert_ne!(loc, before_loc, "the sub-pixel gap must be taken up");
-    assert!(
-        (loc.x - before_loc.x).abs() <= 1 && (loc.y - before_loc.y).abs() <= 1,
-        "taking it up must cost at most a pixel per axis, moved {before_loc:?} → {loc:?}"
-    );
-    assert_eq!(
-        crate::state::configured_window_size(&window),
-        before_size,
-        "half a pixel at each end leaves the size alone"
-    );
-    assert!(!f.state().stage.is_fit(&window));
-    assert!(f.state().stage.is_fill(&window));
-    assert!(
-        !client_sees_maximized(&mut f, id, &surface),
-        "the nudge clears the client's Maximized state too"
     );
 }
 
@@ -1795,25 +1737,28 @@ fn fill_on_ssd_window_round_trips_bar_and_border() {
     f.state().toggle_fill_window(&window);
     f.double_roundtrip(id);
 
-    // The free frame region is 1896 × 1056 (usable minus a 12px gap). The client
-    // content size is that minus a 5px border per side, and on height also the
-    // 25px title bar: 1886 × 1021 — proving the chrome inflation round-trips.
+    // `outer_gap` (12) measures to the bar/content edge and the 5px border lies
+    // outside it, so the free frame region is the usable area inset by 7:
+    // 1906 × 1066. The client content size is that minus a 5px border per side,
+    // and on height also the 25px title bar: 1896 × 1031 — proving the chrome
+    // inflation round-trips.
     let configures = f.client(id).window(&surface).format_recent_configures();
     assert!(
-        configures.contains("size: 1886 × 1021"),
+        configures.contains("size: 1896 × 1031"),
         "fill must deflate the frame by border and bar, got:\n{configures}"
     );
     assert_eq!(
         f.state().stage.position_of(&window),
-        Some(Point::from((17, 42))),
+        Some(Point::from((12, 37))),
         "fill loc must offset the content by border and bar"
     );
     assert!(f.state().stage.is_fill(&window));
 }
 
-/// A fit targets the gap-inset usable area with the window's *visual frame*:
-/// deflating by the bar alone leaves the frame overflowing by `2 × border_width`
-/// per axis.
+/// A fit insets the usable area to the window's bar/content edge — `outer_gap`
+/// less the border, which the frame then hangs back over — and the content
+/// inside gives up the whole chrome: deflating by the bar alone would leave the
+/// content overflowing by `2 × border_width` per axis.
 #[test]
 fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
     let mut f = Fixture::with_config(config_ssd());
@@ -1831,20 +1776,21 @@ fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
     f.state().fit_window(&window);
     f.double_roundtrip(id);
 
-    // Usable area is the full 1920×1080 output; inset by the 12px snap gap
-    // gives an 1896×1056 frame budget. The content inside it gives up the
-    // whole chrome, borders included (25px bar + 5px border on every side):
-    // 1896 - 2×5 = 1886 wide, 1056 - 25 - 2×5 = 1021 tall — the same numbers
-    // `fill_on_ssd_window_round_trips_bar_and_border` lands on, since a lone
-    // window's fit and fill both target the whole usable area.
+    // Usable area is the full 1920×1080 output; inset by 7 (the 12px outer gap
+    // less the 5px border, which hangs outside it) gives a 1906×1066 frame
+    // budget. The content inside it gives up the whole chrome (25px bar + 5px
+    // border on every side): 1906 - 2×5 = 1896 wide, 1066 - 25 - 2×5 = 1031
+    // tall — the same numbers `fill_on_ssd_window_round_trips_bar_and_border`
+    // lands on, since a lone window's fit and fill both target the whole usable
+    // area.
     let configures = f.client(id).window(&surface).format_recent_configures();
     assert!(
-        configures.contains("size: 1886 × 1021"),
+        configures.contains("size: 1896 × 1031"),
         "fit must deflate the target by border and bar, got:\n{configures}"
     );
     assert_eq!(
         f.state().stage.position_of(&window),
-        Some(Point::from((-143, 89))),
+        Some(Point::from((-148, 85))),
         "fit loc must offset the content by border and bar"
     );
 }
