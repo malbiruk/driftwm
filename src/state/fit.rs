@@ -37,29 +37,32 @@ pub(super) fn snap_rect_at(
 }
 
 /// Fit geometry for a primary window: the canvas position, size, camera
-/// target, and visual center the primary would have if fitted to the
-/// viewport right now. Shared between `fit_window` (which applies it) and
+/// target, and zoom anchor the primary would have if fitted to the viewport
+/// right now. Shared between `fit_window` (which applies it) and
 /// `fit_window_snapped` (which feeds the exact post-fit rect into the
-/// cluster-shift helper, so per-edge deltas account for the half-pixel
-/// truncation in `target_camera.* as i32`).
+/// cluster-shift helper — the camera lands on a whole pixel, so `new_loc`'s
+/// `as i32` is exact and that rect is the one the window settles on).
 struct FitGeometry {
     new_loc: Point<i32, Logical>,
     target_size: Size<i32, Logical>,
     target_camera: Point<f64, Logical>,
-    visual_center: Point<f64, Logical>,
+    /// Canvas point the zoom animation pins to the usable center. Derived from
+    /// the rounded camera because the animation lands the camera at
+    /// `anchor.canvas - anchor.screen / zoom`, not at `target_camera`.
+    anchor_canvas: Point<f64, Logical>,
 }
 
 impl DriftWm {
     fn compute_fit_geometry(&self, window: &Window) -> FitGeometry {
         let usable = self.get_usable_area();
-        let gap = self.config.snap_gap;
         let chrome = self.element_chrome(window);
-        // The gap bounds the *visual frame*, so the content inside it gives up the
-        // whole chrome; deflating by the bar alone overflows the usable area by a
-        // border per side.
+        // The inset measures to the bar/content edge, not to the frame, so the
+        // frame deliberately overflows the usable area by one border per side
+        // and the content inside gives up the whole chrome.
+        let inset = self.config.outer_frame_inset(chrome.border);
         let target_size = chrome.content_size(Size::from((
-            usable.size.w - (2.0 * gap) as i32,
-            usable.size.h - (2.0 * gap) as i32,
+            usable.size.w - (2.0 * inset) as i32,
+            usable.size.h - (2.0 * inset) as i32,
         )));
         let usable_center_x = usable.loc.x as f64 + usable.size.w as f64 / 2.0;
         let usable_center_y = usable.loc.y as f64 + usable.size.h as f64 / 2.0;
@@ -67,19 +70,26 @@ impl DriftWm {
         // while fullscreen centers on the restored window instead of the viewport
         // the client is still reporting (see `configured_window_size`).
         let visual_center = self.window_visual_center(window).unwrap_or_default();
+        // Both centers are half-integers, so an unrounded camera can leave the
+        // fitted frame half a pixel inside the usable edge, which the render
+        // pass then rounds to a full one — a wallpaper line along two edges at
+        // `outer_gap = 0`. The window's own center moves by at most half a pixel.
         let target_camera = Point::from((
-            visual_center.x - usable_center_x,
-            visual_center.y - usable_center_y,
+            (visual_center.x - usable_center_x).round(),
+            (visual_center.y - usable_center_y).round(),
         ));
         let new_loc = chrome.content_loc(Point::from((
-            target_camera.x as i32 + usable.loc.x + gap as i32,
-            target_camera.y as i32 + usable.loc.y + gap as i32,
+            target_camera.x as i32 + usable.loc.x + inset as i32,
+            target_camera.y as i32 + usable.loc.y + inset as i32,
         )));
         FitGeometry {
             new_loc,
             target_size,
             target_camera,
-            visual_center,
+            anchor_canvas: Point::from((
+                target_camera.x + usable_center_x,
+                target_camera.y + usable_center_y,
+            )),
         }
     }
 
@@ -102,7 +112,7 @@ impl DriftWm {
             new_loc,
             target_size,
             target_camera,
-            visual_center: center,
+            anchor_canvas,
         } = self.compute_fit_geometry(window);
 
         // A fit establishes its own placement.
@@ -138,7 +148,7 @@ impl DriftWm {
         self.raise_and_focus(window, serial);
         self.set_overview_return(None);
         let anchor = ZoomAnimationAnchor {
-            canvas: center,
+            canvas: anchor_canvas,
             screen: self.usable_center_screen(),
         };
         let frozen = self.stage.id_of(window).filter(|id| {

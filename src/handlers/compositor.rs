@@ -690,11 +690,8 @@ impl CompositorHandler for DriftWm {
                                         &output,
                                         self.config.zoom_reset_on_new_window,
                                     );
-                                    let align = self.align_point_on(
-                                        &output,
-                                        chrome.frame_size(geo.size),
-                                        target_zoom,
-                                    );
+                                    let align =
+                                        self.align_point_on(&output, chrome, geo.size, target_zoom);
                                     // A border is symmetric and cancels out of a
                                     // center; only the bar shifts it.
                                     let bar_f = chrome.bar as f64;

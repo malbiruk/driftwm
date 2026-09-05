@@ -190,8 +190,12 @@ impl DriftWm {
                         window_loc.y as f64 + window_size.h as f64 / 2.0,
                     ))
                 });
-                let frame = self.element_chrome(window).frame_size(window_size);
-                let align = self.align_point_on(output, frame, target_zoom);
+                let align = self.align_point_on(
+                    output,
+                    self.element_chrome(window),
+                    window_size,
+                    target_zoom,
+                );
                 (target_zoom, window_center, align)
             };
 

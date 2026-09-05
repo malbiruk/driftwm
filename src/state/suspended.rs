@@ -198,8 +198,7 @@ impl DriftWm {
     ) {
         let element = StageWindow::Suspended(s.clone());
         let center = self.nav_center(&element);
-        let frame = self.suspended_chrome().frame_size(s.size.get());
-        let align = self.align_point_on(output, frame, target_zoom);
+        let align = self.align_point_on(output, self.suspended_chrome(), s.size.get(), target_zoom);
         self.set_camera_anchor(output, center, align, target_zoom);
     }
 

@@ -3,6 +3,7 @@ use std::time::Instant;
 use smithay::output::Output;
 use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use driftwm::canvas::Chrome;
 use driftwm::config::FocusPlacement;
 use driftwm::stage::StageElement;
 
@@ -195,15 +196,18 @@ impl DriftWm {
     }
 
     /// Screen-space point on `output` where a centering navigation parks a
-    /// window's visual frame center, per [`Self::focus_placement_on`]. `frame` is
-    /// the frame's canvas-space size and `zoom` the zoom the navigation lands at,
-    /// so this is not a fixed screen point — it moves with both.
+    /// window's visual frame center, per [`Self::focus_placement_on`]. `content`
+    /// is the window's canvas-space content size and `zoom` the zoom the
+    /// navigation lands at, so this is not a fixed screen point — it moves with
+    /// both.
     pub fn align_point_on(
         &self,
         output: &Output,
-        frame: Size<i32, Logical>,
+        chrome: Chrome,
+        content: Size<i32, Logical>,
         zoom: f64,
     ) -> Point<f64, Logical> {
+        let frame = chrome.frame_size(content);
         let usable = self.usable_area_on(output);
         let center = Point::from((
             usable.loc.x as f64 + usable.size.w as f64 / 2.0,
@@ -213,12 +217,13 @@ impl DriftWm {
         if (pull_x, pull_y) == (0, 0) {
             return center;
         }
-        // `snap_gap` is canvas px, matching the inset `fill_rect` applies, so a
-        // placed window and a filled one share an edge at every zoom.
-        let gap = self.config.snap_gap * zoom;
-        // `frame` carries both borders while `Chrome::frame_loc` subtracts one,
-        // so the border cancels: half the frame from its center lands exactly
-        // on the outer edge, not half a border off.
+        // The same canvas-px inset `fill_rect` applies to its bounds, scaled to
+        // this zoom, so a placed window and a filled one share an edge at every
+        // zoom. `frame` carries both borders and the inset subtracts one, so the
+        // frame's outer edge lands at `outer_gap - border` from the usable edge
+        // and the bar/content edge at `outer_gap` — the edge fit and fill
+        // produce.
+        let inset = self.config.outer_frame_inset(chrome.border) * zoom;
         let placed = [
             (pull_x, usable.loc.x, usable.size.w, frame.w, center.x),
             (pull_y, usable.loc.y, usable.size.h, frame.h, center.y),
@@ -228,12 +233,12 @@ impl DriftWm {
             let extent = frame_extent as f64 * zoom;
             // Edge-placing a frame that can't fit its two gutters only shoves one
             // side off screen; centering at least shows the middle.
-            if extent + 2.0 * gap > span {
+            if extent + 2.0 * inset > span {
                 return axis_center;
             }
             match pull {
-                -1 => low + gap + extent / 2.0,
-                1 => low + span - gap - extent / 2.0,
+                -1 => low + inset + extent / 2.0,
+                1 => low + span - inset - extent / 2.0,
                 _ => axis_center,
             }
         });
