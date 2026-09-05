@@ -63,6 +63,7 @@ mod suspended;
 mod trackpad_send_events;
 mod translucent_fullscreen;
 mod window_animation;
+mod window_mode;
 mod window_opening;
 mod window_rules;
 mod zoom_to_fit;
@@ -441,6 +442,10 @@ fn fit_and_frame(
 /// plus the client-visible `Maximized` a fit sets — directly, without the camera
 /// move and reposition a real fit action makes, which would shift the very
 /// anchors [`assert_resize_entered`] checks.
+///
+/// The seeded state violates the fit/fill exclusivity `window_inventory`
+/// debug-asserts, so a test must not read the inventory (a `state` IPC request
+/// or `window_inventory()`) between seeding and the clearing entry point.
 fn seed_fit_and_fill(f: &mut Fixture, window: &Window) {
     use driftwm::layout::snap::SnapRect;
     use driftwm::stage::FillSaved;

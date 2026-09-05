@@ -222,7 +222,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"State":{"camera":[-960.0,-600.0],"zoom":1.0,"layout":"English (US)",
   "layout_short":"us","windows":[
   {"id":3,"app_id":"foot","title":"~","position":[0,0],"size":[800,480],
-   "is_focused":true,"is_widget":false,"suspended":false}
+   "is_focused":true,"is_widget":false,"suspended":false,"mode":"Normal"}
 ]}}}
 {"Err":"no focused window"}
 ```
@@ -239,7 +239,12 @@ no entry is promoted, so filter on `is_focused` instead of indexing `windows[0]`
 Each entry's `id` is a stable per-session window handle — pass it back as a
 selector to `focus`, `move`, `resize`, `close`, `suspend`, `relaunch`, or
 `screenshot window`. `suspended` marks a compositor-drawn stand-in rather than a
-live client — see [Suspended windows](#suspended-windows).
+live client — see [Suspended windows](#suspended-windows). `mode` is `"Normal"`,
+`"Fit"` (`fit-window` or `fit-window-snapped`), or `"Fill"` (`fill-window`); it's
+the compositor's own record, so it tells fit from a fill that grew to the same
+rect and doesn't flicker during a configure round-trip the way a geometric
+guess does. A compositor older than this field omits it — treat missing as
+`"Normal"`.
 The reply also carries `layout` (full XKB name) and `layout_short` (the
 configured code for the active group); `fullscreen` and `pinned` (screen-space
 windows, each carrying an `id` too — a `pinned` entry's `position`/`size` are in

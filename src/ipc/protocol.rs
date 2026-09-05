@@ -247,6 +247,19 @@ pub enum Event {
     State(StateInfo),
 }
 
+/// Which compositor-side size mode a canvas window is in. Fullscreen and
+/// pinned windows are reported in their own arrays, so every `windows[]`
+/// entry is exactly one of these.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum WindowMode {
+    #[default]
+    Normal,
+    /// `fit-window` or `fit-window-snapped`.
+    Fit,
+    /// `fill-window`.
+    Fill,
+}
+
 /// One window in the canvas inventory. `position` and `size` describe the
 /// window's **visible frame** — content plus any compositor-drawn title bar and
 /// border — with `position` its center, Y-up.
@@ -269,6 +282,9 @@ pub struct WindowInfo {
     /// title bar — and the `id` selector focuses, moves, or dismisses it.
     #[serde(default)]
     pub suspended: bool,
+    /// The compositor's own fit/fill record — see [`WindowMode`].
+    #[serde(default)]
+    pub mode: WindowMode,
 }
 
 /// A fullscreen window in the IPC `state` reply — one per fullscreened output.
@@ -523,6 +539,7 @@ mod tests {
                 is_focused: true,
                 is_widget: false,
                 suspended: false,
+                mode: WindowMode::Normal,
             }],
             fullscreen: vec![OutputFullscreen {
                 id: 2,
@@ -620,6 +637,15 @@ mod tests {
         ] {
             assert!(obj.get(key).is_some(), "missing key {key}");
         }
+        assert_eq!(obj["windows"][0]["mode"], "Normal");
+    }
+
+    /// The documented wire contract for `mode`: `Fit`/`Fill` serialize to those
+    /// exact JSON strings, not a `rename_all`-cased or wrapped variant.
+    #[test]
+    fn window_mode_wire_strings() {
+        assert_eq!(serde_json::to_value(WindowMode::Fit).unwrap(), "Fit");
+        assert_eq!(serde_json::to_value(WindowMode::Fill).unwrap(), "Fill");
     }
 
     /// docs/ipc.md promises the pushed `State` event payload is identical to
@@ -649,6 +675,7 @@ mod tests {
         assert!(info.layout.is_empty());
         assert!(info.outputs.is_empty());
         assert_eq!(info.windows.len(), 1);
+        assert_eq!(info.windows[0].mode, WindowMode::Normal);
     }
 
     #[test]

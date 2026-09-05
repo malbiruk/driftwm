@@ -31,9 +31,11 @@ use std::time::Instant;
 
 use driftwm::window_ext::WindowExt;
 
-use crate::ipc::protocol::{CanvasLayerInfo, OutputFullscreen, OutputPinned, WindowInfo};
+use crate::ipc::protocol::{
+    CanvasLayerInfo, OutputFullscreen, OutputPinned, WindowInfo, WindowMode,
+};
 
-use super::{CameraSeed, DriftWm, output_logical_size, output_state};
+use super::{CameraSeed, DriftWm, StageWindow, output_logical_size, output_state};
 
 /// Whether an output's viewport moved far enough to count as motion rather than
 /// float jitter. The thresholds live here, inside the one predicate both change
@@ -110,6 +112,7 @@ fn window_list_changed(a: &[WindowInfo], b: &[WindowInfo]) -> bool {
                 || x.is_focused != y.is_focused
                 || x.is_widget != y.is_widget
                 || x.suspended != y.suspended
+                || x.mode != y.mode
         })
 }
 
@@ -121,6 +124,21 @@ fn window_titles_changed(a: &[WindowInfo], b: &[WindowInfo]) -> bool {
 }
 
 impl DriftWm {
+    fn window_mode(&self, window: &StageWindow) -> WindowMode {
+        let fit = self.stage.is_fit(window);
+        let fill = self.stage.is_fill(window);
+        // fit_window clears fill and fill_window clears fit, so a window is
+        // never both.
+        debug_assert!(!(fit && fill), "window is both fit and fill");
+        if fit {
+            WindowMode::Fit
+        } else if fill {
+            WindowMode::Fill
+        } else {
+            WindowMode::Normal
+        }
+    }
+
     /// The canvas window inventory in the shared [`WindowInfo`] shape (the
     /// visual frame: position = its center, Y-up), focused window first. Single
     /// source of truth for both the state file and the IPC `state` response, so
@@ -154,6 +172,7 @@ impl DriftWm {
                     is_focused: focused_suspended == Some(s.id),
                     is_widget: false,
                     suspended: true,
+                    mode: self.window_mode(window),
                 });
                 continue;
             }
@@ -197,6 +216,7 @@ impl DriftWm {
                 is_focused: focused.as_ref().is_some_and(|f| window == f),
                 is_widget: window.is_widget(),
                 suspended: false,
+                mode: self.window_mode(window),
             });
         }
         // Focused window first, so consumers can read windows[0] as the focused one.
@@ -667,6 +687,7 @@ mod tests {
             is_focused: false,
             is_widget: false,
             suspended: false,
+            mode: WindowMode::Normal,
         }
     }
 
@@ -734,6 +755,16 @@ mod tests {
         let a = vec![win(1, "one")];
         let mut b = a.clone();
         b[0].suspended = true;
+        assert!(window_list_changed(&a, &b));
+    }
+
+    #[test]
+    fn list_changed_detects_mode_only_diff() {
+        // fit_window and fill_window can change a window's mode without
+        // touching its geometry, so mode needs its own place in the closure.
+        let a = vec![win(1, "one")];
+        let mut b = a.clone();
+        b[0].mode = WindowMode::Fill;
         assert!(window_list_changed(&a, &b));
     }
 }
