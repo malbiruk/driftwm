@@ -7,12 +7,15 @@ use smithay::input::pointer::MotionEvent;
 use smithay::reexports::wayland_server::Resource;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use smithay::wayland::shell::wlr_layer::Layer;
-use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1;
 
 use crate::ipc::protocol::{Request, Response, WindowSelector};
 use crate::state::StageWindow;
 
-use super::{Fixture, TICK, adopt_last_configure, client_sees_maximized, settle, window_by_app_id};
+use super::{
+    Fixture, TICK, adopt_last_configure, client_sees_maximized, map_top_panel, settle,
+    window_by_app_id,
+};
 
 /// Map one toplevel with a buffer at `size`, settle, and drain the configure
 /// cursor so tests only see what happens next.
@@ -1884,8 +1887,9 @@ fn fill_beside_left_neighbor(
     let b = window_by_app_id(f, "b").unwrap();
 
     park_view(f, Point::from((0.0, 0.0)), 1.0);
-    let gap = f.state().config.snap_gap as i32;
-    f.state().map_window(b, Point::from((gap, gap)), false);
+    let outer_gap = f.state().config.snap_outer_gap as i32;
+    f.state()
+        .map_window(b, Point::from((outer_gap, outer_gap)), false);
     f.state()
         .map_window(a.clone(), Point::from((800, 300)), false);
 
@@ -1896,35 +1900,6 @@ fn fill_beside_left_neighbor(
     let camera = f.state().camera();
     let zoom = f.state().zoom();
     (a, a_surface, camera, zoom)
-}
-
-/// Map a top-anchored panel claiming an exclusive zone, shrinking the output's
-/// usable area for real — the layer commit arranges the map, so
-/// `non_exclusive_zone` actually changes (an output mode change alone leaves it
-/// stale).
-fn map_top_panel(f: &mut Fixture, id: super::client::ClientId, height: u32) {
-    let created = f
-        .client(id)
-        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "panel");
-    let surface = created.surface.clone();
-    created.set_configure_props(super::client::LayerConfigureProps {
-        size: Some((1920, height)),
-        anchor: Some(
-            zwlr_layer_surface_v1::Anchor::Top
-                | zwlr_layer_surface_v1::Anchor::Left
-                | zwlr_layer_surface_v1::Anchor::Right,
-        ),
-        exclusive_zone: Some(height as i32),
-        ..Default::default()
-    });
-    created.commit();
-    f.roundtrip(id);
-
-    let layer = f.client(id).layer(&surface);
-    layer.set_size(1920, height as u16);
-    layer.attach_new_buffer();
-    layer.ack_last_and_commit();
-    f.double_roundtrip(id);
 }
 
 /// Focus `window` and run `center-window` to a standstill. Callers need
@@ -2105,9 +2080,9 @@ fn a_fill_camera_off_the_integer_grid_still_restores() {
     // "b" pinned to the left edge so the fill stops short of it and the
     // centering fallback would land the camera ~200px away.
     let origin = Point::from((1000, -988));
-    let gap = f.state().config.snap_gap as i32;
+    let outer_gap = f.state().config.snap_outer_gap as i32;
     f.state()
-        .map_window(b, origin + Point::from((gap, gap)), false);
+        .map_window(b, origin + Point::from((outer_gap, outer_gap)), false);
     f.state()
         .map_window(a.clone(), origin + Point::from((800, 300)), false);
 

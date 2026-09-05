@@ -44,6 +44,7 @@ mod interact_min;
 mod layer_destroy_focus;
 mod layer_frame_gating;
 mod opacity;
+mod outer_gap;
 mod pinned_phantom;
 mod pointer_constraints;
 mod pointer_motion_dedup;
@@ -80,6 +81,7 @@ use smithay::input::pointer::MotionEvent;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER};
 use smithay::wayland::seat::WaylandFocus;
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
 const TICK: Duration = Duration::from_millis(16);
 const MAX_TICKS: usize = 600;
@@ -610,6 +612,35 @@ fn is_activated(window: &Window) -> bool {
         .toplevel()
         .expect("toplevel")
         .with_pending_state(|s| s.states.contains(xdg_toplevel::State::Activated))
+}
+
+/// Map a top-anchored panel claiming an exclusive zone, shrinking the output's
+/// usable area for real — the layer commit arranges the map, so
+/// `non_exclusive_zone` actually changes (an output mode change alone leaves it
+/// stale).
+fn map_top_panel(f: &mut Fixture, id: client::ClientId, height: u32) {
+    let created = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "panel");
+    let surface = created.surface.clone();
+    created.set_configure_props(client::LayerConfigureProps {
+        size: Some((1920, height)),
+        anchor: Some(
+            zwlr_layer_surface_v1::Anchor::Top
+                | zwlr_layer_surface_v1::Anchor::Left
+                | zwlr_layer_surface_v1::Anchor::Right,
+        ),
+        exclusive_zone: Some(height as i32),
+        ..Default::default()
+    });
+    created.commit();
+    f.roundtrip(id);
+
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(1920, height as u16);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
 }
 
 /// Map a Top layer with `namespace` at `size` and settle. A `None` anchor

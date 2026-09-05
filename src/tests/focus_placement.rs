@@ -53,10 +53,17 @@ fn screen_edges(f: &mut Fixture, elem: &StageWindow) -> (f64, f64, f64, f64) {
 
 /// `center-window` under `focus_placement = "left"` parks the frame's left edge
 /// at `usable.loc.x + (snap.outer_gap - border_width) * zoom` — borderless here,
-/// so `snap_gap * zoom` — not merely somewhere left of center.
+/// so `snap.outer_gap * zoom` — not merely somewhere left of center.
 #[test]
 fn center_window_left_placement_pins_the_left_edge_at_the_gap() {
-    let mut f = Fixture::with_config(config(r#"focus_placement = "left""#));
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "left"
+
+        [snap]
+        outer_gap = 12.0
+        "#,
+    ));
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -67,7 +74,7 @@ fn center_window_left_placement_pins_the_left_edge_at_the_gap() {
     park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
     center_window_and_settle(&mut f, &window);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -76,7 +83,7 @@ fn center_window_left_placement_pins_the_left_edge_at_the_gap() {
     let expected = usable.loc.x as f64 + gap * zoom;
     assert!(
         (x_low - expected).abs() < 1e-6,
-        "left edge must sit exactly `gap` in from the usable area's left: \
+        "left edge must sit exactly `outer_gap` in from the usable area's left: \
          {x_low} vs {expected}"
     );
 }
@@ -84,7 +91,14 @@ fn center_window_left_placement_pins_the_left_edge_at_the_gap() {
 /// The vertical counterpart: `focus_placement = "top"` pins the top edge.
 #[test]
 fn center_window_top_placement_pins_the_top_edge_at_the_gap() {
-    let mut f = Fixture::with_config(config(r#"focus_placement = "top""#));
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "top"
+
+        [snap]
+        outer_gap = 12.0
+        "#,
+    ));
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -95,7 +109,7 @@ fn center_window_top_placement_pins_the_top_edge_at_the_gap() {
     park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
     center_window_and_settle(&mut f, &window);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -104,7 +118,7 @@ fn center_window_top_placement_pins_the_top_edge_at_the_gap() {
     let expected = usable.loc.y as f64 + gap * zoom;
     assert!(
         (y_low - expected).abs() < 1e-6,
-        "top edge must sit exactly `gap` in from the usable area's top: \
+        "top edge must sit exactly `outer_gap` in from the usable area's top: \
          {y_low} vs {expected}"
     );
 }
@@ -112,7 +126,14 @@ fn center_window_top_placement_pins_the_top_edge_at_the_gap() {
 /// The corner case: `focus_placement = "top-left"` pins both edges at once.
 #[test]
 fn center_window_top_left_placement_pins_both_edges_at_the_gap() {
-    let mut f = Fixture::with_config(config(r#"focus_placement = "top-left""#));
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "top-left"
+
+        [snap]
+        outer_gap = 12.0
+        "#,
+    ));
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -123,7 +144,7 @@ fn center_window_top_left_placement_pins_both_edges_at_the_gap() {
     park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
     center_window_and_settle(&mut f, &window);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -139,12 +160,94 @@ fn center_window_top_left_placement_pins_both_edges_at_the_gap() {
     );
 }
 
+/// `[snap] outer_gap` overrides the pull distance directly: with `gap` at its
+/// default (12) and `outer_gap` set to 40, the frame parks 40 canvas px in,
+/// not 12.
+#[test]
+fn center_window_left_placement_honours_a_custom_outer_gap() {
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "left"
+
+        [snap]
+        outer_gap = 40.0
+        "#,
+    ));
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let _surface = map_window(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &window);
+
+    let zoom = f.state().zoom();
+    let usable = f.state().get_usable_area();
+    let elem = StageWindow::Client(window.clone());
+    let (x_low, ..) = screen_edges(&mut f, &elem);
+
+    let expected = usable.loc.x as f64 + 40.0 * zoom;
+    assert!(
+        (x_low - expected).abs() < 1e-6,
+        "left edge must sit `outer_gap` in, not `gap`: {x_low} vs {expected}"
+    );
+}
+
+/// A border lies outside `outer_gap`, so it pulls the frame's own edge one
+/// border closer to the usable area than the bar/content edge: with
+/// `border_width = 4` and `outer_gap = 12`, the frame parks at `12 - 4 = 8`,
+/// leaving the content edge at the full 12.
+#[test]
+fn center_window_left_placement_with_a_border_pulls_the_frame_edge_in_by_the_border() {
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "left"
+
+        [snap]
+        outer_gap = 12.0
+
+        [decorations]
+        border_width = 4
+        "#,
+    ));
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let _surface = map_window(&mut f, id, "a", (800, 600));
+    let window = window_by_app_id(&mut f, "a").unwrap();
+
+    park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
+    center_window_and_settle(&mut f, &window);
+
+    let outer_gap = f.state().config.snap_outer_gap;
+    let zoom = f.state().zoom();
+    let usable = f.state().get_usable_area();
+    let elem = StageWindow::Client(window.clone());
+    let (x_low, ..) = screen_edges(&mut f, &elem);
+
+    let expected = usable.loc.x as f64 + (outer_gap - 4.0) * zoom;
+    assert!(
+        (x_low - expected).abs() < 1e-6,
+        "the border hangs the frame's edge in by its own width: {x_low} vs {expected}"
+    );
+}
+
 /// A frame whose width plus its two gutters doesn't fit the usable area falls
 /// back to centering on that axis alone; the other axis still places, so a
 /// wide window under "top-left" still goes to the top.
 #[test]
 fn a_too_wide_frame_centers_on_x_but_still_places_on_y() {
-    let mut f = Fixture::with_config(config(r#"focus_placement = "top-left""#));
+    let mut f = Fixture::with_config(config(
+        r#"
+        focus_placement = "top-left"
+
+        [snap]
+        outer_gap = 12.0
+        "#,
+    ));
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -157,7 +260,7 @@ fn a_too_wide_frame_centers_on_x_but_still_places_on_y() {
     park_view(&mut f, Point::from((4000.0, -3000.0)), 1.0);
     center_window_and_settle(&mut f, &window);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -196,7 +299,7 @@ fn keep_zoom_navigation_settles_at_the_placed_spot() {
         (f.state().zoom() - 0.7).abs() < 1e-9,
         "Keep leaves the outgoing zoom alone"
     );
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -227,7 +330,7 @@ fn reset_zoom_navigation_settles_at_the_placed_spot() {
         (f.state().zoom() - 1.0).abs() < 1e-9,
         "Reset animates zoom to 1.0"
     );
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
@@ -254,7 +357,7 @@ fn center_window_on_a_filled_window_restores_its_view_ignoring_focus_placement()
     // right, stopping short of the usable area's own left edge.
     let _b_surface = map_window(&mut f, id, "b", (400, 1056));
     let b = window_by_app_id(&mut f, "b").unwrap();
-    let gap = f.state().config.snap_gap as i32;
+    let gap = f.state().config.snap_outer_gap as i32;
     park_view(&mut f, Point::from((0.0, 0.0)), 1.0);
     f.state().map_window(b, Point::from((gap, gap)), false);
 
@@ -300,7 +403,7 @@ fn a_suspended_stand_in_matches_a_clients_frame_edge_but_not_its_center() {
     center_window_and_settle(&mut f, &window);
 
     let usable = f.state().get_usable_area();
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let client_elem = StageWindow::Client(window.clone());
     let (_, client_y_low, _, client_y_high) = screen_edges(&mut f, &client_elem);
@@ -381,7 +484,7 @@ fn an_output_override_places_a_window_differently_than_the_global_default() {
     let elem_b = StageWindow::Client(window_b.clone());
     let (_, _, bx_high, _) = screen_edges(&mut f, &elem_b);
     let usable2 = f.state().usable_area_on(&out2);
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom_b = f.state().zoom();
     let expected = usable2.loc.x as f64 + usable2.size.w as f64 - gap * zoom_b;
     assert!(
@@ -417,7 +520,7 @@ fn center_nearest_inherits_focus_placement() {
         .execute_action(&Action::CenterNearest(Direction::Right));
     settle(&mut f);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let zoom = f.state().zoom();
     let usable = f.state().get_usable_area();
     let elem_a = StageWindow::Client(a.clone());
@@ -448,7 +551,7 @@ fn fit_window_ignores_focus_placement_and_still_fills_the_viewport() {
     adopt_last_configure(&mut f, id, &surface);
     settle(&mut f);
 
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let usable = f.state().get_usable_area();
     let elem = StageWindow::Client(window.clone());
     let (x_low, y_low, x_high, y_high) = screen_edges(&mut f, &elem);
@@ -522,7 +625,7 @@ fn a_newly_mapped_window_seeds_under_the_placement_point() {
     let elem = StageWindow::Client(window);
     let rect = f.state().visual_frame_rect(&elem).unwrap();
     let usable = f.state().get_usable_area();
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     // Canvas coords, at the zoom-1.0 camera the window spawned into.
     let expected = camera_before.x + usable.loc.x as f64 + gap;
     assert!(
@@ -589,7 +692,7 @@ fn send_to_output_lands_on_the_targets_placement_point() {
     let elem = StageWindow::Client(window.clone());
     let rect = f.state().visual_frame_rect(&elem).unwrap();
     let usable2 = f.state().usable_area_on(&out2);
-    let gap = f.state().config.snap_gap;
+    let gap = f.state().config.snap_outer_gap;
     let (cam2, zoom2) = {
         let os = crate::state::output_state(&out2);
         (os.camera, os.zoom)
