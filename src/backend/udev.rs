@@ -45,7 +45,6 @@ use crate::backend::gamma::{GammaProps, set_gamma_for_crtc_legacy};
 use crate::render::OutputRenderElements;
 use crate::state::DriftWm;
 use driftwm::config::OutputMode as ConfigOutputMode;
-use smithay::wayland::seat::WaylandFocus;
 
 const SUPPORTED_COLOR_FORMATS: &[Fourcc] = &[
     Fourcc::Xrgb8888,
@@ -1488,13 +1487,12 @@ fn render_frame(
     // Only on frames where the animation actually advanced — between capped
     // ticks the composited result is intentionally reused.
     if bg_animated {
-        let has_transparent = data.stage.windows().any(|w| {
-            w.wl_surface()
-                .as_deref()
-                .and_then(driftwm::config::applied_rule)
-                .and_then(|r| r.opacity)
-                .is_some_and(|o| o < 1.0)
-        });
+        let focused = data.focus_root_window();
+        let has_transparent = data
+            .stage
+            .windows()
+            .filter_map(|w| w.client())
+            .any(|w| data.effective_opacity_of(w, focused.as_ref()) < 1.0);
         if has_transparent {
             compositor.reset_buffer_ages();
         }

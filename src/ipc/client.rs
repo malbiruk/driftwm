@@ -92,9 +92,11 @@ pub enum Msg {
     },
     /// Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque.
     ///
-    /// Runtime-only: seeded from an `opacity` window rule, lost when the window
-    /// or the compositor restarts. Out-of-range values are rejected. Default
-    /// `1`.
+    /// A get returns the value the window draws at right now — the
+    /// `[decorations]` focus-dependent default unless a window rule or an
+    /// earlier set pinned the window. A set pins the window at `<value>` in
+    /// both focus states. Runtime-only: the pin is lost when the window or the
+    /// compositor restarts. Out-of-range values are rejected.
     ///
     /// `--json` reply: `{"Ok":{"Opacity":0.85}}`.
     Opacity {

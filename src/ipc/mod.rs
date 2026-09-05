@@ -739,20 +739,23 @@ fn cmd_resize(
     })
 }
 
-/// Runtime per-window opacity. The stored `AppliedWindowRule` is the single
-/// source of truth: seeded from window rules at map, overwritten here. Applies
-/// to anything the compositor renders, so no widget/pinned/fullscreen guard.
+/// Runtime per-window opacity. A get reports the value the window is drawn at
+/// right now, which is the `[decorations]` focus-dependent default unless a
+/// window rule or an earlier set pinned the window. A set writes that pin into
+/// the stored `AppliedWindowRule`, and applies to anything the compositor
+/// renders, so no widget/pinned/fullscreen guard.
 fn cmd_opacity(window: Option<WindowSelector>, value: Option<f64>, state: &mut DriftWm) -> Reply {
     let window = window_by_selector(state, window.as_ref())?;
     let surface = window
         .wl_surface()
         .ok_or_else(|| "window has no surface".to_string())?;
     match value {
-        None => Ok(Response::Opacity(
-            driftwm::config::applied_rule(&surface)
-                .and_then(|r| r.opacity)
-                .unwrap_or(1.0),
-        )),
+        None => {
+            let focused = state.focus_root_window();
+            Ok(Response::Opacity(
+                state.effective_opacity_of(&window, focused.as_ref()),
+            ))
+        }
         Some(v) => {
             // Reject rather than clamp: the docs promise commands fail on bad values.
             if !v.is_finite() || !(0.0..=1.0).contains(&v) {

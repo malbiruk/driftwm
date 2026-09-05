@@ -1042,6 +1042,12 @@ pub struct DecorationConfig {
     pub border_width: i32,
     pub border_color: [u8; 4],
     pub border_color_focused: [u8; 4],
+    /// Opacity for unfocused windows that carry no `opacity` of their own.
+    pub opacity: f64,
+    /// Opacity for the focused window when it carries no `opacity` of its own.
+    pub opacity_focused: f64,
+    /// Global backdrop-frost toggle for windows whose rules never set `blur`.
+    pub blur: bool,
     /// Global drop-shadow toggle. Per-window `shadow` rules override this.
     pub shadow: bool,
     /// SSD title bar height in logical pixels.
@@ -1064,6 +1070,9 @@ impl Default for DecorationConfig {
             border_width: 0,
             border_color: [0x30, 0x30, 0x30, 0xFF],
             border_color_focused: [0x30, 0x30, 0x30, 0xFF],
+            opacity: 1.0,
+            opacity_focused: 1.0,
+            blur: false,
             shadow: true,
             title_bar_height: 25,
             font: "Adwaita Sans".to_string(),
@@ -1110,6 +1119,40 @@ pub fn effective_border_color_focused(
     applied
         .and_then(|r| r.border_color_focused)
         .unwrap_or(decorations.border_color_focused)
+}
+
+/// The opacity a window is drawn at. A rule or IPC-set `opacity` pins the
+/// window at that value in both focus states; otherwise fullscreen windows and
+/// widgets draw opaque and everything else takes the `[decorations]`
+/// focus-dependent default.
+pub fn effective_opacity(
+    applied: Option<&AppliedWindowRule>,
+    decorations: &DecorationConfig,
+    is_focused: bool,
+    is_fullscreen: bool,
+) -> f64 {
+    if let Some(pinned) = applied.and_then(|r| r.opacity) {
+        return pinned;
+    }
+    if is_fullscreen || applied.is_some_and(|r| r.widget) {
+        return 1.0;
+    }
+    if is_focused {
+        decorations.opacity_focused
+    } else {
+        decorations.opacity
+    }
+}
+
+/// Whether a window's backdrop is frosted: its rules' sticky `blur`, else the
+/// `[decorations]` default — which never reaches a fullscreen window, where the
+/// frost would cost the output its direct scan-out for a blur of the clear color.
+pub fn effective_blur(
+    applied: Option<&AppliedWindowRule>,
+    decorations: &DecorationConfig,
+    is_fullscreen: bool,
+) -> bool {
+    applied.is_some_and(|r| r.blur) || (decorations.blur && !is_fullscreen)
 }
 
 /// Effective corner radius for a window. `decoration = "none"` hard-vetoes

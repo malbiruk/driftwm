@@ -1,7 +1,7 @@
 //! Compositor-side driver for window animations: starting, cancelling, and
 //! ticking entries, resolving them against client commits, and answering the
 //! render loop's per-frame questions — animated visual, chrome alpha, cull
-//! rect, fullscreen cover.
+//! rect, fullscreen cover, effective opacity.
 //!
 //! [`super::window_animation`] holds the smithay-free state machine; this is
 //! everything that needs `DriftWm` (config, stage, per-output camera) to feed
@@ -549,6 +549,24 @@ impl DriftWm {
                     .unwrap_or(1.0)
                     >= 1.0
             })
+    }
+
+    /// The opacity `window` is drawn at right now, before any open/close
+    /// animation scales it. `focused` is the caller's
+    /// [`Self::focus_root_window`], resolved once per frame rather than per
+    /// window.
+    pub(crate) fn effective_opacity_of(&self, window: &Window, focused: Option<&Window>) -> f64 {
+        let Some(surface) = window.wl_surface() else {
+            return 1.0;
+        };
+        let is_focused = focused == Some(window);
+        let is_fullscreen = self.stage.is_fullscreen(window) || self.chrome_fullscreen(window);
+        driftwm::config::effective_opacity(
+            driftwm::config::applied_rule(&surface).as_ref(),
+            &self.config.decorations,
+            is_focused,
+            is_fullscreen,
+        )
     }
 
     /// Whether `output`'s viewport still sits where `window`'s fullscreen entry

@@ -961,3 +961,39 @@ fn toml_gesture_anywhere_only_not_on_window() {
         "Anywhere context should return the anywhere binding, not on-window"
     );
 }
+
+#[test]
+fn toml_decoration_opacity_defaults_to_opaque_with_blur_off() {
+    let config = Config::from_toml("").unwrap();
+    assert_eq!(config.decorations.opacity, 1.0);
+    assert_eq!(config.decorations.opacity_focused, 1.0);
+    assert!(!config.decorations.blur);
+}
+
+#[test]
+fn toml_decoration_opacity_and_blur_round_trip() {
+    let toml = r#"
+        [decorations]
+        opacity = 0.6
+        opacity_focused = 0.9
+        blur = true
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert_eq!(config.decorations.opacity, 0.6);
+    assert_eq!(config.decorations.opacity_focused, 0.9);
+    assert!(config.decorations.blur);
+}
+
+#[test]
+fn toml_decoration_opacity_above_one_clamps_with_a_warning() {
+    let toml = r#"
+        [decorations]
+        opacity = 1.5
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert_eq!(config.decorations.opacity, 1.0);
+    assert!(
+        warnings.iter().any(|w| w.contains("decorations.opacity")),
+        "an out-of-range opacity should clamp with a warning, got {warnings:?}"
+    );
+}

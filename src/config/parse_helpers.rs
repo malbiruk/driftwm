@@ -305,6 +305,21 @@ pub(super) fn parse_decoration_config(
             "border_color_focused",
             errors,
         ),
+        opacity: clamp_warn(
+            raw.opacity.unwrap_or(defaults.opacity),
+            0.0,
+            1.0,
+            "decorations.opacity",
+            errors,
+        ),
+        opacity_focused: clamp_warn(
+            raw.opacity_focused.unwrap_or(defaults.opacity_focused),
+            0.0,
+            1.0,
+            "decorations.opacity_focused",
+            errors,
+        ),
+        blur: raw.blur.unwrap_or(defaults.blur),
         shadow: raw.shadow.unwrap_or(defaults.shadow),
         title_bar_height: clamp_warn(
             raw.title_bar_height.unwrap_or(defaults.title_bar_height),

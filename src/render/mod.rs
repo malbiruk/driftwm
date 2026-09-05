@@ -291,11 +291,7 @@ pub(crate) fn compose_capture_elements(
     let scale = Scale::from(dpi_scale);
     let visible_rect = canvas::visible_canvas_rect(camera.to_i32_round(), viewport_logical, zoom);
 
-    let focused_surface = state
-        .seat
-        .get_keyboard()
-        .and_then(|kb| kb.current_focus())
-        .map(|f| f.0);
+    let focused_window = state.focus_root_window();
 
     let mut normal: Vec<OutputRenderElements> = Vec::new();
     let mut widgets: Vec<OutputRenderElements> = Vec::new();
@@ -362,8 +358,19 @@ pub(crate) fn compose_capture_elements(
 
         let applied = driftwm::config::applied_rule(&wl_surface);
         let is_widget = applied.as_ref().is_some_and(|r| r.widget);
-        let is_focused = focused_surface.as_ref().is_some_and(|f| *f == *wl_surface);
-        let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0);
+        let is_focused = focused_window.as_ref() == Some(window);
+        // An isolated window is captured as itself, not as the unfocused window
+        // it is while the command runs.
+        let opacity = if isolate.is_some() {
+            applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0)
+        } else {
+            driftwm::config::effective_opacity(
+                applied.as_ref(),
+                &state.config.decorations,
+                is_focused,
+                is_fullscreen,
+            )
+        };
 
         let effective_mode = driftwm::config::effective_decoration_mode(
             applied.as_ref().and_then(|r| r.decoration.as_ref()),
@@ -815,11 +822,7 @@ pub fn compose_frame(
         && state.render.blur_mask_shader.is_some();
     let mut blur_requests: Vec<BlurRequestData> = Vec::new();
 
-    let focused_surface = state
-        .seat
-        .get_keyboard()
-        .and_then(|kb| kb.current_focus())
-        .map(|f| f.0);
+    let focused_window = state.focus_root_window();
 
     #[cfg(feature = "profile-with-tracy")]
     let _windows_span = tracy_client::span!("compose::windows");
@@ -940,7 +943,7 @@ pub fn compose_frame(
         // rest of its budget — nothing may restack over a frame that isn't moving.
         let shows_pinned = state.pinned_picture_of(element_id, window);
         let bucket_pinned = state.draws_pinned_on(element_id, window, output_fullscreen);
-        let is_focused = focused_surface.as_ref().is_some_and(|f| *f == *wl_surface);
+        let is_focused = focused_window.as_ref() == Some(window);
         let effective_mode = driftwm::config::effective_decoration_mode(
             applied.as_ref().and_then(|r| r.decoration.as_ref()),
             &state.config.decorations.default_mode,
@@ -1060,8 +1063,21 @@ pub fn compose_frame(
         });
         // Empty rect list = client explicitly opted out → treat as off.
         let client_blur = client_blur_rects.as_ref().is_some_and(|r| !r.is_empty());
-        let wants_blur = blur_enabled && (applied.as_ref().is_some_and(|r| r.blur) || client_blur);
-        let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0) * visual_alpha as f64;
+        // A frozen exit still wears the fullscreen picture over a culled canvas,
+        // and an entry ramp is already fullscreen on the stage — neither may dim.
+        let fullscreen_exempt = is_fullscreen || state.stage.is_fullscreen(window);
+        let window_blur = driftwm::config::effective_blur(
+            applied.as_ref(),
+            &state.config.decorations,
+            fullscreen_exempt,
+        );
+        let wants_blur = blur_enabled && (window_blur || client_blur);
+        let opacity = driftwm::config::effective_opacity(
+            applied.as_ref(),
+            &state.config.decorations,
+            is_focused,
+            fullscreen_exempt,
+        ) * visual_alpha as f64;
         // Bar, border and shadow ride the fullscreen ramp on top of the window's
         // own opacity; `chrome_alpha` is 1 for every other window.
         let chrome_opacity = opacity * chrome_alpha as f64;
@@ -1474,11 +1490,10 @@ pub fn compose_frame(
                 None
             };
 
-            // If all client rects clipped to nothing AND no rule asked for
-            // blur, skip — otherwise region_rects=None would be interpreted
+            // If all client rects clipped to nothing AND nothing else asked
+            // for blur, skip — otherwise region_rects=None would be interpreted
             // as whole-window blur, against what the client requested.
-            let rule_blur = applied.as_ref().is_some_and(|r| r.blur);
-            let skip_clipped_out = client_blur && region_rects.is_none() && !rule_blur;
+            let skip_clipped_out = client_blur && region_rects.is_none() && !window_blur;
 
             if !skip_clipped_out {
                 blur_requests.push(BlurRequestData {

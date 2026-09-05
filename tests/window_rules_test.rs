@@ -1,5 +1,6 @@
 use driftwm::config::{
-    AppliedWindowRule, Config, DecorationMode, PassKeys, Pattern, WindowRule, glob_matches,
+    AppliedWindowRule, Config, DecorationConfig, DecorationMode, PassKeys, Pattern, WindowRule,
+    effective_blur, effective_opacity, glob_matches,
 };
 
 fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
@@ -701,4 +702,125 @@ fn output_last_wins_across_two_toml_rules() {
     let config = Config::from_toml(toml).unwrap();
     let applied = config.resolve_window_rules("myapp", "title").unwrap();
     assert_eq!(applied.output.as_deref(), Some("HDMI-A-1"));
+}
+
+fn decorations(opacity: f64, opacity_focused: f64, blur: bool) -> DecorationConfig {
+    DecorationConfig {
+        opacity,
+        opacity_focused,
+        blur,
+        ..DecorationConfig::default()
+    }
+}
+
+#[test]
+fn effective_opacity_pin_holds_in_both_focus_states() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        opacity: Some(0.7),
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, true, false), 0.7);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, false), 0.7);
+}
+
+#[test]
+fn effective_opacity_pin_of_one_opts_out_of_the_global_dim() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        opacity: Some(1.0),
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, false), 1.0);
+}
+
+#[test]
+fn effective_opacity_unpinned_focused_window_takes_the_focused_default() {
+    let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, true, false), 0.9);
+}
+
+#[test]
+fn effective_opacity_unpinned_unfocused_window_takes_the_unfocused_default() {
+    let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, false), 0.5);
+}
+
+#[test]
+fn effective_opacity_without_any_rule_takes_the_focus_default() {
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(None, &dec, true, false), 0.9);
+    assert_eq!(effective_opacity(None, &dec, false, false), 0.5);
+}
+
+#[test]
+fn effective_opacity_of_a_fullscreen_window_is_opaque_in_both_focus_states() {
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(None, &dec, true, true), 1.0);
+    assert_eq!(effective_opacity(None, &dec, false, true), 1.0);
+}
+
+#[test]
+fn effective_opacity_pin_beats_the_fullscreen_exemption() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        opacity: Some(0.7),
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, true), 0.7);
+}
+
+#[test]
+fn effective_opacity_of_a_widget_is_opaque() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        widget: true,
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, false), 1.0);
+}
+
+#[test]
+fn effective_opacity_pin_beats_the_widget_exemption() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        widget: true,
+        opacity: Some(0.7),
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(0.5, 0.9, false);
+    assert_eq!(effective_opacity(Some(&applied), &dec, false, false), 0.7);
+}
+
+#[test]
+fn effective_blur_rule_blur_frosts_even_a_fullscreen_window() {
+    let applied = applied_from_toml_rule(&WindowRule {
+        blur: true,
+        ..bare_rule(Some("x"), None)
+    });
+    let dec = decorations(1.0, 1.0, false);
+    assert!(effective_blur(Some(&applied), &dec, false));
+    assert!(effective_blur(Some(&applied), &dec, true));
+}
+
+#[test]
+fn effective_blur_global_default_frosts_a_window_with_no_rule_blur() {
+    let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
+    let dec = decorations(1.0, 1.0, true);
+    assert!(effective_blur(Some(&applied), &dec, false));
+}
+
+#[test]
+fn effective_blur_global_default_leaves_a_fullscreen_window_unfrosted() {
+    let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
+    let dec = decorations(1.0, 1.0, true);
+    assert!(!effective_blur(Some(&applied), &dec, true));
+}
+
+#[test]
+fn effective_blur_is_off_when_neither_the_rule_nor_the_global_asks() {
+    let applied = applied_from_toml_rule(&bare_rule(Some("x"), None));
+    let dec = decorations(1.0, 1.0, false);
+    assert!(!effective_blur(Some(&applied), &dec, false));
 }

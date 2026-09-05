@@ -148,6 +148,13 @@ it live on a window that is already fullscreen. The trade: while a translucent
 window is fullscreen, that output loses direct scan-out, because the compositor
 has to compose the canvas under it every frame. Leave games opaque.
 
+A rule `opacity` is a **pin**: the window draws at that one value whether it is
+focused or not, and it opts the window out of the global `opacity` /
+`opacity_focused` defaults in [`[decorations]`](config.md#decorations). That
+includes `opacity = 1.0` — how a screen-pinned PiP window stays fully opaque
+while everything else dims. `driftwm msg opacity <value>` pins the window the
+same way.
+
 ### Screen-pinned windows
 
 `pinned_to_screen = true` lifts a window out of the infinite canvas and fixes it

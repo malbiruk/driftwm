@@ -319,8 +319,8 @@ impl ResizeCrossfade {
     /// `loc` (fully zoomed physical) and spans `size` (zoomed logical), wrapped
     /// in that window's own animation transform so the old content lands on the
     /// interpolated visual rect exactly as the live content does. `opacity` is
-    /// the window's own (rule) opacity — the fade starts from the density the
-    /// old picture actually had, not from full.
+    /// the opacity the window is drawn at — the fade starts from the density
+    /// the old picture actually had, not from full.
     pub fn render_element(
         &self,
         loc: Point<f64, Physical>,

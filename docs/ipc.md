@@ -137,21 +137,11 @@ driftwm msg --json subscribe \
   | jq --unbuffered -r '.State.windows[] | select(.is_focused) | .app_id'
 ```
 
-A small daemon that dims whatever loses focus and restores full opacity to
-whatever gains it (a snapshot arrives per rendered frame during a pan, so the
-focused id is deduped against the last one seen):
-
-```bash
-prev=
-driftwm msg --json subscribe \
-  | jq --unbuffered -r '.State.windows[] | select(.is_focused) | .id' \
-  | while read -r id; do
-      [ "$id" = "$prev" ] && continue   # same focus, skip repeats
-      [ -n "$prev" ] && driftwm msg opacity 0.7 --id "$prev"
-      driftwm msg opacity 1 --id "$id"
-      prev=$id
-  done
-```
+Dimming whatever loses focus no longer needs a daemon on this feed: set
+`opacity` and `opacity_focused` in
+[`[decorations]`](config.md#decorations) and the compositor does it.
+`driftwm msg opacity <value>` pins a window at one value in both focus states,
+opting it out of those defaults.
 
 ### Debug counters
 

@@ -15,7 +15,6 @@ use std::time::Duration;
 use crate::backend::Backend;
 use crate::render::build_cursor_elements;
 use crate::state::DriftWm;
-use smithay::wayland::seat::WaylandFocus;
 
 /// Initialize the winit backend: create a window, set up the output, and
 /// start the render loop timer.
@@ -236,13 +235,12 @@ pub fn init_winit(
             // Without this, buffer-age optimisation reuses the stale composited result for
             // transparent windows — the background appears frozen inside them.
             if age > 0 && bg_animated {
-                let has_transparent = data.stage.windows().any(|w| {
-                    w.wl_surface()
-                        .as_deref()
-                        .and_then(driftwm::config::applied_rule)
-                        .and_then(|r| r.opacity)
-                        .is_some_and(|o| o < 1.0)
-                });
+                let focused = data.focus_root_window();
+                let has_transparent = data
+                    .stage
+                    .windows()
+                    .filter_map(|w| w.client())
+                    .any(|w| data.effective_opacity_of(w, focused.as_ref()) < 1.0);
                 if has_transparent {
                     age = 0;
                 }

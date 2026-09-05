@@ -412,8 +412,10 @@ impl DriftWm {
         self.active_layout = name;
     }
 
-    /// Keyboard-focused window. Does not filter widgets — pair with
-    /// `.filter(|w| !w.is_widget())` if needed.
+    /// Keyboard-focused window, matched on the toplevel's own surface — see
+    /// [`Self::focus_root_window`] for the window a focused popup belongs to.
+    /// Does not filter widgets — pair with `.filter(|w| !w.is_widget())` if
+    /// needed.
     pub fn focused_window(&self) -> Option<Window> {
         let keyboard = self.seat.get_keyboard()?;
         let focus = keyboard.current_focus()?;
@@ -422,6 +424,15 @@ impl DriftWm {
             .find(|w| w.wl_surface().as_deref() == Some(&focus.0))
             .and_then(|w| w.client())
             .cloned()
+    }
+
+    /// The window whose picture reads as focused: the keyboard-focused window, or
+    /// the one owning the keyboard-focused popup — a popup grab moves the seat's
+    /// focus onto the popup surface at the first key event.
+    pub(crate) fn focus_root_window(&self) -> Option<Window> {
+        let keyboard = self.seat.get_keyboard()?;
+        let focus = keyboard.current_focus()?;
+        self.window_for_surface_root(&focus.0)
     }
 
     /// The element action dispatch should treat as focused: the keyboard-focused
