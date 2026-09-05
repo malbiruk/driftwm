@@ -229,6 +229,9 @@ pub struct Config {
     pub zoom_interact_min: f64,
     pub snap_enabled: bool,
     pub snap_gap: f64,
+    /// Inset from the usable area's edge to a fitted, filled or parked window's
+    /// title bar / content edge. Defaults to `snap_gap`.
+    pub snap_outer_gap: f64,
     pub snap_distance: f64,
     pub snap_break_force: f64,
     pub snap_corners: bool,
@@ -300,6 +303,13 @@ pub struct Config {
 }
 
 impl Config {
+    /// Inset from the usable area to a window's visual frame, in canvas px.
+    /// `outer_gap` measures to the title bar / content edge and the border lies
+    /// outside it, so the frame sits one border closer — off screen at 0.
+    pub fn outer_frame_inset(&self, border_width: i32) -> f64 {
+        self.snap_outer_gap - border_width as f64
+    }
+
     pub fn lookup(&self, modifiers: &ModifiersState, sym: Keysym) -> Option<&Action> {
         let mut combo = KeyCombo {
             modifiers: Modifiers::from_state(modifiers),
@@ -1083,6 +1093,10 @@ impl Config {
                 .collect(),
         };
 
+        // Bound above the literal so `snap.outer_gap`'s fallback is the
+        // *validated* gap, not the raw one.
+        let snap_gap = non_negative(raw.snap.gap.unwrap_or(12.0), "snap.gap", &mut errors);
+
         let config = Self {
             mod_key,
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
@@ -1181,7 +1195,12 @@ impl Config {
                 &mut errors,
             ),
             snap_enabled: raw.snap.enabled.unwrap_or(true),
-            snap_gap: non_negative(raw.snap.gap.unwrap_or(12.0), "snap.gap", &mut errors),
+            snap_gap,
+            snap_outer_gap: non_negative(
+                raw.snap.outer_gap.unwrap_or(snap_gap),
+                "snap.outer_gap",
+                &mut errors,
+            ),
             snap_distance: non_negative(
                 raw.snap.distance.unwrap_or(24.0),
                 "snap.distance",

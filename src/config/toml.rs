@@ -211,6 +211,7 @@ pub(super) struct ZoomConfig {
 pub(super) struct SnapConfig {
     pub enabled: Option<bool>,
     pub gap: Option<f64>,
+    pub outer_gap: Option<f64>,
     pub distance: Option<f64>,
     pub break_force: Option<f64>,
     pub corners: Option<bool>,
