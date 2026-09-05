@@ -19,7 +19,7 @@ use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
 use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
-use crate::input::{DecoTarget, PinnedChrome};
+use crate::input::{DecoTarget, HitKind, PinnedChrome};
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
     PendingMiddleClick, PickTarget, StageWindow, SuspendedWindow, ZoomAnimationAnchor,
@@ -99,10 +99,16 @@ impl DriftWm {
             .is_some_and(|r| r.pass_mouse.allows(mods, trigger))
     }
 
-    /// The toplevel a pointer binding at `pos` would act over. Every canvas-space
-    /// walk skips pinned entries, so a pinned window needs its own screen-space
-    /// arm and outranks the canvas window whose rect it covers — `has_pinned`
-    /// gates the conversion, which costs two output-state locks.
+    /// The toplevel whose content is under `pos`, and so can claim a binding
+    /// there. Content only: a hit on the compositor's own chrome — SSD title
+    /// bar, close button, resize border — or on a canvas layer drawn over the
+    /// window answers `None`, keeping the binding with the compositor, which is
+    /// the one thing `pass_mouse` never takes.
+    ///
+    /// Every canvas-space walk skips pinned entries, so a pinned window needs
+    /// its own screen-space arm and outranks the canvas window whose rect it
+    /// covers — `has_pinned` gates the conversion, which costs two output-state
+    /// locks.
     ///
     /// Only called once a binding has matched: `pointer_context` runs its own
     /// hit-tests and returns none of them, so there is nothing to reuse, and
@@ -113,11 +119,23 @@ impl DriftWm {
     ) -> Option<smithay::desktop::Window> {
         if self.stage.has_pinned() {
             let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
+            if matches!(
+                self.pinned_decoration_under(screen_pos),
+                PinnedChrome::Hit(..)
+            ) {
+                return None;
+            }
             if let Some(window) = self.pinned_element_under(screen_pos) {
                 return Some(window);
             }
         }
-        self.topmost_client_under(pos)
+        if self.canvas_layer_under(pos).is_some() {
+            return None;
+        }
+        match self.topmost_under(pos, |_, _| true)? {
+            (StageWindow::Client(w), HitKind::Content) => Some(w),
+            _ => None,
+        }
     }
 
     /// Whether the subject of a wheel notch at `pos` claims it via `pass_mouse`.
@@ -373,8 +391,11 @@ impl DriftWm {
             // discard the binding and let the ordinary unbound path run (focus,
             // raise, forward). Clearing `modifier_binding` too keeps the
             // decoration branch below live — chrome always stays compositor-owned.
+            // Not in pick mode: there the window has no pointer focus to forward
+            // to, so dropping the binding would leave the click doing nothing.
             if binding.is_some()
                 && context == BindingContext::OnWindow
+                && !self.pick_mode()
                 && let Some(window) = self.pass_mouse_target_under(pos)
                 && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
             {
@@ -1094,7 +1115,7 @@ impl DriftWm {
         // `pinned_window_under` below: the chrome arm in between deliberately
         // hits outside the surface, and clearing `modifier_binding` has to reach it.
         if binding.is_some()
-            && let Some(window) = self.pinned_element_under(screen_pos)
+            && let Some(window) = self.pass_mouse_target_under(pos)
             && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
         {
             binding = None;

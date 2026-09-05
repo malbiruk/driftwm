@@ -265,13 +265,18 @@ Combo syntax is the `[mouse.*]` binding syntax: modifiers plus one of `left`,
 `mod` resolves through `mod_key` as everywhere else. To hand an app the default
 `mod+wheel-scroll` zoom, list `"mod+wheel-scroll"`.
 
+The discrete `wheel-up` / `wheel-down` triggers are a separate channel from the
+continuous `wheel-scroll` one, so listing `"mod+wheel-up"` claims only the
+notch binding — a `mod+wheel-scroll` zoom keeps firing unless it is listed too.
+
 Unlike `pass_keys`, which follows the **focused** window, `pass_mouse` is
 resolved against the window **under the pointer** — canvas, pinned or
 fullscreen — because that is what a mouse binding's context comes from.
 
 Compositor chrome always stays with the compositor: the SSD title bar, the
-close button and the resize borders keep their normal behaviour, so `alt+left`
-on a title bar still starts a move.
+close button and the resize borders keep their normal behaviour for every
+button, so `alt+left` on a title bar still starts a move and `alt+right` on a
+resize border still resizes.
 
 A claimed click behaves exactly as an unbound one, which also means it still
 focuses and raises the window — and with `auto_navigate_on_click = true` it
