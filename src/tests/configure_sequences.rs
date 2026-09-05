@@ -17,6 +17,15 @@ use super::{
     window_by_app_id,
 };
 
+/// The inset fit and fill keep from the usable area is zero by default, which
+/// collapses these tests' arithmetic into the output rect. They set it
+/// explicitly so the inset stays visible in what the client is configured with.
+fn config_outer_gap() -> Config {
+    let mut config = Config::default();
+    config.snap_outer_gap = 12.0;
+    config
+}
+
 /// Map one toplevel with a buffer at `size`, settle, and drain the configure
 /// cursor so tests only see what happens next.
 fn map_settled(
@@ -376,7 +385,7 @@ fn fast_fit_unfit_does_not_teleport_window_on_next_resize() {
 /// pre-exit center and discarding the drag in between.
 #[test]
 fn unfit_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_not_teleport() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     // Fullscreen below moves the camera, which seeds a per-output blur
     // generation that only clears on output disconnect, so it can never
@@ -481,7 +490,7 @@ fn unfit_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_
 /// its settle commit, and the settle re-anchors `restore_size` under it.
 #[test]
 fn unfill_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does_not_teleport() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     // Fullscreen below moves the camera, which seeds a per-output blur
     // generation that only clears on output disconnect, so it can never
@@ -595,7 +604,7 @@ fn unfill_after_fullscreen_exit_drops_the_stale_recenter_so_the_next_resize_does
 /// than from where the grab started.
 #[test]
 fn a_fill_between_a_resize_release_and_its_settle_keeps_its_placement() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
     let id = f.add_client();
@@ -648,7 +657,7 @@ fn a_fill_between_a_resize_release_and_its_settle_keeps_its_placement() {
 /// size it is the whole width of the screen.
 #[test]
 fn a_fill_between_a_top_left_resize_release_and_its_settle_keeps_its_placement() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     origin_view(&mut f);
     let id = f.add_client();
@@ -1200,7 +1209,7 @@ fn fullscreen_exit_restores_the_filled_rect_and_unfill_still_goes_home() {
 /// with.
 #[test]
 fn fullscreen_exit_restores_the_filled_rect_when_it_beats_the_fill_ack() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     let output = f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -1253,7 +1262,7 @@ fn fullscreen_exit_restores_the_filled_rect_when_it_beats_the_fill_ack() {
 /// position would hand the exit a rect the window never held.
 #[test]
 fn fullscreen_exit_restores_the_fit_rect_when_it_beats_the_fit_ack() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     let output = f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
     let id = f.add_client();
@@ -1299,7 +1308,7 @@ fn fullscreen_exit_restores_the_fit_rect_when_it_beats_the_fit_ack() {
 
 #[test]
 fn fill_grows_to_usable_minus_gap() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
 
@@ -1679,7 +1688,7 @@ fn fill_already_filling_does_not_set_membership() {
 
 #[test]
 fn fill_at_zoom_and_pan_uses_canvas_space_usable_area() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
 
@@ -1717,6 +1726,9 @@ fn config_ssd() -> Config {
     let mut config = Config::default();
     config.decorations.default_mode = DecorationMode::Server;
     config.decorations.border_width = 5;
+    // A non-zero outer gap is what makes the border's own contribution to the
+    // inset legible below; at the default 0 the two are indistinguishable.
+    config.snap_outer_gap = 12.0;
     config
 }
 
@@ -1805,7 +1817,7 @@ fn fit_on_ssd_window_subtracts_the_border_from_the_target_size() {
 /// overlap. A commit after the clear must leave the window in place.
 #[test]
 fn fill_records_settled_footprint() {
-    let mut f = Fixture::new();
+    let mut f = Fixture::with_config(config_outer_gap());
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
 

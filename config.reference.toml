@@ -246,14 +246,14 @@
 # gap = 12.0                   # spacing kept between windows, in canvas px —
                                # snapping, auto placement, clusters, and
                                # fill-window's clearance from its neighbours
-# outer_gap = 12.0             # inset from the usable area's edge to a window's
+# outer_gap = 0.0              # inset from the usable area's edge to a window's
                                # title bar or content edge, in canvas px —
                                # fit-window, fill-window and focus_placement
-                               # measure it; defaults to gap. The border lies
-                               # outside it. 0 is the maximize setup: fitted
-                               # and filled windows land edge to edge, and a
-                               # window covering the usable area draws square
-                               # with no shadow until you pan away
+                               # measure it. The border lies outside it. 0 is
+                               # the maximize setup: fitted and filled windows
+                               # land edge to edge, and a window covering the
+                               # usable area draws square with no shadow until
+                               # you pan away. Set it to gap for a margin
 # distance = 24.0              # activation threshold (screen px from edge)
 # break_force = 32.0           # screen px past snap to break free
 # corners = false              # also align corners (parallel edges line up: top-to-top, left-to-left)
@@ -262,8 +262,12 @@
 [decorations]
 # bg_color = "#303030"           # title bar background
 # fg_color = "#FFFFFF"           # title text + close button × color
-# corner_radius = 10             # clip window corners to this radius
-# shadow = true                  # drop shadow under window chrome
+# corner_radius = 10             # clip window corners to this radius —
+                                 # suppressed while the window's frame covers
+                                 # the output's usable area
+# shadow = true                  # drop shadow under window chrome — suppressed
+                                 # while the window's frame covers the output's
+                                 # usable area
 
 # # SSD title bar text. The font is resolved via fontconfig — install the
 # # `adwaita-fonts` package for the default look; otherwise a generic sans is

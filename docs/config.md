@@ -489,9 +489,9 @@ spacing kept between windows, in canvas px — snapping, auto placement, cluster
 
 ### `outer_gap`
 
-Default: `12.0`
+Default: `0.0`
 
-inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it; defaults to gap. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away
+inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away. Set it to gap for a margin
 
 ### `distance`
 
@@ -535,13 +535,13 @@ title text + close button × color
 
 Default: `10`
 
-clip window corners to this radius
+clip window corners to this radius — suppressed while the window's frame covers the output's usable area
 
 ### `shadow`
 
 Default: `true`
 
-drop shadow under window chrome
+drop shadow under window chrome — suppressed while the window's frame covers the output's usable area
 
 ### `title_bar_height`
 
