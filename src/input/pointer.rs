@@ -101,9 +101,8 @@ impl DriftWm {
 
     /// The toplevel whose content is under `pos`, and so can claim a binding
     /// there. Content only: a hit on the compositor's own chrome — SSD title
-    /// bar, close button, resize border — or on a canvas layer drawn over the
-    /// window answers `None`, keeping the binding with the compositor, which is
-    /// the one thing `pass_mouse` never takes.
+    /// bar, close button, resize border — answers `None`, keeping the binding
+    /// with the compositor, which is the one thing `pass_mouse` never takes.
     ///
     /// Every canvas-space walk skips pinned entries, so a pinned window needs
     /// its own screen-space arm and outranks the canvas window whose rect it
@@ -119,18 +118,14 @@ impl DriftWm {
     ) -> Option<smithay::desktop::Window> {
         if self.stage.has_pinned() {
             let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
-            if matches!(
-                self.pinned_decoration_under(screen_pos),
-                PinnedChrome::Hit(..)
-            ) {
-                return None;
+            match self.pinned_decoration_under(screen_pos) {
+                PinnedChrome::Hit(..) => return None,
+                PinnedChrome::Covered => return self.pinned_element_under(screen_pos),
+                PinnedChrome::Miss => {}
             }
             if let Some(window) = self.pinned_element_under(screen_pos) {
                 return Some(window);
             }
-        }
-        if self.canvas_layer_under(pos).is_some() {
-            return None;
         }
         match self.topmost_under(pos, |_, _| true)? {
             (StageWindow::Client(w), HitKind::Content) => Some(w),
@@ -142,6 +137,11 @@ impl DriftWm {
     /// On a fullscreen output that subject is the fullscreen window:
     /// `pinned_window_under` returns `None` there, and the parked canvas bbox is
     /// not what the notch acts over.
+    ///
+    /// A canvas window's arm is off in pick mode: unlike the continuous scroll
+    /// lookup, this site has no OnCanvas retry, so a claim below `interact_min`
+    /// would leave the notch doing nothing at all. A fullscreen window keeps
+    /// pointer focus there, so its arm stays live.
     fn pass_mouse_claims_notch(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
@@ -151,7 +151,7 @@ impl DriftWm {
     ) -> bool {
         let subject = if self.is_fullscreen() {
             self.active_fullscreen_window()
-        } else if context == BindingContext::OnWindow {
+        } else if context == BindingContext::OnWindow && !self.pick_mode() {
             self.pass_mouse_target_under(pos)
         } else {
             return false;

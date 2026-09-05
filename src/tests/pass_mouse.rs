@@ -74,6 +74,19 @@ app_id = "app"
 pass_mouse = ["alt+left"]
 "#;
 
+/// The notch site's own pick-mode case: a claim armed below `interact_min`.
+const NOTCH_CLAIMED_BELOW_INTERACT_MIN: &str = r#"
+[zoom]
+interact_min = 0.5
+
+[mouse.on-window]
+"alt+wheel-down" = "toggle-fullscreen"
+
+[[window_rules]]
+app_id = "app"
+pass_mouse = ["alt+wheel-down"]
+"#;
+
 const PIN: &str = r#"
 [[window_rules]]
 app_id = "app"
@@ -494,6 +507,26 @@ fn a_claim_below_interact_min_leaves_the_binding_alone() {
         client_buttons(&mut f, id),
         Vec::new(),
         "the press the compositor ran must not also reach the app"
+    );
+}
+
+/// The wheel notch has no OnCanvas retry of its own, so a claim below
+/// `interact_min` would leave the notch dead. The bound action runs instead,
+/// exactly as it does with no rule at all.
+#[test]
+fn a_claimed_notch_below_interact_min_still_runs_its_action() {
+    let mut f = Fixture::with_config(config(NOTCH_CLAIMED_BELOW_INTERACT_MIN));
+    f.skip_baseline_check();
+    let (_, window) = mapped_window(&mut f);
+    f.state().set_zoom(0.3);
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, target);
+
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+
+    assert!(
+        f.state().is_fullscreen(),
+        "pick mode keeps alt+wheel-down as the fullscreen binding"
     );
 }
 
