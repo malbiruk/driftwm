@@ -172,6 +172,10 @@ fn export_display(display_name: &str) {
         .spawn()
     {
         Ok(mut child) => {
+            // Deliberately synchronous, like the session import in `main`:
+            // autostart, and whatever it starts through the user manager, must
+            // find DISPLAY already exported. Startup-only, and bounded by
+            // systemctl's own bus timeout.
             if let Err(e) = child.wait() {
                 tracing::warn!("Error waiting for DISPLAY import: {e}");
             }
