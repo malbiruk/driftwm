@@ -100,18 +100,16 @@ impl DriftWm {
     }
 
     /// The toplevel whose content is under `pos`, and so can claim a binding
-    /// there. Content only: a hit on the compositor's own chrome — SSD title
-    /// bar, close button, resize border — answers `None`, keeping the binding
-    /// with the compositor, which is the one thing `pass_mouse` never takes.
+    /// there. A hit on the compositor's own chrome (title bar, close button,
+    /// resize border) answers `None` — chrome is never `pass_mouse`'s to give.
     ///
-    /// Every canvas-space walk skips pinned entries, so a pinned window needs
-    /// its own screen-space arm and outranks the canvas window whose rect it
-    /// covers — `has_pinned` gates the conversion, which costs two output-state
-    /// locks.
+    /// Pinned windows are skipped by the ordinary canvas-space walk, so they
+    /// get their own screen-space check first, ahead of the canvas window
+    /// their rect covers.
     ///
-    /// Only called once a binding has matched: `pointer_context` runs its own
-    /// hit-tests and returns none of them, so there is nothing to reuse, and
-    /// looking the binding up first keeps this walk off every unbound event.
+    /// Called only once a binding has matched, since `pointer_context`'s own
+    /// hit-tests return none of them — this keeps the walk off every unbound
+    /// event.
     fn pass_mouse_target_under(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
@@ -134,14 +132,12 @@ impl DriftWm {
     }
 
     /// Whether the subject of a wheel notch at `pos` claims it via `pass_mouse`.
-    /// On a fullscreen output that subject is the fullscreen window:
-    /// `pinned_window_under` returns `None` there, and the parked canvas bbox is
-    /// not what the notch acts over.
+    /// On a fullscreen output the subject is the fullscreen window, since the
+    /// parked canvas bbox there is not what the notch acts over.
     ///
-    /// A canvas window's arm is off in pick mode: unlike the continuous scroll
-    /// lookup, this site has no OnCanvas retry, so a claim below `interact_min`
-    /// would leave the notch doing nothing at all. A fullscreen window keeps
-    /// pointer focus there, so its arm stays live.
+    /// A canvas subject is skipped in pick mode: this site has no OnCanvas
+    /// retry like the continuous scroll lookup, so a claim below
+    /// `interact_min` would leave the notch doing nothing at all.
     fn pass_mouse_claims_notch(
         &self,
         pos: Point<f64, smithay::utils::Logical>,
@@ -387,12 +383,9 @@ impl DriftWm {
             let (mut binding, mut modifier_binding) =
                 self.modifier_button_binding(&mods, button, context);
 
-            // `pass_mouse`: the window under the pointer claims this combo, so
-            // discard the binding and let the ordinary unbound path run (focus,
-            // raise, forward). Clearing `modifier_binding` too keeps the
-            // decoration branch below live — chrome always stays compositor-owned.
-            // Not in pick mode: there the window has no pointer focus to forward
-            // to, so dropping the binding would leave the click doing nothing.
+            // `pass_mouse`: clearing `modifier_binding` too keeps the decoration
+            // branch below live, so chrome always stays compositor-owned. Off in
+            // pick mode: there the window has no pointer focus to forward to.
             if binding.is_some()
                 && context == BindingContext::OnWindow
                 && !self.pick_mode()
@@ -1518,9 +1511,8 @@ impl DriftWm {
             .mouse_scroll_lookup_ctx(&mods, source, context)
             .cloned();
 
-        // `pass_mouse`: a claim drops the binding and the scroll forwards to the
-        // client at the tail. The `recent_pan` override above resolves OnCanvas,
-        // so a claim can't fire mid-pan.
+        // `pass_mouse`: the `recent_pan` override above already resolves
+        // OnCanvas, so a claim here can't fire mid-pan.
         if action.is_some()
             && context == BindingContext::OnWindow
             && let Some(window) = self.pass_mouse_target_under(pos)
