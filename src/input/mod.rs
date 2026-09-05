@@ -1956,6 +1956,7 @@ impl DriftWm {
                 deco.scale,
                 &deco.title,
                 deco.pinned,
+                deco.corner_radius,
                 &self.config.decorations,
             );
         }
@@ -1973,6 +1974,7 @@ impl DriftWm {
                     deco.scale,
                     &deco.title,
                     deco.pinned,
+                    deco.corner_radius,
                     &self.config.decorations,
                 );
             }

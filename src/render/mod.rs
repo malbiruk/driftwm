@@ -1253,6 +1253,7 @@ pub fn compose_frame(
                     shows_pinned,
                     state.decoration_scale,
                     &deco_title,
+                    effective_corner_radius,
                     &state.config.decorations,
                 );
             }

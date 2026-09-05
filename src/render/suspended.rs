@@ -247,13 +247,26 @@ pub(super) fn push_suspended_element(
         }
     }
 
+    let mode = driftwm::config::effective_decoration_mode(None, &config.default_mode);
+    let border_width = driftwm::config::effective_border_width(None, mode, config);
+    let corner_radius = driftwm::config::effective_corner_radius(None, mode, config);
+
     // Title bar via the reused windowless rasterizer. Rendered textless (the
     // centered label already names the app); the close button and its hover
-    // highlight stay.
+    // highlight stay. A stand-in is never subject to the screen-coverage rule,
+    // so its bar rounds to the configured radius like its border does.
     let deco = decorations
         .entry(key.clone())
         .or_insert_with(|| WindowDecoration::new(size.w, focused, config));
-    deco.update(size.w, focused, false, decoration_scale, "", config);
+    deco.update(
+        size.w,
+        focused,
+        false,
+        decoration_scale,
+        "",
+        corner_radius,
+        config,
+    );
     let bar_physical: Point<f64, Physical> =
         Point::from((loc_phys.x as f64, loc_phys.y as f64 - bar_h_phys));
     if let Ok(bar_elem) = MemoryRenderBufferRenderElement::from_buffer(
@@ -277,9 +290,6 @@ pub(super) fn push_suspended_element(
     }
 
     // Border + shadow around title bar + body, keyed by the suspended id.
-    let mode = driftwm::config::effective_decoration_mode(None, &config.default_mode);
-    let border_width = driftwm::config::effective_border_width(None, mode, config);
-    let corner_radius = driftwm::config::effective_corner_radius(None, mode, config);
     let border_color = if focused {
         driftwm::config::effective_border_color_focused(None, config)
     } else {

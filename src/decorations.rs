@@ -15,6 +15,10 @@ pub struct WindowDecoration {
     pub title: String,
     /// Draw the screen-pinned indicator dot near the left edge.
     pub pinned: bool,
+    /// Corner radius the bar was last rasterised with. Tracked per decoration
+    /// because the drawn radius is a render-pass decision (a window covering the
+    /// output draws square), not the config value.
+    pub corner_radius: i32,
     /// Font-load state at last render: flips a textless bar to re-render once
     /// the background font scan lands.
     fonts_ready: bool,
@@ -58,7 +62,17 @@ impl WindowDecoration {
         // Placeholder scale + empty title; the first-frame `update()` re-renders
         // at the real output scale and window title.
         let scale = 1;
-        let title_bar = render_title_bar(width, focused, false, scale, "", false, config);
+        let corner_radius = config.corner_radius;
+        let title_bar = render_title_bar(
+            width,
+            focused,
+            false,
+            scale,
+            "",
+            false,
+            corner_radius,
+            config,
+        );
         Self {
             title_bar,
             width,
@@ -67,11 +81,14 @@ impl WindowDecoration {
             scale,
             title: String::new(),
             pinned: false,
+            corner_radius,
             fonts_ready: driftwm::text::fonts_ready(),
         }
     }
 
-    /// Re-render if width, focus, pinned, scale, or title changed. Returns true if rebuilt.
+    /// Re-render if width, focus, pinned, scale, title, or corner radius
+    /// changed. Returns true if rebuilt.
+    #[allow(clippy::too_many_arguments)]
     pub fn update(
         &mut self,
         width: i32,
@@ -79,6 +96,7 @@ impl WindowDecoration {
         pinned: bool,
         scale: i32,
         title: &str,
+        corner_radius: i32,
         config: &DecorationConfig,
     ) -> bool {
         let fonts_ready = driftwm::text::fonts_ready();
@@ -87,6 +105,7 @@ impl WindowDecoration {
             && pinned == self.pinned
             && scale == self.scale
             && title == self.title
+            && corner_radius == self.corner_radius
             && fonts_ready == self.fonts_ready
         {
             return false;
@@ -95,6 +114,7 @@ impl WindowDecoration {
         self.focused = focused;
         self.pinned = pinned;
         self.scale = scale;
+        self.corner_radius = corner_radius;
         self.fonts_ready = fonts_ready;
         self.title.clear();
         self.title.push_str(title);
@@ -105,6 +125,7 @@ impl WindowDecoration {
             scale,
             &self.title,
             self.pinned,
+            corner_radius,
             config,
         );
         true
@@ -223,9 +244,11 @@ pub fn resize_edge_at(
 }
 
 /// CPU-render the title bar: solid background, rounded top corners, title text,
-/// and a "×" close button. `scale` supersamples the buffer (buffer scale =
-/// `scale`) so the bar stays crisp on HiDPI outputs; all buffer-space geometry
-/// below is in physical pixels.
+/// and a "×" close button. `corner_radius` is in logical px — the caller's
+/// decided radius, which is not always the configured one. `scale` supersamples
+/// the buffer (buffer scale = `scale`) so the bar stays crisp on HiDPI outputs;
+/// all buffer-space geometry below is in physical pixels.
+#[allow(clippy::too_many_arguments)]
 pub fn render_title_bar(
     width: i32,
     _focused: bool,
@@ -233,6 +256,7 @@ pub fn render_title_bar(
     scale: i32,
     title: &str,
     pinned: bool,
+    corner_radius: i32,
     config: &DecorationConfig,
 ) -> MemoryRenderBuffer {
     let s = scale.max(1);
@@ -240,7 +264,7 @@ pub fn render_title_bar(
     let w = width.max(1) * s;
     let bg = config.bg_color;
     let fg = config.fg_color;
-    let cr = ((config.corner_radius * s) as f64)
+    let cr = ((corner_radius * s) as f64)
         .min(w as f64 / 2.0)
         .min(h as f64);
 
@@ -526,6 +550,46 @@ mod tests {
     }
 
     const PAD: i32 = CLOSE_BTN_RIGHT_PAD;
+
+    /// Read one pixel's RGBA out of a rasterised bar. `MemoryRenderBuffer`
+    /// exposes its bytes only through a render context, so borrow one.
+    fn pixel_at(buf: &mut MemoryRenderBuffer, x: i32, y: i32, stride_px: i32) -> [u8; 4] {
+        let mut out = [0u8; 4];
+        buf.render()
+            .draw(|pixels| {
+                let idx = ((y * stride_px + x) * 4) as usize;
+                out.copy_from_slice(&pixels[idx..idx + 4]);
+                Ok::<_, std::convert::Infallible>(Vec::new())
+            })
+            .unwrap();
+        out
+    }
+
+    #[test]
+    fn title_bar_with_zero_corner_radius_has_opaque_top_left_pixel() {
+        let config = DecorationConfig::default();
+        let mut bar = render_title_bar(200, true, false, 1, "", false, 0, &config);
+        assert_eq!(pixel_at(&mut bar, 0, 0, 200)[3], config.bg_color[3]);
+    }
+
+    #[test]
+    fn title_bar_with_rounded_corners_has_transparent_top_left_pixel() {
+        let config = DecorationConfig::default();
+        let mut bar = render_title_bar(200, true, false, 1, "", false, 16, &config);
+        assert_eq!(pixel_at(&mut bar, 0, 0, 200)[3], 0);
+    }
+
+    #[test]
+    fn decoration_update_rebuilds_when_only_corner_radius_changes() {
+        let config = DecorationConfig::default();
+        let mut deco = WindowDecoration::new(200, true, &config);
+        // Settle first: `new` renders at a placeholder scale, and the font scan
+        // may land between calls.
+        deco.update(200, true, false, 1, "", config.corner_radius, &config);
+        assert!(!deco.update(200, true, false, 1, "", config.corner_radius, &config));
+        assert!(deco.update(200, true, false, 1, "", 0, &config));
+        assert_eq!(deco.corner_radius, 0);
+    }
 
     #[test]
     fn close_button_rect_dimensions_are_bar_height_by_bar_height() {
