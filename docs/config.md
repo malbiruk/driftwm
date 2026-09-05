@@ -39,7 +39,7 @@ Default: `"center"`
 
 Where a centering navigation parks the focused window in the viewport. One of "center" (default), "top", "bottom", "left", "right", "top-left", "top-right", "bottom-left", "bottom-right". Handy on a widescreen, where centering wastes both flanks, or a vertical panel, where it wastes both ends.
 
-An edge or corner puts the window's visual frame a snap.gap in from the usable area — the same inset fill-window stops at, so a placed window and a filled one share an edge. That gap is canvas px, so it shrinks as you zoom out: 12.0 renders as 4.8 screen px at zoom 0.4.
+An edge or corner puts the window's title bar / content edge snap.outer_gap in from the usable area, the border hanging outside it — the same edge fit-window and fill-window produce, so a placed window and a filled one line up. That inset is canvas px, so it shrinks as you zoom out: 12.0 renders as 4.8 screen px at zoom 0.4.
 
 A window too big to fit on an axis with its two gutters centers on that axis rather than hanging off screen; the other axis still places, so a tall window under "top-left" still goes left.
 
@@ -485,7 +485,13 @@ magnetic edge snapping during window drag
 
 Default: `12.0`
 
-gap left between windows and around the usable area, in canvas px — snapping, fill-window, fit-window, auto placement and focus_placement all measure it
+spacing kept between windows, in canvas px — snapping, auto placement, clusters, and fill-window's clearance from its neighbours
+
+### `outer_gap`
+
+Default: `12.0`
+
+inset from the usable area's edge to a window's title bar or content edge, in canvas px — fit-window, fill-window and focus_placement measure it; defaults to gap. The border lies outside it. 0 is the maximize setup: fitted and filled windows land edge to edge, and a window covering the usable area draws square with no shadow until you pan away
 
 ### `distance`
 
@@ -772,7 +778,7 @@ Actions:
 - `toggle-fullscreen` — toggle focused window fullscreen
 - `fit-window` — toggle maximize: centers + resets zoom + fills viewport; restore only resizes back
 - `fit-window-snapped` — fit-window for the focused window's whole snap cluster
-- `fill-window` — grow in place to fill free space; edges outside the usable area or overlapping another window pull back to a gap; clears maximize; press again to restore
+- `fill-window` — grow in place to fill free space, stopping snap.outer_gap short of the usable area's edge and snap.gap short of a neighbour; edges outside those bounds pull back; clears maximize; press again to restore
 - `toggle-pin-to-screen` — pin/unpin the focused window to the screen (ignores pan/zoom, floats above)
 - `reload-config` — hot-reload config file
 - `toggle-cursor-pan` — toggle cursor edge-pan (see [navigation.edge_pan])
