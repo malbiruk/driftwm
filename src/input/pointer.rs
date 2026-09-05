@@ -87,6 +87,70 @@ impl DriftWm {
         (binding, has_modifier)
     }
 
+    /// Whether `window`'s `pass_mouse` rule claims this trigger, so the binding
+    /// is discarded and the event takes the ordinary unbound path to the client.
+    /// Resolved against the live config like `pass_keys`, so a reload applies
+    /// immediately — not `config::applied_rule`, which is the map-time copy.
+    fn pass_mouse_claims(
+        &self,
+        window: &smithay::desktop::Window,
+        mods: &smithay::input::keyboard::ModifiersState,
+        trigger: config::MouseTrigger,
+    ) -> bool {
+        let app_id = window.app_id_or_class().unwrap_or_default();
+        let title = window.window_title().unwrap_or_default();
+        self.config
+            .resolve_window_rules(&app_id, &title)
+            .is_some_and(|r| r.pass_mouse.allows(mods, trigger))
+    }
+
+    /// The toplevel a pointer binding at `pos` would act over. Every canvas-space
+    /// walk skips pinned entries, so a pinned window needs its own screen-space
+    /// arm and outranks the canvas window whose rect it covers — `has_pinned`
+    /// gates the conversion, which costs two output-state locks.
+    ///
+    /// Only called once a binding has matched: `pointer_context` runs its own
+    /// hit-tests and returns none of them, so there is nothing to reuse, and
+    /// looking the binding up first keeps this walk off every unbound event.
+    fn pass_mouse_target_under(
+        &self,
+        pos: Point<f64, smithay::utils::Logical>,
+    ) -> Option<smithay::desktop::Window> {
+        if self.stage.has_pinned() {
+            let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
+            if let Some(window) = self.pinned_element_under(screen_pos) {
+                return Some(window);
+            }
+        }
+        self.topmost_client_under(pos)
+    }
+
+    /// Whether the subject of a wheel notch at `pos` claims it via `pass_mouse`.
+    /// On a fullscreen output that subject is the fullscreen window:
+    /// `pinned_window_under` returns `None` there, and the parked canvas bbox is
+    /// not what the notch acts over.
+    fn pass_mouse_claims_notch(
+        &self,
+        pos: Point<f64, smithay::utils::Logical>,
+        mods: &smithay::input::keyboard::ModifiersState,
+        up: bool,
+        context: BindingContext,
+    ) -> bool {
+        let subject = if self.is_fullscreen() {
+            self.active_fullscreen_window()
+        } else if context == BindingContext::OnWindow {
+            self.pass_mouse_target_under(pos)
+        } else {
+            return false;
+        };
+        let trigger = if up {
+            config::MouseTrigger::WheelUp
+        } else {
+            config::MouseTrigger::WheelDown
+        };
+        subject.is_some_and(|w| self.pass_mouse_claims(&w, mods, trigger))
+    }
+
     /// Keep `held_buttons` in sync with a button event, and drain the
     /// pick-swallowed set on release. Must run for every button event on every
     /// dispatch path (including the locked-session one), or a release missed
@@ -195,10 +259,20 @@ impl DriftWm {
             // keybindings (execute_action's guard exits when needed); unbound
             // clicks forward to the app.
             if self.is_fullscreen() {
-                let fs_lookup = self
+                let mut fs_lookup = self
                     .config
                     .mouse_button_lookup_ctx(&mods, button, BindingContext::OnWindow)
                     .cloned();
+                // A `pass_mouse` claim becomes "no binding", so the `None` arm
+                // below reclaims keyboard focus and forwards to the client. It
+                // needs its own gate here: the `Action(_)` arm falls through
+                // without returning.
+                if fs_lookup.is_some()
+                    && let Some(window) = self.active_fullscreen_window()
+                    && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+                {
+                    fs_lookup = None;
+                }
                 match fs_lookup {
                     Some(MouseAction::Action(_)) => {
                         // Deferring to execute_action keeps its was_fullscreen
@@ -297,7 +371,21 @@ impl DriftWm {
 
             // `modifier_binding` gates the chrome paths below.
             let context = self.pointer_context(pos);
-            let (binding, modifier_binding) = self.modifier_button_binding(&mods, button, context);
+            let (mut binding, mut modifier_binding) =
+                self.modifier_button_binding(&mods, button, context);
+
+            // `pass_mouse`: the window under the pointer claims this combo, so
+            // discard the binding and let the ordinary unbound path run (focus,
+            // raise, forward). Clearing `modifier_binding` too keeps the
+            // decoration branch below live — chrome always stays compositor-owned.
+            if binding.is_some()
+                && context == BindingContext::OnWindow
+                && let Some(window) = self.pass_mouse_target_under(pos)
+                && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+            {
+                binding = None;
+                modifier_binding = false;
+            }
 
             // SSD decoration clicks: title bar → move, close button → close, resize border → resize
             if !modifier_binding
@@ -1004,8 +1092,19 @@ impl DriftWm {
         let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
 
         // `modifier_binding` gates the pinned chrome path below, as on the canvas path.
-        let (binding, modifier_binding) =
+        let (mut binding, mut modifier_binding) =
             self.modifier_button_binding(&mods, button, BindingContext::OnWindow);
+
+        // `pass_mouse` resolves its subject here rather than reusing the
+        // `pinned_window_under` below: the chrome arm in between deliberately
+        // hits outside the surface, and clearing `modifier_binding` has to reach it.
+        if binding.is_some()
+            && let Some(window) = self.pinned_element_under(screen_pos)
+            && self.pass_mouse_claims(&window, &mods, config::MouseTrigger::Button(button))
+        {
+            binding = None;
+            modifier_binding = false;
+        }
 
         if !modifier_binding
             && button == config::BTN_LEFT
@@ -1326,6 +1425,7 @@ impl DriftWm {
                     .config
                     .mouse_wheel_step_lookup_ctx(&mods, v < 0.0, notch_context)
                     .cloned()
+                && !self.pass_mouse_claims_notch(pos, &mods, v < 0.0, notch_context)
             {
                 // High-resolution wheels emit sub-notch v120 deltas;
                 // accumulate to whole notches so a flick fires the action
@@ -1354,11 +1454,17 @@ impl DriftWm {
         // them on the restored canvas; any other bound scroll falls through
         // unexited (a no-op below); unbound scroll forwards to the app.
         if self.is_fullscreen() {
-            match self
+            let mut fs_scroll = self
                 .config
                 .mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow)
-                .cloned()
+                .cloned();
+            if fs_scroll.is_some()
+                && let Some(window) = self.active_fullscreen_window()
+                && self.pass_mouse_claims(&window, &mods, scroll_trigger(source))
             {
+                fs_scroll = None;
+            }
+            match fs_scroll {
                 Some(MouseAction::PanViewport | MouseAction::Zoom) => {
                     // Dispatch below anchors pan/zoom on `pos`, so it must be
                     // the post-exit position (the exit warps the pointer).
@@ -1391,6 +1497,17 @@ impl DriftWm {
             .config
             .mouse_scroll_lookup_ctx(&mods, source, context)
             .cloned();
+
+        // `pass_mouse`: a claim drops the binding and the scroll forwards to the
+        // client at the tail. The `recent_pan` override above resolves OnCanvas,
+        // so a claim can't fire mid-pan.
+        if action.is_some()
+            && context == BindingContext::OnWindow
+            && let Some(window) = self.pass_mouse_target_under(pos)
+            && self.pass_mouse_claims(&window, &mods, scroll_trigger(source))
+        {
+            action = None;
+        }
 
         // Pick mode cuts a canvas window off from pointer focus, so a bare
         // scroll over one finds no binding (OnWindow is empty and the `anywhere`
@@ -1558,6 +1675,15 @@ pub(super) fn edges_from_position(
         (_, _, true, _) => xdg_toplevel::ResizeEdge::Top,
         (_, _, _, true) => xdg_toplevel::ResizeEdge::Bottom,
         _ => xdg_toplevel::ResizeEdge::BottomRight,
+    }
+}
+
+/// The continuous-scroll `pass_mouse` trigger for an axis source, matching what
+/// `Config::mouse_scroll_lookup_ctx` builds from the same source.
+fn scroll_trigger(source: AxisSource) -> config::MouseTrigger {
+    match source {
+        AxisSource::Finger => config::MouseTrigger::TrackpadScroll,
+        _ => config::MouseTrigger::WheelScroll,
     }
 }
 
