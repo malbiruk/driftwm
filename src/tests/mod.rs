@@ -12,6 +12,7 @@
 
 mod client;
 mod fixture;
+mod gl;
 mod headless;
 mod input_backend;
 mod real;
@@ -51,6 +52,7 @@ mod pointer_motion_dedup;
 mod popups;
 mod real_clients;
 mod relaunch;
+mod render_pixels;
 mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
@@ -167,6 +169,32 @@ fn map_window(
     let window = f.client(id).window(&surface);
     window.set_size(size.0, size.1);
     window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    surface
+}
+
+/// [`map_window`] with a real `wl_shm` texture instead of the 1x1 single-pixel
+/// buffer: `logical_size` is the viewport destination (what the window measures
+/// on the canvas), `texels` the buffer's own grid, and `pixels` its
+/// premultiplied little-endian BGRA bytes.
+fn map_window_shm(
+    f: &mut Fixture,
+    id: client::ClientId,
+    app_id: &str,
+    logical_size: (u16, u16),
+    texels: (i32, i32),
+    pixels: &[u8],
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id(app_id);
+    window.commit();
+    f.roundtrip(id);
+
+    let window = f.client(id).window(&surface);
+    window.set_size(logical_size.0, logical_size.1);
+    window.attach_shm_buffer(texels, pixels);
     window.ack_last_and_commit();
     f.double_roundtrip(id);
     surface

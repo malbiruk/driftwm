@@ -6,17 +6,14 @@
 //! sockets — not hermetic); run with `cargo test -- --include-ignored`. Also
 //! self-skips when neither `foot` nor `weston-terminal` is installed.
 
-use std::io::{BufRead, BufReader, Write};
-use std::os::unix::net::UnixStream;
-use std::path::Path;
 use std::process::Command;
 use std::time::{Duration, Instant};
 
 use driftwm::window_ext::WindowExt;
 
 use super::Fixture;
-use super::real::TempDir;
-use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
+use super::real::{TempDir, ipc_request};
+use crate::ipc::protocol::{Request, Response, WindowSelector};
 
 /// Kill and reap the child on drop, so a mid-test panic can't orphan a
 /// still-running client (`Child::drop` alone neither kills nor waits).
@@ -45,45 +42,6 @@ fn find_client() -> Option<&'static str> {
         }
     }
     None
-}
-
-/// Send one request on its own connection and read the reply, pumping the
-/// compositor between attempts. A blocking read would deadlock — the test thread
-/// *is* the server loop, so the reply is only produced when we pump. A short
-/// read timeout bounds each attempt; the retry loop pumps and re-reads until the
-/// reply lands or the deadline fails the test.
-fn ipc_request(f: &mut Fixture, ipc_path: &Path, request: &Request) -> Reply {
-    let mut stream = UnixStream::connect(ipc_path).expect("connect ipc socket");
-    let mut payload = serde_json::to_vec(request).unwrap();
-    payload.push(b'\n');
-    stream.write_all(&payload).expect("write ipc request");
-    stream
-        .set_read_timeout(Some(Duration::from_millis(20)))
-        .expect("set read timeout");
-
-    let mut reader = BufReader::new(stream);
-    let mut line = String::new();
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        f.pump(1);
-        match reader.read_line(&mut line) {
-            Ok(0) => panic!("ipc connection closed before a reply to {request:?}"),
-            Ok(_) => break,
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                ) =>
-            {
-                assert!(
-                    Instant::now() < deadline,
-                    "ipc reply timed out for {request:?}"
-                );
-            }
-            Err(e) => panic!("ipc read error for {request:?}: {e}"),
-        }
-    }
-    serde_json::from_str(line.trim_end()).expect("parse ipc reply")
 }
 
 #[test]

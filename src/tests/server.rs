@@ -14,6 +14,11 @@ use crate::state::{ClientState, DriftWm};
 /// backend is deliberately absent: `DriftWm.backend` stays `None`, so every
 /// render/IPC path that would touch a GPU or socket short-circuits, and only
 /// pure protocol dispatch (configure, enter/leave, flush) drives the state.
+///
+/// The one sanctioned exception is [`super::gl::install`], which hands a real
+/// surfaceless GLES renderer to the pixel scenarios; those undo it with
+/// `gl::uninstall` before teardown, so the `None` contract holds everywhere
+/// else.
 pub struct Server {
     pub event_loop: EventLoop<'static, DriftWm>,
     pub state: DriftWm,

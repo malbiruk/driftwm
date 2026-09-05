@@ -1,4 +1,4 @@
-use smithay::output::{Mode, Output, PhysicalProperties, Subpixel};
+use smithay::output::{Mode, Output, PhysicalProperties, Scale, Subpixel};
 use smithay::reexports::wayland_server::backend::GlobalId;
 use smithay::utils::{Size, Transform};
 
@@ -23,6 +23,32 @@ pub fn add_output_with_saved(
     size: (u16, u16),
     saved: &std::collections::HashMap<String, (crate::state::CameraSeed, f64)>,
 ) -> (Output, GlobalId) {
+    add_output_full(state, n, size, saved, None)
+}
+
+/// Like [`add_output`] but at a fractional output scale.
+pub fn add_output_scaled(
+    state: &mut DriftWm,
+    n: u8,
+    size: (u16, u16),
+    scale: f64,
+) -> (Output, GlobalId) {
+    add_output_full(
+        state,
+        n,
+        size,
+        &std::collections::HashMap::new(),
+        Some(Scale::Fractional(scale)),
+    )
+}
+
+fn add_output_full(
+    state: &mut DriftWm,
+    n: u8,
+    size: (u16, u16),
+    saved: &std::collections::HashMap<String, (crate::state::CameraSeed, f64)>,
+    scale: Option<Scale>,
+) -> (Output, GlobalId) {
     let output = Output::new(
         format!("HEADLESS-{n}"),
         PhysicalProperties {
@@ -38,7 +64,7 @@ pub fn add_output_with_saved(
         size: Size::from((i32::from(size.0), i32::from(size.1))),
         refresh: 60_000,
     };
-    output.change_current_state(Some(mode), Some(Transform::Normal), None, None);
+    output.change_current_state(Some(mode), Some(Transform::Normal), scale, None);
     output.set_preferred(mode);
     let global = output.create_global::<DriftWm>(&state.display_handle);
 

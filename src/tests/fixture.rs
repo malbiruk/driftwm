@@ -138,6 +138,14 @@ impl Fixture {
         output
     }
 
+    /// [`Fixture::add_output`] at a fractional output scale — `size` stays the
+    /// mode in physical pixels, so the logical viewport shrinks by `scale`.
+    pub fn add_output_scaled(&mut self, n: u8, size: (u16, u16), scale: f64) -> Output {
+        let (output, global) = headless::add_output_scaled(self.state(), n, size, scale);
+        self.output_globals.insert(output.name(), global);
+        output
+    }
+
     /// Disconnect an output the way the udev backend does: run the backend-
     /// independent disconnect policy, then disable and remove its `wl_output`
     /// global. udev delays the removal 10s for in-flight binds; the fixture pumps

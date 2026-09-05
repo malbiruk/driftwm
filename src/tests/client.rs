@@ -7,6 +7,8 @@ use std::cmp::min;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Write as _;
+use std::io::Write as _;
+use std::os::fd::AsFd as _;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -27,6 +29,8 @@ use wayland_client::protocol::wl_pointer::{self, WlPointer};
 use wayland_client::protocol::wl_region::WlRegion;
 use wayland_client::protocol::wl_registry::{self, WlRegistry};
 use wayland_client::protocol::wl_seat::{self, WlSeat};
+use wayland_client::protocol::wl_shm::{self, WlShm};
+use wayland_client::protocol::wl_shm_pool::WlShmPool;
 use wayland_client::protocol::wl_surface::{self, WlSurface};
 use wayland_client::protocol::wl_touch::{self, WlTouch};
 use wayland_client::{Connection, Dispatch, Proxy as _, QueueHandle};
@@ -90,6 +94,7 @@ pub struct State {
     pub xdg_wm_base: Option<XdgWmBase>,
     pub layer_shell: Option<ZwlrLayerShellV1>,
     pub spbm: Option<WpSinglePixelBufferManagerV1>,
+    pub shm: Option<WlShm>,
     pub viewporter: Option<WpViewporter>,
     pub seat: Option<WlSeat>,
     /// Bound alongside the seat, so every scenario can observe touch delivery
@@ -193,6 +198,7 @@ impl ExtWorkspace {
 pub struct Window {
     pub qh: QueueHandle<State>,
     pub spbm: WpSinglePixelBufferManagerV1,
+    pub shm: WlShm,
     pub seat: WlSeat,
 
     pub surface: WlSurface,
@@ -202,6 +208,10 @@ pub struct Window {
     pub pending_configure: Configure,
     pub configures_received: Vec<(u32, Configure)>,
     pub close_requested: bool,
+    /// The shm pool, buffer, and backing fd of the most recent
+    /// [`Window::attach_shm_buffer`], held so the compositor keeps a live
+    /// mapping to read texels from.
+    shm_buffer: Option<(std::fs::File, WlShmPool, WlBuffer)>,
 
     pub configures_looked_at: usize,
 }
@@ -411,6 +421,7 @@ impl Client {
             xdg_wm_base: None,
             layer_shell: None,
             spbm: None,
+            shm: None,
             viewporter: None,
             seat: None,
             touch: None,
@@ -707,6 +718,7 @@ impl State {
         let window = Window {
             qh: self.qh.clone(),
             spbm: self.spbm.clone().unwrap(),
+            shm: self.shm.clone().unwrap(),
             seat: self.seat.clone().unwrap(),
 
             surface,
@@ -716,6 +728,7 @@ impl State {
             pending_configure: Configure::default(),
             configures_received: Vec::new(),
             close_requested: false,
+            shm_buffer: None,
 
             configures_looked_at: 0,
         };
@@ -1089,6 +1102,24 @@ impl State {
     }
 }
 
+/// A read-write fd holding `pixels`, for a `wl_shm` pool. Created in the temp
+/// dir and unlinked straight away, so nothing outlives the fd itself.
+fn shm_file(pixels: &[u8]) -> std::fs::File {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let path = std::env::temp_dir().join(format!("driftwm-test-shm-{}-{n}", std::process::id()));
+    let mut file = std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .expect("create shm file");
+    std::fs::remove_file(&path).expect("unlink shm file");
+    file.write_all(pixels).expect("write shm pixels");
+    file.flush().expect("flush shm pixels");
+    file
+}
+
 impl Window {
     pub fn commit(&self) {
         self.surface.commit();
@@ -1117,6 +1148,32 @@ impl Window {
     pub fn attach_new_buffer(&self) {
         let buffer = self.spbm.create_u32_rgba_buffer(0, 0, 0, 0, &self.qh, ());
         self.surface.attach(Some(&buffer), 0, 0);
+    }
+
+    /// Attach a `wl_shm` Argb8888 buffer of `size` texels carrying `pixels`
+    /// (premultiplied little-endian BGRA, `size.0 * size.1 * 4` bytes).
+    ///
+    /// Sizing on screen still comes from the viewport destination, so the texel
+    /// grid and the logical size are independent — which is how a client that
+    /// was told a fractional scale allocates a buffer one texel wider than the
+    /// window paints.
+    pub fn attach_shm_buffer(&mut self, size: (i32, i32), pixels: &[u8]) {
+        let (w, h) = size;
+        let stride = w * 4;
+        assert_eq!(
+            pixels.len(),
+            (stride * h) as usize,
+            "an Argb8888 buffer of {w}x{h} texels is {} bytes",
+            stride * h
+        );
+        let file = shm_file(pixels);
+        let pool = self
+            .shm
+            .create_pool(file.as_fd(), pixels.len() as i32, &self.qh, ());
+        let buffer = pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, &self.qh, ());
+        self.surface.attach(Some(&buffer), 0, 0);
+        self.surface.damage_buffer(0, 0, w, h);
+        self.shm_buffer = Some((file, pool, buffer));
     }
 
     pub fn attach_null(&self) {
@@ -1421,6 +1478,9 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == WpSinglePixelBufferManagerV1::interface().name {
                     let version = min(version, WpSinglePixelBufferManagerV1::interface().version);
                     state.spbm = Some(registry.bind(name, version, qh, ()));
+                } else if interface == WlShm::interface().name {
+                    let version = min(version, WlShm::interface().version);
+                    state.shm = Some(registry.bind(name, version, qh, ()));
                 } else if interface == WpViewporter::interface().name {
                     let version = min(version, WpViewporter::interface().version);
                     state.viewporter = Some(registry.bind(name, version, qh, ()));
@@ -1787,6 +1847,33 @@ impl Dispatch<WlBuffer, ()> for State {
             wl_buffer::Event::Release => (),
             _ => unreachable!(),
         }
+    }
+}
+
+impl Dispatch<WlShm, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlShm,
+        _event: <WlShm as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        // `wl_shm.format` announcements; the tests attach Argb8888, which every
+        // compositor advertises unconditionally.
+    }
+}
+
+impl Dispatch<WlShmPool, ()> for State {
+    fn event(
+        _state: &mut Self,
+        _proxy: &WlShmPool,
+        _event: <WlShmPool as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        unreachable!()
     }
 }
 

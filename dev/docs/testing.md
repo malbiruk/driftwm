@@ -61,15 +61,21 @@ seeds replay first on every subsequent run, pinning the bug forever.
 `cargo test` lane stays hermetic and deterministic; anything that steps
 outside it carries `#[ignore = "reason"]` and runs via
 `cargo test -- --include-ignored` (or `-- --ignored` for just those). CI runs
-the full include-ignored lane. Two exist today: the soak/leak scenario
+the full include-ignored lane. Three exist today: the soak/leak scenario
 (`src/tests/soak.rs`) churns hundreds of windows and asserts counters, file
 descriptors, and RSS all plateau — the fd/RSS assertions are process-wide, so
 prefer running it alone (`cargo test --bin driftwm soak -- --ignored`) when
-debugging a failure; and the real-client scenario
+debugging a failure; the real-client scenario
 (`src/tests/real_clients.rs`) spawns an actual `foot`/`weston-terminal`
 against a private wayland + IPC socket and drives it over the wire,
-self-skipping when neither is on `PATH`. Mark any future non-hermetic or
-genuinely slow test the same way.
+self-skipping when neither is on `PATH`; and the pixel scenarios
+(`src/tests/render_pixels.rs`) give the fixture a real GLES renderer on Mesa's
+surfaceless EGL platform (`src/tests/gl.rs`) and assert on the bytes the chrome
+shaders produce, self-skipping where there is no EGL/GLES. smithay keeps
+surfaceless displays in a process-global set and terminates one when its last
+handle drops, so those scenarios take `gl::lock()` as their first statement and
+run one at a time whatever the harness's thread count — a new GL scenario must
+do the same. Mark any future non-hermetic or genuinely slow test the same way.
 
 **Fixture tests never touch the real session.** Construct configs with
 `Config::from_toml` + `Fixture::with_config` — never read
