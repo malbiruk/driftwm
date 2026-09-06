@@ -480,24 +480,19 @@ fn an_edge_anchored_layer_surface_is_frosted_where_its_capture_clips() {
         (0, 0, OUTPUT.0 - 1, 79),
         "the bar spans the top edge of the output"
     );
-    let vals: Vec<i32> = [2u32, 8, 16, 32, 64, 128, 800, 1500, 1590, 1597]
-        .iter()
-        .map(|&x| luma(&img, x, 40))
-        .collect();
-    println!("bar luma across: {vals:?}");
-    let rows: Vec<i32> = [2u32, 8, 20, 40, 60, 77]
-        .iter()
-        .map(|&y| luma(&img, 800, y))
-        .collect();
-    println!("bar luma down: {rows:?}");
+    for x in [2u32, 8, 16, 32, 64, 128, 800, 1500, 1590, 1597] {
+        assert!(frosted(&img, x, 40), "the bar is frosted at x={x}");
+    }
+    for y in [2u32, 8, 20, 40, 60, 77] {
+        assert!(frosted(&img, 800, y), "the bar is frosted at y={y}");
+    }
 
     uninstall_with_blur(&mut f, &output);
 }
 
 /// By design, and asserted rather than fixed: a fullscreen window conceals the
-/// canvas, so an overlay layer above it frosts the fullscreen picture. The
-/// frost is real — the overlay is never left transparent there — it just shows
-/// the window below it rather than the canvas.
+/// canvas, so an overlay layer above it frosts the fullscreen picture rather
+/// than the canvas.
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn an_overlay_layer_over_a_fullscreen_window_frosts_the_fullscreen_picture() {
