@@ -2,8 +2,7 @@
 //!
 //! The chrome scenarios in [`super::render_pixels`] go through the screenshot
 //! path, which deliberately draws no blur. These drive `compose_frame` and read
-//! the live frame back instead, so what the Kawase passes and the mask produce
-//! is a fact about bytes.
+//! the live frame back instead.
 //!
 //! `#[ignore]`d out of the default lane (needs Mesa's surfaceless EGL,
 //! self-skipping when that is missing); each scenario takes [`gl::lock`] first.
@@ -19,29 +18,24 @@ use super::client::{ClientId, LayerConfigureProps};
 use super::real::TempDir;
 use super::{Fixture, gl};
 
-/// The output every scenario runs on, in physical pixels, and the scale it runs
-/// at. The scale is the point: the Kawase offset the shader is handed carries
-/// it, so anything sized from the unscaled strength is short by a factor of two
-/// here.
+/// The output every scenario runs on, in physical pixels, and its scale. At 2x,
+/// anything sized from the unscaled strength is short by half.
 const OUTPUT: (u32, u32) = (1600, 1200);
 const SCALE: f64 = 2.0;
 
-/// The frosted window, logical and physical. Its physical extent is what the
-/// backdrop below is laid out around.
+/// The frosted window, logical and physical.
 const WINDOW_LOGICAL: (u16, u16) = (300, 200);
 const WINDOW_PHYSICAL: (i32, i32) = (600, 400);
 
-/// The client buffer the frosted window paints: premultiplied BGRA at alpha
-/// 1/255. Above the mask shader's `step(0.001, a)` threshold, so the whole
-/// window is frosted, and close enough to invisible that the composite over the
-/// frost reads as the frost itself.
+/// What the frosted window paints: alpha 1/255 is above the mask shader's
+/// `step(0.001, a)` threshold, so the whole window is frosted, and close enough
+/// to invisible that the composite over the frost reads as the frost itself.
 const GHOST_BGRA: [u8; 4] = [0, 0, 0, 1];
 
-/// A backdrop of hard 16-px black/white stripes inside a rectangle centred on
-/// the output, and flat white outside it. The stripes blur to a flat mid-grey,
-/// so the frost holds one number everywhere the blur sees nothing but them, and
-/// the white beyond shows as a deviation from that number wherever the reach
-/// gets to it.
+/// Hard black/white stripes inside a rectangle centred on the output, flat
+/// white outside it. The stripes blur to one mid-grey, so the frost holds one
+/// number wherever the blur sees only them, and the white beyond shows as a
+/// deviation from it wherever the reach gets to it.
 ///
 /// `margin` is how far the stripes extend past the window on every side, in
 /// physical pixels.
@@ -83,8 +77,7 @@ fn config_toml(shader_path: &str, radius: u32, strength: f64) -> String {
     )
 }
 
-/// The three blur programs, which [`gl::install`] deliberately leaves alone.
-/// Compile them onto the renderer before it is handed over.
+/// [`gl::install`] plus the blur trio it leaves alone.
 fn install_with_blur(f: &mut Fixture, mut renderer: GlesRenderer) {
     let (down, up, mask) = crate::render::compile_blur_shaders(&mut renderer);
     gl::install(f, renderer);
@@ -149,11 +142,9 @@ fn luma(img: &RgbaImage, x: u32, y: u32) -> i32 {
     (p[0] as i32 + p[1] as i32 + p[2] as i32) / 3
 }
 
-/// The Kawase offset the shader is handed is `blur_strength * output_scale`, so
-/// the padding the capture is grown by has to carry that scale too. Sized from
-/// the unscaled strength, the capture around a window on a 2x output is half as
-/// wide as the blur reaches, and backdrop the frost should show is simply not
-/// in the texture the blur runs over.
+/// The pad the capture is grown by carries the output scale, as the Kawase
+/// offset the shader is handed does. Sized from the unscaled strength, the
+/// capture around a window on a 2x output is half as wide as the blur reaches.
 ///
 /// The stripes stop 110 physical pixels past the window: outside a pad sized
 /// from the strength alone (5 passes x 1.5 = 96), inside one that carries the
@@ -193,9 +184,8 @@ fn the_frost_sees_backdrop_a_pad_without_the_output_scale_would_miss() {
     let img = live_frame(&mut f, &output);
     let (x0, y0, x1, y1) = frost_bounds(&img);
 
-    // The backdrop is laid out around a window centred on the output, so a
-    // placement change has to show up here rather than quietly moving the
-    // stripe frame out from under the frost.
+    // The stripes are laid out around a centred window, so a placement change
+    // has to fail here rather than quietly slide them out from under the frost.
     assert_eq!(
         (x1 - x0 + 1, y1 - y0 + 1),
         (WINDOW_PHYSICAL.0 as u32, WINDOW_PHYSICAL.1 as u32),
@@ -287,10 +277,9 @@ fn layer_texels(logical: (u32, u32)) -> (i32, i32) {
 }
 
 /// The mid-grey a blurred stripe field settles at, and how far from it a
-/// still-frosted pixel may sit. The tolerance is generous because a surface at
-/// an output edge blurs over the mirror wrap, whose stripe phase does not line
-/// up with the real backdrop's; what it has to separate is frost from no frost,
-/// and the bare backdrop is pure black or pure white.
+/// frosted pixel may sit. The tolerance is generous because a surface at an
+/// output edge blurs over the mirror wrap, whose stripe phase does not match
+/// the backdrop's; it only has to tell frost from bare black or white.
 const STRIPE_GREY: i32 = 127;
 const FROST_TOLERANCE: i32 = 12;
 
@@ -330,8 +319,7 @@ fn stripe_scene(name: &str) -> Option<(Fixture, Output, TempDir)> {
 }
 
 /// A layer surface's frost is built and spliced in the same pass that first
-/// sees it, so the frame it maps on already carries it — there is no frame
-/// where the surface is up and its backdrop is still the sharp scene.
+/// sees it, so the frame it maps on already carries it.
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn a_layer_surface_is_frosted_on_the_frame_it_maps() {
@@ -416,9 +404,8 @@ fn a_layer_surface_that_paints_after_a_transparent_first_buffer_is_frosted() {
     uninstall_with_blur(&mut f, &output);
 }
 
-/// A launcher that opens and closes inside a couple of frames still gets its
-/// frost while it is up, and takes it with it when it goes: the cache is keyed
-/// on the surface, so nothing of it survives into the frame after the unmap.
+/// A launcher that opens and closes inside a couple of frames is frosted while
+/// it is up, and takes the frost with it when it goes.
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn a_layer_surface_that_unmaps_two_frames_later_was_frosted_the_whole_time() {
@@ -538,8 +525,7 @@ fn an_overlay_layer_over_a_fullscreen_window_frosts_the_fullscreen_picture() {
     f.client(client).window(&window).set_fullscreen(None);
     f.double_roundtrip(client);
     // Not `adopt_last_configure`: that attaches a transparent single-pixel
-    // buffer, and a fullscreen window that paints nothing does not conceal the
-    // canvas — which is the case this scenario is not about.
+    // buffer, and a fullscreen window that paints nothing conceals no canvas.
     let w = f.client(client).window(&window);
     w.set_size(fs_logical.0, fs_logical.1);
     w.attach_shm_buffer(fs_texels, &opaque);
@@ -572,9 +558,8 @@ fn an_overlay_layer_over_a_fullscreen_window_frosts_the_fullscreen_picture() {
 }
 
 /// Two bars that between them cover most of the output claim the shared
-/// backdrop: the scene background is blurred once and each of them slices its
-/// own rect out of it. The other layer scenarios all take the per-window path,
-/// so this is the one that exercises the slice.
+/// backdrop: the background is blurred once and each slices its own rect out
+/// of it. The other layer scenarios all take the per-window path.
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn two_bars_that_pay_for_the_shared_backdrop_slice_their_frost_out_of_it() {

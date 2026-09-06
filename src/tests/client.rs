@@ -1360,10 +1360,8 @@ impl LayerSurface {
         self.surface.attach(Some(&buffer), 0, 0);
     }
 
-    /// [`Window::attach_shm_buffer`] for a layer surface. The single-pixel
-    /// buffer above is fully transparent, and the blur mask thresholds surface
-    /// alpha — so a scenario that needs a layer surface to actually be frosted
-    /// has to paint real texels.
+    /// [`Window::attach_shm_buffer`] for a layer surface: the single-pixel
+    /// buffer is fully transparent, which the blur mask thresholds away.
     pub fn attach_shm_buffer(&mut self, size: (i32, i32), pixels: &[u8]) {
         let (w, h) = size;
         let stride = w * 4;

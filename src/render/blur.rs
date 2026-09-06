@@ -568,11 +568,9 @@ fn behind_own_chrome(
 /// edge: window-edge samples must see real backdrop, not clamped border
 /// pixels. Sized to the blur's worst-case reach at the deepest mip.
 ///
-/// `offset` is the tap distance the shader itself is handed — the configured
-/// strength already multiplied by the output scale — and not the strength on
-/// its own. The reach is in physical pixels and so is the pad, so a pad sized
-/// from the unscaled strength is short by the scale factor on every HiDPI
-/// output, and the crop then keeps texels the taps read from past the padding.
+/// `offset` is the scaled tap distance the shader is handed, not the configured
+/// strength: reach and pad are both physical pixels, so a pad sized from the
+/// unscaled strength is short by the scale factor on every HiDPI output.
 fn blur_pad(offset: f32, passes: usize) -> i32 {
     ((offset * (1u32 << (passes + 1)) as f32).ceil() as i32).clamp(16, 256)
 }
@@ -1050,8 +1048,7 @@ pub(crate) fn process_blur_requests(
     let down_shader = state.render.blur_down_shader.clone().unwrap();
     let up_shader = state.render.blur_up_shader.clone().unwrap();
     let blur_passes = state.config.effects.blur_radius as usize;
-    // One value for the shader's tap distance and for the padding that has to
-    // cover its reach, so the two cannot disagree about the output scale.
+    // Shared by the taps and the pad, so the two cannot disagree on the scale.
     let blur_offset = state.config.effects.blur_strength as f32 * output_scale as f32;
     let context_id = renderer.context_id();
     let output_name = output.name();
@@ -1740,9 +1737,8 @@ pub(crate) fn process_blur_requests(
                 })
                 .collect();
             if relocated.is_empty() {
-                // The multiply below would bake an all-zero alpha into the
-                // frost and stamp it fresh, which is an invisible frost that
-                // outlives the frame that caused it.
+                // The multiply below stamps an all-zero mask fresh, and that
+                // outlives this frame.
                 tracing::debug!(
                     surface = %req.surface_id,
                     "frost would be masked to nothing: the surface contributed no elements"
@@ -1880,9 +1876,6 @@ pub(crate) fn process_blur_requests(
             continue;
         };
         if cache.zeroed {
-            // Nothing is drawn where the frost should be: either the texture
-            // has never held one, or it was zeroed and nothing has rebuilt it
-            // since.
             tracing::debug!(
                 surface = %req.surface_id,
                 output = %output_name,
@@ -2786,8 +2779,7 @@ mod tests {
     }
 
     /// The ceiling has to clear the shipped effects at the scales real panels
-    /// run at, or the pad is capped short of the reach on exactly the outputs
-    /// the scaling was added for.
+    /// run at, or the pad is capped short of the reach on HiDPI outputs.
     #[test]
     fn the_pad_takes_the_scale_the_shader_takes() {
         let offset = |scale: f32| 1.5 * scale;
