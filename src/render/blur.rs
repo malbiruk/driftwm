@@ -1215,10 +1215,22 @@ pub(crate) fn process_blur_requests(
                         // out of a texture whose contents are unknown.
                         shared.textures = None;
                         shared.backoff.note_failure();
+                        tracing::debug!(
+                            output = %output_name,
+                            skip_frames = shared.backoff.skip_frames,
+                            "shared backdrop render failed; windows fall back to their own capture"
+                        );
                     }
                 }
                 // The allocation itself failed.
-                None => shared.backoff.note_failure(),
+                None => {
+                    shared.backoff.note_failure();
+                    tracing::debug!(
+                        output = %output_name,
+                        skip_frames = shared.backoff.skip_frames,
+                        "shared backdrop textures could not be allocated"
+                    );
+                }
             }
         }
         // Textures the payoff rule left unrendered still hold the last view's
@@ -1232,6 +1244,11 @@ pub(crate) fn process_blur_requests(
     for (i, req) in blur_requests.iter().enumerate() {
         let win_size = req.screen_rect.size;
         if win_size.w <= 0 || win_size.h <= 0 {
+            tracing::debug!(
+                surface = %req.surface_id,
+                output = %output_name,
+                "no frost: the window has no on-screen extent"
+            );
             needs_recompute.push(false);
             mask_forced.push(false);
             continue;
@@ -1242,6 +1259,11 @@ pub(crate) fn process_blur_requests(
             if let Some(c) = BlurCache::new(renderer, alloc, wrap) {
                 state.render.blur_cache.insert(key.clone(), c);
             } else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    output = %output_name,
+                    "no frost: the blur cache textures could not be allocated"
+                );
                 needs_recompute.push(false);
                 mask_forced.push(false);
                 continue;
@@ -1326,9 +1348,17 @@ pub(crate) fn process_blur_requests(
             // no padding is needed.
             let shared_src = tex_a.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: cannot bind the frost texture for the shared slice"
+                );
                 continue;
             };
             let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: cannot draw into the frost texture for the shared slice"
+                );
                 continue;
             };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
@@ -1350,6 +1380,12 @@ pub(crate) fn process_blur_requests(
                 )
                 .is_ok();
             let _ = frame.finish();
+            if !sliced {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost cleared but unrendered: the shared backdrop slice failed"
+                );
+            }
             rebuilt[i] = sliced;
             continue;
         }
@@ -1361,6 +1397,11 @@ pub(crate) fn process_blur_requests(
         // Entirely off the output: no backdrop exists to capture, and the
         // cached texture is not visible anyway.
         let Some(capture) = backdrop_capture(padded, output_size) else {
+            tracing::debug!(
+                surface = %req.surface_id,
+                output = %output_name,
+                "frost left unrendered: the padded capture is entirely off the output"
+            );
             continue;
         };
 
@@ -1396,6 +1437,11 @@ pub(crate) fn process_blur_requests(
         // Before `ensure_pads`, so the padded pair is not allocated for a
         // capture that will not happen.
         if relocated.is_empty() {
+            tracing::debug!(
+                surface = %req.surface_id,
+                output = %output_name,
+                "frost zeroed: nothing is drawn beneath this surface to capture"
+            );
             zero_texture(renderer, &cache.texture, cache.alloc);
             // The splice below drops the element while this holds, and an
             // element leaving the frame is what damages what it vacated — so
@@ -1406,6 +1452,11 @@ pub(crate) fn process_blur_requests(
         }
 
         if !cache.ensure_pads(renderer, pad_live, wrap) {
+            tracing::debug!(
+                surface = %req.surface_id,
+                ?pad_live,
+                "frost left unrendered: the padded ping-pong pair could not be allocated"
+            );
             continue;
         }
         cache.pads_idle_frames = 0;
@@ -1431,6 +1482,10 @@ pub(crate) fn process_blur_requests(
                 )
                 .is_err()
             {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: the backdrop capture failed"
+                );
                 continue;
             }
         } else {
@@ -1454,10 +1509,19 @@ pub(crate) fn process_blur_requests(
             let Some(mut scratch) =
                 pool.acquire(renderer, capture.clipped.size, wrap, scratch_budget)
             else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    size = ?capture.clipped.size,
+                    "frost left unrendered: no scratch texture for the clipped capture"
+                );
                 continue;
             };
             {
                 let Ok(mut target) = renderer.bind(&mut scratch) else {
+                    tracing::debug!(
+                        surface = %req.surface_id,
+                        "frost left unrendered: cannot bind the clipped capture's scratch"
+                    );
                     continue;
                 };
                 let mut dt =
@@ -1472,6 +1536,10 @@ pub(crate) fn process_blur_requests(
                     )
                     .is_err()
                 {
+                    tracing::debug!(
+                        surface = %req.surface_id,
+                        "frost left unrendered: the clipped backdrop capture failed"
+                    );
                     continue;
                 }
             }
@@ -1514,6 +1582,10 @@ pub(crate) fn process_blur_requests(
         )
         .is_err()
         {
+            tracing::debug!(
+                surface = %req.surface_id,
+                "frost left unrendered: the Kawase passes failed"
+            );
             continue;
         }
 
@@ -1522,9 +1594,17 @@ pub(crate) fn process_blur_requests(
         {
             let blurred = pad_a.clone();
             let Ok(mut target) = renderer.bind(&mut cache.texture) else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: cannot bind the frost texture for the crop"
+                );
                 continue;
             };
             let Ok(mut frame) = renderer.render(&mut target, win_size, Transform::Normal) else {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unrendered: cannot draw into the frost texture for the crop"
+                );
                 continue;
             };
             let _ = frame.clear(Color32F::TRANSPARENT, &[Rectangle::from_size(win_size)]);
@@ -1546,6 +1626,12 @@ pub(crate) fn process_blur_requests(
                 )
                 .is_ok();
             let _ = frame.finish();
+            if !cropped {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost cleared but unrendered: the crop back out of the padded pair failed"
+                );
+            }
             rebuilt[i] = cropped;
         }
     }
@@ -1616,8 +1702,21 @@ pub(crate) fn process_blur_requests(
                     )
                 })
                 .collect();
+            if relocated.is_empty() {
+                // The multiply below would bake an all-zero alpha into the
+                // frost and stamp it fresh, which is an invisible frost that
+                // outlives the frame that caused it.
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost would be masked to nothing: the surface contributed no elements"
+                );
+            }
             {
                 let Ok(mut target) = renderer.bind(&mut cache.mask) else {
+                    tracing::debug!(
+                        surface = %req.surface_id,
+                        "frost left unmasked: cannot bind the mask texture"
+                    );
                     continue;
                 };
                 let mut dt = OutputDamageTracker::new(win_size, output_scale, Transform::Normal);
@@ -1635,6 +1734,10 @@ pub(crate) fn process_blur_requests(
                     )
                     .is_err()
                 {
+                    tracing::debug!(
+                        surface = %req.surface_id,
+                        "frost left unmasked: the alpha-shape capture failed"
+                    );
                     continue;
                 }
             }
@@ -1700,6 +1803,10 @@ pub(crate) fn process_blur_requests(
             // rectangle ignoring the window's alpha shape and its client blur
             // region. Leave it dirty so the next frame rebuilds it.
             if !applied {
+                tracing::debug!(
+                    surface = %req.surface_id,
+                    "frost left unmasked: the alpha multiply failed"
+                );
                 continue;
             }
         }
@@ -1726,6 +1833,14 @@ pub(crate) fn process_blur_requests(
             continue;
         };
         if cache.zeroed {
+            // Nothing is drawn where the frost should be: either the texture
+            // has never held one, or it was zeroed and nothing has rebuilt it
+            // since.
+            tracing::debug!(
+                surface = %req.surface_id,
+                output = %output_name,
+                "no frost element: the frost texture is empty"
+            );
             continue;
         }
 
