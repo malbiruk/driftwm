@@ -12,7 +12,8 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
-  DEPS_APT: libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm-dev libxkbcommon-dev libwayland-dev
+  # Mesa's EGL and its software rasterizer give the pixel tests a surfaceless GL context.
+  DEPS_APT: libseat-dev libdisplay-info-dev libinput-dev libudev-dev libgbm-dev libxkbcommon-dev libwayland-dev libegl1 libegl-mesa0 libgl1-mesa-dri
 
 jobs:
   fmt:

@@ -26,7 +26,27 @@ pub fn lock() -> std::sync::MutexGuard<'static, ()> {
 
 /// A GL renderer on Mesa's surfaceless EGL platform, or `None` when this
 /// machine has no EGL/GLES. `test` names the caller in the printed skip line.
+/// Whether libEGL can be loaded at all. smithay panics when it is missing,
+/// and poisons its loader for every later test, before its `EGLDisplay`
+/// error path gets a chance to report anything.
+fn egl_present() -> bool {
+    // SAFETY: dlopen of a static NUL-terminated name has no other side
+    // effects, and the handle is released right away.
+    unsafe {
+        let lib = libc::dlopen(c"libEGL.so.1".as_ptr(), libc::RTLD_LAZY);
+        if lib.is_null() {
+            return false;
+        }
+        libc::dlclose(lib);
+        true
+    }
+}
+
 pub fn surfaceless_renderer(test: &str) -> Option<GlesRenderer> {
+    if !egl_present() {
+        eprintln!("skipping {test}: libEGL.so.1 is not installed");
+        return None;
+    }
     // SAFETY: nothing else in this process calls `eglGetPlatformDisplay`, so
     // smithay's own bookkeeping owns every display handle and no foreign code
     // can `eglTerminate` one out from under it.
