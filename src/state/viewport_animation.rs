@@ -23,6 +23,7 @@ use smithay::output::Output;
 use smithay::reexports::wayland_server::protocol::wl_surface::WlSurface;
 
 use super::{DriftWm, FocusTarget, output_state};
+use crate::input::constraint::{ConstraintKind, constraint_snapshot, deactivate_constraint};
 
 /// How long after the last pan event momentum auto-launches, covering touchpads
 /// that don't send AxisStop on finger lift.
@@ -133,13 +134,9 @@ impl DriftWm {
     /// to a locked surface reads as a phantom absolute move (snap-back).
     pub(crate) fn pointer_constraint_active(&self) -> bool {
         let pointer = self.seat.get_pointer().unwrap();
-        pointer.current_focus().is_some_and(|focus| {
-            smithay::wayland::pointer_constraints::with_pointer_constraint(
-                &focus.0,
-                &pointer,
-                |c| c.is_some_and(|c| c.is_active()),
-            )
-        })
+        pointer
+            .current_focus()
+            .is_some_and(|focus| constraint_snapshot(&focus.0, &pointer).is_some_and(|s| s.active))
     }
 
     /// Whether `surface` is the focused surface and holds an active lock.
@@ -155,14 +152,10 @@ impl DriftWm {
     /// confine. Only a lock freezes the cursor, so only a lock makes an
     /// absolute motion a position the client never moved to.
     pub(crate) fn pointer_constraint_locked(&self) -> bool {
-        use smithay::wayland::pointer_constraints::PointerConstraint;
         let pointer = self.seat.get_pointer().unwrap();
         pointer.current_focus().is_some_and(|focus| {
-            smithay::wayland::pointer_constraints::with_pointer_constraint(
-                &focus.0,
-                &pointer,
-                |c| c.is_some_and(|c| c.is_active() && matches!(&*c, PointerConstraint::Locked(_))),
-            )
+            constraint_snapshot(&focus.0, &pointer)
+                .is_some_and(|s| s.active && s.kind == ConstraintKind::Locked)
         })
     }
 
@@ -210,17 +203,7 @@ impl DriftWm {
                 return;
             }
             if let Some(focus) = pointer.current_focus() {
-                smithay::wayland::pointer_constraints::with_pointer_constraint(
-                    &focus.0,
-                    &pointer,
-                    |c| {
-                        if let Some(c) = c
-                            && c.is_active()
-                        {
-                            c.deactivate();
-                        }
-                    },
-                );
+                deactivate_constraint(&focus.0, &pointer);
             }
         }
 

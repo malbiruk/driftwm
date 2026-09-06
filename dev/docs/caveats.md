@@ -18,7 +18,9 @@ calloop is single-threaded. A 50ms DNS lookup, a slow file read, a stuck subproc
 
 ## Never re-enter a surface's user-data lock
 
-`compositor::with_states` holds a non-reentrant `Mutex` for the whole closure, and so does everything built on it. Calling one from inside another closure on the *same* surface hangs the compositor with no panic and no log — this is how the compositor froze whenever a game armed a pointer lock carrying a region. Read what you need out of the closure, drop the lock, then act. Nothing enforces this statically; see `smithay-api.md` for the list of APIs that take this lock.
+`compositor::with_states` holds a non-reentrant `Mutex` for the whole closure, and so does everything built on it. Calling one from inside another closure on the *same* surface hangs the compositor with no panic and no log — this is how the compositor froze whenever a game armed a pointer lock carrying a region. Read what you need out of the closure, drop the lock, then act. The pointer-constraint closure has a lint (below); nothing else is enforced statically — see `smithay-api.md` for the list of APIs that take this lock.
+
+Pointer constraints are read through `src/input/constraint.rs` and nowhere else — `with_pointer_constraint` is banned in `clippy.toml`. `constraint_snapshot` returns a plain `ConstraintSnapshot` (kind, active flag, cloned region) and `activate_constraint` / `deactivate_constraint` flip the flag, so nothing runs under the constraint closure's lock but a field copy. That closes one direction only: the lint sees call sites, not the function taken as a value, and calling the helpers from inside a `with_states` or `Window::geometry` closure on the same surface still deadlocks.
 
 ## Client misbehavior must not crash the compositor
 

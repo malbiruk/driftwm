@@ -410,10 +410,8 @@ impl PointerConstraintsHandler for DriftWm {
         pointer: &PointerHandle<Self>,
         location: Point<f64, Logical>,
     ) {
-        use smithay::wayland::pointer_constraints::with_pointer_constraint;
-
-        let is_active =
-            with_pointer_constraint(surface, pointer, |c| c.is_some_and(|c| c.is_active()));
+        let is_active = crate::input::constraint::constraint_snapshot(surface, pointer)
+            .is_some_and(|s| s.active);
         if !is_active {
             return;
         }

@@ -15,4 +15,5 @@ disallowed-methods = [
     { path = "smithay::desktop::space::Space::element_under", reason = "Space holds no window elements — hit-test through DriftWm::element_under / element_under_raw, see dev/docs/caveats.md" },
     { path = "smithay::desktop::space::Space::outputs_for_element", reason = "Space holds no window elements — derive visibility from stage positions and visible_canvas_rect (zoom-aware) via DriftWm::mark_dirty_for_surface" },
     { path = "smithay::desktop::wayland::window::Window::bbox", reason = "excludes popups, so overhanging popups get culled, frame-throttled, and missed by hit-tests — use Window::bbox_with_popups / DriftWm::window_bbox_with_popups, see dev/docs/caveats.md" },
+    { path = "smithay::wayland::pointer_constraints::with_pointer_constraint", reason = "the closure holds the surface's user-data mutex, and re-locking it inside (window geometry, with_states) hangs the compositor — read a ConstraintSnapshot through src/input/constraint.rs instead, see dev/docs/caveats.md" },
 ]

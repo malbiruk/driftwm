@@ -1,4 +1,5 @@
 mod actions;
+pub(crate) mod constraint;
 pub(crate) mod gestures;
 pub(crate) mod keyboard;
 mod pointer;
@@ -19,7 +20,6 @@ use smithay::{
 use smithay::desktop::Window;
 use smithay::desktop::space::SpaceElement;
 use smithay::reexports::wayland_server::Resource;
-use smithay::wayland::pointer_constraints::{PointerConstraint, with_pointer_constraint};
 use smithay::wayland::seat::WaylandFocus;
 
 use smithay::utils::Logical;
@@ -27,6 +27,9 @@ use smithay::wayland::compositor::RegionAttributes;
 
 use std::rc::Rc;
 
+use self::constraint::{
+    ConstraintKind, activate_constraint, constraint_snapshot, deactivate_constraint,
+};
 use crate::decorations::{DecorationHit, DecorationKey};
 use crate::state::{DriftWm, FocusTarget, PickTarget, StageWindow, SuspendedWindow};
 use driftwm::canvas::{
@@ -156,8 +159,8 @@ where
 /// back out.
 ///
 /// Reads the surface's user data through `Window::geometry`, so it must never
-/// be called from inside a `with_states` or `with_pointer_constraint` closure
-/// on the same surface — that mutex is not re-entrant.
+/// be called from inside a `with_states` closure on the same surface — that
+/// mutex is not re-entrant.
 pub(crate) fn window_origin_for_surface(
     state: &DriftWm,
     surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
@@ -309,9 +312,8 @@ impl DriftWm {
         let Some(focus) = pointer.current_focus() else {
             return false;
         };
-        with_pointer_constraint(&focus.0, &pointer, |c| {
-            c.is_some_and(|c| c.is_active() && matches!(&*c, PointerConstraint::Locked(_)))
-        })
+        constraint_snapshot(&focus.0, &pointer)
+            .is_some_and(|s| s.active && s.kind == ConstraintKind::Locked)
     }
 
     /// Process a single input event from any backend (winit, libinput, etc).
@@ -708,13 +710,7 @@ impl DriftWm {
         let focus_changed = old_focus.as_ref().map(|f| &f.0) != new_focus.as_ref().map(|f| &f.0);
 
         if focus_changed && let Some(old) = &old_focus {
-            with_pointer_constraint(&old.0, &pointer, |c| {
-                if let Some(c) = c
-                    && c.is_active()
-                {
-                    c.deactivate();
-                }
-            });
+            deactivate_constraint(&old.0, &pointer);
         }
 
         self.maybe_activate_pointer_constraint();
@@ -735,22 +731,17 @@ impl DriftWm {
             return;
         };
 
-        // `with_pointer_constraint` and `window_origin_for_surface` both lock the
-        // surface's mutex, so the region check can't run inside this closure —
-        // read the region out first, then check and activate below. Outer `None`
-        // means nothing to arm (no constraint, or already active); inner `None`
-        // means the constraint has no region and arms anywhere.
-        let Some(arming_region) = with_pointer_constraint(&focus.0, &pointer, |constraint| {
-            let constraint = constraint?;
-            if constraint.is_active() {
-                return None;
-            }
-            Some(constraint.region().cloned())
-        }) else {
+        // Reading the constraint and `window_origin_for_surface` both lock the
+        // surface's mutex, so the region check runs against a snapshot taken
+        // first rather than against the live constraint.
+        let Some(snapshot) = constraint_snapshot(&focus.0, &pointer) else {
             return;
         };
+        if snapshot.active {
+            return;
+        }
 
-        if let Some(region) = arming_region {
+        if let Some(region) = snapshot.region {
             let pointer_canvas = pointer.current_location();
             let Some(surface_origin) = window_origin_for_surface(self, &focus.0) else {
                 return;
@@ -764,11 +755,7 @@ impl DriftWm {
         // Nothing between the two calls dispatches or runs client code, so this
         // is still the same, inactive constraint — and `activate` is idempotent
         // regardless.
-        with_pointer_constraint(&focus.0, &pointer, |constraint| {
-            if let Some(constraint) = constraint {
-                constraint.activate();
-            }
-        });
+        activate_constraint(&focus.0, &pointer);
     }
 
     /// Send a `wl_pointer.motion` and record what the client was told, so
@@ -1012,9 +999,8 @@ impl DriftWm {
 
         // Pointer lock: freeze position, only send relative motion
         if let Some(focus) = pointer.current_focus() {
-            let locked = with_pointer_constraint(&focus.0, &pointer, |c| {
-                c.is_some_and(|c| c.is_active() && matches!(&*c, PointerConstraint::Locked(_)))
-            });
+            let locked = constraint_snapshot(&focus.0, &pointer)
+                .is_some_and(|s| s.active && s.kind == ConstraintKind::Locked);
             if locked {
                 let origin = window_origin_for_surface(self, &focus.0).unwrap_or(old_canvas);
                 pointer.relative_motion(
@@ -1039,16 +1025,11 @@ impl DriftWm {
         // constraint can never re-establish.
         let confined: Option<(FocusTarget, Option<RegionAttributes>)> =
             pointer.current_focus().and_then(|focus| {
-                let region = with_pointer_constraint(&focus.0, &pointer, |c| {
-                    let c = c?;
-                    if !c.is_active() {
-                        return None;
-                    }
-                    match &*c {
-                        PointerConstraint::Confined(confine) => Some(confine.region().cloned()),
-                        _ => None,
-                    }
-                })?;
+                let snapshot = constraint_snapshot(&focus.0, &pointer)?;
+                if !snapshot.active || snapshot.kind != ConstraintKind::Confined {
+                    return None;
+                }
+                let region = snapshot.region;
                 // A confine only restricts motion while the pointer is inside its
                 // region; if it's currently outside, leave this motion free so it
                 // can move back in — the same gate activation uses.
