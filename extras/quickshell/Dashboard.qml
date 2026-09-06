@@ -41,12 +41,29 @@ PanelWindow {
 
         // The tile block is centered with its column gap equal to the side
         // margins; the tray and the footer buttons' text line up with its edges.
+        // Value columns are sized from the widest value a tile can show, not
+        // the current ones, so nothing shifts as numbers change.
         RowLayout {
             id: tiles
             readonly property real leftLabel: Math.max(battery.labelWidth, network.labelWidth, brightness.labelWidth, cpu.labelWidth)
             readonly property real rightLabel: Math.max(keyboard.labelWidth, bluetooth.labelWidth, volume.labelWidth, ram.labelWidth)
-            readonly property real leftWidth: leftLabel + Theme.labelGap + Math.max(battery.valueWidth, network.valueWidth, brightness.valueWidth, cpu.valueWidth)
-            readonly property real rightWidth: rightLabel + Theme.labelGap + Math.max(keyboard.valueWidth, bluetooth.valueWidth, volume.valueWidth, ram.valueWidth)
+            readonly property real valueColumn: Math.max(widestPercent.width, widestWord.width)
+            readonly property real leftWidth: leftLabel + Theme.labelGap + valueColumn
+            readonly property real rightWidth: rightLabel + Theme.labelGap + valueColumn
+
+            TextMetrics {
+                id: widestPercent
+                text: "100%"
+                font.pixelSize: Theme.fontSize
+                font.family: Theme.fontFamily
+            }
+
+            TextMetrics {
+                id: widestWord
+                text: "wired"
+                font.pixelSize: Theme.fontSize
+                font.family: Theme.fontFamily
+            }
 
             Layout.alignment: Qt.AlignHCenter
             Layout.fillWidth: false

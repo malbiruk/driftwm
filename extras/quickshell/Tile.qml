@@ -11,11 +11,10 @@ Item {
     // The label column's width, shared across a column of tiles so values line up.
     property real labelColumn: labelWidth
     readonly property real labelWidth: labelText.implicitWidth
-    readonly property real valueWidth: valueText.implicitWidth
     signal clicked()
 
     implicitHeight: 24
-    implicitWidth: labelColumn + Theme.labelGap + valueWidth
+    implicitWidth: labelColumn + Theme.labelGap + valueText.implicitWidth
 
     Rectangle {
         anchors.fill: parent
