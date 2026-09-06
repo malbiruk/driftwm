@@ -319,13 +319,18 @@ impl DriftWm {
         use smithay::wayland::compositor::get_parent;
         use smithay::wayland::shell::wlr_layer::KeyboardInteractivity;
 
-        // The pointer's focus may be a subsurface; resolve to the root surface
-        // that the layer is keyed by.
+        // The pointer's focus may be a subsurface or one of the layer's own
+        // popups; resolve to the root surface the layer is keyed by. A popup
+        // left unresolved would read as a click elsewhere, dropping the
+        // on-demand focus and tearing the popup's grab down with it.
         let surface = surface.map(|mut s| {
             while let Some(parent) = get_parent(&s) {
                 s = parent;
             }
-            s
+            match self.popups.find_popup(&s) {
+                Some(kind) => smithay::desktop::find_popup_root_surface(&kind).unwrap_or(s),
+                None => s,
+            }
         });
 
         if let Some(surface) = surface

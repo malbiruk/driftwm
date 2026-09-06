@@ -44,6 +44,7 @@ mod input_dispatch;
 mod interact_min;
 mod layer_destroy_focus;
 mod layer_frame_gating;
+mod layer_popup_focus;
 mod opacity;
 mod outer_gap;
 mod pass_mouse;
