@@ -467,7 +467,21 @@ from [`config.reference.toml`](config.reference.toml).
 ## Example setup
 
 driftwm is just a compositor — everything else is standard Wayland tooling.
-Here are some tools that work well with it:
+A few ways to get a desktop going on top of it:
+
+**[`extras/`](extras/)** is an installable starting point — a driftwm
+config, a [Quickshell](https://quickshell.org/) "home dashboard" (time, battery,
+Wi-Fi, Bluetooth, audio, brightness, CPU/RAM, media, tray, power menu) pinned at
+the canvas origin, GLSL shader wallpapers, and helper scripts such as a fuzzel
+spotlight that searches open windows, suspended windows, and apps together, wired
+into a curated setup. Run `extras/install.sh` to try it, or steal pieces.
+
+**Full Wayland shells** like **noctalia**, **wayle**, and **dank-material-shell**
+are compositor-agnostic and give you a complete desktop out of the box (`driftwm`
+supports the `wlr-layer-shell` protocol), just without compositor-specific features
+— a good newcomer-friendly option.
+
+**Or assemble your own** from standard pieces:
 
 - **waybar** — Status bar / taskbar
 - **crystal-dock** — macOS-style dock
@@ -479,21 +493,13 @@ Here are some tools that work well with it:
 - **wlr-randr / wdisplays** — Output configuration
 - **COSMIC Settings** — Wi-Fi, Bluetooth, sound (or **nm-applet** + **blueman** + **pavucontrol**)
 
-Compositor-agnostic full Wayland shells like **noctalia**, **wayle**, and **dank-material-shell** should work too (`driftwm` supports `wlr-layer-shell` protocol) but without compositor-specific features.
-
-The [`extras/`](extras/) directory contains a complete setup — driftwm config,
-GLSL shader wallpapers, Python widgets (clock, calendar, system stats, power
-menu), waybar with taskbar/tray, a fuzzel spotlight script that lists open
-windows, suspended windows, and installed apps together, and window rules tying
-it all together. Use it as a starting point or steal pieces.
-
 ## Community
 
 - [driftwm-desktop](https://github.com/C10udburst/driftwm-desktop) — A layer for displaying `~/Desktop` contents on canvas as draggable icons.
+- [Driftmap](https://github.com/rywby-dot/driftwm-minimap) — interactive overlay minimap for driftwm
 - [driftwm-settings](https://github.com/wwmaxik/driftwm-settings) — GTK4 GUI config editor
 - [driftwm-noctalia](https://github.com/youssefvdel/driftwm-noctalia) — noctalia shell fork adapted for driftwm
 - [Just Enough Shell](https://github.com/ORFLEM/just_enough_shell) — minimal QuickShell desktop shell, driftwm-focused
-- [Driftmap](https://github.com/rywby-dot/driftwm-minimap) — interactive overlay minimap for driftwm
 - [Gallery](https://github.com/malbiruk/driftwm/discussions/143) — community shaders & rices, share your own
 
 ## Contributing

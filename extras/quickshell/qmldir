@@ -1,0 +1,22 @@
+# A qmldir replaces the implicit directory import, so every type is listed.
+singleton Theme 1.0 Theme.qml
+singleton Popups 1.0 Popups.qml
+Battery 1.0 Battery.qml
+Bluetooth 1.0 Bluetooth.qml
+Brightness 1.0 Brightness.qml
+Clock 1.0 Clock.qml
+Cpu 1.0 Cpu.qml
+Dashboard 1.0 Dashboard.qml
+FlatButton 1.0 FlatButton.qml
+KbdLayout 1.0 KbdLayout.qml
+ListRow 1.0 ListRow.qml
+MonthView 1.0 MonthView.qml
+Mpris 1.0 Mpris.qml
+Network 1.0 Network.qml
+Popover 1.0 Popover.qml
+PowerMenu 1.0 PowerMenu.qml
+Ram 1.0 Ram.qml
+ThinSlider 1.0 ThinSlider.qml
+Tile 1.0 Tile.qml
+Tray 1.0 Tray.qml
+Volume 1.0 Volume.qml

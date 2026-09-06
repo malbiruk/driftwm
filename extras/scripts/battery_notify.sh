@@ -1,6 +1,5 @@
 #!/bin/bash
 # Battery notification daemon — polls every 60s, notifies at threshold crossings.
-# Uses same thresholds and cooldown approach as the sway status_bar_info.sh script.
 
 BATTERY_LOW=15
 BATTERY_CRITICAL=5
