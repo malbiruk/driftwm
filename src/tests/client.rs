@@ -227,12 +227,17 @@ pub struct Window {
 pub struct LayerSurface {
     pub qh: QueueHandle<State>,
     pub spbm: WpSinglePixelBufferManagerV1,
+    pub shm: WlShm,
 
     pub surface: WlSurface,
     pub layer_surface: ZwlrLayerSurfaceV1,
     pub viewport: WpViewport,
     pub configures_received: Vec<(u32, LayerConfigure)>,
     pub close_requested: bool,
+
+    /// The pool and buffer behind the last [`LayerSurface::attach_shm_buffer`],
+    /// held so the compositor keeps a live texture to import.
+    shm_buffer: Option<(std::fs::File, WlShmPool, WlBuffer)>,
 
     pub configures_looked_at: usize,
 }
@@ -808,12 +813,15 @@ impl State {
         let layer_surface = LayerSurface {
             qh: self.qh.clone(),
             spbm: self.spbm.clone().unwrap(),
+            shm: self.shm.clone().unwrap(),
 
             surface,
             layer_surface,
             viewport,
             configures_received: Vec::new(),
             close_requested: false,
+
+            shm_buffer: None,
 
             configures_looked_at: 0,
         };
@@ -1350,6 +1358,29 @@ impl LayerSurface {
     pub fn attach_new_buffer(&self) {
         let buffer = self.spbm.create_u32_rgba_buffer(0, 0, 0, 0, &self.qh, ());
         self.surface.attach(Some(&buffer), 0, 0);
+    }
+
+    /// [`Window::attach_shm_buffer`] for a layer surface. The single-pixel
+    /// buffer above is fully transparent, and the blur mask thresholds surface
+    /// alpha — so a scenario that needs a layer surface to actually be frosted
+    /// has to paint real texels.
+    pub fn attach_shm_buffer(&mut self, size: (i32, i32), pixels: &[u8]) {
+        let (w, h) = size;
+        let stride = w * 4;
+        assert_eq!(
+            pixels.len(),
+            (stride * h) as usize,
+            "an Argb8888 buffer of {w}x{h} texels is {} bytes",
+            stride * h
+        );
+        let file = shm_file(pixels);
+        let pool = self
+            .shm
+            .create_pool(file.as_fd(), pixels.len() as i32, &self.qh, ());
+        let buffer = pool.create_buffer(0, w, h, stride, wl_shm::Format::Argb8888, &self.qh, ());
+        self.surface.attach(Some(&buffer), 0, 0);
+        self.surface.damage_buffer(0, 0, w, h);
+        self.shm_buffer = Some((file, pool, buffer));
     }
 
     pub fn attach_null(&self) {
