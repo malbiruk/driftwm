@@ -13,7 +13,7 @@ use smithay::{
     },
     desktop::{WindowSurfaceType, layer_map_for_output},
     input::pointer::{MotionEvent, RelativeMotionEvent},
-    utils::{Point, SERIAL_COUNTER, Serial},
+    utils::{Point, SERIAL_COUNTER, Serial, Transform},
     wayland::shell::wlr_layer::Layer as WlrLayer,
 };
 
@@ -135,6 +135,8 @@ fn cursor_edge_pan_velocity(
 /// event scales its own coordinates against the panel-native size — so the
 /// inverse transform recovers that size to sample against, and
 /// `transform_point_in` maps the sampled point back into the rotated frame.
+/// A render-only transform (the nested backend's) is skipped, since it isn't
+/// a rotation of the panel.
 pub(crate) fn event_screen_pos<I, E>(
     output: &smithay::output::Output,
     output_geo_size: smithay::utils::Size<i32, smithay::utils::Logical>,
@@ -144,7 +146,12 @@ where
     I: InputBackend,
     E: AbsolutePositionEvent<I>,
 {
-    let transform = output.current_transform();
+    let render_only = crate::state::output_state(output).render_only_transform;
+    let transform = if render_only {
+        Transform::Normal
+    } else {
+        output.current_transform()
+    };
     let size = transform.invert().transform_size(output_geo_size);
     transform.transform_point_in(event.position_transformed(size), &size.to_f64())
 }

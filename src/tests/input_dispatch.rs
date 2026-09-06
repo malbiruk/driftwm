@@ -12,7 +12,7 @@ use std::time::Duration;
 use driftwm::config::{BTN_LEFT, BTN_MIDDLE, Config};
 use smithay::backend::input::ButtonState;
 use smithay::desktop::Window;
-use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, SERIAL_COUNTER, Transform};
 
 use crate::input::is_interaction_tail;
 use crate::state::StageWindow;
@@ -200,6 +200,54 @@ fn absolute_motion_maps_screen_through_camera_and_zoom() {
         f.state().seat.get_pointer().unwrap().current_location(),
         Point::from((620.0, -20.0)),
         "the pointer sits where the camera and zoom put the reported position"
+    );
+}
+
+/// A physical panel mounted flipped mirrors where a finger or cursor lands, so
+/// `Flipped180` maps absolute input to `(x, h - y)`.
+#[test]
+fn a_flipped_panel_mirrors_absolute_input_vertically() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    output.change_current_state(None, Some(Transform::Flipped180), None, None);
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.camera_target = None;
+        os.zoom = 1.0;
+        os.zoom_target = None;
+    });
+
+    pointer_to_screen(&mut f, &FakeDevice::mouse(), Point::from((100.0, 200.0)));
+
+    assert_eq!(
+        f.state().seat.get_pointer().unwrap().current_location(),
+        Point::from((100.0, 880.0)),
+        "a rotated panel's transform must mirror the reported position"
+    );
+}
+
+/// The nested backend's `Flipped180` only cancels the renderer's Y-flip; it is
+/// not a rotation of the panel, so absolute input must map through as if the
+/// transform were `Normal`.
+#[test]
+fn a_render_only_transform_leaves_absolute_input_unrotated() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    output.change_current_state(None, Some(Transform::Flipped180), None, None);
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.camera_target = None;
+        os.zoom = 1.0;
+        os.zoom_target = None;
+    });
+    crate::state::output_state(&output).render_only_transform = true;
+
+    pointer_to_screen(&mut f, &FakeDevice::mouse(), Point::from((100.0, 200.0)));
+
+    assert_eq!(
+        f.state().seat.get_pointer().unwrap().current_location(),
+        Point::from((100.0, 200.0)),
+        "a render-only transform must not be read as a rotation of absolute input"
     );
 }
 

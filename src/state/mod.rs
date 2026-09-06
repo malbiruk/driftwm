@@ -447,6 +447,10 @@ pub struct OutputState {
     /// and scale and whose transform is the renderer's Y-flip compensation.
     /// Config reload skips those three here and applies position only.
     pub backend_owned_mode: bool,
+    /// The transform on this output is a render-space artifact — the nested
+    /// backend's Y-flip compensation — not a rotation of the panel, so absolute
+    /// input positions map as if it were `Normal`.
+    pub render_only_transform: bool,
 }
 
 pub fn init_output_state(
@@ -481,6 +485,7 @@ pub fn init_output_state(
             fullscreen_return: None,
             active_bookmark: None,
             backend_owned_mode: false,
+            render_only_transform: false,
         })
     });
 }

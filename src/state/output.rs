@@ -554,6 +554,7 @@ mod tests {
             fullscreen_return: None,
             active_bookmark: None,
             backend_owned_mode: false,
+            render_only_transform: false,
         }
     }
 

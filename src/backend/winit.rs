@@ -79,8 +79,13 @@ pub fn init_winit(
     data.output_connected(&output, &std::collections::HashMap::new());
     // Mode and scale follow the host window's resizes, and the transform above
     // is the renderer's Y-flip compensation — none of the three is
-    // config-derived, so config reload must leave them alone.
-    crate::state::output_state(&output).backend_owned_mode = true;
+    // config-derived, so config reload must leave them alone, and
+    // render_only_transform keeps input from reading it as a rotation.
+    {
+        let mut os = crate::state::output_state(&output);
+        os.backend_owned_mode = true;
+        os.render_only_transform = true;
+    }
 
     // Notify output management clients about the winit output
     {

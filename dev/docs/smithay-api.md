@@ -431,7 +431,7 @@ driftwm's synthetic backend for tests lives in `src/tests/input_backend.rs`.
 
 ### Backend
 
-- **Winit backend needs `Transform::Flipped180`** on the output — EGL Y-axis is inverted relative to Wayland coordinates.
+- **Winit backend needs `Transform::Flipped180`** on the output — EGL Y-axis is inverted relative to Wayland coordinates. Input must not treat it as a rotation, which is what `OutputState::render_only_transform` gates.
 - **`Transform::Normal` for udev** — DRM handles orientation natively.
 - **WAYLAND_DISPLAY must NOT be set before `winit::init()`** — winit connects to the parent compositor; setting our socket first causes a deadlock.
 - **Backend on state** — winit backend stored as `Option<WinitGraphicsBackend<GlesRenderer>>` on DriftWm. Timer closure uses take/put pattern to split borrows. Required for DmabufHandler to access renderer.
