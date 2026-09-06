@@ -538,3 +538,72 @@ fn a_lock_stays_disarmed_until_the_pointer_enters_its_region() {
         "the lock must arm once the pointer moves inside its region"
     );
 }
+
+/// A confine's region is surface-local like a lock's, but unlike a lock the
+/// cursor inside it really moves — so the compositor has to hold it in the
+/// region itself. Refused, not clamped: clamping to the region's bounding box
+/// can slide the cursor onto another output, where the confine could never
+/// re-establish.
+#[test]
+fn a_confine_with_a_region_holds_the_cursor_inside_it() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let (surface, _) = shadowed_window(&mut f, id);
+    point_at_window_center(&mut f, id);
+
+    // Reaches less than `SHADOW` from the pointer on every side, so measuring
+    // from the geometry origin instead of the surface origin would read it
+    // as outside.
+    let region = (
+        CENTER_IN_SURFACE.0 - SHADOW.x + 1,
+        CENTER_IN_SURFACE.1 - SHADOW.y + 1,
+        SHADOW.x * 2 - 2,
+        SHADOW.y * 2 - 2,
+    );
+    let _confine = f
+        .client(id)
+        .confine_pointer_with_region(&surface, &[region]);
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().pointer_constraint_active() && !f.state().pointer_constraint_locked(),
+        "a confine whose region covers the pointer must arm and must not read \
+         as a lock, or this scenario tests nothing"
+    );
+
+    // Past the region's right edge, well short of the window's. A confined move
+    // is refused for leaving the surface *or* the region, so a destination off
+    // the window would be refused even by a compositor that lost the region.
+    let out_of_region = Point::from((40.0, 0.0));
+    assert!(
+        f64::from(CENTER_IN_SURFACE.0) + out_of_region.x > f64::from(region.0 + region.2)
+            && f64::from(CENTER_IN_SURFACE.0) + out_of_region.x < f64::from(SHADOW.x + GEOMETRY.0),
+        "the refused destination must land outside the region but still inside \
+         the window, or this scenario tests nothing"
+    );
+
+    let start = f.state().seat.get_pointer().unwrap().current_location();
+    pointer_relative_motion(&mut f, &FakeDevice::mouse(), out_of_region);
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().seat.get_pointer().unwrap().current_location(),
+        start,
+        "a move out of the confine's region must be refused outright, not \
+         clamped to the region's edge"
+    );
+
+    // The refusal left the cursor at `start`, so this move sets off from the
+    // region's centre exactly like the last one did.
+    let in_region = Point::from((10.0, 10.0));
+    pointer_relative_motion(&mut f, &FakeDevice::mouse(), in_region);
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.state().seat.get_pointer().unwrap().current_location(),
+        start + in_region,
+        "a move that stays inside the region must go through untouched"
+    );
+}

@@ -645,6 +645,17 @@ impl Client {
         self.state.lock_pointer_with_region(surface, rects)
     }
 
+    /// Confine the pointer to `surface`, restricted to a region given as
+    /// surface-local `(x, y, w, h)` rects. The confine arms only while the
+    /// pointer is inside the region, and then holds the cursor inside it.
+    pub fn confine_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpConfinedPointerV1 {
+        self.state.confine_pointer_with_region(surface, rects)
+    }
+
     /// Send `ext_session_lock_manager_v1.lock`, entering
     /// `SessionLockHandler::lock` on the compositor. The created lock object
     /// is tracked as this client's most recent [`Lock`]; its `locked`/
@@ -1008,6 +1019,26 @@ impl State {
         );
         region.destroy();
         lock
+    }
+
+    pub fn confine_pointer_with_region(
+        &mut self,
+        surface: &WlSurface,
+        rects: &[(i32, i32, i32, i32)],
+    ) -> ZwpConfinedPointerV1 {
+        let constraints = self.pointer_constraints.as_ref().unwrap();
+        let pointer = self.pointer.as_ref().unwrap();
+        let region = self.region_from(rects);
+        let confine = constraints.confine_pointer(
+            surface,
+            pointer,
+            Some(&region),
+            Lifetime::Persistent,
+            &self.qh,
+            (),
+        );
+        region.destroy();
+        confine
     }
 
     pub fn lock_session(&mut self) {
