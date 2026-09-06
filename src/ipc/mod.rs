@@ -201,6 +201,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Move { window, to } => cmd_move(window, to, state),
         Request::Resize { window, to } => cmd_resize(window, to, state),
         Request::Opacity { window, value } => cmd_opacity(window, value, state),
+        Request::Pin { window, value } => cmd_pin(window, value, state),
         Request::Close(sel) => cmd_close(sel, state),
         Request::Suspend(sel) => cmd_suspend(sel, state),
         Request::Relaunch(sel) => cmd_relaunch(sel, state),
@@ -223,6 +224,7 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Move { to: Some(_), .. }
             | Request::Resize { to: Some(_), .. }
             | Request::Opacity { value: Some(_), .. }
+            | Request::Pin { value: Some(_), .. }
             | Request::Close(_)
             | Request::Suspend(_)
             | Request::Relaunch(_)
@@ -774,6 +776,45 @@ fn cmd_opacity(window: Option<WindowSelector>, value: Option<f64>, state: &mut D
             Ok(Response::Opacity(v))
         }
     }
+}
+
+/// Screen-pinning as a bool: the scriptable form of `toggle-pin-to-screen`.
+fn cmd_pin(window: Option<WindowSelector>, value: Option<bool>, state: &mut DriftWm) -> Reply {
+    let window = match element_by_selector(state, window.as_ref())? {
+        StageWindow::Client(window) => window,
+        StageWindow::Suspended(_) => return Err("stand-ins can't be pinned".to_string()),
+    };
+    let pinned = state.is_pinned(&window);
+    let Some(value) = value else {
+        return Ok(Response::Pin(pinned));
+    };
+    // Fullscreen holds the pin for its duration — entry stashes it, exit
+    // restores it — so neither direction is settable until the window leaves.
+    if state.is_window_fullscreen(&window) {
+        return Err("fullscreen windows can't be pinned".to_string());
+    }
+    if value == pinned {
+        return Ok(Response::Pin(value));
+    }
+    if value {
+        // Drawn nowhere until its adopt lands, and the reveal then maps it into
+        // a slot a pin would make visually inert.
+        if state.hidden_by_deferred_adopt(&window) {
+            return Err("this window is not on screen yet".to_string());
+        }
+        state.pin_window(&window)?;
+    } else {
+        // Activating is only consistent when the target already holds focus; a
+        // selector can reach any window. Widgets never activate.
+        let activate = state.focused_window().as_ref() == Some(&window) && !window.is_widget();
+        state.unpin_window(&window, activate);
+        // `stage.map` always raises; the render buckets keep a widget painted
+        // below windows either way, but the input hit-tests walk raw stage order.
+        if window.is_widget() {
+            state.enforce_below_windows();
+        }
+    }
+    Ok(Response::Pin(value))
 }
 
 fn cmd_close(sel: Option<WindowSelector>, state: &mut DriftWm) -> Reply {

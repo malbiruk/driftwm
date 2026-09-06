@@ -105,6 +105,20 @@ pub enum Msg {
         #[arg(long)]
         id: Option<u64>,
     },
+    /// Get whether a window is pinned to the screen, or set it with `on`/`off`.
+    ///
+    /// The pin `toggle-pin-to-screen` sets: neither direction moves the window
+    /// visually, and setting the state it already has changes nothing.
+    /// Fullscreen windows and stand-ins are refused.
+    ///
+    /// `--json` reply: `{"Ok":{"Pin":true}}`.
+    Pin {
+        #[arg(value_name = "on|off", value_parser = clap::builder::BoolishValueParser::new())]
+        value: Option<bool>,
+        /// Target this window id.
+        #[arg(long)]
+        id: Option<u64>,
+    },
     /// Suspend the focused window, or one by `app_id` substring or `--id`.
     ///
     /// The same conversion as the `suspend-window` action: the client goes away
@@ -413,6 +427,10 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
                 value: *value,
             }
         }
+        Msg::Pin { value, id } => Request::Pin {
+            window: id.map(WindowSelector::Id),
+            value: *value,
+        },
         Msg::Close { app_id, id } => Request::Close(window_selector(app_id, *id)),
         Msg::Suspend { app_id, id } => Request::Suspend(window_selector(app_id, *id)),
         Msg::Relaunch { app_id, id } => Request::Relaunch(window_selector(app_id, *id)),
@@ -554,6 +572,7 @@ fn print_response(response: Response) {
         Response::Position { x, y } => println!("{x} {y}"),
         Response::Size { width, height } => println!("{width} {height}"),
         Response::Opacity(value) => println!("{value}"),
+        Response::Pin(value) => println!("{value}"),
         Response::Bookmark { x, y } => println!("{x} {y}"),
         Response::Bookmarks(bookmarks) => {
             for (name, [x, y]) in bookmarks {
@@ -873,6 +892,32 @@ mod tests {
                 id: None
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn pin_maps_value_and_id() {
+        assert_eq!(
+            to_request(&Msg::Pin {
+                value: None,
+                id: None
+            })
+            .unwrap(),
+            Request::Pin {
+                window: None,
+                value: None
+            }
+        );
+        assert_eq!(
+            to_request(&Msg::Pin {
+                value: Some(true),
+                id: Some(5)
+            })
+            .unwrap(),
+            Request::Pin {
+                window: Some(WindowSelector::Id(5)),
+                value: Some(true)
+            }
         );
     }
 

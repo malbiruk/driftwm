@@ -75,6 +75,14 @@ pub enum Request {
         #[serde(default)]
         value: Option<f64>,
     },
+    /// Get or set whether a window is pinned to the screen. `window` `None`
+    /// targets the focused window; `value` `None` reads instead of setting it.
+    Pin {
+        #[serde(default)]
+        window: Option<WindowSelector>,
+        #[serde(default)]
+        value: Option<bool>,
+    },
     /// Close a window (the focused one when `None`); errors when nothing matches.
     Close(Option<WindowSelector>),
     /// Suspend a window (the focused one when `None`) — routes through the same
@@ -162,6 +170,8 @@ pub enum Response {
     },
     /// A window's opacity in `0.0`–`1.0`.
     Opacity(f64),
+    /// Whether a window is pinned to the screen.
+    Pin(bool),
     /// A written screenshot: absolute `path` and pixel dimensions.
     Screenshot {
         path: String,
@@ -411,6 +421,18 @@ mod tests {
                 window: Some(WindowSelector::AppId("foot".into())),
                 value: Some(0.75),
             },
+            Request::Pin {
+                window: None,
+                value: None,
+            },
+            Request::Pin {
+                window: Some(WindowSelector::Id(3)),
+                value: Some(true),
+            },
+            Request::Pin {
+                window: Some(WindowSelector::AppId("foot".into())),
+                value: Some(false),
+            },
             Request::Close(None),
             Request::Close(Some(WindowSelector::Id(7))),
             Request::Suspend(None),
@@ -517,6 +539,21 @@ mod tests {
                 value: Some(0.5)
             }
         );
+        // Pin fields both default too: bare `{}` is the focused-window read.
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"Pin":{}}"#).unwrap(),
+            Request::Pin {
+                window: None,
+                value: None
+            }
+        );
+        assert_eq!(
+            serde_json::from_str::<Request>(r#"{"Pin":{"window":5,"value":true}}"#).unwrap(),
+            Request::Pin {
+                window: Some(WindowSelector::Id(5)),
+                value: Some(true)
+            }
+        );
         // Screenshot window target defaults its selector too.
         assert_eq!(
             serde_json::from_str::<ScreenshotTarget>(r#"{"Window":{}}"#).unwrap(),
@@ -594,6 +631,7 @@ mod tests {
                 height: 600,
             }),
             Ok(Response::Opacity(0.5)),
+            Ok(Response::Pin(true)),
             Ok(Response::Bookmark {
                 x: 100.0,
                 y: -200.0,

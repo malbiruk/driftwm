@@ -48,6 +48,7 @@ mod layer_popup_focus;
 mod opacity;
 mod outer_gap;
 mod pass_mouse;
+mod pin_ipc;
 mod pinned_phantom;
 mod pointer_constraints;
 mod pointer_motion_dedup;

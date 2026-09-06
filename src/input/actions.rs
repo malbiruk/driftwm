@@ -1,10 +1,9 @@
 use smithay::{
     input::keyboard::Layout,
-    utils::{Logical, Point, Rectangle, Size},
+    utils::{Logical, Point, Size},
     wayland::seat::WaylandFocus,
 };
 
-use crate::state::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
 use crate::state::{DriftWm, HomeReturn, NavZoom, StageWindow};
 use driftwm::canvas::{self};
 use driftwm::config::{Action, LayoutSwitch, Modifiers, SendEvents, TrackpadState};
@@ -727,106 +726,13 @@ impl DriftWm {
         else {
             return;
         };
-        // The on-screen rect the window is drawn at right now, read before the
-        // mutation flips which space "on screen" is derived from. At zoom != 1
-        // the flip is a `1/z` scale jump anchored at the content-box top-left,
-        // and this is the picture the new entry grows out of. Resolved against
-        // the same output each branch below uses.
-        let output = match self.stage.pin_of(&window) {
-            Some(site) => self.output_by_name(&site.output),
-            None => self.output_for_window(&window),
-        };
-        let pre_toggle = output.and_then(|output| self.window_screen_rect_on(&window, &output));
-        // Pin/unpin flips the chase space (canvas ↔ screen); an in-flight entry
-        // would keep a stale-space visual, so drop it — along with any parked
-        // pan and stashed capture belonging to the transition it supersedes.
-        self.cancel_window_animation(&window);
-        // The pin decides where the window lives from here on.
-        self.drop_owed_recenter(&window);
-        if let Some(site) = self.stage.take_pin(&window) {
-            // Unpin: convert the fixed screen position back to a canvas
-            // location at the current camera/zoom — no visual jump.
-            if let Some(output) = self.output_by_name(&site.output) {
-                let (camera, zoom) = {
-                    let os = crate::state::output_state(&output);
-                    (os.camera, os.zoom)
-                };
-                let canvas = driftwm::canvas::screen_to_canvas(
-                    driftwm::canvas::ScreenPos(site.screen_pos.to_f64()),
-                    camera,
-                    zoom,
-                )
-                .0
-                .to_i32_round();
-                self.map_window(window.clone(), canvas, true);
-                // Converting the pre-toggle screen rect back through the same
-                // camera reproduces it exactly on the first frame; the chase then
-                // runs it out to the canvas rect the camera magnifies by `1/z`.
-                // Inside the output guard on purpose: without an output there is
-                // no camera to convert with, and the window was never re-mapped.
-                if let Some(screen) = pre_toggle {
-                    let seed = Rectangle::new(
-                        Point::from((
-                            camera.x + screen.loc.x / zoom,
-                            camera.y + screen.loc.y / zoom,
-                        )),
-                        Size::from((screen.size.w / zoom, screen.size.h / zoom)),
-                    );
-                    self.begin_geometry_animation_seeded(
-                        &window,
-                        seed,
-                        AnimSpace::Canvas,
-                        None,
-                        GeometryRole::Normal,
-                        ContentPolicy::Cap,
-                        None,
-                    );
-                }
-            }
+        if self.stage.pin_of(&window).is_some() {
+            self.unpin_window(&window, true);
         } else {
-            // Pin at the window's current on-screen position on its output.
-            let Some(output) = self.output_for_window(&window) else {
-                return;
-            };
-            let Some(loc) = self.stage.position_of(&window) else {
-                return;
-            };
-            let (camera, zoom) = {
-                let os = crate::state::output_state(&output);
-                (os.camera, os.zoom)
-            };
-            let screen = driftwm::canvas::canvas_to_screen(
-                driftwm::canvas::CanvasPos(loc.to_f64()),
-                camera,
-                zoom,
-            )
-            .0;
-            let screen_pos = Point::from((screen.x.round() as i32, screen.y.round() as i32));
-            // Pinned windows are out of the focus cycle.
-            self.stage.drop_from_focus_history(&window);
-            self.stage.set_pin(
-                &window,
-                driftwm::stage::PinnedSite {
-                    output: output.name(),
-                    screen_pos,
-                },
-            );
-            // The entry chases `screen_pos` at the window's real size under zoom
-            // 1, so a capture taken at zoom 0.5 grows into it from half size.
-            if let Some(seed) = pre_toggle {
-                self.begin_geometry_animation_seeded(
-                    &window,
-                    seed,
-                    AnimSpace::Screen(output.name()),
-                    None,
-                    GeometryRole::Normal,
-                    ContentPolicy::Cap,
-                    None,
-                );
-            }
+            // A window with no output to pin to stays as it was; the keybinding
+            // has no one to tell.
+            let _ = self.pin_window(&window);
         }
-        // The hit-test path changed (pinned vs canvas); recompute pointer focus.
-        self.refresh_pointer_focus();
     }
 
     /// Override `[input.trackpad]`'s send-events mode for the rest of the

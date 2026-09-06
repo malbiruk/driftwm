@@ -57,6 +57,7 @@ driftwm msg --json focus --id 5
 | [`resize`](#driftwm-msg-resize) | Get a window's size, or resize it to `<width> <height>` |
 | [`close`](#driftwm-msg-close) | Close the focused window, or one by `app_id` substring or `--id` |
 | [`opacity`](#driftwm-msg-opacity) | Get a window's opacity, or set it with `<value>` — `0` transparent, `1` opaque |
+| [`pin`](#driftwm-msg-pin) | Get whether a window is pinned to the screen, or set it with `on`/`off` |
 | [`suspend`](#driftwm-msg-suspend) | Suspend the focused window, or one by `app_id` substring or `--id` |
 | [`relaunch`](#driftwm-msg-relaunch) | Relaunch a suspended window: the focused stand-in, or one by `app_id` substring or `--id` |
 | [`camera`](#driftwm-msg-camera) | Get the camera position, or pan the viewport to `<x> <y>` (canvas point, Y-up) |
@@ -190,6 +191,25 @@ A get returns the value the window draws at right now — the `[decorations]` fo
 
 ```bash
 driftwm msg opacity 0.85 --id 5
+```
+
+#### `driftwm msg pin`
+
+```
+driftwm msg pin [OPTIONS] [on|off]
+```
+
+Get whether a window is pinned to the screen, or set it with `on`/`off`.
+
+The pin `toggle-pin-to-screen` sets: neither direction moves the window visually, and setting the state it already has changes nothing. Fullscreen windows and stand-ins are refused.
+
+`--json` reply: `{"Ok":{"Pin":true}}`.
+
+- `--id <ID>` — Target this window id
+
+```bash
+driftwm msg pin
+driftwm msg pin on --id 5
 ```
 
 #### `driftwm msg suspend`

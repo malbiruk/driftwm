@@ -8,19 +8,20 @@ JSON, so any language can speak it directly.
 ## `driftwm msg`
 
 Run `driftwm msg <command>` from inside a driftwm session. The commands —
-`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `close`, `suspend`,
-`relaunch`, `layout`, `action`, `bookmark`, `screenshot`, `state`, `subscribe`,
-and `debug-counters` — with their arguments, flags, and JSON reply shapes are
-documented in the generated [CLI reference](cli.md); `driftwm msg <command> --help`
-prints the same for one command. The conventions they share follow below.
+`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `pin`, `close`,
+`suspend`, `relaunch`, `layout`, `action`, `bookmark`, `screenshot`, `state`,
+`subscribe`, and `debug-counters` — with their arguments, flags, and JSON reply
+shapes are documented in the generated [CLI reference](cli.md);
+`driftwm msg <command> --help` prints the same for one command. The conventions
+they share follow below.
 
-`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, and `bookmark` read when
-given no arguments and write when given arguments. The others don't follow that rule:
-`action` requires its arguments, `close`/`suspend`/`relaunch` act on the focused
-window when given no selector, and `layout`, `screenshot`, `state`, `subscribe`,
-and `debug-counters` need no arguments at all. A command that fails (bad value,
-no focused window, no match) prints an error to stderr and exits non-zero, so
-scripts can branch on it.
+`camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `pin`, and `bookmark`
+read when given no arguments and write when given arguments. The others don't
+follow that rule: `action` requires its arguments, `close`/`suspend`/`relaunch`
+act on the focused window when given no selector, and `layout`, `screenshot`,
+`state`, `subscribe`, and `debug-counters` need no arguments at all. A command
+that fails (bad value, no focused window, no match) prints an error to stderr
+and exits non-zero, so scripts can branch on it.
 
 Add `--json` to print the raw JSON reply. The default output is a human-readable
 rendering for a terminal, not a stable format — parse `--json`, or the
@@ -35,6 +36,10 @@ origin, `camera 0 0` centers the viewport there, and positive `y` is above.
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
 still works.
+
+`pin` moves a window between the two spaces without moving it visually. Like
+`move`, it refuses a fullscreen window, whose pin reads `false` until fullscreen
+ends; the `toggle-pin-to-screen` action leaves fullscreen first instead.
 
 Widgets are the mirror image: they hold a canvas position but ignore drags,
 gestures and nudges, so `move` is the only way to reposition one. `resize` still
@@ -176,6 +181,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 | get / set move    | `{"Move":{}}` / `{"Move":{"window":5,"to":[100,200]}}` (both optional)              |
 | get / set resize  | `{"Resize":{}}` / `{"Resize":{"window":5,"to":[800,600]}}` (both optional)          |
 | get / set opacity | `{"Opacity":{}}` / `{"Opacity":{"window":5,"value":0.5}}` (both optional)           |
+| get / set pin     | `{"Pin":{}}` / `{"Pin":{"window":5,"value":true}}` (both optional)                  |
 | close             | `{"Close":null}` / `{"Close":5}` / `{"Close":"alacritty"}`                          |
 | suspend           | `{"Suspend":null}` / `{"Suspend":5}` / `{"Suspend":"alacritty"}`                    |
 | relaunch          | `{"Relaunch":null}` / `{"Relaunch":5}` / `{"Relaunch":"alacritty"}`                 |
@@ -198,6 +204,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Position":{"x":100,"y":200}}}
 {"Ok":{"Size":{"width":800,"height":600}}}
 {"Ok":{"Opacity":0.85}}
+{"Ok":{"Pin":true}}
 {"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}   // bookmark get / set (Y-up)
 {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}     // bookmark list (sorted by name)
 {"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}
@@ -215,20 +222,20 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 state: on a set it reports the clamped size the client was asked for, which the
 client is free not to commit. Read it back with a bare `{"Resize":{}}` to see
 what the window actually has. Every other setter (`Camera`, `Zoom`, `Position`,
-`Opacity`) echoes state the compositor owns outright.
+`Opacity`, `Pin`) echoes state the compositor owns outright.
 
 The `windows` array is the same shape driftwm writes to its [state file](#state-file),
 focused window first — but only while something is focused; with nothing focused
 no entry is promoted, so filter on `is_focused` instead of indexing `windows[0]`.
 Each entry's `id` is a stable per-session window handle — pass it back as a
-selector to `focus`, `move`, `resize`, `close`, `suspend`, `relaunch`, or
-`screenshot window`. `suspended` marks a compositor-drawn stand-in rather than a
-live client — see [Suspended windows](#suspended-windows). `mode` is `"Normal"`,
-`"Fit"` (`fit-window` or `fit-window-snapped`), or `"Fill"` (`fill-window`); it's
-the compositor's own record, so it tells fit from a fill that grew to the same
-rect and doesn't flicker during a configure round-trip the way a geometric
-guess does. A compositor older than this field omits it — treat missing as
-`"Normal"`.
+selector to `focus`, `move`, `resize`, `opacity`, `pin`, `close`, `suspend`,
+`relaunch`, or `screenshot window`. `suspended` marks a compositor-drawn
+stand-in rather than a live client — see [Suspended windows](#suspended-windows).
+`mode` is `"Normal"`, `"Fit"` (`fit-window` or `fit-window-snapped`), or
+`"Fill"` (`fill-window`); it's the compositor's own record, so it tells fit from
+a fill that grew to the same rect and doesn't flicker during a configure
+round-trip the way a geometric guess does. A compositor older than this field
+omits it — treat missing as `"Normal"`.
 The reply also carries `layout` (full XKB name) and `layout_short` (the
 configured code for the active group); `fullscreen` and `pinned` (screen-space
 windows, each carrying an `id` too — a `pinned` entry's `position`/`size` are in

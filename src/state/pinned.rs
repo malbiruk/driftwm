@@ -1,6 +1,6 @@
-//! Screen-pinned windows: keeping each pin's canvas location in step with the
-//! fixed screen position it renders at, and rehoming pins whose output changes
-//! or is unplugged.
+//! Screen-pinned windows: pinning and unpinning without a visual jump, keeping
+//! each pin's canvas location in step with the fixed screen position it renders
+//! at, and rehoming pins whose output changes or is unplugged.
 //!
 //! The canvas location is bookkeeping — rendering and hit-testing read
 //! `screen_pos` — but it has to be re-anchored whenever the camera moves, or
@@ -8,11 +8,147 @@
 
 use smithay::desktop::Window;
 use smithay::output::Output;
-use smithay::utils::{Logical, Point, Size};
+use smithay::utils::{Logical, Point, Rectangle, Size};
 
+use super::window_animation::{AnimSpace, ContentPolicy, GeometryRole};
 use super::{DriftWm, StageWindow, output_logical_size, output_state};
 
 impl DriftWm {
+    /// Pin `window` at the on-screen rect it is drawn at right now, on the
+    /// output showing it. No-op when it is already pinned; `Err` when there is
+    /// no output to pin to.
+    pub(crate) fn pin_window(&mut self, window: &Window) -> Result<(), String> {
+        if self.stage.pin_of(window).is_some() {
+            return Ok(());
+        }
+        let output = self.output_for_window(window);
+        // The on-screen rect the window is drawn at right now, read before the
+        // mutation flips which space "on screen" is derived from. At zoom != 1
+        // the flip is a `1/z` scale jump anchored at the content-box top-left,
+        // and this is the picture the new entry grows out of.
+        let pre_pin = output
+            .as_ref()
+            .and_then(|output| self.window_screen_rect_on(window, output));
+        // Pinning flips the chase space (canvas → screen); an in-flight entry
+        // would keep a stale-space visual, so drop it — along with any parked
+        // pan and stashed capture belonging to the transition it supersedes.
+        self.cancel_window_animation(window);
+        // The pin decides where the window lives from here on.
+        self.drop_owed_recenter(window);
+        // The cancel and the drop sit above this guard because the pre-pin rect
+        // has to be read before the cancel; the guard only fails with no output
+        // at all, where nothing was on screen to disturb.
+        let Some(output) = output else {
+            return Err("no output to pin to".to_string());
+        };
+        let Some(loc) = self.stage.position_of(window) else {
+            return Err("window has no position".to_string());
+        };
+        let (camera, zoom) = {
+            let os = output_state(&output);
+            (os.camera, os.zoom)
+        };
+        let screen = driftwm::canvas::canvas_to_screen(
+            driftwm::canvas::CanvasPos(loc.to_f64()),
+            camera,
+            zoom,
+        )
+        .0;
+        let screen_pos = Point::from((screen.x.round() as i32, screen.y.round() as i32));
+        // Pinned windows are out of the focus cycle.
+        self.stage.drop_from_focus_history(window);
+        self.stage.set_pin(
+            window,
+            driftwm::stage::PinnedSite {
+                output: output.name(),
+                screen_pos,
+            },
+        );
+        // The entry chases `screen_pos` at the window's real size under zoom
+        // 1, so a capture taken at zoom 0.5 grows into it from half size.
+        if let Some(seed) = pre_pin {
+            self.begin_geometry_animation_seeded(
+                window,
+                seed,
+                AnimSpace::Screen(output.name()),
+                None,
+                GeometryRole::Normal,
+                ContentPolicy::Cap,
+                None,
+            );
+        }
+        // The hit-test path changed (pinned vs canvas); recompute pointer focus.
+        self.refresh_pointer_focus();
+        Ok(())
+    }
+
+    /// Return a pinned `window` to the canvas at the point its pin site maps to
+    /// under the current camera, so nothing moves on screen. The re-map raises
+    /// it; `activate` says whether it also takes the activated hint. No-op when
+    /// the window isn't pinned.
+    pub(crate) fn unpin_window(&mut self, window: &Window, activate: bool) {
+        // Read rather than take: the pre-unpin rect below is the pinned picture.
+        let Some(site) = self.stage.pin_of(window).cloned() else {
+            return;
+        };
+        let output = self.output_by_name(&site.output);
+        // The on-screen rect the window is drawn at right now, read before the
+        // mutation flips which space "on screen" is derived from. At zoom != 1
+        // the flip is a `1/z` scale jump anchored at the content-box top-left,
+        // and this is the picture the new entry grows out of.
+        let pre_unpin = output
+            .as_ref()
+            .and_then(|output| self.window_screen_rect_on(window, output));
+        // Unpinning flips the chase space (screen → canvas); an in-flight entry
+        // would keep a stale-space visual, so drop it — along with any parked
+        // pan and stashed capture belonging to the transition it supersedes.
+        self.cancel_window_animation(window);
+        // The canvas location decides where the window lives from here on.
+        self.drop_owed_recenter(window);
+        self.stage.take_pin(window);
+        if let Some(output) = output {
+            // Convert the fixed screen position back to a canvas location at the
+            // current camera/zoom — no visual jump.
+            let (camera, zoom) = {
+                let os = output_state(&output);
+                (os.camera, os.zoom)
+            };
+            let canvas = driftwm::canvas::screen_to_canvas(
+                driftwm::canvas::ScreenPos(site.screen_pos.to_f64()),
+                camera,
+                zoom,
+            )
+            .0
+            .to_i32_round();
+            self.map_window(window.clone(), canvas, activate);
+            // Converting the pre-unpin screen rect back through the same camera
+            // reproduces it exactly on the first frame; the chase then runs it
+            // out to the canvas rect the camera magnifies by `1/z`. Inside the
+            // output guard on purpose: without an output there is no camera to
+            // convert with, and the window was never re-mapped.
+            if let Some(screen) = pre_unpin {
+                let seed = Rectangle::new(
+                    Point::from((
+                        camera.x + screen.loc.x / zoom,
+                        camera.y + screen.loc.y / zoom,
+                    )),
+                    Size::from((screen.size.w / zoom, screen.size.h / zoom)),
+                );
+                self.begin_geometry_animation_seeded(
+                    window,
+                    seed,
+                    AnimSpace::Canvas,
+                    None,
+                    GeometryRole::Normal,
+                    ContentPolicy::Cap,
+                    None,
+                );
+            }
+        }
+        // The hit-test path changed (pinned vs canvas); recompute pointer focus.
+        self.refresh_pointer_focus();
+    }
+
     /// Re-anchor each pinned window's canvas location to the point its fixed
     /// `screen_pos` currently maps to. Without this the loc freezes at placement
     /// and drifts off its output as the camera pans — triggering spurious
