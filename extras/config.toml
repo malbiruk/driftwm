@@ -74,7 +74,7 @@ fg_color = "#333333"
 
 [keybindings]
 "mod+n" = "spawn swaync-client -t"
-"mod+s" = "suspend-window"
+"mod+shift+q" = "suspend-window"
 # Spotlight: one search over open windows, suspended windows, and installed
 # apps — it replaces the plain launcher on mod+d.
 "mod+d" = "exec ~/.config/driftwm/scripts/spotlight.sh"
