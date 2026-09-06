@@ -243,11 +243,21 @@ fn map_layer(
     logical: (u32, u32),
     anchor: Option<zwlr_layer_surface_v1::Anchor>,
 ) -> wayland_client::protocol::wl_surface::WlSurface {
-    let texels = (
-        (logical.0 as f64 * SCALE) as i32,
-        (logical.1 as f64 * SCALE) as i32,
-    );
-    let pixels = super::render_pixels::solid_bgra(texels.0, texels.1, GHOST_BGRA, false);
+    map_layer_filled(f, id, namespace, layer, logical, anchor, GHOST_BGRA)
+}
+
+/// [`map_layer`] with the texel the first buffer is filled with.
+fn map_layer_filled(
+    f: &mut Fixture,
+    id: ClientId,
+    namespace: &str,
+    layer: zwlr_layer_shell_v1::Layer,
+    logical: (u32, u32),
+    anchor: Option<zwlr_layer_surface_v1::Anchor>,
+    bgra: [u8; 4],
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let texels = layer_texels(logical);
+    let pixels = super::render_pixels::solid_bgra(texels.0, texels.1, bgra, false);
 
     let created = f.client(id).create_layer(None, layer, namespace);
     let surface = created.surface.clone();
@@ -266,6 +276,14 @@ fn map_layer(
     l.ack_last_and_commit();
     f.double_roundtrip(id);
     surface
+}
+
+/// A layer surface's buffer size in texels at the scenario scale.
+fn layer_texels(logical: (u32, u32)) -> (i32, i32) {
+    (
+        (logical.0 as f64 * SCALE) as i32,
+        (logical.1 as f64 * SCALE) as i32,
+    )
 }
 
 /// The mid-grey a blurred stripe field settles at, and how far from it a
@@ -342,6 +360,57 @@ fn a_layer_surface_is_frosted_on_the_frame_it_maps() {
     assert!(
         frosted(&img, (x0 + x1) / 2, (y0 + y1) / 2),
         "the layer surface's first frame is frosted"
+    );
+
+    uninstall_with_blur(&mut f, &output);
+}
+
+/// A fully transparent first buffer (GTK4 maps before its first paint)
+/// captures an all-zero mask, and on a busy output the frame countdown that
+/// retries it runs out before the client paints. The client's own commit has
+/// to re-capture the mask, so the frame after it paints is frosted.
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_layer_surface_that_paints_after_a_transparent_first_buffer_is_frosted() {
+    let _gl = gl::lock();
+    let Some((mut f, output, _temp)) = stripe_scene("layer transparent first buffer") else {
+        return;
+    };
+
+    let client = f.add_client();
+    let logical = (300, 200);
+    let surface = map_layer_filled(
+        &mut f,
+        client,
+        "frosted",
+        zwlr_layer_shell_v1::Layer::Top,
+        logical,
+        None,
+        [0, 0, 0, 0],
+    );
+    let (cx, cy) = (OUTPUT.0 / 2, OUTPUT.1 / 2);
+
+    // More composed frames than the frame countdown, all on the transparent
+    // buffer: nothing to frost yet, and the countdown is gone.
+    for _ in 0..4 {
+        let img = live_frame(&mut f, &output);
+        assert!(
+            !frosted(&img, cx, cy),
+            "a fully transparent surface shows the bare backdrop"
+        );
+    }
+
+    let texels = layer_texels(logical);
+    let pixels = super::render_pixels::solid_bgra(texels.0, texels.1, GHOST_BGRA, false);
+    let l = f.client(client).layer(&surface);
+    l.attach_shm_buffer(texels, &pixels);
+    l.commit();
+    f.double_roundtrip(client);
+
+    let img = live_frame(&mut f, &output);
+    assert!(
+        frosted(&img, cx, cy),
+        "the frame after the client paints is frosted"
     );
 
     uninstall_with_blur(&mut f, &output);

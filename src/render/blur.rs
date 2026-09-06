@@ -253,6 +253,17 @@ pub struct BlurCache {
     /// invalidates the cache. Forcing a recompute for the next frame after
     /// creation gives the import time to settle.
     pub force_dirty_frames: u8,
+    /// Commit counters the current mask was captured from, empty until the
+    /// first capture: the warm-up's "has the client painted since?" signal.
+    pub mask_commits: Vec<CommitCounter>,
+    /// Mask re-captures still owed to the surface's own commits. A first
+    /// buffer can be fully transparent (GTK4 maps before its first paint), and
+    /// `force_dirty_frames` is spent in composed frames, which a busy output
+    /// burns before that client commits real content — leaving an all-zero
+    /// mask stamped valid for the surface's life. Bounded, so a window
+    /// repainting at frame rate never pays a surface render per frame past
+    /// its warm-up.
+    pub mask_warmup_commits: u8,
 }
 
 impl BlurCache {
@@ -283,6 +294,8 @@ impl BlurCache {
             id: Id::new(),
             damage_bag: DamageBag::new(4),
             force_dirty_frames: 2,
+            mask_commits: Vec::new(),
+            mask_warmup_commits: MASK_WARMUP_COMMITS,
         })
     }
 
@@ -411,6 +424,11 @@ pub struct RenderBackoff {
 /// Cap on the doubling, so a renderer that comes back is picked up within a
 /// couple of seconds rather than minutes.
 const BACKOFF_MAX_SKIP: u32 = 64;
+
+/// Distinct commits after a blur cache's creation that each re-capture its
+/// mask. The real first paint lands a commit or two after map; the rest cover
+/// a client that animates in from transparent.
+const MASK_WARMUP_COMMITS: u8 = 8;
 
 impl RenderBackoff {
     /// Whether this frame may attempt the capture, consuming one frame of any
@@ -969,6 +987,15 @@ pub(crate) struct BlurRequestData {
     pub region_rects: Option<Arc<Vec<Rectangle<i32, Physical>>>>,
 }
 
+/// Commit counters of the elements a mask is rendered from: the signal for
+/// whether the client has painted since the mask was captured.
+fn surface_commits(
+    elements: &[OutputRenderElements],
+    (start, end): (usize, usize),
+) -> impl Iterator<Item = CommitCounter> + '_ {
+    elements[start..end].iter().map(|e| e.current_commit())
+}
+
 /// Parts of the window-sized mask that have to be zeroed back out so only a
 /// client-requested blur region keeps frost. `None` means no client region, so
 /// the whole window stays frosted and nothing is subtracted.
@@ -1031,8 +1058,9 @@ pub(crate) fn process_blur_requests(
     let geom_gen = state.render.blur_geometry_generation;
     let view = ViewStamp { camera, zoom };
 
-    // Precompute per-request behind depth (index into all_elements where "below this window" begins)
-    let behind_starts: Vec<usize> = blur_requests
+    // Where each request's own elements sit in `all_elements`, before any
+    // splice. The range end is where "below this window" begins.
+    let surface_ranges: Vec<(usize, usize)> = blur_requests
         .iter()
         .map(|req| {
             let prefix = match req.layer {
@@ -1042,7 +1070,8 @@ pub(crate) fn process_blur_requests(
                 BlurLayer::Normal => normal_prefix,
                 BlurLayer::Widget => widget_prefix,
             };
-            (prefix + req.elem_start + req.elem_count).min(all_elements.len())
+            let start = (prefix + req.elem_start).min(all_elements.len());
+            (start, (start + req.elem_count).min(all_elements.len()))
         })
         .collect();
 
@@ -1053,10 +1082,12 @@ pub(crate) fn process_blur_requests(
     let backdrop_starts: Vec<usize> = blur_requests
         .iter()
         .enumerate()
-        .map(|(i, req)| behind_own_chrome(behind_starts[i], req.trailing_chrome, background_start))
+        .map(|(i, req)| {
+            behind_own_chrome(surface_ranges[i].1, req.trailing_chrome, background_start)
+        })
         .collect();
 
-    // behind_starts alone is a z-order test: side-by-side windows all read as
+    // The range end alone is a z-order test: side-by-side windows all read as
     // "stacked" and lose the shared slice. Only what reaches into the padded
     // capture counts — for the fall-through and for the fingerprint alike,
     // which is why one walk produces both.
@@ -1296,9 +1327,21 @@ pub(crate) fn process_blur_requests(
         if backdrop_changed || geom_changed || view_dirty || backdrop_beat {
             cache.dirty = true;
         }
-        mask_forced.push(cache.force_dirty_frames > 0);
-        if cache.force_dirty_frames > 0 {
+        // Two re-capture budgets in different currencies: composed frames for
+        // a late buffer import, the surface's own commits for a transparent
+        // first buffer.
+        let client_painted = cache.mask_warmup_commits > 0
+            && !cache
+                .mask_commits
+                .iter()
+                .copied()
+                .eq(surface_commits(all_elements, surface_ranges[i]));
+        let forced = cache.force_dirty_frames > 0 || client_painted;
+        mask_forced.push(forced);
+        if forced {
             cache.dirty = true;
+        }
+        if cache.force_dirty_frames > 0 {
             cache.force_dirty_frames -= 1;
         }
         cache.last_backdrop_hash = backdrop_hash;
@@ -1443,6 +1486,9 @@ pub(crate) fn process_blur_requests(
                 "frost zeroed: nothing is drawn beneath this surface to capture"
             );
             zero_texture(renderer, &cache.texture, cache.alloc);
+            // Settling has to take the commit signal with it, or the warm-up
+            // re-dirties this frost every frame the scene stays empty beneath.
+            cache.mask_commits = surface_commits(all_elements, surface_ranges[i]).collect();
             // The splice below drops the element while this holds, and an
             // element leaving the frame is what damages what it vacated — so
             // the frost the texture used to hold does not survive on screen.
@@ -1650,14 +1696,6 @@ pub(crate) fn process_blur_requests(
             continue;
         }
 
-        let prefix = match req.layer {
-            BlurLayer::Overlay => overlay_prefix,
-            BlurLayer::Top => top_prefix,
-            BlurLayer::Pinned => pinned_prefix,
-            BlurLayer::Normal => normal_prefix,
-            BlurLayer::Widget => widget_prefix,
-        };
-
         // The mask is the window's alpha shape: it changes with geometry, with
         // the live extent it was rasterized at, and with the client's blur
         // region — not with background ticks. Recapturing it per animated
@@ -1676,8 +1714,7 @@ pub(crate) fn process_blur_requests(
                     .is_none_or(|s| !s.matches(geom_gen, win_size, regions))
             });
 
-        let surf_start = prefix + req.elem_start;
-        let surf_end = (surf_start + req.elem_count).min(all_elements.len());
+        let (surf_start, surf_end) = surface_ranges[i];
 
         let Some(cache) = state.render.blur_cache.get_mut(&key) else {
             continue;
@@ -1758,6 +1795,16 @@ pub(crate) fn process_blur_requests(
                 let _ = frame.clear(Color32F::TRANSPARENT, &outside);
                 let _ = frame.finish();
             }
+            let commits: Vec<CommitCounter> =
+                surface_commits(all_elements, surface_ranges[i]).collect();
+            // The first capture is the map itself, not a paint since it.
+            if !cache.mask_commits.is_empty()
+                && commits != cache.mask_commits
+                && cache.mask_warmup_commits > 0
+            {
+                cache.mask_warmup_commits -= 1;
+            }
+            cache.mask_commits = commits;
             cache.mask_stamp = Some(MaskStamp {
                 geometry_generation: geom_gen,
                 live: win_size,
