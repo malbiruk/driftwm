@@ -20,6 +20,7 @@ mod server;
 
 mod auto_navigate_click;
 mod auto_placement;
+mod blur_pixels;
 mod bookmarks;
 mod camera_animation;
 mod camera_zoom_ipc;

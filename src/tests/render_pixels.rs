@@ -62,7 +62,7 @@ fn map_odd_window(f: &mut Fixture, client: super::client::ClientId) {
 /// `color`. `blank_last_col_row` leaves the far column and row transparent —
 /// what a client paints into the extra texel `wp_fractional_scale_v1` rounds
 /// its buffer up to when the logical size lands on a half physical pixel.
-fn solid_bgra(w: i32, h: i32, color: [u8; 4], blank_last_col_row: bool) -> Vec<u8> {
+pub(super) fn solid_bgra(w: i32, h: i32, color: [u8; 4], blank_last_col_row: bool) -> Vec<u8> {
     let mut buf = vec![0u8; (w * h * 4) as usize];
     for y in 0..h {
         for x in 0..w {

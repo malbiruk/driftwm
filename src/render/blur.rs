@@ -549,8 +549,14 @@ fn behind_own_chrome(
 /// Padding around the blur crop so the Kawase reach never touches a texture
 /// edge: window-edge samples must see real backdrop, not clamped border
 /// pixels. Sized to the blur's worst-case reach at the deepest mip.
-fn blur_pad(strength: f32, passes: usize) -> i32 {
-    ((strength * (1u32 << (passes + 1)) as f32).ceil() as i32).clamp(16, 128)
+///
+/// `offset` is the tap distance the shader itself is handed — the configured
+/// strength already multiplied by the output scale — and not the strength on
+/// its own. The reach is in physical pixels and so is the pad, so a pad sized
+/// from the unscaled strength is short by the scale factor on every HiDPI
+/// output, and the crop then keeps texels the taps read from past the padding.
+fn blur_pad(offset: f32, passes: usize) -> i32 {
+    ((offset * (1u32 << (passes + 1)) as f32).ceil() as i32).clamp(16, 256)
 }
 
 /// Step the per-window blur allocations are rounded up to, in physical pixels.
@@ -1017,7 +1023,9 @@ pub(crate) fn process_blur_requests(
     let down_shader = state.render.blur_down_shader.clone().unwrap();
     let up_shader = state.render.blur_up_shader.clone().unwrap();
     let blur_passes = state.config.effects.blur_radius as usize;
-    let blur_strength = state.config.effects.blur_strength as f32;
+    // One value for the shader's tap distance and for the padding that has to
+    // cover its reach, so the two cannot disagree about the output scale.
+    let blur_offset = state.config.effects.blur_strength as f32 * output_scale as f32;
     let context_id = renderer.context_id();
     let output_name = output.name();
     let geom_gen = state.render.blur_geometry_generation;
@@ -1038,7 +1046,7 @@ pub(crate) fn process_blur_requests(
         })
         .collect();
 
-    let pad = blur_pad(blur_strength, blur_passes);
+    let pad = blur_pad(blur_offset, blur_passes);
 
     // Everything below the window's own chrome: what the occlusion probe scans,
     // and what the per-window capture renders.
@@ -1195,7 +1203,7 @@ pub(crate) fn process_blur_requests(
                             &up_shader,
                             tex_a,
                             tex_b,
-                            blur_strength * output_scale as f32,
+                            blur_offset,
                             blur_passes,
                         )
                         .is_ok();
@@ -1495,14 +1503,13 @@ pub(crate) fn process_blur_requests(
         }
 
         // Run Kawase blur passes on the padded crop
-        let offset = blur_strength * output_scale as f32;
         if render_blur(
             renderer,
             &down_shader,
             &up_shader,
             pad_a,
             pad_b,
-            offset,
+            blur_offset,
             blur_passes,
         )
         .is_err()
@@ -2612,7 +2619,18 @@ mod tests {
         // a radius edit past that point moves no cache size — which is why the
         // caches have to be dropped on reload rather than resized into.
         assert_eq!(blur_pad(1.0, 0), 16);
-        assert_eq!(blur_pad(8.0, 5), 128);
-        assert!((16..=128).contains(&blur_pad(4.0, 3)));
+        assert_eq!(blur_pad(8.0, 5), 256);
+        assert!((16..=256).contains(&blur_pad(4.0, 3)));
+    }
+
+    /// The ceiling has to clear the shipped effects at the scales real panels
+    /// run at, or the pad is capped short of the reach on exactly the outputs
+    /// the scaling was added for.
+    #[test]
+    fn the_pad_takes_the_scale_the_shader_takes() {
+        let offset = |scale: f32| 1.5 * scale;
+        assert_eq!(blur_pad(offset(1.0), 5), 96);
+        assert_eq!(blur_pad(offset(1.5), 5), 144);
+        assert_eq!(blur_pad(offset(2.0), 5), 192);
     }
 }
