@@ -497,7 +497,7 @@ supports the `wlr-layer-shell` protocol), just without compositor-specific featu
 
 - [driftwm-desktop](https://github.com/C10udburst/driftwm-desktop) — A layer for displaying `~/Desktop` contents on canvas as draggable icons.
 - [Driftmap](https://github.com/rywby-dot/driftwm-minimap) — interactive overlay minimap for driftwm
-- [driftwm-settings](https://github.com/wwmaxik/driftwm-settings) — GTK4 GUI config editor
+- [driftwm-settings](https://github.com/wwmaxik/driftwm-settings) — Iced GUI config editor
 - [driftwm-noctalia](https://github.com/youssefvdel/driftwm-noctalia) — noctalia shell fork adapted for driftwm
 - [Just Enough Shell](https://github.com/ORFLEM/just_enough_shell) — minimal QuickShell desktop shell, driftwm-focused
 - [Gallery](https://github.com/malbiruk/driftwm/discussions/143) — community shaders & rices, share your own
