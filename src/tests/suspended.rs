@@ -201,15 +201,11 @@ fn client_ssd_bar_right_pad_strip_is_chrome() {
         ),
         "the right-pad strip of a live window's own bar is chrome, not a hole"
     );
-    // Unlike a stand-in's strip, this one is a real surface's chrome, so the
-    // cascade answers with that surface — what it must never answer with is the
-    // client beneath.
-    assert_eq!(
-        f.state()
-            .pointer_focus_under(strip, strip)
-            .map(|(t, _)| t.0),
-        Some(server_surface(&window)),
-        "the strip belongs to the bar's own window, not the client beneath"
+    // The strip is chrome: it must not leak pointer focus to the client beneath,
+    // nor deliver out-of-bounds pointer events to the window itself.
+    assert!(
+        f.state().pointer_focus_under(strip, strip).is_none(),
+        "the strip gives no pointer focus to the client beneath or the window"
     );
 }
 

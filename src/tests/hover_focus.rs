@@ -426,3 +426,145 @@ size = [400, 300]
     );
     assert!(!is_activated(&pin));
 }
+
+/// Hovering outside any window edge (in the 8px external resize margin) yields
+/// no pointer motion or focus to the client on any side. Out-of-bounds coordinates
+/// (such as x < 0 or y < 0) must never be sent.
+#[test]
+fn hover_outside_window_edges_yields_no_pointer_motion() {
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let _surface = map_window(&mut f, id, "w", (400, 300));
+    let w = window_by_app_id(&mut f, "w").unwrap();
+    f.state().with_output_state(|os| {
+        os.zoom = 1.0;
+        os.camera = Point::from((0.0, 0.0));
+    });
+    place(&mut f, &w, Point::from((500, 400)));
+
+    let mouse = super::input_backend::FakeDevice::mouse();
+    f.client(id).state.pointer_positions.clear();
+
+    // 4 px outside each of the four edges (within the 8px CSD resize margin):
+    let top_outside = Point::from((700.0, 396.0));
+    let left_outside = Point::from((496.0, 550.0));
+    let right_outside = Point::from((904.0, 550.0));
+    let bottom_outside = Point::from((700.0, 704.0));
+
+    for (name, pt) in [
+        ("top", top_outside),
+        ("left", left_outside),
+        ("right", right_outside),
+        ("bottom", bottom_outside),
+    ] {
+        assert!(
+            f.state().pointer_focus_under(pt, pt).is_none(),
+            "{name} margin must yield no pointer focus"
+        );
+
+        super::input_backend::pointer_to(&mut f, &mouse, pt);
+        f.double_roundtrip(id);
+
+        assert!(
+            f.client(id).state.pointer_positions.is_empty(),
+            "{name} margin must deliver no pointer motion to the client, but got: {:?}",
+            f.client(id).state.pointer_positions
+        );
+        assert!(
+            f.state()
+                .seat
+                .get_pointer()
+                .unwrap()
+                .current_focus()
+                .is_none(),
+            "{name} margin must leave current pointer focus None"
+        );
+    }
+
+    // Moving strictly inside the window yields pointer motion with valid coordinates:
+    let inside = Point::from((700.0, 550.0));
+    super::input_backend::pointer_to(&mut f, &mouse, inside);
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        f.client(id).state.pointer_positions.last(),
+        Some(&(200.0, 150.0)),
+        "pointer inside the window must deliver local coordinates to the client"
+    );
+    assert_eq!(
+        f.state()
+            .seat
+            .get_pointer()
+            .unwrap()
+            .current_focus()
+            .as_ref()
+            .map(|t| &t.0),
+        Some(&server_surface(&w)),
+    );
+
+    // Moving back outside past the left edge clears pointer focus (sends leave):
+    super::input_backend::pointer_to(&mut f, &mouse, left_outside);
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state()
+            .seat
+            .get_pointer()
+            .unwrap()
+            .current_focus()
+            .is_none(),
+        "moving outside must drop pointer focus"
+    );
+}
+
+/// On an SSD window, hovering the title bar (and the margin above it) also delivers
+/// no pointer motion or focus to the client.
+#[test]
+fn hover_on_ssd_chrome_yields_no_pointer_motion_to_client() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[decorations]
+default_mode = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let _surface = map_window(&mut f, id, "w", (400, 300));
+    let w = window_by_app_id(&mut f, "w").unwrap();
+    give_ssd(&mut f, &w);
+    f.state().with_output_state(|os| {
+        os.zoom = 1.0;
+        os.camera = Point::from((0.0, 0.0));
+    });
+    place(&mut f, &w, Point::from((500, 400)));
+
+    let mouse = super::input_backend::FakeDevice::mouse();
+    f.client(id).state.pointer_positions.clear();
+
+    // Bar is 25px tall above 400: y in [375, 400).
+    // Margin above bar is 8px: y in [367, 375).
+    let bar_pt = Point::from((700.0, 385.0));
+    let margin_above_bar = Point::from((700.0, 370.0));
+
+    for (name, pt) in [
+        ("title bar", bar_pt),
+        ("margin above bar", margin_above_bar),
+    ] {
+        assert!(
+            f.state().pointer_focus_under(pt, pt).is_none(),
+            "{name} must yield no pointer focus"
+        );
+
+        super::input_backend::pointer_to(&mut f, &mouse, pt);
+        f.double_roundtrip(id);
+
+        assert!(
+            f.client(id).state.pointer_positions.is_empty(),
+            "{name} must deliver no pointer motion to the client, but got: {:?}",
+            f.client(id).state.pointer_positions
+        );
+    }
+}
