@@ -566,6 +566,14 @@ impl DriftWm {
             self.pointer_over_screen_space = true;
             return Some(hit);
         }
+        if self.stage.has_pinned()
+            && (!matches!(self.pinned_decoration_under(screen_pos), PinnedChrome::Miss)
+                || self.pinned_resize_margin_under(screen_pos))
+        {
+            self.pointer_over_layer = false;
+            self.pointer_over_screen_space = true;
+            return None;
+        }
 
         // A suspended window is an opaque canvas element that sits with normal
         // windows. When one is the topmost element here it terminates the
@@ -591,6 +599,14 @@ impl DriftWm {
                 return None;
             }
             return Some(hit);
+        }
+        // Compositor chrome on canvas windows (SSD title bar, close button, resize borders)
+        // occludes lower layers (canvas layers, widgets, bottom layers) while yielding no
+        // client pointer focus.
+        if self.decoration_under(canvas_pos).is_some() || self.resize_margin_under(canvas_pos) {
+            self.pointer_over_layer = false;
+            self.pointer_over_screen_space = false;
+            return None;
         }
 
         // Canvas-positioned layer surfaces
@@ -1648,22 +1664,10 @@ impl DriftWm {
         &self,
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<PickTarget> {
-        // A stand-in owns no surface, so `surface_under` can't see it. Check the
-        // decoration channel first: it is topmost-first, so a client's content or
-        // chrome above the stand-in wins and this arm won't match.
-        if let Some((DecoTarget::Suspended(s), _)) = self.decoration_under(canvas_pos) {
-            return Some(PickTarget::Suspended(s.id));
+        match self.draggable_element_under(canvas_pos)? {
+            StageWindow::Suspended(s) => Some(PickTarget::Suspended(s.id)),
+            StageWindow::Client(w) => Some(PickTarget::Client(w)),
         }
-        let (target, _) = self.surface_under(canvas_pos, Some(false))?;
-        // A content hit may be a subsurface; walk to the root toplevel before
-        // resolving to a window (chrome hits already return the toplevel).
-        let mut root = target.0;
-        while let Some(parent) = smithay::wayland::compositor::get_parent(&root) {
-            root = parent;
-        }
-        let window = self.window_for_surface(&root)?;
-        self.is_canvas_window(&window)
-            .then_some(PickTarget::Client(window))
     }
 
     /// The stage element a move or resize gesture at `canvas_pos` may drag — a
@@ -1762,7 +1766,9 @@ impl DriftWm {
                 ));
             }
 
-            // Then check decoration areas for this window
+            // Then check decoration areas for this window. These are compositor chrome
+            // (not client surface content), so hitting them terminates the z-order
+            // walk (occluding anything beneath) while yielding no client pointer focus.
             let size = window.geometry().size;
             if self
                 .decorations
@@ -1773,7 +1779,7 @@ impl DriftWm {
                     || crate::decorations::resize_edge_at(pos, loc, size, bar_height, border_width)
                         .is_some()
                 {
-                    return Some((FocusTarget((*wl_surface).clone()), loc.to_f64()));
+                    return None;
                 }
             } else {
                 // CSD: compositor-side resize margin strictly outside the client
@@ -1786,7 +1792,7 @@ impl DriftWm {
                     && !is_fullscreen
                     && crate::decorations::resize_edge_at(pos, loc, size, 0, border_width).is_some()
                 {
-                    return Some((FocusTarget((*wl_surface).clone()), loc.to_f64()));
+                    return None;
                 }
             }
         }
@@ -1867,12 +1873,7 @@ impl DriftWm {
                 )
                 .is_some()
                 {
-                    let adjusted = screen_space_focus_loc(
-                        ScreenPos(p.screen_pos.to_f64()),
-                        CanvasPos(canvas_pos),
-                        ScreenPos(screen_pos),
-                    );
-                    return Some((FocusTarget((*wl_surface).clone()), adjusted));
+                    return None;
                 }
             } else {
                 let is_widget =
@@ -1887,12 +1888,7 @@ impl DriftWm {
                     )
                     .is_some()
                 {
-                    let adjusted = screen_space_focus_loc(
-                        ScreenPos(p.screen_pos.to_f64()),
-                        CanvasPos(canvas_pos),
-                        ScreenPos(screen_pos),
-                    );
-                    return Some((FocusTarget((*wl_surface).clone()), adjusted));
+                    return None;
                 }
             }
         }
@@ -2300,10 +2296,9 @@ impl DriftWm {
     /// Whether `pos` lands in the resize margin of any canvas element. The
     /// channels that report that margin — `decoration_hit_for` and
     /// `suspended_decoration_hit` — are gated on `resize_on_border` because they
-    /// answer what the band *does*; `pointer_context` asks this instead so the
-    /// band's membership stays the window's either way. A pinned window needs no
-    /// arm here: `pinned_window_under` already answers for its margin ungated, in
-    /// screen space.
+    /// answer what the band *does*; `pointer_context` and `focus_cascade` ask
+    /// this instead so the band's membership and occlusion stay the window's either way.
+    /// Pinned windows check `pinned_resize_margin_under` in screen space.
     ///
     /// No occlusion pass: anything drawn over a margin is itself on-window, so
     /// the answer is the same whichever of the two the pointer is really over.
@@ -2337,6 +2332,29 @@ impl DriftWm {
                 self.resize_margin_hit_for(w, entry.position, pos).is_some()
             }
         })
+    }
+
+    /// Whether `screen_pos` lands in the resize margin of any screen-pinned window.
+    pub(crate) fn pinned_resize_margin_under(&self, screen_pos: Point<f64, Logical>) -> bool {
+        let Some(output) = self.active_output() else {
+            return false;
+        };
+        let output_name = output.name();
+        for (window, site) in self.stage.pinned_windows() {
+            let Some(window) = window.client() else {
+                continue;
+            };
+            if site.output != output_name {
+                continue;
+            }
+            if self
+                .resize_margin_hit_for(window, site.screen_pos, screen_pos)
+                .is_some()
+            {
+                return true;
+            }
+        }
+        false
     }
 
     /// Which region of a suspended window's frame `pos` lands in, or `None` if

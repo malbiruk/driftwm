@@ -281,22 +281,20 @@ fn margin_press_starts_resize(rules: &str) -> bool {
     resizing
 }
 
-/// The margin belongs to the window on both hit-test paths whatever
-/// `resize_on_border` says. The option decides whether the band *resizes*, not
-/// whether it is part of the window: `surface_under` and `pinned_window_under`
-/// answer for it unconditionally, so the pointer over it is the window's and
-/// nothing rendered beneath — a wallpaper layer, a lower window — can claim it.
+/// The resize margin is compositor chrome: it yields no client pointer focus
+/// (`surface_under` and `pinned_window_under` return None so out-of-bounds pointer
+/// events are not sent to the client), but it occludes anything rendered beneath.
 #[test]
-fn the_resize_margin_takes_pointer_focus_whether_or_not_it_resizes() {
+fn the_resize_margin_takes_no_pointer_focus_whether_or_not_it_resizes() {
     assert_eq!(
         margin_takes_pointer_focus(PIN_RULE),
-        (true, true),
-        "a grabbable border is the window's, so the pointer over it is the window's"
+        (false, false),
+        "a grabbable border is compositor chrome, so no client surface takes pointer focus"
     );
     assert_eq!(
         margin_takes_pointer_focus(PIN_RULE_NO_BORDER_RESIZE),
-        (true, true),
-        "an inert border is still the window's margin, not the empty space behind it"
+        (false, false),
+        "an inert border is compositor chrome, so no client surface takes pointer focus"
     );
 }
 
