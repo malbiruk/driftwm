@@ -140,5 +140,21 @@
       };
 
       nixosModules.default = self.nixosModules.driftwm;
+
+      homeManagerModules.driftwm =
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
+        {
+          imports = [ ./nix/home-module.nix ];
+          wayland.windowManager.driftwm.package =
+            lib.mkDefault
+              self.packages.${pkgs.stdenv.hostPlatform.system}.default;
+        };
+
+      homeManagerModules.default = self.homeManagerModules.driftwm;
     };
 }
