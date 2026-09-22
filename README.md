@@ -283,6 +283,8 @@ cargo build
 cargo run
 ```
 
+#### NixOS Module
+
 To enable `driftwm` on NixOS, you can import and use the provided NixOS module in your configuration.
 
 Using Flakes:
@@ -330,6 +332,60 @@ in
 `programs.driftwm.package` selects the package providing the compositor binary.
 XWayland via `xwayland-satellite` is on by default; set
 `programs.xwayland.enable = false;` to disable it.
+
+#### Home Manager Module
+
+To enable `driftwm` using [Home Manager](https://github.com/nix-community/home-manager), you can import and use the provided Home Manager module in your configuration.
+
+Using Flakes:
+
+```nix
+# flake.nix
+{
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
+    home-manager.url = "github:nix-community/home-manager";
+    driftwm.url = "github:malbiruk/driftwm";
+  };
+
+  outputs = { self, nixpkgs, home-manager, driftwm, ... }: {
+    homeConfigurations.myHost = home-manager.lib.homeManagerConfiguration {
+      pkgs = nixpkgs.legacyPackages.x86_64-linux;
+      modules = [
+        driftwm.homeManagerModules.default
+        ./configuration.nix
+      ];
+    };
+  };
+}
+```
+
+Then, enable it in your configuration:
+
+```nix
+{
+  wayland.windowManager.driftwm.enable = true;
+}
+```
+
+Without flakes, import the flake's output directly:
+
+```nix
+let
+  driftwm-flake = builtins.getFlake "github:malbiruk/driftwm";
+in
+{
+  imports = [ driftwm-flake.homeManagerModules.default ];
+  wayland.windowManager.driftwm.enable = true;
+}
+```
+
+`wayland.windowManager.driftwm.package` selects the package providing the compositor binary.
+XWayland via `xwayland-satellite` is on by default; set
+`wayland.windowManager.driftwm.settings.xwayland.enabled = false;` to disable it
+(and `wayland.windowManager.driftwm.xwaylandSatellitePackage = null;` to skip installing the package).
+
+The TOML-based configuration is available through `wayland.windowManager.driftwm.settings`.
 
 ### Build from source
 
