@@ -999,6 +999,12 @@ pub struct DriftWm {
     /// from. `relative_motion` sets that too, but with the same focus, so the
     /// shadow stays exact.
     pub last_pointer_under: Option<(FocusTarget, Point<f64, Logical>)>,
+    /// The viewport `(camera, zoom)` sloppy focus was last evaluated at, on the
+    /// active output. Written by [`DriftWm::maybe_hover_focus`] on every path
+    /// through it, read by [`DriftWm::refresh_pointer_focus`] to tell a viewport
+    /// that has moved — the case where a different window slides under a cursor
+    /// that never does — from a scene change that left the one under it alone.
+    pub hover_viewport: Option<(Point<f64, Logical>, f64)>,
     /// wl_surface commits since the last rendered frame. Tracy diagnostic
     /// counter (plotted as `frame.commits`); sampled and reset on every
     /// render_frame, so it's only meaningful on a single-output profiling

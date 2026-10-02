@@ -643,7 +643,14 @@ impl DriftWm {
 
     /// Sloppy focus: when enabled, focus the non-widget window under the pointer
     /// without raising it. Skips layers, widgets, and empty canvas.
+    ///
+    /// Stamps the viewport it answered for, on every path through it — a
+    /// decline is an answer too — so [`Self::refresh_pointer_focus`] can tell a
+    /// viewport that moved under a resting cursor, which this never sees, from
+    /// a scene change that left the camera where it was, which needs no second
+    /// pass.
     pub(crate) fn maybe_hover_focus(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
+        self.hover_viewport = Some((self.camera(), self.zoom()));
         if !self.config.focus_follows_mouse || self.pointer_over_layer {
             return;
         }
@@ -1064,6 +1071,18 @@ impl DriftWm {
         // region is re-set around the parked cursor becomes armable with no
         // delivery change, and nothing else re-evaluates it.
         self.update_pointer_constraint(old_focus);
+        // Sloppy focus has its own pull, for the case the delivery dedup above
+        // cannot see: a pan or a zoom slides a different window under a cursor
+        // that never moves, so nothing dispatches, yet under
+        // `focus_follows_mouse` the keyboard focus owes a move to it. Gated on
+        // the viewport, so only a camera that actually moved pays the walk — the
+        // pick above has already refreshed `pointer_over_layer`, which this
+        // reads. Reached from here rather than from the camera-move sites for
+        // the reason this function exists at all: there is no chokepoint a pan
+        // has to pass through.
+        if self.hover_viewport != Some((self.camera(), self.zoom())) {
+            self.maybe_hover_focus(canvas_pos);
+        }
         // A second z-order walk that can re-rasterise a title bar, so only when
         // something changed or an affordance is in play: pick mode flips with
         // the zoom and no pointer motion, and a latched affordance has to clear

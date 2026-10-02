@@ -1,12 +1,17 @@
 //! Hover-driven `Activated` hint: under `focus_follows_mouse`, moving window
 //! focus by hover must also flip the xdg-toplevel `Activated` state exclusively
 //! — matching what a click/raise already does — without raising the window.
+//! The scenarios at the end cover the hover pull inside `refresh_pointer_focus`:
+//! a viewport move slides a new window under a cursor that never moves, and
+//! sloppy focus owes a move to it even where the client-pointer delivery
+//! dedup puts nothing on the wire.
 
 use smithay::desktop::Window;
-use smithay::utils::{Logical, Point, SERIAL_COUNTER};
+use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 
-use crate::state::{FocusTarget, StageWindow};
+use crate::state::{FocusIntent, FocusTarget, StageWindow};
 
+use super::input_backend::{FakeDevice, pointer_to, trackpad_scroll};
 use super::{
     Fixture, config, give_ssd, is_activated, keyboard_focus, map_window, server_surface,
     window_by_app_id,
@@ -567,4 +572,224 @@ default_mode = "server"
             f.client(id).state.pointer_positions
         );
     }
+}
+
+/// 1:1 canvas↔screen (camera origin, zoom 1), so a canvas point in a scenario
+/// names the screen pixel the cursor rests on and a pan reads as a pure canvas
+/// shift. Clears the placement camera target too, or a settling animation
+/// would move the camera underneath the scenario.
+fn origin_view(f: &mut Fixture) {
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.camera_target = None;
+        os.zoom = 1.0;
+        os.zoom_target = None;
+    });
+}
+
+/// Pan the viewport by `delta` and carry the cursor along, exactly as
+/// `apply_scroll_momentum` and the axis/gesture pan arms do — the two halves
+/// are inseparable here, since the pull hit-tests at the cursor's canvas
+/// position and a camera move alone would leave it pointing at the old canvas.
+fn pan_viewport(f: &mut Fixture, delta: Point<f64, Logical>) {
+    let applied = f.state().drift_pan(delta, 0);
+    let pos = f.state().seat.get_pointer().unwrap().current_location();
+    f.state().warp_pointer(pos + applied);
+}
+
+/// The report this covers, end to end: two fingers pan the viewport, the cursor
+/// holds its screen pixel, and the window that was under it slides away while
+/// another takes its place — so `focus_follows_mouse` has to follow it there.
+/// Client pointer focus already lands there (the axis arm dispatches it
+/// synchronously), which is why the keyboard used to sit on the window the pan
+/// carried away until the cursor was jiggled. Driven by real scroll events, so
+/// the whole chain runs: the axis pan, its cursor carry, and the pull.
+#[test]
+fn a_trackpad_pan_under_a_resting_cursor_moves_sloppy_focus() {
+    let mut f = Fixture::with_config(config(
+        r#"
+focus_follows_mouse = true
+
+[navigation]
+trackpad_speed = 100.0
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    // Both start below the viewport, so only a pan can put them under the
+    // cursor: at 15 px of finger scroll per notch and this speed, one notch is
+    // 1500 canvas px — the first walks the canvas up onto `a`, the next onto
+    // `b`.
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 2300)));
+    let b_surface = map_window(&mut f, id, "b", (400, 300));
+    let b = window_by_app_id(&mut f, "b").unwrap();
+    place(&mut f, &b, Point::from((0, 3800)));
+    origin_view(&mut f);
+
+    let trackpad = FakeDevice::touchpad();
+    // The cursor rests on bare canvas. That is also the only place an
+    // unmodified two-finger scroll pans from, so the first notch has to come
+    // from here; `recent_pan` stickiness is what keeps the second one panning
+    // once `a` is under the cursor. Whatever mapping left focused, the pan has
+    // to move it — which is the whole assertion.
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((200.0, 950.0)));
+    f.double_roundtrip(id);
+    assert!(
+        !is_activated(&a),
+        "test setup bug: neither window is under the resting cursor yet"
+    );
+
+    trackpad_scroll(&mut f, &trackpad);
+    f.double_roundtrip(id);
+    assert!(
+        is_activated(&a),
+        "test setup bug: the first notch puts a under the resting cursor, so a takes focus"
+    );
+    f.client(id).window(&b_surface).format_recent_configures();
+
+    // The cursor never moves. This notch slides `a` off it and `b` onto it.
+    trackpad_scroll(&mut f, &trackpad);
+    f.double_roundtrip(id);
+
+    assert!(
+        is_activated(&b) && !is_activated(&a),
+        "a viewport move must carry sloppy focus onto the window now under the \
+         cursor, got a={} b={}",
+        is_activated(&a),
+        is_activated(&b)
+    );
+    let b_configures = f.client(id).window(&b_surface).format_recent_configures();
+    assert!(
+        b_configures.contains("Activated"),
+        "the pan must flush an Activated configure to the window it focused, got:\n{b_configures}"
+    );
+}
+
+/// The same pan with `focus_follows_mouse` off (the default): client pointer
+/// focus follows the viewport, the keyboard stays where the last click put it.
+#[test]
+fn a_viewport_move_alone_leaves_focus_alone_with_sloppy_focus_off() {
+    let mut f = Fixture::with_config(config(""));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 0)));
+    map_window(&mut f, id, "b", (400, 300));
+    let b = window_by_app_id(&mut f, "b").unwrap();
+    place(&mut f, &b, Point::from((0, 1500)));
+    origin_view(&mut f);
+
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.double_roundtrip(id);
+    assert!(is_activated(&a));
+
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((200.0, 150.0)));
+    f.double_roundtrip(id);
+    pan_viewport(&mut f, Point::from((0.0, 1500.0)));
+    f.double_roundtrip(id);
+
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&a)),
+        "focus_follows_mouse=false must leave the keyboard on the clicked window"
+    );
+    assert!(!is_activated(&b));
+}
+
+/// A pan that leaves the same window under the cursor must not churn focus: no
+/// re-activation, no configure on the wire. The hover pull is gated on the
+/// viewport having moved, so this is the half of that gate the pan scenario
+/// above can't see — the cursor still rests on `a`, and `a` keeps the hint it
+/// already had.
+#[test]
+fn a_pan_that_keeps_the_same_window_under_the_cursor_sends_no_focus_change() {
+    let mut f = Fixture::with_config(config("focus_follows_mouse = true\n"));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    let a_surface = map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 0)));
+    map_window(&mut f, id, "b", (400, 300));
+    let b = window_by_app_id(&mut f, "b").unwrap();
+    place(&mut f, &b, Point::from((2000, 0)));
+    origin_view(&mut f);
+
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((200.0, 150.0)));
+    f.double_roundtrip(id);
+    assert!(is_activated(&a));
+    // Drain the hover that just landed, so only a focus change can show up.
+    f.client(id).window(&a_surface).format_recent_configures();
+
+    pan_viewport(&mut f, Point::from((0.0, 40.0)));
+    f.double_roundtrip(id);
+
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(!is_activated(&b));
+    let configures = f.client(id).window(&a_surface).format_recent_configures();
+    assert!(
+        configures.is_empty(),
+        "a pan that leaves focus where it was must not re-activate anything, got:\n{configures}"
+    );
+}
+
+/// A suspended stand-in yields no client pointer focus at all, so the pan that
+/// brings one under the cursor changes nothing the pull would put on the wire —
+/// its delivery dedup skips the dispatch — and sloppy focus still has to move
+/// onto it. Pins the hover pull as its own step rather than a tail of the
+/// pointer dispatch.
+#[test]
+fn a_pan_onto_a_suspended_window_moves_sloppy_focus_onto_it() {
+    let mut f = Fixture::with_config(config(
+        r#"
+focus_follows_mouse = true
+
+[decorations]
+default_mode = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 0)));
+    origin_view(&mut f);
+    let sid = f.state().insert_suspended_for_test(
+        1,
+        Point::from((0, 1500)),
+        Size::from((400, 300)),
+        "s",
+        "S",
+    );
+
+    // Inserting the stand-in activates it too (a no-op on the wire, no
+    // toplevel), so re-focus a to make the assertions isolate the pan.
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&a, serial);
+    f.double_roundtrip(id);
+    assert!(is_activated(&a));
+
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((200.0, 150.0)));
+    f.double_roundtrip(id);
+    pan_viewport(&mut f, Point::from((0.0, 1500.0)));
+    f.double_roundtrip(id);
+
+    let intent = f.state().window_focus.clone();
+    assert!(
+        matches!(intent, Some(FocusIntent::Suspended(s)) if s == sid),
+        "a pan onto a stand-in must set the Suspended focus intent, got: {intent:?}"
+    );
+    assert!(
+        !is_activated(&a),
+        "the window the pan carried away must lose the Activated hint"
+    );
+
+    f.state().dismiss_suspended(sid);
 }

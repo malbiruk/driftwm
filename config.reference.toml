@@ -19,6 +19,8 @@
 
 # # Sloppy focus: keyboard focus follows the pointer to windows.
 # # Moving to empty canvas keeps focus; click empty canvas to unfocus.
+# # Panning or zooming the viewport counts as moving the pointer, so a window
+# # that slides under a resting cursor takes focus.
 # focus_follows_mouse = false
 
 # # Where new windows spawn when no window rule positions them:

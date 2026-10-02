@@ -21,7 +21,7 @@ Window manager modifier key: "super" (default), "alt", or "mod3". Nothing occupi
 
 Default: `false`
 
-Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus; click empty canvas to unfocus.
+Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus; click empty canvas to unfocus. Panning or zooming the viewport counts as moving the pointer, so a window that slides under a resting cursor takes focus.
 
 ### `window_placement`
 
