@@ -6,4 +6,5 @@ pub mod image_copy_capture;
 pub mod output_management;
 pub mod output_power;
 pub mod screencopy;
+pub mod server_decoration;
 pub mod virtual_keyboard;

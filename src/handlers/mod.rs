@@ -858,6 +858,53 @@ impl OutputPowerHandler for DriftWm {
 
 driftwm::delegate_output_power!(DriftWm);
 
+impl driftwm::protocols::server_decoration::ServerDecorationHandler for DriftWm {
+    fn server_decoration_state(
+        &mut self,
+    ) -> &mut driftwm::protocols::server_decoration::ServerDecorationManagerState {
+        &mut self.server_decoration_state
+    }
+
+    fn server_decoration_default_mode(
+        &self,
+    ) -> smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode{
+        match self.config.decorations.default_mode {
+            driftwm::config::DecorationMode::Client => {
+                smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode::Client
+            }
+            _ => {
+                smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode::Server
+            }
+        }
+    }
+
+    fn server_decoration_mode_for_surface(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode{
+        let applied = driftwm::config::applied_rule(surface);
+        let rule_explicit = applied.as_ref().and_then(|a| a.decoration.as_ref());
+        match rule_explicit {
+            Some(driftwm::config::DecorationMode::Client) => {
+                smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::Client
+            }
+            Some(_) => {
+                smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::Server
+            }
+            None => match self.config.decorations.default_mode {
+                driftwm::config::DecorationMode::Client => {
+                    smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::Client
+                }
+                _ => {
+                    smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode::Server
+                }
+            },
+        }
+    }
+}
+
+driftwm::delegate_server_decoration!(DriftWm);
+
 use smithay::wayland::foreign_toplevel_list::ForeignToplevelHandle;
 use smithay::wayland::image_capture_source::{
     ImageCaptureSource, ImageCaptureSourceHandler, OutputCaptureSourceHandler,
