@@ -715,6 +715,8 @@ pub struct DriftWm {
     pub screencopy_state: driftwm::protocols::screencopy::ScreencopyManagerState,
     pub output_management_state: driftwm::protocols::output_management::OutputManagementState,
     pub output_power_state: driftwm::protocols::output_power::OutputPowerState,
+    pub server_decoration_state:
+        driftwm::protocols::server_decoration::ServerDecorationManagerState,
     /// Outputs currently in DPMS off; render loop skips these.
     pub dpms_off_outputs: HashSet<Output>,
     /// Client-requested DPMS transitions awaiting the udev render loop —
