@@ -10,6 +10,7 @@
 //! all clients and asserts `debug_counters` return to the construction-time
 //! baseline (opt out with `Fixture::skip_baseline_check`).
 
+mod back_pan;
 mod client;
 mod fixture;
 mod gl;

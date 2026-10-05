@@ -280,6 +280,33 @@ impl DriftWm {
             let keyboard = self.seat.get_keyboard().unwrap();
             let mods = keyboard.modifier_state();
 
+            // Linux mice normally report Back as BTN_SIDE (275); some use BTN_BACK (278).
+            if self.config.back_button_pan
+                && matches!(button, 275 | 278)
+                && !mods.ctrl
+                && !mods.alt
+                && !mods.shift
+                && !mods.logo
+                && !mods.iso_level5_shift
+                && !pointer.is_grabbed()
+                && !self.is_fullscreen()
+            {
+                let screen = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
+                let focus = self.pointer_focus_under(screen, pos);
+                if let Some(pan) = self.make_pan_grab(pos, button, false) {
+                    let mut start_data = pan.start_data.clone();
+                    start_data.focus = focus;
+                    let grab = crate::grabs::BackPanGrab {
+                        start_data,
+                        pan,
+                        dragging: false,
+                        forwarded: false,
+                    };
+                    pointer.set_grab(self, grab, serial, Focus::Keep);
+                    return;
+                }
+            }
+
             // During fullscreen the window fills the screen, so bindings resolve
             // in the OnWindow context. Grab bindings exit fullscreen up front and
             // dispatch on the restored canvas; discrete actions dispatch like

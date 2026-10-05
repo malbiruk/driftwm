@@ -160,6 +160,7 @@ pub struct TabletSettings {
 pub struct Config {
     pub mod_key: ModKey,
     pub focus_follows_mouse: bool,
+    pub back_button_pan: bool,
     /// Session persistence: close-to-suspend, window restore, and camera restore.
     pub session: SessionConfig,
     /// Multiplier for trackpad scroll and gesture pan deltas. 1.0 = raw trackpad.
@@ -1089,6 +1090,7 @@ impl Config {
         let config = Self {
             mod_key,
             focus_follows_mouse: raw.focus_follows_mouse.unwrap_or(false),
+            back_button_pan: raw.back_button_pan.unwrap_or(false),
             session: SessionConfig {
                 suspend_on_close: raw.session.suspend_on_close.unwrap_or(false),
                 restore_windows: raw.session.restore_windows.unwrap_or(false),

@@ -23,6 +23,12 @@ Default: `false`
 
 Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus; click empty canvas to unfocus.
 
+### `back_button_pan`
+
+Default: `false`
+
+Hold Back and drag at least 6 screen pixels to pan; release without dragging sends Back. Fullscreen, modified clicks and existing grabs retain normal mouse behaviour.
+
 ### `window_placement`
 
 Default: `"center"`

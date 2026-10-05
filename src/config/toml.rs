@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 pub(super) struct ConfigFile {
     pub mod_key: Option<String>,
     pub focus_follows_mouse: Option<bool>,
+    pub back_button_pan: Option<bool>,
     pub session: SessionFileConfig,
     pub input: InputConfig,
     pub cursor: CursorConfig,
