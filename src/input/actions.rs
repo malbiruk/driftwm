@@ -109,6 +109,7 @@ impl DriftWm {
             Action::GrowWindow(dir) => self.step_resize_focused(dir, self.config.resize_step),
             Action::ShrinkWindow(dir) => self.step_resize_focused(dir, -self.config.resize_step),
             Action::PanViewport(dir) => {
+                self.cancel_held_overview_return();
                 let Some(zoom) = self.with_output_state(|os| {
                     os.zoom_target = None;
                     os.zoom_animation_anchor = None;
@@ -435,6 +436,14 @@ impl DriftWm {
             Action::ZoomReset => {
                 self.zoom_to_anchored(1.0);
             }
+            Action::ZoomToFitHeld => {
+                if self.has_active_held_bindings() {
+                    self.begin_held_overview();
+                } else {
+                    self.execute_action(&Action::ZoomToFit);
+                }
+            }
+            Action::RestoreOverview => self.finish_held_overview(),
             Action::ZoomToFit => {
                 if self.try_restore_overview() {
                     // toggled back

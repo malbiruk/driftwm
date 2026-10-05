@@ -175,6 +175,8 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "zoom-out" => Ok(Action::ZoomOut),
         "zoom-reset" => Ok(Action::ZoomReset),
         "zoom-to-fit" => Ok(Action::ZoomToFit),
+        "zoom-to-fit-held" => Ok(Action::ZoomToFitHeld),
+        "restore-overview" => Ok(Action::RestoreOverview),
         "zoom-to-fit-snapped" => Ok(Action::ZoomToFitSnapped),
         "toggle-fullscreen" => Ok(Action::ToggleFullscreen),
         "fit-window" => Ok(Action::FitWindow),
@@ -262,6 +264,8 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("zoom-out", "zoom-out"),
     ("zoom-reset", "zoom-reset"),
     ("zoom-to-fit", "zoom-to-fit"),
+    ("zoom-to-fit-held", "zoom-to-fit-held"),
+    ("restore-overview", "restore-overview"),
     ("zoom-to-fit-snapped", "zoom-to-fit-snapped"),
 ];
 
@@ -621,6 +625,8 @@ mod tests {
             Action::ZoomOut => "zoom-out",
             Action::ZoomReset => "zoom-reset",
             Action::ZoomToFit => "zoom-to-fit",
+            Action::ZoomToFitHeld => "zoom-to-fit-held",
+            Action::RestoreOverview => "restore-overview",
             Action::ZoomToFitSnapped => "zoom-to-fit-snapped",
             Action::ToggleFullscreen => "toggle-fullscreen",
             Action::FitWindow => "fit-window",

@@ -336,6 +336,12 @@ impl DriftWm {
         if self.is_output_fullscreen(output) {
             return Point::from((0.0, 0.0));
         }
+        if delta.x == 0.0 && delta.y == 0.0 {
+            return delta;
+        }
+        if self.held_overview_output.as_ref() == Some(output) {
+            self.cancel_held_overview_return();
+        }
         {
             let mut os = super::output_state(output);
             os.camera_target = None;

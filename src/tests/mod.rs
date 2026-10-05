@@ -14,6 +14,7 @@ mod client;
 mod fixture;
 mod gl;
 mod headless;
+mod held_bindings;
 mod input_backend;
 mod real;
 mod server;

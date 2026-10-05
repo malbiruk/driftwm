@@ -263,3 +263,189 @@ fn unfitting_snapped_out_of_fullscreen_still_pulls_the_neighbour_back() {
         "the neighbour tracks the unfitted primary's right edge back in"
     );
 }
+
+fn held_fit_fixture() -> Fixture {
+    let config =
+        driftwm::config::Config::from_toml(r#"[held-keybindings]
+"mod+w" = { press = "zoom-to-fit-held", release = "restore-overview", cancel = "restore-overview", hold = "modifiers" }
+"#)
+            .unwrap();
+    let mut f = Fixture::with_config(config);
+    two_spread_windows(&mut f);
+    f
+}
+
+#[test]
+fn held_overview_w_release_and_camera_warps_do_not_restore() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = held_fit_fixture();
+    let original_camera = f.state().camera();
+    let original_zoom = f.state().zoom();
+    key_press(&mut f, 125); // Super
+    key_press(&mut f, 17); // W
+    key_release(&mut f, 17);
+    settle(&mut f);
+    assert!(f.state().held_overview);
+    assert!(f.state().held_overview_output.is_some());
+    assert!(f.state().zoom() < original_zoom);
+    key_release(&mut f, 125);
+    settle(&mut f);
+    assert!(!f.state().held_overview);
+    assert!((f.state().zoom() - original_zoom).abs() < 1e-6);
+    assert!((f.state().camera().x - original_camera.x).abs() < 1.0);
+    assert!((f.state().camera().y - original_camera.y).abs() < 1.0);
+}
+
+#[test]
+fn held_overview_pointer_motion_keeps_return_armed() {
+    use super::input_backend::{
+        FakeDevice, key_press, key_release, pointer_relative_motion, pointer_to,
+    };
+    let mut f = held_fit_fixture();
+    let original_camera = f.state().camera();
+    let original_zoom = f.state().zoom();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    pointer_relative_motion(&mut f, &FakeDevice::mouse(), Point::from((20.0, 0.0)));
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((600.0, 500.0)));
+    assert!(f.state().held_overview_output.is_some());
+    assert!(f.state().overview_return().is_some());
+    key_release(&mut f, 17);
+    key_release(&mut f, 125);
+    settle(&mut f);
+    assert!((f.state().zoom() - original_zoom).abs() < 1e-6);
+    assert!((f.state().camera().x - original_camera.x).abs() < 1.0);
+    assert!((f.state().camera().y - original_camera.y).abs() < 1.0);
+}
+
+#[test]
+fn held_overview_camera_pan_disarms_return() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = held_fit_fixture();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    f.state().drift_pan(Point::from((0.0, 0.0)), 1);
+    assert!(f.state().overview_return().is_some());
+    f.state().drift_pan(Point::from((40.0, 20.0)), 2);
+    assert!(f.state().held_overview_output.is_none());
+    assert!(f.state().overview_return().is_none());
+    // Stop momentum to isolate whether release restores the original view.
+    let output = f.state().active_output().unwrap();
+    crate::state::output_state(&output).momentum.stop();
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    key_press(&mut f, 17);
+    key_release(&mut f, 17);
+    key_release(&mut f, 125);
+    settle(&mut f);
+    assert_eq!(f.state().camera(), camera);
+    assert_eq!(f.state().zoom(), zoom);
+}
+
+#[test]
+fn held_overview_keyboard_pan_disarms_return() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = held_fit_fixture();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    f.state()
+        .execute_action(&Action::PanViewport(Direction::Right));
+    settle(&mut f);
+    let camera = f.state().camera();
+    let zoom = f.state().zoom();
+    key_release(&mut f, 17);
+    key_release(&mut f, 125);
+    settle(&mut f);
+    assert_eq!(f.state().camera(), camera);
+    assert_eq!(f.state().zoom(), zoom);
+}
+
+#[test]
+fn held_overview_super_can_release_before_w() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = held_fit_fixture();
+    let zoom = f.state().zoom();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    key_release(&mut f, 125);
+    key_release(&mut f, 17);
+    settle(&mut f);
+    assert!(!f.state().held_overview);
+    assert!((f.state().zoom() - zoom).abs() < 1e-6);
+}
+
+#[test]
+fn held_overview_escape_restores_and_reset_disarms() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = held_fit_fixture();
+    let zoom = f.state().zoom();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    key_press(&mut f, 1); // Escape
+    key_release(&mut f, 1);
+    settle(&mut f);
+    assert!((f.state().zoom() - zoom).abs() < 1e-6);
+    key_release(&mut f, 17);
+    key_release(&mut f, 125);
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    settle(&mut f);
+    f.state().reset_held_input_state();
+    assert!(!f.state().held_overview);
+    assert!(f.state().held_overview_output.is_none());
+    assert!(f.state().camera_target().is_none());
+}
+
+#[test]
+fn held_overview_super_left_click_picks_and_keeps_selected_view() {
+    use super::input_backend::{FakeDevice, key_press, key_release, pointer_to, press, release};
+    use driftwm::config::BTN_LEFT;
+    let mut f = held_fit_fixture();
+    f.state().config.zoom_interact_min = 1.0;
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    key_release(&mut f, 17);
+    settle(&mut f);
+    let left = window_by_app_id(&mut f, "left").unwrap();
+    let mouse = FakeDevice::mouse();
+    pointer_to(&mut f, &mouse, Point::from((200.0, 150.0)));
+    assert!(f.state().held_overview_output.is_some());
+    press(&mut f, &mouse, BTN_LEFT);
+    release(&mut f, &mouse, BTN_LEFT);
+    settle(&mut f);
+    assert_eq!(f.state().focused_window(), Some(left));
+    assert!((f.state().zoom() - 1.0).abs() < 1e-6);
+    let camera = f.state().camera();
+    key_release(&mut f, 125);
+    settle(&mut f);
+    assert_eq!(f.state().camera(), camera);
+    assert!((f.state().zoom() - 1.0).abs() < 1e-6);
+}
+
+#[test]
+fn held_overview_uses_the_bound_modifier_not_super() {
+    use super::input_backend::{key_press, key_release};
+    for (modifier, key) in [("alt", 56), ("ctrl", 29)] {
+        let config = driftwm::config::Config::from_toml(&format!(r#"[held-keybindings]
+"{modifier}+w" = {{ press = "zoom-to-fit-held", release = "restore-overview", cancel = "restore-overview", hold = "modifiers" }}
+"#)).unwrap();
+        let mut f = Fixture::with_config(config);
+        two_spread_windows(&mut f);
+        let zoom = f.state().zoom();
+        key_press(&mut f, key);
+        key_press(&mut f, 17);
+        key_release(&mut f, 17);
+        settle(&mut f);
+        assert!(f.state().held_overview);
+        assert!(f.state().zoom() < zoom);
+        key_release(&mut f, key);
+        settle(&mut f);
+        assert!(!f.state().held_overview);
+        assert!((f.state().zoom() - zoom).abs() < 1e-6);
+    }
+}

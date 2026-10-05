@@ -1,6 +1,8 @@
 mod actions;
 pub(crate) mod constraint;
 pub(crate) mod gestures;
+pub(crate) mod held_bindings;
+mod held_overview;
 pub(crate) mod keyboard;
 mod pointer;
 pub(crate) mod tablet;
@@ -8,8 +10,9 @@ pub(crate) mod touch;
 
 use smithay::{
     backend::input::{
-        AbsolutePositionEvent, Axis, ButtonState, Event, InputBackend, InputEvent, KeyState,
-        KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent, PointerMotionEvent,
+        AbsolutePositionEvent, Axis, ButtonState, Device, DeviceCapability, Event, InputBackend,
+        InputEvent, KeyState, KeyboardKeyEvent, PointerAxisEvent, PointerButtonEvent,
+        PointerMotionEvent,
     },
     desktop::{WindowSurfaceType, layer_map_for_output},
     input::pointer::{MotionEvent, RelativeMotionEvent},
@@ -382,6 +385,9 @@ impl DriftWm {
                 self.on_device_added::<I>(device);
             }
             InputEvent::DeviceRemoved { device } => {
+                if device.has_capability(DeviceCapability::Keyboard) {
+                    self.reset_held_input_state();
+                }
                 self.on_device_removed::<I>(device);
             }
             _ => {}
@@ -1425,6 +1431,10 @@ impl DriftWm {
         let Some(output) = active else {
             return;
         };
+        if self.held_overview_output.as_ref() == Some(&output) {
+            self.clear_edge_pan(&output);
+            return;
+        }
         // A fullscreen window owns the whole viewport — edge-panning the camera
         // out from under it just breaks the fullscreen surface.
         if self.is_output_fullscreen(&output) {

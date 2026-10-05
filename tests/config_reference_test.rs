@@ -350,7 +350,9 @@ fn keybinding_actions_are_all_documented() {
     // const entry names a real action (a bad action surfaces as a warning).
     let mut toml = String::from("[keybindings]\n");
     for (i, (_, sample)) in ACTION_NAMES.iter().enumerate() {
-        toml.push_str(&format!("\"ctrl+F{}\" = \"{sample}\"\n", i + 1));
+        // XKB has F1 through F35; use another chord after that range.
+        let modifiers = if i < 35 { "ctrl" } else { "ctrl+shift" };
+        toml.push_str(&format!("\"{modifiers}+F{}\" = \"{sample}\"\n", i % 35 + 1));
     }
     let (_, warnings) = Config::from_toml_collect(&toml)
         .unwrap_or_else(|e| panic!("sample action bindings failed to parse: {e}\n\n{toml}"));

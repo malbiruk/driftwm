@@ -868,7 +868,16 @@ impl DriftWm {
         // fall-through.
         let (_, modifier_binding) =
             self.modifier_button_binding(&mods, button, BindingContext::OnWindow);
-        if modifier_binding {
+        // The overview lets the held chord pick windows; otherwise a
+        // modifier+left pan binding can make overview windows unpickable.
+        let held_overview_pick = button == config::BTN_LEFT
+            && self.held_overview_output.as_ref() == self.active_output().as_ref()
+            && self.held_overview_output.is_some()
+            && self.held_bindings.iter().any(|held| {
+                matches!(held.binding.press, config::Action::ZoomToFitHeld)
+                    && held.binding.modifiers == config::Modifiers::from_state(&mods)
+            });
+        if modifier_binding && !held_overview_pick {
             return false;
         }
 
