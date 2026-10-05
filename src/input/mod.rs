@@ -642,7 +642,7 @@ impl DriftWm {
     }
 
     /// Sloppy focus: when enabled, focus the non-widget window under the pointer
-    /// without raising it. Skips layers, widgets, and empty canvas.
+    /// without raising it. Skips layers and widgets; bare canvas can clear focus.
     pub(crate) fn maybe_hover_focus(&mut self, canvas_pos: Point<f64, smithay::utils::Logical>) {
         if !self.config.focus_follows_mouse || self.pointer_over_layer {
             return;
@@ -715,7 +715,20 @@ impl DriftWm {
                     self.set_activated_exclusive(&StageWindow::Suspended(s));
                 }
             }
-            None => {}
+            None => {
+                if self.config.unfocus_on_empty_canvas
+                    && self.window_focus.is_some()
+                    && self.on_demand_layer.is_none()
+                    && self.exclusive_layer_focus().is_none()
+                    && self.canvas_layer_under(canvas_pos).is_none()
+                    && !self.resize_margin_under(canvas_pos)
+                    && !self.pinned_resize_margin_under(screen_pos)
+                    && matches!(self.pinned_decoration_under(screen_pos), PinnedChrome::Miss)
+                {
+                    self.clear_focus_to_empty_canvas(SERIAL_COUNTER.next_serial());
+                    self.clear_window_activation();
+                }
+            }
         }
     }
 

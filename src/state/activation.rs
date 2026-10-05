@@ -1,4 +1,4 @@
-//! The xdg Activated hint: exactly one window carries it, and a change reaches
+//! The xdg Activated hint: at most one window carries it, and a change reaches
 //! the client even when no other configure follows.
 //!
 //! The subtlety is *when* to flush. A window that already has a configure
@@ -18,7 +18,7 @@ impl DriftWm {
     where
         StageWindow: PartialEq<Q>,
     {
-        self.activate_exclusive(target, true);
+        self.activate_exclusive(Some(target), true);
     }
 
     /// Like `set_activated_exclusive`, but for a `target` that is about to
@@ -30,7 +30,11 @@ impl DriftWm {
     where
         StageWindow: PartialEq<Q>,
     {
-        self.activate_exclusive(target, false);
+        self.activate_exclusive(Some(target), false);
+    }
+
+    pub(crate) fn clear_window_activation(&self) {
+        self.activate_exclusive::<StageWindow>(None, true);
     }
 
     /// Set xdg Activated on `target`, clear it elsewhere, and flush the hint for
@@ -39,15 +43,16 @@ impl DriftWm {
     /// splitting the batched first-commit send. `flush_target` is false when a
     /// following send will carry the target's hint itself. Stand-ins never
     /// activate (`set_activated` no-ops, no toplevel), so they stay quiet.
-    fn activate_exclusive<Q>(&self, target: &Q, flush_target: bool)
+    fn activate_exclusive<Q>(&self, target: Option<&Q>, flush_target: bool)
     where
         StageWindow: PartialEq<Q>,
     {
         for w in self.stage.windows() {
-            if !w.set_activated(w == target) {
+            let is_target = target.is_some_and(|target| w == target);
+            if !w.set_activated(is_target) {
                 continue;
             }
-            if w == target && !flush_target {
+            if is_target && !flush_target {
                 continue;
             }
             if let Some(toplevel) = w.toplevel()

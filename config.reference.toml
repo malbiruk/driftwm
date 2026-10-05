@@ -18,8 +18,11 @@
 # mod_key = "super"
 
 # # Sloppy focus: keyboard focus follows the pointer to windows.
-# # Moving to empty canvas keeps focus; click empty canvas to unfocus.
+# # Moving to empty canvas keeps focus by default; click empty canvas to unfocus.
 # focus_follows_mouse = false
+# # With focus_follows_mouse enabled, hovering bare canvas clears window focus.
+# # Layers, widgets, resize margins, fullscreen windows and active grabs retain focus.
+# unfocus_on_empty_canvas = false
 
 # # Where new windows spawn when no window rule positions them:
 # #   "center"           — under the focus_placement point (the viewport center

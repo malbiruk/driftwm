@@ -21,7 +21,13 @@ Window manager modifier key: "super" (default), "alt", or "mod3". Nothing occupi
 
 Default: `false`
 
-Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus; click empty canvas to unfocus.
+Sloppy focus: keyboard focus follows the pointer to windows. Moving to empty canvas keeps focus by default; click empty canvas to unfocus.
+
+### `unfocus_on_empty_canvas`
+
+Default: `false`
+
+With focus_follows_mouse enabled, hovering bare canvas clears window focus. Layers, widgets, resize margins, fullscreen windows and active grabs retain focus.
 
 ### `window_placement`
 

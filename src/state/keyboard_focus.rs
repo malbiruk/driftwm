@@ -273,7 +273,7 @@ impl DriftWm {
 
     /// First mapped layer surface (across outputs and canvas layers) that
     /// requests `Exclusive` keyboard interactivity, in z-priority order.
-    fn exclusive_layer_focus(&self) -> Option<FocusTarget> {
+    pub(crate) fn exclusive_layer_focus(&self) -> Option<FocusTarget> {
         use smithay::utils::IsAlive;
         use smithay::wayland::shell::wlr_layer::{KeyboardInteractivity, Layer};
 

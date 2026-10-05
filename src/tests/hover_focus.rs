@@ -568,3 +568,154 @@ default_mode = "server"
         );
     }
 }
+
+#[test]
+fn empty_canvas_unfocus_is_opt_in_and_requires_hover_focus() {
+    for (hover, unfocus, cleared) in [
+        (true, false, false),
+        (false, true, false),
+        (true, true, true),
+    ] {
+        let mut f = Fixture::with_config(config(&format!(
+            "focus_follows_mouse = {hover}\nunfocus_on_empty_canvas = {unfocus}\n"
+        )));
+        f.add_output(1, (1920, 1080));
+        let id = f.add_client();
+        let surface = map_window(&mut f, id, "a", (400, 300));
+        let a = window_by_app_id(&mut f, "a").unwrap();
+        place(&mut f, &a, Point::from((0, 0)));
+        f.state().raise_and_focus(&a, SERIAL_COUNTER.next_serial());
+        f.double_roundtrip(id);
+        f.client(id).window(&surface).format_recent_configures();
+
+        let background = Point::from((1000.0, 700.0));
+        f.state().warp_pointer(background);
+        f.state().maybe_hover_focus(background);
+        f.double_roundtrip(id);
+        assert_eq!(keyboard_focus(&mut f).is_none(), cleared);
+        assert_eq!(!is_activated(&a), cleared);
+        assert_eq!(f.state().suppress_auto_anchor, cleared);
+        if cleared {
+            let configures = f.client(id).window(&surface).format_recent_configures();
+            assert!(!configures.is_empty() && !configures.contains("Activated"));
+            f.state().maybe_hover_focus(background);
+            f.double_roundtrip(id);
+            assert!(
+                f.client(id)
+                    .window(&surface)
+                    .format_recent_configures()
+                    .is_empty()
+            );
+            let center = window_center(&mut f, &a);
+            f.state().warp_pointer(center);
+            f.state().maybe_hover_focus(center);
+            assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+            assert!(is_activated(&a));
+            assert!(!f.state().suppress_auto_anchor);
+        }
+    }
+}
+
+#[test]
+fn empty_canvas_unfocus_preserves_resize_margin_and_layer_hover() {
+    let mut f = Fixture::with_config(config(
+        "focus_follows_mouse = true\nunfocus_on_empty_canvas = true\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((100, 100)));
+    f.state().raise_and_focus(&a, SERIAL_COUNTER.next_serial());
+    f.state().maybe_hover_focus(Point::from((98.0, 200.0)));
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(is_activated(&a));
+    f.state().pointer_over_layer = true;
+    f.state().maybe_hover_focus(Point::from((1000.0, 700.0)));
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(is_activated(&a));
+}
+
+#[test]
+fn empty_canvas_unfocus_preserves_widgets_and_pointer_grabs() {
+    use super::input_backend::{FakeDevice, pointer_to, press, release};
+    use driftwm::config::BTN_LEFT;
+    let mut f = Fixture::with_config(config(
+        "focus_follows_mouse = true\nunfocus_on_empty_canvas = true\n[[window_rules]]\napp_id = \"widget\"\nwidget = true\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 0)));
+    map_window(&mut f, id, "widget", (200, 100));
+    let widget = window_by_app_id(&mut f, "widget").unwrap();
+    place(&mut f, &widget, Point::from((800, 0)));
+    f.state().raise_and_focus(&a, SERIAL_COUNTER.next_serial());
+    let center = window_center(&mut f, &widget);
+    f.state().maybe_hover_focus(center);
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(is_activated(&a));
+    let mouse = FakeDevice::mouse();
+    pointer_to(&mut f, &mouse, Point::from((200.0, 150.0)));
+    press(&mut f, &mouse, BTN_LEFT);
+    assert!(f.state().seat.get_pointer().unwrap().is_grabbed());
+    f.state().maybe_hover_focus(Point::from((1000.0, 700.0)));
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(is_activated(&a));
+    release(&mut f, &mouse, BTN_LEFT);
+}
+
+#[test]
+fn empty_canvas_unfocus_preserves_exclusive_layer_focus_intent() {
+    use wayland_protocols_wlr::layer_shell::v1::client::{
+        zwlr_layer_shell_v1, zwlr_layer_surface_v1,
+    };
+    let mut f = Fixture::with_config(config(
+        "focus_follows_mouse = true\nunfocus_on_empty_canvas = true\n",
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    place(&mut f, &a, Point::from((0, 0)));
+    f.state().raise_and_focus(&a, SERIAL_COUNTER.next_serial());
+    let layer = f
+        .client(id)
+        .create_layer(None, zwlr_layer_shell_v1::Layer::Overlay, "launcher");
+    let surface = layer.surface.clone();
+    layer.set_configure_props(super::client::LayerConfigureProps {
+        size: Some((400, 300)),
+        kb_interactivity: Some(zwlr_layer_surface_v1::KeyboardInteractivity::Exclusive),
+        ..Default::default()
+    });
+    layer.commit();
+    f.roundtrip(id);
+    let layer = f.client(id).layer(&surface);
+    layer.set_size(400, 300);
+    layer.attach_new_buffer();
+    layer.ack_last_and_commit();
+    f.double_roundtrip(id);
+    let before = keyboard_focus(&mut f);
+    f.state().maybe_hover_focus(Point::from((1000.0, 700.0)));
+    assert_eq!(keyboard_focus(&mut f), before);
+    f.client(id).layer(&surface).layer_surface.destroy();
+    f.double_roundtrip(id);
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+}
+
+#[test]
+fn empty_canvas_unfocus_preserves_fullscreen_focus() {
+    let mut f = Fixture::with_config(config(
+        "focus_follows_mouse = true\nunfocus_on_empty_canvas = true\n",
+    ));
+    let output = f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+    map_window(&mut f, id, "a", (400, 300));
+    let a = window_by_app_id(&mut f, "a").unwrap();
+    f.state().enter_fullscreen(&a, Some(output));
+    f.state().maybe_hover_focus(Point::from((3000.0, 2000.0)));
+    assert_eq!(keyboard_focus(&mut f), Some(server_surface(&a)));
+    assert!(is_activated(&a));
+}
