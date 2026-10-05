@@ -596,6 +596,7 @@ impl XdgShellHandler for DriftWm {
             snap: driftwm::layout::snap::SnapState::default(),
             constraints,
             cluster_resize,
+            contact_push: None,
             pinned_initial_screen_pos,
             touch_start: None,
             touch_slots: 0,

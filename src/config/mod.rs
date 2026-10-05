@@ -228,6 +228,7 @@ pub struct Config {
     /// comparison, so the sentinel needs no special case).
     pub zoom_interact_min: f64,
     pub snap_enabled: bool,
+    pub contact_push: bool,
     pub snap_gap: f64,
     /// Inset from the usable area's edge to a fitted, filled or parked window's
     /// title bar / content edge.
@@ -1184,6 +1185,7 @@ impl Config {
                 &mut errors,
             ),
             snap_enabled: raw.snap.enabled.unwrap_or(true),
+            contact_push: raw.snap.contact_push.unwrap_or(false),
             snap_gap: non_negative(raw.snap.gap.unwrap_or(12.0), "snap.gap", &mut errors),
             snap_outer_gap: non_negative(
                 raw.snap.outer_gap.unwrap_or(0.0),

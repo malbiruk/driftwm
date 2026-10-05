@@ -11,6 +11,8 @@
 
 mod activation;
 mod cluster_snapshot;
+mod contact_push;
+pub(crate) use contact_push::ContactPushSnapshot;
 mod cursor;
 mod edge_pan;
 mod errors;

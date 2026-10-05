@@ -203,6 +203,7 @@ pub struct ResizeGrab {
     /// `members` + empty `exclude` for single-window resize (every cluster
     /// loop becomes a no-op, `snap_targets` behaves as pre-slice-2).
     pub cluster_resize: ClusterResizeSnapshot,
+    pub(crate) contact_push: Option<crate::state::ContactPushSnapshot>,
     /// `Some` ⟹ resizing a screen-pinned window: the size delta is taken in
     /// output-relative screen space (× zoom), there's no snap or cluster reflow,
     /// and top/left-edge repositioning targets `screen_pos`. Holds the
@@ -470,6 +471,7 @@ impl ResizeGrab {
             snap: SnapState::default(),
             constraints,
             cluster_resize,
+            contact_push: None,
             pinned_initial_screen_pos,
             touch_start: Some(touch_start),
             touch_slots: slots,
@@ -603,7 +605,8 @@ impl ResizeGrab {
 
         // Snap active resize edges to nearby windows. Skipped under a locked
         // ratio: snapping one axis would fight the ratio-derived axis.
-        if data.config.snap_enabled && self.locked_ratio.is_none() {
+        let contact_resize = data.config.contact_push && self.cluster_resize.members.is_empty();
+        if data.config.snap_enabled && self.locked_ratio.is_none() && !contact_resize {
             #[allow(clippy::mutable_key_type)]
             let excludes = self.cluster_resize.exclude_set(&data.stage);
             let (others, self_bar, self_bw) = data.snap_targets(element, &excludes);
@@ -635,7 +638,26 @@ impl ResizeGrab {
         // neighbors. Treat a ratio-locked resize as single-window. Shifts run
         // every tick (not gated on size change): a member dying mid-tick can
         // reflow the cascade while the primary's size holds constant.
-        let moved_members = if self.locked_ratio.is_none() {
+        if contact_resize && self.locked_ratio.is_none() && self.contact_push.is_none() {
+            self.contact_push = data.capture_contact_push(element);
+        }
+        if let Some(snapshot) = &self.contact_push {
+            let mut rect = snapshot.primary;
+            let dw = (new_w - self.initial_window_size.w) as f64;
+            let dh = (new_h - self.initial_window_size.h) as f64;
+            if has_left(self.edges) {
+                rect.x_low -= dw;
+            } else {
+                rect.x_high += dw;
+            }
+            if has_top(self.edges) {
+                rect.y_low -= dh;
+            } else {
+                rect.y_high += dh;
+            }
+            snapshot.apply(data, rect);
+        }
+        let moved_members = if self.locked_ratio.is_none() && self.contact_push.is_none() {
             self.cluster_resize.apply_member_shifts(
                 &mut data.stage,
                 element,

@@ -242,6 +242,9 @@
                               # threshold can be unreachable and thus inert.
 
 [snap]
+# # Push newly contacted neighbours during single-window move/resize, preserving their sizes.
+# # Keeps gap spacing along the dominant drag axis; explicit cluster grabs remain unchanged.
+# contact_push = false
 # enabled = true               # magnetic edge snapping during window drag
 # gap = 12.0                   # spacing kept between windows, in canvas px —
                                # snapping, auto placement, clusters, and

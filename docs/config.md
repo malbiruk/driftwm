@@ -475,6 +475,12 @@ zoom (1.0 = 100%) below which a window is too small to touch: left click navigat
 
 ## `[snap]`
 
+### `contact_push`
+
+Default: `false`
+
+Push newly contacted neighbours during single-window move/resize, preserving their sizes. Keeps gap spacing along the dominant drag axis; explicit cluster grabs remain unchanged.
+
 ### `enabled`
 
 Default: `true`

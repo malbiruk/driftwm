@@ -11,6 +11,7 @@
 //! baseline (opt out with `Fixture::skip_baseline_check`).
 
 mod client;
+mod contact_push;
 mod fixture;
 mod gl;
 mod headless;
@@ -660,6 +661,7 @@ fn install_client_resize_grab(
         snap: SnapState::default(),
         constraints: SizeConstraints::for_window(window),
         cluster_resize: cluster,
+        contact_push: None,
         pinned_initial_screen_pos: None,
         touch_start: None,
         touch_slots: 0,
