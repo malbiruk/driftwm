@@ -12,6 +12,7 @@ mod lifecycle;
 mod screenshot;
 mod shader_chunks;
 mod shaders;
+mod survey;
 mod suspended;
 mod tile_chunks;
 mod tile_chunks_tiff;
@@ -1894,6 +1895,8 @@ pub fn compose_frame(
     // Error bar sits above every window and layer-shell surface but below the
     // cursor. Spliced after blur so it doesn't shift the prefix offsets blur
     // indexes into.
+    let hints = survey::elements(state, renderer, output);
+    all_elements.splice(cursor_count..cursor_count, hints);
     let error_bar = error_bar::build_error_bar_elements(state, renderer, output);
     if !error_bar.is_empty() {
         all_elements.splice(cursor_count..cursor_count, error_bar);

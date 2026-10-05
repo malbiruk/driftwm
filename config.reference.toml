@@ -221,6 +221,9 @@
                               # immediate. 0 disables.
 
 [zoom]
+# # Show app-inspired key hints after zoom-to-fit (Super+W). Type a hint to focus and zoom to it.
+# # Hints remain readable at any zoom; Backspace edits a partial hint and Escape returns.
+# survey_labels = false
 # step = 1.1                  # multiplier per keypress (1.1 = 10% per press)
 # trackpad_speed = 1.0        # trackpad pinch-zoom multiplier (1.0 = direct, 0 = off)
 # mouse_speed = 1.0           # mouse-wheel zoom multiplier (1.0 = direct, 0 = off)

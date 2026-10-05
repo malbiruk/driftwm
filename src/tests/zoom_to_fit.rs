@@ -263,3 +263,123 @@ fn unfitting_snapped_out_of_fullscreen_still_pulls_the_neighbour_back() {
         "the neighbour tracks the unfitted primary's right edge back in"
     );
 }
+
+fn survey_fixture() -> Fixture {
+    let mut f = Fixture::new();
+    two_spread_windows(&mut f);
+    f
+}
+
+#[test]
+fn survey_labels_select_after_modifier_release() {
+    use super::input_backend::{key_press, key_release};
+    let mut f = survey_fixture();
+    f.state().config.zoom_survey_labels = true;
+    let left = window_by_app_id(&mut f, "left").unwrap();
+    key_press(&mut f, 125);
+    key_press(&mut f, 17);
+    key_release(&mut f, 17);
+    settle(&mut f);
+    assert!(f.state().survey_active());
+    assert_eq!(f.state().survey_hints.len(), 2);
+    assert!(f.state().survey_hints.iter().any(|h| h.label == "L"));
+    key_release(&mut f, 125);
+    assert!(f.state().survey_active());
+    key_press(&mut f, 38); // L
+    key_release(&mut f, 38);
+    settle(&mut f);
+    assert_eq!(f.state().focused_window(), Some(left));
+    assert!((f.state().zoom() - 1.0).abs() < 1e-6);
+    assert!(f.state().survey_hints.is_empty());
+    assert!(!f.state().survey_active());
+}
+
+#[test]
+fn survey_labels_option_and_cancel_paths() {
+    use super::input_backend::{key_press, key_release};
+    for enabled in [false, true] {
+        let mut f = survey_fixture();
+        f.state().config.zoom_survey_labels = enabled;
+        key_press(&mut f, 125);
+        key_press(&mut f, 17);
+        key_release(&mut f, 17);
+        settle(&mut f);
+        assert_eq!(f.state().survey_active(), enabled);
+        if enabled {
+            assert!(f.state().survey_key('9' as u32));
+            assert!(f.state().survey_prefix.is_empty());
+            f.state().drift_pan(Point::from((20.0, 0.0)), 1);
+            assert!(f.state().survey_hints.is_empty());
+        }
+        key_press(&mut f, 1); // Escape restores only while survey is active.
+        key_release(&mut f, 1);
+        key_release(&mut f, 125);
+        settle(&mut f);
+        assert!(f.state().survey_hints.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "requires surfaceless EGL/GLES"]
+fn survey_badges_render_at_screen_size() {
+    use smithay::utils::{Physical, Scale, Size};
+    let _lock = super::gl::lock();
+    let Some(renderer) = super::gl::surfaceless_renderer("survey labels") else {
+        return;
+    };
+    let mut f = survey_fixture();
+    f.state().config.zoom_survey_labels = true;
+    super::gl::install(&mut f, renderer);
+    f.state().execute_action(&Action::ZoomToFit);
+    settle(&mut f);
+    let output = f.state().active_output().unwrap();
+    let mut backend = f.state().backend.take().unwrap();
+    let elements = crate::render::compose_frame(f.state(), backend.renderer(), &output, Vec::new());
+    let refs: Vec<_> = elements.iter().collect();
+    let bytes = crate::render::render_elements_to_rgba(
+        backend.renderer(),
+        Size::<i32, Physical>::from((1920, 1080)),
+        Scale::from(1.0),
+        &refs,
+    )
+    .unwrap();
+    let count = bytes
+        .chunks_exact(4)
+        .filter(|p| p[..3] == [25, 25, 30] && p[3] == 255)
+        .count();
+    assert!(
+        (1000..3000).contains(&count),
+        "both opaque screen-sized badges are visible: {count}"
+    );
+    assert!(f.state().survey_hints.iter().all(|h| h.buffer.is_some()));
+    f.state().execute_action(&Action::ZoomToFit);
+    assert!(f.state().survey_hints.is_empty());
+    f.state().backend = Some(backend);
+    super::gl::uninstall(&mut f);
+}
+
+#[test]
+fn survey_toggle_and_escape_restore_saved_view() {
+    use super::input_backend::{key_press, key_release};
+    for escape in [false, true] {
+        let mut f = survey_fixture();
+        f.state().config.zoom_survey_labels = true;
+        let camera = f.state().camera();
+        let zoom = f.state().zoom();
+        key_press(&mut f, 125);
+        key_press(&mut f, 17);
+        key_release(&mut f, 17);
+        settle(&mut f);
+        assert!(f.state().survey_active());
+        let key = if escape { 1 } else { 17 };
+        key_press(&mut f, key);
+        key_release(&mut f, key);
+        key_release(&mut f, 125);
+        settle(&mut f);
+        assert!(!f.state().survey_active());
+        assert!(f.state().survey_hints.is_empty());
+        assert!((f.state().zoom() - zoom).abs() < 1e-6);
+        assert!((f.state().camera().x - camera.x).abs() < 1.0);
+        assert!((f.state().camera().y - camera.y).abs() < 1.0);
+    }
+}

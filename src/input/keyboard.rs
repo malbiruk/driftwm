@@ -20,6 +20,7 @@ impl DriftWm {
     /// session pause. `held_action` above all — its repeat would go on firing,
     /// and forcing a redraw per frame, on the VT we just left.
     pub(crate) fn reset_held_input_state(&mut self) {
+        self.clear_survey();
         self.suppressed_keys.clear();
         self.held_buttons.clear();
         self.held_action = None;
@@ -118,6 +119,27 @@ impl DriftWm {
                     return FilterResult::Forward;
                 }
 
+                if state.survey_active() && sym.raw() == keysyms::KEY_Escape {
+                    state.execute_action(&driftwm::config::Action::ZoomToFit);
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(None);
+                }
+                if !modifiers.ctrl
+                    && !modifiers.alt
+                    && !state.suppressed_keys.contains(&keycode_u32)
+                    && !matches!(
+                        state.config.lookup(modifiers, sym),
+                        Some(
+                            driftwm::config::Action::ZoomToFit
+                                | driftwm::config::Action::ZoomToFitSnapped
+                        )
+                    )
+                    && state.survey_key(sym.raw())
+                {
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(None);
+                }
+
                 // VT switching: Ctrl+Alt+F1..F12 produces XF86Switch_VT_1..12
                 let raw = sym.raw();
                 if (0x1008FE01..=0x1008FE0C).contains(&raw) {
@@ -182,6 +204,8 @@ impl DriftWm {
                 FilterResult::Forward
             },
         );
+
+        self.perform_survey_pick();
 
         // Update active layout name (may have changed via XKB group switch)
         let layout_name = keyboard.with_xkb_state(self, |ctx| {

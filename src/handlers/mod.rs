@@ -1215,6 +1215,7 @@ impl SessionLockHandler for DriftWm {
             deadline_token: token,
         };
 
+        self.clear_survey();
         // Kill all transient input/animation state so nothing fires during lock
         self.gesture_state = None;
         self.held_action = None;

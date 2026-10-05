@@ -99,6 +99,9 @@ impl DriftWm {
             .and_then(|o| output_state(&o).overview_return)
     }
     pub fn set_overview_return(&mut self, val: Option<(Point<f64, Logical>, f64)>) {
+        if val.is_none() {
+            self.clear_survey();
+        }
         if let Some(o) = self.active_output() {
             output_state(&o).overview_return = val;
         }

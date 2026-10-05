@@ -9,6 +9,8 @@
 //! routines that must name every field. Nothing said so before, and the file
 //! grew past 3,000 lines of methods that each had a better home.
 
+mod survey;
+pub(crate) use survey::SurveyHint;
 mod activation;
 mod cluster_snapshot;
 mod cursor;
@@ -897,6 +899,10 @@ pub struct DriftWm {
     /// without press" — games / Discord / state-tracking apps break, and
     /// launchers leak the trigger key into the previously focused window.
     pub suppressed_keys: HashSet<u32>,
+    pub(crate) survey_output: Option<Output>,
+    pub(crate) survey_hints: Vec<SurveyHint>,
+    pub(crate) survey_prefix: String,
+    pub(crate) survey_pending: Option<ClusterMember>,
 
     /// Mouse buttons currently held down. Cleared on VT switch and session
     /// pause alongside `suppressed_keys`.

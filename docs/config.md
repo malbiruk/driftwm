@@ -425,6 +425,12 @@ delay before pan starts at an edge bordering another monitor (ms). Outer edges r
 
 ## `[zoom]`
 
+### `survey_labels`
+
+Default: `false`
+
+Show app-inspired key hints after zoom-to-fit (Super+W). Type a hint to focus and zoom to it. Hints remain readable at any zoom; Backspace edits a partial hint and Escape returns.
+
 ### `step`
 
 Default: `1.1`

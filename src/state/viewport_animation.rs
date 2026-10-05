@@ -336,6 +336,7 @@ impl DriftWm {
         if self.is_output_fullscreen(output) {
             return Point::from((0.0, 0.0));
         }
+        self.clear_survey();
         {
             let mut os = super::output_state(output);
             os.camera_target = None;

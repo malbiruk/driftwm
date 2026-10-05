@@ -227,6 +227,7 @@ pub struct Config {
     /// anywhere on it moves it. `0.0` disables the feature (strict `<`
     /// comparison, so the sentinel needs no special case).
     pub zoom_interact_min: f64,
+    pub zoom_survey_labels: bool,
     pub snap_enabled: bool,
     pub snap_gap: f64,
     /// Inset from the usable area's edge to a fitted, filled or parked window's
@@ -1176,6 +1177,7 @@ impl Config {
             // clamp_warn (not non_negative): folds NaN into the below-min branch
             // → 0.0 → off, and rejects values above MAX_ZOOM rather than
             // silently accepting a threshold no zoom can ever fall below.
+            zoom_survey_labels: raw.zoom.survey_labels.unwrap_or(false),
             zoom_interact_min: clamp_warn(
                 raw.zoom.interact_min.unwrap_or(0.0),
                 0.0,

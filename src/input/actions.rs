@@ -109,6 +109,7 @@ impl DriftWm {
             Action::GrowWindow(dir) => self.step_resize_focused(dir, self.config.resize_step),
             Action::ShrinkWindow(dir) => self.step_resize_focused(dir, -self.config.resize_step),
             Action::PanViewport(dir) => {
+                self.clear_survey();
                 let Some(zoom) = self.with_output_state(|os| {
                     os.zoom_target = None;
                     os.zoom_animation_anchor = None;
@@ -436,6 +437,7 @@ impl DriftWm {
                 self.zoom_to_anchored(1.0);
             }
             Action::ZoomToFit => {
+                self.clear_survey();
                 if self.try_restore_overview() {
                     // toggled back
                 } else {
@@ -455,10 +457,12 @@ impl DriftWm {
                         .map(|p| (Point::from((p.x as i32, p.y as i32)), Size::from((0, 0))));
                     if let Some(bbox) = canvas::all_windows_bbox(windows.chain(anchors)) {
                         self.fit_to_bbox(bbox);
+                        self.begin_survey();
                     }
                 }
             }
             Action::ZoomToFitSnapped => {
+                self.clear_survey();
                 if self.try_restore_overview() {
                     // toggled back
                 } else if let Some(focused) =
