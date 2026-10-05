@@ -897,6 +897,8 @@ pub struct DriftWm {
     /// without press" — games / Discord / state-tracking apps break, and
     /// launchers leak the trigger key into the previously focused window.
     pub suppressed_keys: HashSet<u32>,
+    pub(crate) held_bindings: Vec<crate::input::held_bindings::ActiveHeldBinding>,
+    pub(crate) held_cancel_actions: Vec<driftwm::config::Action>,
 
     /// Mouse buttons currently held down. Cleared on VT switch and session
     /// pause alongside `suppressed_keys`.

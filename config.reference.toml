@@ -386,6 +386,16 @@
 # # Example: bring your own keyboard scheme, keep mouse + gesture + touch defaults
 # # disable_defaults = ["keys"]
 
+[held-keybindings]
+# # Optional press/release bindings; all keyboard actions are supported.
+# # A held binding takes precedence over an ordinary binding for the same chord.
+# # hold = "key" (default) releases when the trigger key lifts. "modifiers" waits
+# # until a required chord modifier lifts, even if the trigger key was released earlier.
+# # Escape runs optional cancel and suppresses release; repeats are ignored until release.
+# # Lock, VT switch and keyboard removal discard pending actions without executing them.
+# # Example: hold Alt+F8 to turn cursor pan on temporarily
+# # "alt+F8" = { press = "toggle-cursor-pan", release = "toggle-cursor-pan", cancel = "toggle-cursor-pan", hold = "modifiers" }
+
 [keybindings]
 # # Keyboard bindings: "Modifier+...+Keysym" = "action [arg]"
 # # Merges with defaults. Use "none" to unbind a default binding.

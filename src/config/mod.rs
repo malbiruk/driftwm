@@ -273,6 +273,7 @@ pub struct Config {
     pub child_env: HashMap<String, String>,
     pub output_configs: Vec<OutputConfig>,
     bindings: HashMap<KeyCombo, Action>,
+    held_bindings: HashMap<KeyCombo, HeldKeyBinding>,
     /// Tap-modifier bindings: a bare modifier chord (e.g. `alt+shift`) that
     /// fires its action when the chord is pressed and released with no other
     /// key on top. Keyed by the exact modifier set.
@@ -318,6 +319,15 @@ impl Config {
         };
         combo.normalize();
         self.bindings.get(&combo)
+    }
+
+    pub fn held_lookup(&self, modifiers: &ModifiersState, sym: Keysym) -> Option<&HeldKeyBinding> {
+        let mut combo = KeyCombo {
+            modifiers: Modifiers::from_state(modifiers),
+            sym,
+        };
+        combo.normalize();
+        self.held_bindings.get(&combo)
     }
 
     /// Look up a tap-modifier binding by the completed chord's modifier set.
@@ -597,6 +607,31 @@ impl Config {
                     }
                     Err(e) => warn_and_collect!("config: invalid key combo '{key_str}': {e}"),
                 }
+            }
+        }
+
+        let mut held_bindings = HashMap::new();
+        for (key, entry) in &raw.held_keybindings {
+            let parsed = (|| -> Result<_, String> {
+                let mut combo = parse_key_combo(key, mod_key)?;
+                combo.normalize();
+                if entry.hold == HoldUntil::Modifiers && combo.modifiers.is_empty() {
+                    return Err("hold = modifiers requires a modifier chord".into());
+                }
+                let binding = HeldKeyBinding {
+                    press: parse_action(&entry.press)?,
+                    release: parse_action(&entry.release)?,
+                    cancel: entry.cancel.as_deref().map(parse_action).transpose()?,
+                    hold: entry.hold,
+                    modifiers: combo.modifiers.clone(),
+                };
+                Ok((combo, binding))
+            })();
+            match parsed {
+                Ok((combo, binding)) => {
+                    held_bindings.insert(combo, binding);
+                }
+                Err(e) => warn_and_collect!("config: invalid held binding '{key}': {e}"),
             }
         }
 
@@ -1251,6 +1286,7 @@ impl Config {
             output_configs,
             bindings,
             tap_bindings,
+            held_bindings,
             mouse: mouse_bindings,
             resize_on_border,
             decoration_resize_snapped,
@@ -2759,5 +2795,52 @@ mod tests {
         std::fs::write(&path, "mod_key = \"bogus\"\n").unwrap();
         let warnings = Config::check_from(&path).unwrap();
         assert!(!warnings.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod held_binding_tests {
+    use super::*;
+    #[test]
+    fn held_binding_options_parse_and_reject_invalid_modifier_holds() {
+        let config = Config::from_toml(
+            r#"[held-keybindings]
+"alt+F8" = { press = "zoom-out", release = "zoom-reset", hold = "modifiers" }
+"F9" = { press = "zoom-out", release = "zoom-reset" }
+"#,
+        )
+        .unwrap();
+        let mods = ModifiersState {
+            alt: true,
+            ..ModifiersState::default()
+        };
+        let f8 = Keysym::from(smithay::input::keyboard::keysyms::KEY_F8);
+        assert_eq!(
+            config.held_lookup(&mods, f8).unwrap().hold,
+            HoldUntil::Modifiers
+        );
+        let f9 = Keysym::from(smithay::input::keyboard::keysyms::KEY_F9);
+        assert_eq!(
+            config
+                .held_lookup(&ModifiersState::default(), f9)
+                .unwrap()
+                .hold,
+            HoldUntil::Key
+        );
+        let (_, warnings) = Config::from_toml_collect(
+            r#"[held-keybindings]
+"F8" = { press = "zoom-out", release = "zoom-reset", hold = "modifiers" }
+"#,
+        )
+        .unwrap();
+        assert!(warnings.iter().any(|w| w.contains("requires a modifier")));
+        assert!(
+            Config::from_toml(
+                r#"[held-keybindings]
+"F8" = { press = "zoom-out", release = "zoom-reset", hold = "wrong" }
+"#
+            )
+            .is_err()
+        );
     }
 }

@@ -21,6 +21,8 @@ pub(super) struct ConfigFile {
     pub autostart: Option<Vec<String>>,
     pub bindings: BindingsFileConfig,
     pub keybindings: Option<HashMap<String, String>>,
+    #[serde(rename = "held-keybindings")]
+    pub held_keybindings: HashMap<String, HeldKeyBindingConfig>,
     pub mouse: MouseFileConfig,
     pub gestures: GestureFileConfig,
     pub touch: TouchFileConfig,
@@ -467,4 +469,14 @@ pub fn expand_tilde(path: &str) -> String {
         return format!("{home}/{rest}");
     }
     path.to_string()
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct HeldKeyBindingConfig {
+    pub press: String,
+    pub release: String,
+    pub cancel: Option<String>,
+    #[serde(default)]
+    pub hold: super::HoldUntil,
 }
