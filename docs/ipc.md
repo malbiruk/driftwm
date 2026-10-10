@@ -213,7 +213,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"State":{"camera":[-960.0,-600.0],"zoom":1.0,"layout":"English (US)",
   "layout_short":"us","windows":[
   {"id":3,"app_id":"foot","title":"~","position":[0,0],"size":[800,480],
-   "is_focused":true,"is_widget":false,"suspended":false,"mode":"Normal"}
+   "is_focused":true,"is_widget":false,"suspended":false,"mode":"Normal","pid":4242}
 ]}}}
 {"Err":"no focused window"}
 ```
@@ -236,6 +236,11 @@ stand-in rather than a live client — see [Suspended windows](#suspended-window
 a fill that grew to the same rect and doesn't flicker during a configure
 round-trip the way a geometric guess does. A compositor older than this field
 omits it — treat missing as `"Normal"`.
+`pid` is the client's process ID, read from its Wayland socket credentials, so a
+tool can find the window a process owns — the terminal a command runs in, say —
+and raise it by `id`. An XWayland window reports the Xwayland server's PID, and a
+stand-in, which has no client, has no `pid`; a compositor older than this field
+omits it too.
 The reply also carries `layout` (full XKB name) and `layout_short` (the
 configured code for the active group); `fullscreen` and `pinned` (screen-space
 windows, each carrying an `id` too — a `pinned` entry's `position`/`size` are in

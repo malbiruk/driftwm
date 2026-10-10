@@ -295,6 +295,10 @@ pub struct WindowInfo {
     /// The compositor's own fit/fill record — see [`WindowMode`].
     #[serde(default)]
     pub mode: WindowMode,
+    /// The client's process ID, from its Wayland socket credentials. Absent for
+    /// a stand-in, which has no client.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 /// A fullscreen window in the IPC `state` reply — one per fullscreened output.
@@ -577,6 +581,7 @@ mod tests {
                 is_widget: false,
                 suspended: false,
                 mode: WindowMode::Normal,
+                pid: Some(4242),
             }],
             fullscreen: vec![OutputFullscreen {
                 id: 2,
@@ -676,6 +681,26 @@ mod tests {
             assert!(obj.get(key).is_some(), "missing key {key}");
         }
         assert_eq!(obj["windows"][0]["mode"], "Normal");
+    }
+
+    /// `pid` is a plain number when the window has a client, left out for a
+    /// stand-in, and a reply from a compositor without the field still parses.
+    #[test]
+    fn window_pid_wire_contract() {
+        let mut state = sample_state();
+        let json = serde_json::to_value(&state).unwrap();
+        assert_eq!(json["windows"][0]["pid"], 4242);
+
+        state.windows[0].pid = None;
+        let json = serde_json::to_value(&state).unwrap();
+        assert!(json["windows"][0].get("pid").is_none());
+
+        let older: WindowInfo = serde_json::from_str(
+            r#"{"id":1,"app_id":"foot","title":"~","position":[0,0],"size":[1,1],
+                "is_focused":false,"is_widget":false}"#,
+        )
+        .unwrap();
+        assert_eq!(older.pid, None);
     }
 
     /// The documented wire contract for `mode`: `Fit`/`Fill` serialize to those

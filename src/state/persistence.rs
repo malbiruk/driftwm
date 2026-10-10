@@ -143,6 +143,19 @@ impl DriftWm {
     /// visual frame: position = its center, Y-up), focused window first. Single
     /// source of truth for both the state file and the IPC `state` response, so
     /// the two can't drift.
+    /// An XWayland window reports Xwayland's PID, its client.
+    fn client_pid(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) -> Option<u32> {
+        use smithay::reexports::wayland_server::Resource;
+        let credentials = surface
+            .client()?
+            .get_credentials(&self.display_handle)
+            .ok()?;
+        u32::try_from(credentials.pid).ok()
+    }
+
     pub fn window_inventory(&self) -> Vec<WindowInfo> {
         let focused = self.focused_window();
         let focused_suspended = self.gated_suspended_focus();
@@ -173,6 +186,7 @@ impl DriftWm {
                     is_widget: false,
                     suspended: true,
                     mode: self.window_mode(window),
+                    pid: None,
                 });
                 continue;
             }
@@ -217,6 +231,7 @@ impl DriftWm {
                 is_widget: window.is_widget(),
                 suspended: false,
                 mode: self.window_mode(window),
+                pid: self.client_pid(&surface),
             });
         }
         // Focused window first, so consumers can read windows[0] as the focused one.
@@ -688,6 +703,7 @@ mod tests {
             is_widget: false,
             suspended: false,
             mode: WindowMode::Normal,
+            pid: None,
         }
     }
 
