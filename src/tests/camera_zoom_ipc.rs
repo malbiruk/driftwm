@@ -231,3 +231,29 @@ fn camera_set_rejecting_a_non_finite_target_leaves_fullscreen_intact() {
 
     f.state().exit_fullscreen_on(&output);
 }
+
+/// `cursor` reports the pointer in the global output layout, not canvas space:
+/// the camera and zoom must not leak into it, the output's layout offset must.
+#[test]
+fn cursor_reports_screen_space_in_the_output_layout() {
+    use smithay::utils::Point;
+
+    use super::input_backend::{FakeDevice, pointer_to_screen};
+
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    f.state().with_output_state(|os| {
+        os.zoom = 0.5;
+        os.camera = Point::from((-700.0, 300.0));
+        os.layout_position = Point::from((2560, 0));
+    });
+    pointer_to_screen(&mut f, &FakeDevice::mouse(), Point::from((300.0, 200.0)));
+
+    match dispatch(Request::Cursor, f.state()) {
+        Ok(Response::Cursor { x, y, output: name }) => {
+            assert!(approx((x, y), (2860.0, 200.0), 0.01), "got ({x}, {y})");
+            assert_eq!(name, output.name());
+        }
+        other => panic!("expected a Cursor reply, got {other:?}"),
+    }
+}

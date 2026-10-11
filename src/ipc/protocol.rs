@@ -32,6 +32,9 @@ pub enum Request {
     Layout {
         short: bool,
     },
+    /// The pointer in the global output layout (screen space, not canvas), plus
+    /// the output it is on.
+    Cursor,
     State,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
@@ -150,6 +153,11 @@ pub enum Response {
     },
     Zoom(f64),
     Layout(String),
+    Cursor {
+        x: f64,
+        y: f64,
+        output: String,
+    },
     /// Boxed so the whole-state snapshot doesn't bloat every other (tiny)
     /// reply variant. Serde-transparent, so the wire shape is unchanged.
     State(Box<StateInfo>),
@@ -367,6 +375,7 @@ mod tests {
             Request::Zoom(Some(2.0)),
             Request::Layout { short: false },
             Request::Layout { short: true },
+            Request::Cursor,
             Request::State,
             Request::DebugCounters,
             Request::Subscribe,
@@ -615,6 +624,11 @@ mod tests {
         let replies: Vec<Reply> = vec![
             Ok(Response::Camera { x: 1.0, y: 2.0 }),
             Ok(Response::Zoom(1.5)),
+            Ok(Response::Cursor {
+                x: 2600.5,
+                y: 12.0,
+                output: "DP-1".into(),
+            }),
             Ok(Response::State(Box::new(sample_state()))),
             Ok(Response::DebugCounters(
                 [("stage_entries".to_string(), 2usize)]

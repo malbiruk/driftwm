@@ -193,6 +193,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Camera(arg) => cmd_camera(arg, state),
         Request::Zoom(arg) => cmd_zoom(arg, state),
         Request::Layout { short } => cmd_layout(short, state),
+        Request::Cursor => cmd_cursor(state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -287,6 +288,24 @@ fn cmd_zoom(arg: Option<f64>, state: &mut DriftWm) -> Reply {
             Ok(Response::Zoom(clamped))
         }
     }
+}
+
+fn cmd_cursor(state: &mut DriftWm) -> Reply {
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    let output = state.active_output().ok_or("no output")?;
+    // The pointer is in canvas space on the active output, which follows it.
+    let screen = driftwm::canvas::canvas_to_screen(
+        driftwm::canvas::CanvasPos(pointer.current_location()),
+        state.camera(),
+        state.zoom(),
+    )
+    .0;
+    let origin = crate::state::output_state(&output).layout_position;
+    Ok(Response::Cursor {
+        x: origin.x as f64 + screen.x,
+        y: origin.y as f64 + screen.y,
+        output: output.name(),
+    })
 }
 
 fn cmd_layout(short: bool, state: &mut DriftWm) -> Reply {

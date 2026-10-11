@@ -64,6 +64,7 @@ driftwm msg --json focus --id 5
 | [`zoom`](#driftwm-msg-zoom) | Get the zoom level, or set it with `<level>` |
 | [`bookmark`](#driftwm-msg-bookmark) | List bookmarks, get or set one by `<name>`, or delete with `--delete` |
 | [`layout`](#driftwm-msg-layout) | Print the active keyboard layout (full XKB name, e.g. `English (US)`) |
+| [`cursor`](#driftwm-msg-cursor) | Print the pointer position in the global output layout (screen space, Y-down, the coordinates layer-shell clients see) and the output it is on |
 | [`action`](#driftwm-msg-action) | Run a config action, e.g. `action close-window`, `action switch-layout next` |
 | [`screenshot`](#driftwm-msg-screenshot) | Capture a canvas PNG. With no subcommand, captures the active output's current view of the canvas |
 | [`debug-counters`](#driftwm-msg-debug-counters) | Print internal collection sizes for leak diagnosis (unstable keys) |
@@ -320,6 +321,20 @@ Print the active keyboard layout (full XKB name, e.g. `English (US)`).
 
 ```bash
 driftwm msg layout --short
+```
+
+#### `driftwm msg cursor`
+
+```
+driftwm msg cursor
+```
+
+Print the pointer position in the global output layout (screen space, Y-down, the coordinates layer-shell clients see) and the output it is on.
+
+`--json` reply: `{"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}`.
+
+```bash
+driftwm msg --json cursor
 ```
 
 #### `driftwm msg action`

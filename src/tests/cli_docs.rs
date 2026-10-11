@@ -78,6 +78,7 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         ],
     ),
     ("driftwm msg layout", &["driftwm msg layout --short"]),
+    ("driftwm msg cursor", &["driftwm msg --json cursor"]),
     (
         "driftwm msg action",
         &[

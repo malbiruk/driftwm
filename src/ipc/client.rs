@@ -197,6 +197,11 @@ pub enum Msg {
         #[arg(long)]
         short: bool,
     },
+    /// Print the pointer position in the global output layout (screen space,
+    /// Y-down, the coordinates layer-shell clients see) and the output it is on.
+    ///
+    /// `--json` reply: `{"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}`.
+    Cursor,
     /// Run a config action, e.g. `action close-window`, `action switch-layout next`.
     ///
     /// Takes the same string you would write in a config keybinding, parsed with
@@ -385,6 +390,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         },
         Msg::Zoom { level } => Request::Zoom(*level),
         Msg::Layout { short } => Request::Layout { short: *short },
+        Msg::Cursor => Request::Cursor,
         Msg::State => Request::State,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
@@ -565,6 +571,7 @@ fn print_response(response: Response) {
         Response::Camera { x, y } => println!("{x} {y}"),
         Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
+        Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }
