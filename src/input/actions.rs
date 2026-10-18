@@ -109,6 +109,7 @@ impl DriftWm {
             Action::GrowWindow(dir) => self.step_resize_focused(dir, self.config.resize_step),
             Action::ShrinkWindow(dir) => self.step_resize_focused(dir, -self.config.resize_step),
             Action::PanViewport(dir) => {
+                self.user_moved_camera();
                 let Some(zoom) = self.with_output_state(|os| {
                     os.zoom_target = None;
                     os.zoom_animation_anchor = None;
@@ -248,6 +249,12 @@ impl DriftWm {
                         // Unfocus so next CenterNearest searches from viewport center (= this anchor)
                         let serial = smithay::utils::SERIAL_COUNTER.next_serial();
                         self.set_window_focus(None, serial);
+                        // The sibling arm navigates to a window and parks the
+                        // hover pull for it; this one has to park it too, or a
+                        // cursor left over a window on the way would take the
+                        // keyboard right back and the two halves of one command
+                        // would disagree.
+                        self.hover_follows_camera = false;
                         self.with_output_state(|os| {
                             os.overview_return = None;
                             os.momentum.stop();
@@ -296,6 +303,7 @@ impl DriftWm {
                 }
             }
             Action::HomeToggle => {
+                self.user_moved_camera();
                 let viewport_size = self.get_viewport_size();
                 let zoom = self.zoom();
                 let camera = self.camera();
@@ -706,6 +714,7 @@ impl DriftWm {
     /// panel-aware (`usable_center_screen`). `SetBookmark` captures the exact
     /// inverse, so set → go-to-bookmark round-trips. Zoom is untouched.
     fn go_to_canvas_point(&mut self, x: f64, y: f64) {
+        self.user_moved_camera();
         let vc = self.usable_center_screen();
         let zoom = self.zoom();
         let target_camera = Point::from((x - vc.x / zoom, -y - vc.y / zoom));
@@ -764,6 +773,7 @@ impl DriftWm {
         let Some((saved_camera, saved_zoom)) = self.overview_return() else {
             return false;
         };
+        self.user_moved_camera();
         self.set_overview_return(None);
         let vc = self.usable_center_screen();
         self.set_zoom_animation_anchor(
@@ -782,6 +792,7 @@ impl DriftWm {
     /// current camera/zoom into `overview_return` so the next zoom-to-fit
     /// press toggles back.
     fn fit_to_bbox(&mut self, bbox: smithay::utils::Rectangle<i32, smithay::utils::Logical>) {
+        self.user_moved_camera();
         let usable = self.get_usable_area();
         let vc = self.usable_center_screen();
         let fit_zoom = canvas::zoom_to_fit(bbox, usable.size, self.config.zoom_fit_padding);
@@ -797,6 +808,7 @@ impl DriftWm {
 
     /// Animate zoom to `target_zoom`, anchored on viewport center (for keyboard actions).
     pub(crate) fn zoom_to_anchored(&mut self, target_zoom: f64) {
+        self.user_moved_camera();
         self.set_overview_return(None);
         let vc = self.usable_center_screen();
         let camera = self.camera();

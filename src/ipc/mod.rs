@@ -262,6 +262,7 @@ fn cmd_camera(arg: Option<(f64, f64)>, state: &mut DriftWm) -> Reply {
             // target so the viewport ends up centered there.
             let target =
                 driftwm::canvas::camera_for_center(x, y, state.zoom(), state.get_viewport_size());
+            state.user_moved_camera();
             state.set_camera_target(Some(target));
             Ok(Response::Camera { x, y })
         }

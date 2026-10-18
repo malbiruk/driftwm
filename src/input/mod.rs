@@ -641,6 +641,15 @@ impl DriftWm {
         None
     }
 
+    /// A camera move the user drove: a pan, its fling, a zoom, an edge-pan, a
+    /// bookmark or an IPC jump. Brings the sloppy-focus pull back after a
+    /// navigation suspended it ([`Self::hover_follows_camera`]), since a
+    /// viewport the user is looking around in owes hover the window it lands
+    /// on.
+    pub(crate) fn user_moved_camera(&mut self) {
+        self.hover_follows_camera = true;
+    }
+
     /// Sloppy focus: when enabled, focus the non-widget window under the pointer
     /// without raising it. Skips layers, widgets, and empty canvas.
     ///
@@ -1080,7 +1089,13 @@ impl DriftWm {
         // reads. Reached from here rather than from the camera-move sites for
         // the reason this function exists at all: there is no chokepoint a pan
         // has to pass through.
-        if self.hover_viewport != Some((self.camera(), self.zoom())) {
+        //
+        // The second conjunct keeps a navigation that focused the window it
+        // pans to from losing the keyboard on the way there: the camera move
+        // that `center-nearest`, `focus-center`, Alt-Tab, an activation or
+        // `msg focus` makes is in service of the focus they just set, not a
+        // viewport the user is looking around in.
+        if self.hover_viewport != Some((self.camera(), self.zoom())) && self.hover_follows_camera {
             self.maybe_hover_focus(canvas_pos);
         }
         // A second z-order walk that can re-rasterise a title bar, so only when

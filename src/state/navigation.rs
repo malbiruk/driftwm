@@ -200,6 +200,11 @@ impl DriftWm {
             };
 
         self.set_camera_anchor(output, anchor_canvas, anchor_screen, target_zoom);
+        // The camera is traveling to the window this navigation just focused.
+        // Handing the keyboard to whatever slid under the resting cursor on the
+        // way there would undo it, so the pull stays parked until a camera move
+        // the user drives puts it back (`user_moved_camera`).
+        self.hover_follows_camera = false;
     }
 
     /// The zoom a navigation animates to on `output`: 1.0 when `reset_zoom`

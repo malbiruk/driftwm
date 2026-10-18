@@ -121,6 +121,7 @@ impl DriftWm {
 
                 let (cur_zoom, cur_camera) = self.gesture_camera_zoom();
                 if new_zoom != cur_zoom {
+                    self.user_moved_camera();
                     let pointer = self.seat.get_pointer().unwrap();
                     let pos = pointer.current_location();
                     let screen_pos = canvas_to_screen(CanvasPos(pos), cur_camera, cur_zoom).0;
@@ -191,6 +192,7 @@ impl DriftWm {
                 let (cur_zoom, cur_camera) = self.gesture_camera_zoom();
                 let snapped = canvas::snap_zoom(cur_zoom);
                 if !inert && snapped != cur_zoom {
+                    self.user_moved_camera();
                     let pointer = self.seat.get_pointer().unwrap();
                     let pos = pointer.current_location();
                     let screen_pos = canvas_to_screen(CanvasPos(pos), cur_camera, cur_zoom).0;

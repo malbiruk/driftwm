@@ -288,6 +288,7 @@ impl DriftWm {
         // velocity is screen-space speed; convert to canvas delta
         let zoom = self.zoom();
         let canvas_delta = Point::from((velocity.x / zoom, velocity.y / zoom));
+        self.user_moved_camera();
         self.set_camera(self.camera() + canvas_delta);
         self.update_output_from_camera();
 
@@ -336,6 +337,7 @@ impl DriftWm {
         if self.is_output_fullscreen(output) {
             return Point::from((0.0, 0.0));
         }
+        self.user_moved_camera();
         {
             let mut os = super::output_state(output);
             os.camera_target = None;
@@ -402,6 +404,9 @@ impl DriftWm {
 
     /// Launch momentum on a specific output.
     pub fn launch_momentum_on(&mut self, output: &smithay::output::Output) {
+        // A fling is a pan the user started; if a navigation parked the hover
+        // pull in the meantime, this coasting move is still theirs to follow.
+        self.user_moved_camera();
         self.disarm_momentum_launch_on(&output.name());
         super::output_state(output).momentum.launch();
     }
@@ -644,6 +649,7 @@ impl DriftWm {
         };
 
         let cam = output_state(output).camera;
+        self.user_moved_camera();
         self.set_camera_on(
             output,
             Point::from((cam.x + canvas_delta.x, cam.y + canvas_delta.y)),
