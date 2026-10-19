@@ -294,6 +294,12 @@ pub struct Config {
     /// Keybinding and gesture fit are unaffected — bind `fit-window-snapped`
     /// explicitly for those.
     pub decoration_fit_snapped: bool,
+    /// When `true` (default), interactive mouse grabs (move-window, resize-window,
+    /// pan-viewport) over a fullscreen window exit fullscreen and start the grab
+    /// on the restored canvas. When `false`, mouse grab bindings over a fullscreen
+    /// window are ignored and forwarded to the window as plain clicks, keeping
+    /// fullscreen intact.
+    pub grabs_in_fullscreen: bool,
     pub gestures: ContextBindings<GestureBinding, GestureConfigEntry>,
     /// Touch gesture bindings (`[touch]`), keyed by bare trigger (no modifiers).
     /// Named `touch_gestures` because `touch` is the `[input.touch]` device settings.
@@ -617,6 +623,7 @@ impl Config {
         let resize_on_border = raw.mouse.resize_on_border.unwrap_or(true);
         let decoration_resize_snapped = raw.mouse.decoration_resize_snapped.unwrap_or(false);
         let decoration_fit_snapped = raw.mouse.decoration_fit_snapped.unwrap_or(false);
+        let grabs_in_fullscreen = raw.mouse.grabs_in_fullscreen.unwrap_or(true);
         let mut mouse_bindings = if disable_mouse {
             ContextBindings::empty()
         } else {
@@ -1255,6 +1262,7 @@ impl Config {
             resize_on_border,
             decoration_resize_snapped,
             decoration_fit_snapped,
+            grabs_in_fullscreen,
             gestures: gesture_bindings,
             touch_gestures: touch_bindings,
             num_lock: raw.input.keyboard.num_lock.unwrap_or(true),

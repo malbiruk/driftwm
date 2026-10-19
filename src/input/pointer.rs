@@ -295,7 +295,9 @@ impl DriftWm {
                 // needs its own gate here: the `Action(_)` arm falls through
                 // without returning.
                 if fs_lookup.is_some()
-                    && self.fullscreen_claims(&mods, config::MouseTrigger::Button(button))
+                    && (self.fullscreen_claims(&mods, config::MouseTrigger::Button(button))
+                        || (!self.config.grabs_in_fullscreen
+                            && !matches!(fs_lookup, Some(MouseAction::Action(_)))))
                 {
                     fs_lookup = None;
                 }
@@ -1485,7 +1487,12 @@ impl DriftWm {
                 .mouse_scroll_lookup_ctx(&mods, source, BindingContext::OnWindow)
                 .cloned();
             if fs_scroll.is_some()
-                && self.fullscreen_claims(&mods, config::MouseTrigger::for_axis_source(source))
+                && (self.fullscreen_claims(&mods, config::MouseTrigger::for_axis_source(source))
+                    || (!self.config.grabs_in_fullscreen
+                        && matches!(
+                            fs_scroll,
+                            Some(MouseAction::PanViewport | MouseAction::Zoom)
+                        )))
             {
                 fs_scroll = None;
             }

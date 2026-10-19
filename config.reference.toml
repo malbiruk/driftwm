@@ -530,6 +530,13 @@
 # # if you want cluster-aware fit there too.
 # decoration_fit_snapped = false
 
+# # When true (default), interactive mouse grabs (move-window, resize-window,
+# # pan-viewport) over a fullscreen window exit fullscreen and start the grab
+# # on the restored canvas. When false, mouse grab bindings over a fullscreen
+# # window are ignored and forwarded to the window as plain clicks, keeping
+# # fullscreen intact (game-friendly).
+# grabs_in_fullscreen = true
+
 # # Mouse bindings: "Modifier+...+Trigger" = "action"
 # # Context-aware: on-window, on-canvas, anywhere.
 # # Specific context checked first, then "anywhere" as fallback.

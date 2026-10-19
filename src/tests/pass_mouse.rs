@@ -647,3 +647,33 @@ fn an_unclaimed_notch_on_a_fullscreen_window_runs_its_action() {
         "an unclaimed notch runs its bound action"
     );
 }
+
+#[test]
+fn disabled_fullscreen_grabs_forward_to_client_and_preserve_fullscreen() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[mouse]
+grabs_in_fullscreen = false
+"#,
+    ));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, target);
+    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+    release(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+
+    assert_eq!(
+        client_buttons(&mut f, id),
+        vec![(BTN_LEFT, PRESSED), (BTN_LEFT, RELEASED)],
+        "mouse click when grabs_in_fullscreen = false must be forwarded to client"
+    );
+    assert!(
+        f.state().is_fullscreen(),
+        "disabled grabs must not exit fullscreen"
+    );
+}

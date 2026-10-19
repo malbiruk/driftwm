@@ -358,6 +358,11 @@ pub(super) struct MouseFileConfig {
     /// Propagate decoration-initiated fit (maximize/unmaximize) to snapped neighbors.
     /// See [`super::Config::decoration_fit_snapped`].
     pub decoration_fit_snapped: Option<bool>,
+    /// Allow interactive mouse grabs (move/resize) to trigger on fullscreen windows.
+    /// When `false`, mouse grab bindings over a fullscreen window are ignored
+    /// (forwarded to the window as plain clicks) instead of exiting fullscreen.
+    /// See [`super::Config::grabs_in_fullscreen`].
+    pub grabs_in_fullscreen: Option<bool>,
     #[serde(rename = "on-window")]
     pub on_window: Option<HashMap<String, String>>,
     #[serde(rename = "on-canvas")]
