@@ -136,6 +136,17 @@ impl WlrLayerShellHandler for DriftWm {
         if let Err(e) = map.map_layer(&desktop_surface) {
             tracing::warn!("Failed to map layer surface: {e}");
         }
+        drop(map);
+
+        // Now that the surface has an output, correct the scale: at
+        // `new_fractional_scale` time it had none, so it was handed the canvas
+        // maximum, which overshoots for a layer surface on the coarser output.
+        let scale = resolved_output.current_scale().fractional_scale();
+        desktop_surface.with_surfaces(|_surface, states| {
+            smithay::wayland::fractional_scale::with_fractional_scale(states, |fractional| {
+                fractional.set_preferred_scale(scale);
+            });
+        });
     }
 
     fn layer_destroyed(&mut self, surface: LayerSurface) {
