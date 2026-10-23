@@ -209,6 +209,7 @@ pub(super) struct ZoomConfig {
 #[derive(Serialize, Deserialize, Default)]
 #[serde(default, deny_unknown_fields)]
 pub(super) struct SnapConfig {
+    pub contact_push: Option<bool>,
     pub enabled: Option<bool>,
     pub gap: Option<f64>,
     pub outer_gap: Option<f64>,

@@ -74,6 +74,7 @@ pub struct MoveGrab {
     /// (especially during snap holds), so bumping the blur generation
     /// unconditionally re-runs Kawase blur on every blurred window for nothing.
     last_mapped_loc: Option<Point<i32, Logical>>,
+    contact_push: Option<crate::state::ContactPushSnapshot>,
     /// `Some` ⟹ this drag moves a screen-pinned window. The value is the
     /// fixed screen-space offset from the cursor to the window's top-left,
     /// captured at grab start. The window tracks `cursor_screen + offset`,
@@ -102,6 +103,7 @@ impl MoveGrab {
             inhibited_edge: None,
             cluster_members: to_cluster_members(cluster_members),
             last_mapped_loc: None,
+            contact_push: None,
             pinned_grab_offset: None,
         }
     }
@@ -135,6 +137,7 @@ impl MoveGrab {
             inhibited_edge: None,
             cluster_members: to_cluster_members(cluster_members),
             last_mapped_loc: None,
+            contact_push: None,
             pinned_grab_offset: None,
         }
     }
@@ -163,6 +166,7 @@ impl MoveGrab {
             inhibited_edge: None,
             cluster_members: Vec::new(),
             last_mapped_loc: None,
+            contact_push: None,
             pinned_grab_offset: Some(grab_offset),
         }
     }
@@ -187,6 +191,7 @@ impl MoveGrab {
             inhibited_edge: None,
             cluster_members: Vec::new(),
             last_mapped_loc: None,
+            contact_push: None,
             pinned_grab_offset: Some(grab_offset),
         }
     }
@@ -556,7 +561,10 @@ impl MoveGrab {
         // exclude them from the primary's snap targets so it doesn't snap onto
         // its own cluster.
         let members = self.resolved_members(data);
-        let snapped = if data.config.snap_enabled {
+        if data.config.contact_push && members.is_empty() && self.contact_push.is_none() {
+            self.contact_push = data.capture_contact_push(element);
+        }
+        let snapped = if data.config.snap_enabled && self.contact_push.is_none() {
             #[allow(clippy::mutable_key_type)]
             let excludes: HashSet<StageWindow> = members.iter().map(|(w, _)| w.clone()).collect();
             let zoom = output_state(&self.output).zoom;
@@ -580,6 +588,13 @@ impl MoveGrab {
             crate::grabs::drag_map_window(data, member, member_pos);
         }
         crate::grabs::drag_map_window(data, element.clone(), new_loc);
+        if let Some(snapshot) = &self.contact_push
+            && let Some(rect) = data.snap_rect_for(element)
+        {
+            snapshot.apply(data, rect);
+            // Mapping neighbours must not put them above the grabbed window.
+            data.map_window(element.clone(), new_loc, false);
+        }
 
         // Sub-pixel motion that resolves to the same integer canvas position
         // doesn't actually shift the window, so blurred neighbours don't need
