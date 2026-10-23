@@ -140,6 +140,7 @@ pub fn init_winit(
                         None,
                     );
                     data.recompute_decoration_scale();
+                    data.update_preferred_scales();
                 }
                 WinitEvent::Input(event) => {
                     data.process_input_event(event);

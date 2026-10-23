@@ -301,3 +301,31 @@ decoration = "server"
         "the whole frame stays inside the survivor"
     );
 }
+
+/// The scale clients are told to render at follows the outputs, and it is the
+/// sharpest one present — a window is not bound to a single viewport, so
+/// anything less would stretch it the moment it is panned onto the sharp
+/// output. Unplugging the coarse output must raise it back.
+#[test]
+fn preferred_client_scale_tracks_the_sharpest_output() {
+    let mut f = Fixture::new();
+    let fine = f.add_output_scaled(1, (2880, 1800), 1.5);
+
+    assert_eq!(f.state().preferred_client_scale(), 1.5);
+
+    // A coarser second output must not drag the scale down: the window may be
+    // shown on either, and only the sharpest keeps it crisp on both.
+    let coarse = f.add_output_scaled(2, (1920, 1080), 1.0);
+    assert_eq!(f.state().preferred_client_scale(), 1.5);
+
+    f.remove_output(&fine);
+    assert_eq!(f.state().preferred_client_scale(), 1.0);
+
+    f.add_output_scaled(3, (2880, 1800), 1.5);
+    assert_eq!(f.state().preferred_client_scale(), 1.5);
+
+    // And the regression this guards: once the coarse output is gone, clients
+    // must not be left on its scale.
+    f.remove_output(&coarse);
+    assert_eq!(f.state().preferred_client_scale(), 1.5);
+}

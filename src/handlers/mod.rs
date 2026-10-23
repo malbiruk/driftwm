@@ -230,10 +230,14 @@ impl DmabufHandler for DriftWm {
 
 impl FractionalScaleHandler for DriftWm {
     fn new_fractional_scale(&mut self, surface: WlSurface) {
-        let scale = self
-            .active_output()
-            .map(|o| o.current_scale().fractional_scale())
-            .unwrap_or(1.0);
+        // Not `active_output()`: at this point the surface has no geometry and
+        // no output of its own, and which output happens to be focused says
+        // nothing about where the window will sit. The sharpest output is the
+        // only answer that cannot come out too soft, and `update_preferred_scales`
+        // keeps it that way as outputs come and go. A layer surface, which does
+        // belong to one output, is corrected down to that output's scale as
+        // soon as it is mapped and the output is known.
+        let scale = self.preferred_client_scale();
         smithay::wayland::compositor::with_states(&surface, |data| {
             smithay::wayland::fractional_scale::with_fractional_scale(data, |fractional| {
                 fractional.set_preferred_scale(scale);
@@ -1084,6 +1088,7 @@ impl OutputManagementHandler for DriftWm {
             self.render.remove_output(&s.output_name);
         }
         self.recompute_decoration_scale();
+        self.update_preferred_scales();
         self.mark_all_dirty();
         self.output_config_dirty = true;
         true

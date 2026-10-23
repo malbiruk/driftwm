@@ -205,6 +205,7 @@ impl DriftWm {
         self.space
             .map_output(output, effective_camera.to_i32_round());
         self.recompute_decoration_scale();
+        self.update_preferred_scales();
 
         // Both are no-ops when no windows exist, so this is safe at boot too.
         self.reassign_orphaned_pinned(output);
@@ -315,6 +316,7 @@ impl DriftWm {
                 self.reassign_orphaned_pinned(&target);
             }
             self.recompute_decoration_scale();
+            self.update_preferred_scales();
             output_state(output).fullscreen_return = None;
             self.stage.take_fullscreen(&output.name());
             self.dpms_off_outputs.remove(output);
@@ -519,6 +521,79 @@ impl DriftWm {
             .map(|o| o.current_scale().fractional_scale())
             .fold(1.0_f64, f64::max);
         self.decoration_scale = max_scale.ceil() as i32;
+    }
+
+    /// The scale clients should render at: the sharpest output present.
+    ///
+    /// A canvas window is not bound to one output — several viewports can show
+    /// it at once, and panning moves it between them with no client-visible
+    /// event. Rendering everything for the sharpest output means the compositor
+    /// only ever downscales, never stretches, whichever viewport the window
+    /// ends up in. Same maximum `recompute_decoration_scale` picks for the
+    /// compositor's own buffers, for the same reason.
+    pub fn preferred_client_scale(&self) -> f64 {
+        self.space
+            .outputs()
+            .map(|o| o.current_scale().fractional_scale())
+            .fold(1.0_f64, f64::max)
+    }
+
+    /// Re-send `wp_fractional_scale_v1.preferred_scale` to every client
+    /// surface. Call after output add/remove/scale change, next to
+    /// [`Self::recompute_decoration_scale`].
+    ///
+    /// Without this a client is told its scale exactly once, when it creates
+    /// its fractional-scale object, and never again: a window opened while a
+    /// 1.0 output was connected keeps rendering at 1.0 on a 1.5 panel long
+    /// after that output is gone, and nothing short of recreating the surface
+    /// recovers it.
+    pub fn update_preferred_scales(&self) {
+        use smithay::wayland::fractional_scale::with_fractional_scale;
+
+        let canvas_scale = self.preferred_client_scale();
+
+        for window in self.stage.windows().filter_map(|w| w.client()) {
+            window.with_surfaces(|_surface, states| {
+                with_fractional_scale(states, |fractional| {
+                    fractional.set_preferred_scale(canvas_scale);
+                });
+            });
+        }
+
+        // Layer and lock surfaces get their own output's scale, not the canvas
+        // maximum: unlike a window they belong to exactly one output and
+        // nothing ever pans them onto a sharper viewport, so overshooting would
+        // only make them allocate and render pixels we immediately downscale.
+        for output in self.space.outputs() {
+            let scale = output.current_scale().fractional_scale();
+
+            let map = smithay::desktop::layer_map_for_output(output);
+            for layer in map.layers() {
+                layer.with_surfaces(|_surface, states| {
+                    with_fractional_scale(states, |fractional| {
+                        fractional.set_preferred_scale(scale);
+                    });
+                });
+            }
+            drop(map);
+
+            // A lock surface outlives any number of hotplugs by design — it is
+            // on screen precisely while nobody is around to reopen a window —
+            // so it is the last thing that can afford to be told its scale once.
+            if let Some(lock) = self.lock_surfaces.get(output) {
+                smithay::wayland::compositor::with_surface_tree_downward(
+                    lock.wl_surface(),
+                    (),
+                    |_, _, _| smithay::wayland::compositor::TraversalAction::DoChildren(()),
+                    |_, states, _| {
+                        with_fractional_scale(states, |fractional| {
+                            fractional.set_preferred_scale(scale);
+                        });
+                    },
+                    |_, _, _| true,
+                );
+            }
+        }
     }
 }
 

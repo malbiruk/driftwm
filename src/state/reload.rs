@@ -249,6 +249,7 @@ impl DriftWm {
 
         self.apply_output_rules_after_reload();
         self.recompute_decoration_scale();
+        self.update_preferred_scales();
 
         if let Some(msg) = super::errors::summarize_config_errors(&config_errors) {
             self.set_error(ErrorSource::Config, msg);
