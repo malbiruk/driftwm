@@ -43,7 +43,8 @@ const TOOLKIT_DEFAULTS: &[(&str, &str)] = &[
 ];
 
 /// Seed bookmarks when `[navigation.bookmarks]` is absent: the four canvas
-/// corners, matching the default `go-to-bookmark 1..4` keybindings. Y-up.
+/// corners, matching the bookmark fallback of the default `go-to-workspace 1..4`
+/// keybindings. Y-up.
 const DEFAULT_BOOKMARKS: &[(&str, [f64; 2])] = &[
     ("1", [-1750.0, 1750.0]),
     ("2", [1750.0, 1750.0]),
@@ -259,6 +260,10 @@ pub struct Config {
     /// convention) that populate `DriftWm::bookmarks` at startup. This is a
     /// seed only — the live registry is the source of truth once running.
     pub navigation_bookmarks: BTreeMap<String, [f64; 2]>,
+    /// What ext-workspace pills represent. Bookmarks (the historical default)
+    /// or connected snap clusters (zones). Also selects what the 1-based
+    /// `go-to-workspace 1..4` bindings dispatch to.
+    pub workspace_source: WorkspaceSource,
     pub backend: BackendConfig,
     pub effects: EffectsConfig,
     pub window_rules: Vec<WindowRule>,
@@ -1061,6 +1066,17 @@ impl Config {
             child_env.insert(k.clone(), v.clone());
         }
 
+        let workspace_source = match raw.navigation.workspace_source.as_deref() {
+            Some("bookmarks") | None => WorkspaceSource::Bookmarks,
+            Some("zones") => WorkspaceSource::Zones,
+            Some(other) => {
+                warn_and_collect!(
+                    "config: unknown navigation.workspace_source '{other}', using bookmarks"
+                );
+                WorkspaceSource::Bookmarks
+            }
+        };
+
         // Y-up values kept as-is (unlike anchors); conversion happens at use
         // sites. Absent section → corner defaults; explicit-empty → no seeds. A
         // non-finite coordinate (TOML accepts nan/inf) would serialize to JSON
@@ -1239,6 +1255,7 @@ impl Config {
                 .map(|[x, y]| Point::from((x, -y)))
                 .collect(),
             navigation_bookmarks,
+            workspace_source,
             autostart: raw.autostart.unwrap_or_default(),
             env: raw.env,
             child_env,
@@ -1684,6 +1701,41 @@ mod tests {
         // A present-but-empty table is the explicit-empty escape hatch.
         let config = Config::from_toml("[navigation.bookmarks]\n").unwrap();
         assert!(config.navigation_bookmarks.is_empty());
+    }
+
+    #[test]
+    fn workspace_source_defaults_to_bookmarks_and_parses_zones() {
+        use crate::config::WorkspaceSource;
+
+        assert_eq!(
+            Config::from_toml("").unwrap().workspace_source,
+            WorkspaceSource::Bookmarks
+        );
+        assert_eq!(
+            Config::from_toml("[navigation]\nworkspace_source = \"zones\"\n")
+                .unwrap()
+                .workspace_source,
+            WorkspaceSource::Zones
+        );
+
+        let (config, warnings) =
+            Config::from_toml_collect("[navigation]\nworkspace_source = \"wat\"\n").unwrap();
+        assert_eq!(config.workspace_source, WorkspaceSource::Bookmarks);
+        assert!(warnings.iter().any(|w| w.contains("workspace_source")));
+    }
+
+    #[test]
+    fn default_super_digits_switch_workspaces() {
+        let config = Config::from_toml("").unwrap();
+        for (key, ordinal) in [("mod+1", 1), ("mod+2", 2), ("mod+3", 3), ("mod+4", 4)] {
+            let mut combo = parse::parse_key_combo(key, ModKey::Super).unwrap();
+            combo.normalize();
+            assert_eq!(
+                config.bindings.get(&combo),
+                Some(&Action::GoToWorkspace(ordinal)),
+                "{key} should switch workspace ordinal {ordinal}"
+            );
+        }
     }
 
     #[test]

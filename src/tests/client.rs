@@ -218,6 +218,7 @@ pub struct WorkspaceRecord {
     pub handle: ExtWorkspaceHandleV1,
     pub id: Option<String>,
     pub name: Option<String>,
+    pub coordinates: Option<Vec<u32>>,
     pub capabilities: Option<u32>,
     pub state: Option<u32>,
     pub removed: bool,
@@ -2010,6 +2011,7 @@ impl Dispatch<ExtWorkspaceManagerV1, ()> for State {
                     handle: workspace,
                     id: None,
                     name: None,
+                    coordinates: None,
                     capabilities: None,
                     state: None,
                     removed: false,
@@ -2086,7 +2088,16 @@ impl Dispatch<ExtWorkspaceHandleV1, ()> for State {
             ext_workspace_handle_v1::Event::State { state } => {
                 record.state = Some(state.into());
             }
-            ext_workspace_handle_v1::Event::Coordinates { .. } => (),
+            ext_workspace_handle_v1::Event::Coordinates { coordinates } => {
+                record.coordinates = Some(
+                    coordinates
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
+                        .map(|bytes| u32::from_ne_bytes(*bytes))
+                        .collect(),
+                );
+            }
             ext_workspace_handle_v1::Event::Removed => record.removed = true,
             _ => unreachable!(),
         }

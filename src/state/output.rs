@@ -553,6 +553,7 @@ mod tests {
             home_return: None,
             fullscreen_return: None,
             active_bookmark: None,
+            active_zone: None,
             backend_owned_mode: false,
             render_only_transform: false,
         }

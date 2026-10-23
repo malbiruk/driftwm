@@ -171,6 +171,17 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
                 .ok_or("go-to-bookmark requires a bookmark name")?;
             Ok(Action::GoToBookmark(name.to_string()))
         }
+        "go-to-workspace" | "go-to-zone" => {
+            let raw = arg.ok_or("go-to-workspace requires a 1-based zone number")?;
+            let index: usize = raw
+                .trim()
+                .parse()
+                .map_err(|_| format!("go-to-workspace: expected a 1-based number, got '{raw}'"))?;
+            if index == 0 {
+                return Err("go-to-workspace: zone numbers are 1-based".to_string());
+            }
+            Ok(Action::GoToWorkspace(index))
+        }
         "set-bookmark" => {
             let name = arg
                 .filter(|a| !a.is_empty())
@@ -253,6 +264,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("focus-center", "focus-center"),
     ("focus-nearest", "focus-nearest up"),
     ("go-to-bookmark", "go-to-bookmark 1"),
+    ("go-to-workspace", "go-to-workspace 1"),
     ("grow-window", "grow-window up"),
     ("home-toggle", "home-toggle"),
     ("move-to-bookmark", "move-to-bookmark 1"),
@@ -646,6 +658,7 @@ mod tests {
             Action::CycleWindows { .. } => "cycle-windows",
             Action::HomeToggle => "home-toggle",
             Action::GoToBookmark(_) => "go-to-bookmark",
+            Action::GoToWorkspace(_) => "go-to-workspace",
             Action::SetBookmark(_) => "set-bookmark",
             Action::MoveToBookmark(_) => "move-to-bookmark",
             Action::ZoomIn => "zoom-in",
@@ -719,6 +732,19 @@ mod tests {
         assert!(parse_action("move-to-bookmark").is_err());
         // Whitespace-only argument is empty after trimming.
         assert!(parse_action("go-to-bookmark   ").is_err());
+    }
+
+    #[test]
+    fn go_to_workspace_takes_a_one_based_number() {
+        assert_eq!(
+            parse_action("go-to-workspace 3"),
+            Ok(Action::GoToWorkspace(3))
+        );
+        assert_eq!(parse_action("go-to-zone 2"), Ok(Action::GoToWorkspace(2)));
+        assert!(parse_action("go-to-workspace").is_err());
+        assert!(parse_action("go-to-workspace 0").is_err());
+        assert!(parse_action("go-to-workspace -1").is_err());
+        assert!(parse_action("go-to-workspace first").is_err());
     }
 
     #[test]

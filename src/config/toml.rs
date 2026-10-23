@@ -155,6 +155,8 @@ pub(super) struct NavigationConfig {
     /// runtime bookmark registry. Absent → the compiled corner defaults;
     /// present-but-empty → no seeds (explicit-empty escape hatch).
     pub bookmarks: Option<HashMap<String, [f64; 2]>>,
+    /// What ext-workspace pills represent: `"bookmarks"` (default) or `"zones"`.
+    pub workspace_source: Option<String>,
     pub edge_pan: EdgePanConfig,
 }
 

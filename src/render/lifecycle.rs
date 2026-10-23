@@ -42,39 +42,60 @@ pub fn refresh_foreign_toplevels(state: &mut crate::state::DriftWm) {
     );
 }
 
-/// Recompute each output's active bookmark and sync the ext-workspace protocol.
-/// Call once per frame alongside `refresh_foreign_toplevels`. Incumbents live
-/// per-output in `OutputState`; the focused output's is what the protocol's
-/// single `active` bit and the IPC `active_bookmark` fields report.
+/// Recompute each output's active workspace and sync the ext-workspace
+/// protocol. Call once per frame alongside `refresh_foreign_toplevels`.
+/// Incumbents live per-output in `OutputState`; the focused output's is what
+/// the protocol's single `active` bit reports.
 pub fn refresh_ext_workspaces(state: &mut crate::state::DriftWm) {
     use crate::state::{output_logical_size, output_state};
+    use driftwm::config::WorkspaceSource;
 
     let outputs: Vec<Output> = state.space.outputs().cloned().collect();
-    for output in &outputs {
-        let (camera, zoom) = {
-            let os = output_state(output);
-            (os.camera, os.zoom)
-        };
-        let viewport = output_logical_size(output);
-        let usable_center = state.usable_center_screen_on(output);
-        let incumbent = output_state(output).active_bookmark.clone();
-        let winner = canvas::active_bookmark(
-            &state.bookmarks,
-            camera,
-            viewport,
-            zoom,
-            usable_center,
-            incumbent.as_deref(),
-        );
-        if winner != incumbent {
-            output_state(output).active_bookmark = winner;
-            state.active_bookmark_dirty = true;
+    let mode = state.config.workspace_source;
+    let zones = state.zones();
+    let entries = state.workspace_entries(&zones);
+
+    match mode {
+        WorkspaceSource::Bookmarks => {
+            for output in &outputs {
+                let (camera, zoom) = {
+                    let os = output_state(output);
+                    (os.camera, os.zoom)
+                };
+                let viewport = output_logical_size(output);
+                let usable_center = state.usable_center_screen_on(output);
+                let incumbent = output_state(output).active_bookmark.clone();
+                let winner = canvas::active_bookmark(
+                    &state.bookmarks,
+                    camera,
+                    viewport,
+                    zoom,
+                    usable_center,
+                    incumbent.as_deref(),
+                );
+                if winner != incumbent {
+                    output_state(output).active_bookmark = winner;
+                    state.active_bookmark_dirty = true;
+                }
+            }
+        }
+        WorkspaceSource::Zones => {
+            for output in &outputs {
+                let incumbent = output_state(output).active_zone.clone();
+                let winner = state.active_zone_for_output(output, &zones, incumbent.as_deref());
+                if winner != incumbent {
+                    output_state(output).active_zone = winner;
+                    state.active_bookmark_dirty = true;
+                }
+            }
         }
     }
 
-    let active = state
-        .active_output()
-        .and_then(|o| output_state(&o).active_bookmark.clone());
+    let active = state.active_output().and_then(|output| match mode {
+        WorkspaceSource::Bookmarks => output_state(&output).active_bookmark.clone(),
+        WorkspaceSource::Zones => output_state(&output).active_zone.clone(),
+    });
+
     // Only outputs with a live wl_output global can carry group enters; the
     // virtual placeholders left by a full disconnect have none.
     let live_outputs: Vec<Output> = outputs
@@ -82,11 +103,13 @@ pub fn refresh_ext_workspaces(state: &mut crate::state::DriftWm) {
         .filter(|o| !state.disconnected_outputs.contains(&o.name()))
         .cloned()
         .collect();
+    let can_manage = mode == WorkspaceSource::Bookmarks;
     driftwm::protocols::ext_workspace::refresh::<crate::state::DriftWm>(
         &mut state.ext_workspace_state,
-        &state.bookmarks,
+        &entries,
         active.as_deref(),
         &live_outputs,
+        can_manage,
     );
 }
 

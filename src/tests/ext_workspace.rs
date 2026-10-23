@@ -14,8 +14,10 @@ use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::{
 };
 use wayland_protocols::ext::workspace::v1::client::ext_workspace_manager_v1::ExtWorkspaceManagerV1;
 
+use crate::state::StageWindow;
+
 use super::client::ClientId;
-use super::{Fixture, config};
+use super::{Fixture, config, map_window, settle, window_by_app_id};
 
 /// Run the per-frame ext-workspace refresh the render loops drive: recompute
 /// every output's incumbent bookmark and diff the registry into protocol events.
@@ -520,5 +522,142 @@ fn incremental_change_arrives_under_a_done_barrier() {
     assert!(
         f.client(id).state.ext_workspace.done_count > done_before,
         "the insert arrives atomically under a new done"
+    );
+}
+
+/// Two adjacent windows (zone 1) plus one far-away window (zone 2), with the
+/// server configured to export zones. `refresh` must run before `connect` so
+/// the bind burst hydrates the current entry set.
+fn zones_layout() -> Fixture {
+    let mut f = Fixture::with_config(config("[navigation]\nworkspace_source = \"zones\"\n"));
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let client = f.add_client();
+    let gap = f.state().config.snap_gap as i32;
+
+    map_window(&mut f, client, "left", (400, 300));
+    map_window(&mut f, client, "right", (400, 300));
+    map_window(&mut f, client, "far", (400, 300));
+
+    let left = window_by_app_id(&mut f, "left").expect("left window");
+    let right = window_by_app_id(&mut f, "right").expect("right window");
+    let far = window_by_app_id(&mut f, "far").expect("far window");
+    f.state()
+        .map_window(StageWindow::Client(left), Point::from((0, 0)), false);
+    f.state().map_window(
+        StageWindow::Client(right),
+        Point::from((400 + gap, 0)),
+        false,
+    );
+    f.state()
+        .map_window(StageWindow::Client(far), Point::from((4000, 0)), false);
+    settle(&mut f);
+    refresh(&mut f);
+    f
+}
+
+#[test]
+fn zones_mode_advertises_connected_clusters_with_ordinal_names() {
+    use wayland_protocols::ext::workspace::v1::client::ext_workspace_group_handle_v1::GroupCapabilities;
+    use wayland_protocols::ext::workspace::v1::client::ext_workspace_handle_v1::WorkspaceCapabilities;
+
+    let mut f = zones_layout();
+    let id = connect(&mut f);
+    let ws = &f.client(id).state.ext_workspace;
+
+    assert_eq!(ws.names(), vec!["1".to_string(), "2".to_string()]);
+    assert_eq!(ws.workspace("1").unwrap().coordinates, Some(vec![0]));
+    assert_eq!(ws.workspace("2").unwrap().coordinates, Some(vec![1]));
+    assert!(
+        ws.workspace("1")
+            .unwrap()
+            .id
+            .as_deref()
+            .unwrap()
+            .starts_with("zone-"),
+        "zone ids are stable element-derived ids, not display ordinals"
+    );
+    assert_eq!(ws.active(), Some("1"));
+
+    // Zones are navigation targets only: no create/remove.
+    let caps = ws.workspace("1").unwrap().capabilities.unwrap();
+    assert_eq!(caps, WorkspaceCapabilities::Activate.bits());
+    let group_caps = ws.group_capabilities.unwrap();
+    assert_eq!(
+        group_caps & GroupCapabilities::CreateWorkspace.bits(),
+        0,
+        "zones must not advertise create_workspace"
+    );
+}
+
+#[test]
+fn empty_canvas_advertises_one_synthetic_zone() {
+    let mut f = Fixture::with_config(config("[navigation]\nworkspace_source = \"zones\"\n"));
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[]);
+    let id = connect(&mut f);
+    let ws = &f.client(id).state.ext_workspace;
+
+    assert_eq!(ws.names(), vec!["1".to_string()]);
+    assert_eq!(ws.workspace("1").unwrap().id.as_deref(), Some("zone-empty"));
+    assert_eq!(ws.active(), Some("1"));
+
+    // Nothing to frame, so activation stays put.
+    assert!(f.state().camera_target().is_none());
+    handle(&mut f, id, "1").activate();
+    manager(&mut f, id).commit();
+    f.double_roundtrip(id);
+    assert!(f.state().camera_target().is_none());
+}
+
+#[test]
+fn activating_a_zone_pill_frames_its_cluster() {
+    let mut f = zones_layout();
+    let id = connect(&mut f);
+    let zones = f.state().zones();
+    let expected = Point::<f64, smithay::utils::Logical>::from((
+        zones[1].bbox.loc.x as f64 + zones[1].bbox.size.w as f64 / 2.0,
+        zones[1].bbox.loc.y as f64 + zones[1].bbox.size.h as f64 / 2.0,
+    ));
+
+    handle(&mut f, id, "2").activate();
+    manager(&mut f, id).commit();
+    f.double_roundtrip(id);
+    settle(&mut f);
+
+    let center = f.state().viewport_center_canvas();
+    assert!(
+        (center.x - expected.x).abs() < 0.5 && (center.y - expected.y).abs() < 0.5,
+        "clicking pill 2 should frame zone 2 at {expected:?}, got {center:?}"
+    );
+
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id).state.ext_workspace.active(),
+        Some("2"),
+        "the framed zone becomes the incumbent"
+    );
+}
+
+#[test]
+fn zones_mode_ignores_create_workspace_requests() {
+    let mut f = Fixture::with_config(config("[navigation]\nworkspace_source = \"zones\"\n"));
+    f.add_output(1, (1920, 1080));
+    seed(&mut f, &[]);
+    let id = connect(&mut f);
+
+    let group = f.client(id).state.ext_workspace.group.clone().unwrap();
+    group.create_workspace("new".into());
+    manager(&mut f, id).commit();
+    f.double_roundtrip(id);
+
+    assert!(f.state().bookmarks.is_empty());
+    refresh(&mut f);
+    f.double_roundtrip(id);
+    assert_eq!(
+        f.client(id).state.ext_workspace.names(),
+        vec!["1".to_string()],
+        "the synthetic zone is still the only pill"
     );
 }

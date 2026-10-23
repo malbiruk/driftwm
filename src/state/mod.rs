@@ -44,6 +44,7 @@ pub(crate) mod window_animation;
 mod window_animation_driver;
 mod window_frame;
 mod window_lifecycle;
+pub(crate) mod zones;
 pub use cluster_snapshot::{ClusterMember, ClusterResizeSnapshot};
 pub use cursor::{CursorFrames, CursorState};
 use edge_pan::EdgePanDelay;
@@ -458,6 +459,10 @@ pub struct OutputState {
     /// center, with hysteresis. Recomputed per frame by the ext-workspace
     /// refresh; the focused output's value is what the protocol and IPC report.
     pub active_bookmark: Option<String>,
+    /// This output's active snap zone (`zones` workspace mode): the visible
+    /// cluster with the largest viewport intersection, with hysteresis. The
+    /// synthetic `zone-empty` wins while the canvas has no windows.
+    pub active_zone: Option<String>,
     /// The backend, not the config, owns this output's mode, scale and
     /// transform — set for the nested output, whose host window drives size
     /// and scale and whose transform is the renderer's Y-flip compensation.
@@ -500,6 +505,7 @@ pub fn init_output_state(
             home_return: None,
             fullscreen_return: None,
             active_bookmark: None,
+            active_zone: None,
             backend_owned_mode: false,
             render_only_transform: false,
         })

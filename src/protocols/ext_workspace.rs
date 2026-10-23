@@ -1,14 +1,15 @@
-//! `ext-workspace-v1` (staging): exports driftwm bookmarks to bars and shells
-//! through the workspace metaphor. One group represents the whole canvas; each
-//! bookmark is a workspace named after it. The single `active` state bit tracks
-//! the focused viewport's nearest visible bookmark.
+//! `ext-workspace-v1` (staging): exposes driftwm's conceptual workspaces to
+//! bars and shells. One group represents the whole canvas. In `bookmarks` mode
+//! each bookmark is a pill; in `zones` mode each connected snap cluster is one
+//! pill, and a synthetic pill stands in when the canvas is empty. The single
+//! `active` state bit tracks the focused viewport's incumbent.
 //!
-//! This is an *export of bookmarks*, not real workspaces — no window↔workspace
-//! association exists or is implied. smithay ships no helper for this protocol,
-//! so it is hand-rolled against the generated interfaces, diffing the registry
-//! per frame like `foreign_toplevel`.
+//! This is an *export of a viewport navigation model*, not real workspaces — no
+//! window↔workspace association exists or is implied. smithay ships no helper
+//! for this protocol, so it is hand-rolled against the generated interfaces,
+//! diffing the registry per frame like `foreign_toplevel`.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use smithay::output::Output;
 use smithay::reexports::wayland_protocols::ext::workspace::v1::server::{
@@ -24,9 +25,37 @@ use smithay::reexports::wayland_server::{
 
 const VERSION: u32 = 1;
 
-/// One bound client: its manager, the single group handle, the per-bookmark
-/// workspace handles, the outputs already advertised via `output_enter`, and
-/// the double-buffered requests awaiting `commit`.
+/// One ext-workspace entry: a stable protocol id, a human-readable display
+/// name, and its position in the group's 1-D ordering. Bookmarks use the name
+/// as their id; zones use `zone-<element id>` so display names stay ordinal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WorkspaceEntry {
+    pub id: String,
+    pub name: String,
+    pub coordinates: Vec<u32>,
+}
+
+impl WorkspaceEntry {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, coordinate: u32) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            coordinates: vec![coordinate],
+        }
+    }
+}
+
+/// The properties last advertised on one client's handle, for diffing.
+struct AdvertisedWorkspace {
+    handle: ExtWorkspaceHandleV1,
+    name: String,
+    coordinates: Vec<u32>,
+    capabilities: WorkspaceCapabilities,
+}
+
+/// One bound client: its manager, the single group handle, the per-workspace
+/// handles, the outputs already advertised via `output_enter`, and the
+/// double-buffered requests awaiting `commit`.
 ///
 /// `group` is `None` once the client destroys the group handle while keeping
 /// the manager live: workspaces, state, and `done` keep flowing, but
@@ -34,7 +63,7 @@ const VERSION: u32 = 1;
 struct ManagerInstance {
     manager: ExtWorkspaceManagerV1,
     group: Option<ExtWorkspaceGroupHandleV1>,
-    workspaces: BTreeMap<String, ExtWorkspaceHandleV1>,
+    workspaces: BTreeMap<String, AdvertisedWorkspace>,
     outputs: Vec<WlOutput>,
     pending: Vec<PendingOp>,
 }
@@ -50,12 +79,14 @@ enum PendingOp {
 pub struct ExtWorkspaceManagerState {
     display: DisplayHandle,
     instances: Vec<ManagerInstance>,
-    /// Bookmark names last advertised as workspaces — the diff baseline for
-    /// `refresh` and the hydration list for `bind`.
-    workspaces: BTreeSet<String>,
-    /// Name of the workspace currently carrying the `active` bit (the focused
+    /// Entries last advertised as workspaces — the diff baseline for `refresh`
+    /// and the hydration list for `bind`.
+    workspaces: BTreeMap<String, WorkspaceEntry>,
+    /// Id of the workspace currently carrying the `active` bit (the focused
     /// output's incumbent), diffed each refresh to emit state flips.
     active: Option<String>,
+    /// Bookmarks can be created/removed through the protocol; zones cannot.
+    can_manage: bool,
 }
 
 pub struct ExtWorkspaceGlobalData {
@@ -65,9 +96,9 @@ pub struct ExtWorkspaceGlobalData {
 pub trait ExtWorkspaceHandler {
     fn ext_workspace_state(&mut self) -> &mut ExtWorkspaceManagerState;
     fn ext_workspace_outputs(&self) -> Vec<Output>;
-    fn workspace_activate(&mut self, name: String);
+    fn workspace_activate(&mut self, id: String);
     fn workspace_create(&mut self, name: String);
-    fn workspace_remove(&mut self, name: String);
+    fn workspace_remove(&mut self, id: String);
 }
 
 impl ExtWorkspaceManagerState {
@@ -88,22 +119,48 @@ impl ExtWorkspaceManagerState {
         Self {
             display: display.clone(),
             instances: Vec::new(),
-            workspaces: BTreeSet::new(),
+            workspaces: BTreeMap::new(),
             active: None,
+            can_manage: true,
         }
     }
 }
 
-/// Create a workspace handle for one bookmark on one instance and send its
-/// initial burst: `workspace` (manager) → `id` → `name` → `capabilities` →
-/// `state` → `workspace_enter` (group). The protocol requires `state` among the
-/// initial details, so every workspace starts at `empty`; the caller re-emits
-/// `state(active)` on the active one within the same atomic `done`.
+fn workspace_capabilities(can_manage: bool) -> WorkspaceCapabilities {
+    if can_manage {
+        WorkspaceCapabilities::Activate | WorkspaceCapabilities::Remove
+    } else {
+        WorkspaceCapabilities::Activate
+    }
+}
+
+fn group_capabilities(can_manage: bool) -> GroupCapabilities {
+    if can_manage {
+        GroupCapabilities::CreateWorkspace
+    } else {
+        GroupCapabilities::empty()
+    }
+}
+
+fn encode_coordinates(coordinates: &[u32]) -> Vec<u8> {
+    coordinates
+        .iter()
+        .flat_map(|coordinate| coordinate.to_ne_bytes())
+        .collect()
+}
+
+/// Create a workspace handle for one entry on one instance and send its initial
+/// burst: `workspace` (manager) → `id` → `name` → `coordinates` →
+/// `capabilities` → `state` → `workspace_enter` (group). The protocol requires
+/// `state` among the initial details, so every workspace starts at `empty`; the
+/// caller re-emits `state(active)` on the active one within the same atomic
+/// `done`.
 fn create_workspace_handle<D>(
     display: &DisplayHandle,
     client: &Client,
     inst: &mut ManagerInstance,
-    name: &str,
+    entry: &WorkspaceEntry,
+    can_manage: bool,
 ) where
     D: Dispatch<ExtWorkspaceHandleV1, ()> + 'static,
 {
@@ -113,38 +170,63 @@ fn create_workspace_handle<D>(
         return;
     };
     inst.manager.workspace(&handle);
-    // The registry key is unique and stable, so it doubles as the protocol id.
-    handle.id(name.to_owned());
-    handle.name(name.to_owned());
-    handle.capabilities(WorkspaceCapabilities::Activate | WorkspaceCapabilities::Remove);
+    handle.id(entry.id.clone());
+    handle.name(entry.name.clone());
+    if !entry.coordinates.is_empty() {
+        handle.coordinates(encode_coordinates(&entry.coordinates));
+    }
+    let capabilities = workspace_capabilities(can_manage);
+    handle.capabilities(capabilities);
     handle.state(State::empty());
     if let Some(group) = &inst.group {
         group.workspace_enter(&handle);
     }
-    inst.workspaces.insert(name.to_owned(), handle);
+    inst.workspaces.insert(
+        entry.id.clone(),
+        AdvertisedWorkspace {
+            handle,
+            name: entry.name.clone(),
+            coordinates: entry.coordinates.clone(),
+            capabilities,
+        },
+    );
 }
 
-/// Diff the bookmark registry against the advertised set and reconcile every
-/// bound client, emitting `done` per instance only when something changed.
-/// `active` is the focused output's incumbent — the only output whose
-/// incumbent the protocol projects. `outputs` are the live outputs (those
-/// with a wl_output global).
+/// Diff the entry set against the advertised one and reconcile every bound
+/// client, emitting `done` per instance only when something changed. `active`
+/// is the focused output's incumbent — the only output whose incumbent the
+/// protocol projects. `outputs` are the live outputs (those with a wl_output
+/// global). `can_manage` selects bookmark-style create/remove capabilities.
 ///
 /// Runs every frame: the manager global predates every wl_output global and
 /// clients bind outputs on their own schedule, so output_enter can only be
 /// delivered by diffing per frame, as the protocol requires.
 pub fn refresh<D>(
     ws_state: &mut ExtWorkspaceManagerState,
-    bookmarks: &BTreeMap<String, [f64; 2]>,
+    entries: &[WorkspaceEntry],
     active: Option<&str>,
     outputs: &[Output],
+    can_manage: bool,
 ) where
     D: Dispatch<ExtWorkspaceHandleV1, ()> + 'static,
 {
-    let live: BTreeSet<String> = bookmarks.keys().cloned().collect();
-    let created: Vec<String> = live.difference(&ws_state.workspaces).cloned().collect();
-    let removed: Vec<String> = ws_state.workspaces.difference(&live).cloned().collect();
+    let live: BTreeMap<String, WorkspaceEntry> = entries
+        .iter()
+        .map(|entry| (entry.id.clone(), entry.clone()))
+        .collect();
+    let created: Vec<WorkspaceEntry> = live
+        .iter()
+        .filter(|(id, _)| !ws_state.workspaces.contains_key(*id))
+        .map(|(_, entry)| entry.clone())
+        .collect();
+    let removed: Vec<String> = ws_state
+        .workspaces
+        .keys()
+        .filter(|id| !live.contains_key(*id))
+        .cloned()
+        .collect();
     let active_changed = ws_state.active.as_deref() != active;
+    let manage_changed = ws_state.can_manage != can_manage;
 
     let old_active = ws_state.active.clone();
     let display = ws_state.display.clone();
@@ -156,6 +238,10 @@ pub fn refresh<D>(
 
         // Reconcile group outputs only while the group handle is live.
         if let Some(group) = inst.group.clone() {
+            if manage_changed {
+                group.capabilities(group_capabilities(can_manage));
+                changed = true;
+            }
             // The distinct wl_output resources this client has bound across the
             // live outputs. Each distinct resource gets its own enter; the
             // dedup only guards against the same resource being listed twice.
@@ -190,20 +276,43 @@ pub fn refresh<D>(
             });
         }
 
-        for name in &removed {
-            if let Some(handle) = inst.workspaces.remove(name) {
+        for id in &removed {
+            if let Some(old) = inst.workspaces.remove(id) {
                 // A workspace must leave its group before removal — the protocol
                 // only removes workspaces belonging to no group.
                 if let Some(group) = &inst.group {
-                    group.workspace_leave(&handle);
+                    group.workspace_leave(&old.handle);
                 }
-                handle.removed();
+                old.handle.removed();
                 changed = true;
             }
         }
-        for name in &created {
-            create_workspace_handle::<D>(&display, &client, inst, name);
+        for entry in &created {
+            create_workspace_handle::<D>(&display, &client, inst, entry, can_manage);
             changed = true;
+        }
+        for (id, entry) in &live {
+            let Some(advertised) = inst.workspaces.get_mut(id) else {
+                continue;
+            };
+            if advertised.name != entry.name {
+                advertised.handle.name(entry.name.clone());
+                advertised.name = entry.name.clone();
+                changed = true;
+            }
+            if advertised.coordinates != entry.coordinates {
+                advertised
+                    .handle
+                    .coordinates(encode_coordinates(&entry.coordinates));
+                advertised.coordinates = entry.coordinates.clone();
+                changed = true;
+            }
+            let capabilities = workspace_capabilities(can_manage);
+            if advertised.capabilities != capabilities {
+                advertised.handle.capabilities(capabilities);
+                advertised.capabilities = capabilities;
+                changed = true;
+            }
         }
         if active_changed {
             // Clearing the old handle is skipped when it was just removed above
@@ -211,13 +320,13 @@ pub fn refresh<D>(
             if let Some(old) = old_active.as_deref()
                 && let Some(handle) = inst.workspaces.get(old)
             {
-                handle.state(State::empty());
+                handle.handle.state(State::empty());
                 changed = true;
             }
             if let Some(new) = active
                 && let Some(handle) = inst.workspaces.get(new)
             {
-                handle.state(State::Active);
+                handle.handle.state(State::Active);
                 changed = true;
             }
         }
@@ -228,6 +337,7 @@ pub fn refresh<D>(
 
     ws_state.workspaces = live;
     ws_state.active = active.map(str::to_owned);
+    ws_state.can_manage = can_manage;
 }
 
 /// Retract a disconnecting output from every bound client's group via
@@ -293,7 +403,7 @@ where
             return;
         };
         manager.workspace_group(&group);
-        group.capabilities(GroupCapabilities::CreateWorkspace);
+        group.capabilities(group_capabilities(ws_state.can_manage));
 
         let mut inst = ManagerInstance {
             manager: manager.clone(),
@@ -310,14 +420,14 @@ where
             }
         }
 
-        let names: Vec<String> = ws_state.workspaces.iter().cloned().collect();
-        for name in &names {
-            create_workspace_handle::<D>(handle, client, &mut inst, name);
+        let entries: Vec<WorkspaceEntry> = ws_state.workspaces.values().cloned().collect();
+        for entry in &entries {
+            create_workspace_handle::<D>(handle, client, &mut inst, entry, ws_state.can_manage);
         }
         if let Some(active) = ws_state.active.as_deref()
             && let Some(workspace) = inst.workspaces.get(active)
         {
-            workspace.state(State::Active);
+            workspace.handle.state(State::Active);
         }
 
         manager.done();
@@ -453,8 +563,8 @@ where
         let found = ws_state.instances.iter().enumerate().find_map(|(i, inst)| {
             inst.workspaces
                 .iter()
-                .find_map(|(name, handle)| (handle == resource).then(|| name.clone()))
-                .map(|name| (i, name))
+                .find_map(|(id, advertised)| (&advertised.handle == resource).then(|| id.clone()))
+                .map(|id| (i, id))
         });
         let Some((idx, name)) = found else {
             return;
@@ -481,7 +591,8 @@ where
 
     fn destroyed(state: &mut D, _client: ClientId, resource: &ExtWorkspaceHandleV1, _data: &()) {
         for inst in &mut state.ext_workspace_state().instances {
-            inst.workspaces.retain(|_, handle| handle != resource);
+            inst.workspaces
+                .retain(|_, advertised| &advertised.handle != resource);
         }
     }
 }

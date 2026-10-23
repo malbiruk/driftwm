@@ -413,6 +413,24 @@ impl DriftWm {
                     tracing::info!("no bookmark named '{name}' — set it with set-bookmark")
                 }
             },
+            Action::GoToWorkspace(index) => {
+                if self.config.workspace_source == driftwm::config::WorkspaceSource::Zones {
+                    if !self.activate_zone_ordinal(*index) {
+                        tracing::info!("no snap zone at workspace ordinal {index}");
+                    }
+                } else {
+                    // Preserve the historical Super+1..4 bookmark behaviour in
+                    // bookmarks mode. Direct lookup avoids re-running the
+                    // fullscreen/cycle prelude of `execute_action`.
+                    let name = index.to_string();
+                    match self.bookmarks.get(&name) {
+                        Some(&[x, y]) => self.go_to_canvas_point(x, y),
+                        None => {
+                            tracing::info!("no bookmark named '{name}' — set it with set-bookmark")
+                        }
+                    }
+                }
+            }
             Action::SetBookmark(name) => {
                 let vc = self.usable_center_screen();
                 // Capture the destination of an in-flight animation, not a
@@ -827,7 +845,10 @@ impl DriftWm {
     /// Animate zoom + camera to fit `bbox` inside the viewport. Saves the
     /// current camera/zoom into `overview_return` so the next zoom-to-fit
     /// press toggles back.
-    fn fit_to_bbox(&mut self, bbox: smithay::utils::Rectangle<i32, smithay::utils::Logical>) {
+    pub(crate) fn fit_to_bbox(
+        &mut self,
+        bbox: smithay::utils::Rectangle<i32, smithay::utils::Logical>,
+    ) {
         self.user_moved_camera();
         let usable = self.get_usable_area();
         let vc = self.usable_center_screen();

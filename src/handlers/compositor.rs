@@ -511,6 +511,7 @@ impl CompositorHandler for DriftWm {
 
                     let mut placed_at_cursor = false;
                     let mut place_in_background = false;
+                    let mut fit_restore_center = None;
                     // One-shot: when a rule forces a size, first commit
                     // arrives at the client's preferred size; configure with
                     // the rule size and defer positioning/decoration/nav to
@@ -618,6 +619,16 @@ impl CompositorHandler for DriftWm {
                         // location — skip positioning so bar-shifted
                         // centering doesn't override that.
                         let chrome = self.mapping_chrome(&root, &effective);
+                        // A client that asks to be maximized before its first
+                        // commit still commits at its preferred windowed size.
+                        // Place the rect it is about to become, not that
+                        // throwaway one: `fit_window` expands around the visual
+                        // center, so a smaller pre-fit rect would make the
+                        // final fit overlap the group it just docked against.
+                        let queued_fit = self.pending_fit.contains(&root)
+                            && !self.pending_fullscreen.contains_key(&root);
+                        let fit_size = queued_fit.then(|| self.fit_target_size(chrome));
+                        let auto_size = fit_size.unwrap_or(geo.size);
                         let pos = if let Some(ref applied) = applied
                             && let Some((x, y)) = applied.position
                         {
@@ -655,10 +666,38 @@ impl CompositorHandler for DriftWm {
                                     self.config.window_placement,
                                     driftwm::config::WindowPlacement::Auto
                                 ) {
-                                self.auto_placement_pos(&window, geo.size, chrome)
+                                self.auto_placement_pos(&window, auto_size, chrome)
+                                    .map(|pos| {
+                                        // Center the window's first (windowed)
+                                        // commit inside the fit slot so the fit
+                                        // expands around the same visual center and
+                                        // lands on that free slot.
+                                        match fit_size {
+                                            Some(fit_size) => (
+                                                pos.0 + (fit_size.w - geo.size.w) / 2,
+                                                pos.1 + (fit_size.h - geo.size.h) / 2,
+                                            ),
+                                            None => pos,
+                                        }
+                                    })
                             } else {
                                 None
                             };
+                            // The fit rect is the maximized window's visible
+                            // placement, but an unfit should return the
+                            // windowed rect beside the group, not to the fit
+                            // rect's center.
+                            if queued_fit
+                                && auto_pos.is_some()
+                                && let Some((x, y)) =
+                                    self.auto_placement_pos(&window, geo.size, chrome)
+                            {
+                                fit_restore_center = Some(crate::state::visual_frame_center(
+                                    Point::from((x, y)),
+                                    geo.size,
+                                    chrome.bar as f64,
+                                ));
+                            }
                             let placed = bg_pos.or(cursor_pos).or(auto_pos).unwrap_or_else(|| {
                                 let output = self
                                     .active_output()
@@ -865,6 +904,15 @@ impl CompositorHandler for DriftWm {
                             self.start_window_open_animation(&window);
 
                             self.apply_queued_geometry_request(&root);
+                            if let Some(center) = fit_restore_center
+                                && self.stage.is_fit(&window)
+                                && let Some(at) = self.stage.position_of(&window)
+                            {
+                                self.stage.set_fit_restore(
+                                    &window,
+                                    driftwm::stage::FitRestore { center, at },
+                                );
+                            }
                         }
                     } else if !has_size {
                         self.pending_center.insert(root.clone());

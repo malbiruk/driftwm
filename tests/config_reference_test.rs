@@ -348,8 +348,15 @@ fn documented_actions() -> BTreeSet<String> {
 fn keybinding_actions_are_all_documented() {
     // Sample-parse: each canonical sample must parse cleanly, proving every
     // const entry names a real action (a bad action surfaces as a warning).
-    for (name, sample) in ACTION_NAMES {
-        let toml = format!("[keybindings]\n\"ctrl+F1\" = \"{sample}\"\n");
+    for (i, (name, sample)) in ACTION_NAMES.iter().enumerate() {
+        // xkb only knows F1–F35. Wrap the overflow behind Alt so every action
+        // still gets a unique, parseable sample combo.
+        let combo = if i < 35 {
+            format!("ctrl+F{}", i + 1)
+        } else {
+            format!("ctrl+alt+F{}", i - 34)
+        };
+        let toml = format!("[keybindings]\n\"{combo}\" = \"{sample}\"\n");
         let (_, warnings) = Config::from_toml_collect(&toml)
             .unwrap_or_else(|e| panic!("sample binding for {name} failed to parse: {e}\n\n{toml}"));
         assert!(

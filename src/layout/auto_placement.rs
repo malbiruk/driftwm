@@ -89,6 +89,104 @@ pub fn place_auto(
         return None;
     }
     let order = bfs_cluster(windows, focused_idx, cluster_eligible, gap);
+    place_auto_in_order(
+        windows,
+        order,
+        cluster_eligible,
+        new_w,
+        new_h,
+        viewport_center,
+        gap,
+    )
+}
+
+/// Like [`place_auto`], but falls back to other clusters when the preferred
+/// one has no free slot. Tries `preferred_idx`'s cluster first, then every
+/// remaining eligible cluster ordered by distance from the viewport center.
+pub fn place_auto_any(
+    windows: &[Rect],
+    preferred_idx: Option<usize>,
+    cluster_eligible: &HashSet<usize>,
+    new_w: f64,
+    new_h: f64,
+    viewport_center: (f64, f64),
+    gap: f64,
+) -> Option<(f64, f64)> {
+    let mut tried: HashSet<usize> = HashSet::new();
+
+    if let Some(idx) = preferred_idx.filter(|&i| i < windows.len() && cluster_eligible.contains(&i))
+    {
+        let order = bfs_cluster(windows, idx, cluster_eligible, gap);
+        tried.extend(order.iter().copied());
+        if let Some(pos) = place_auto_in_order(
+            windows,
+            order,
+            cluster_eligible,
+            new_w,
+            new_h,
+            viewport_center,
+            gap,
+        ) {
+            return Some(pos);
+        }
+    }
+
+    let mut seeds: Vec<(usize, f64)> = windows
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| cluster_eligible.contains(i) && !tried.contains(i))
+        .map(|(i, w)| (i, distance_sq_to_point(w, viewport_center)))
+        .collect();
+    seeds.sort_by(|a, b| a.1.total_cmp(&b.1).then_with(|| a.0.cmp(&b.0)));
+
+    for (idx, _) in seeds {
+        if tried.contains(&idx) {
+            continue;
+        }
+        let order = bfs_cluster(windows, idx, cluster_eligible, gap);
+        tried.extend(order.iter().copied());
+        if let Some(pos) = place_auto_in_order(
+            windows,
+            order,
+            cluster_eligible,
+            new_w,
+            new_h,
+            viewport_center,
+            gap,
+        ) {
+            return Some(pos);
+        }
+    }
+    None
+}
+
+fn distance_sq_to_point(r: &Rect, p: (f64, f64)) -> f64 {
+    let dx = if p.0 < r.x {
+        r.x - p.0
+    } else if p.0 > r.x_high() {
+        p.0 - r.x_high()
+    } else {
+        0.0
+    };
+    let dy = if p.1 < r.y {
+        r.y - p.1
+    } else if p.1 > r.y_high() {
+        p.1 - r.y_high()
+    } else {
+        0.0
+    };
+    dx * dx + dy * dy
+}
+
+fn place_auto_in_order(
+    windows: &[Rect],
+    order: Vec<usize>,
+    cluster_eligible: &HashSet<usize>,
+    new_w: f64,
+    new_h: f64,
+    viewport_center: (f64, f64),
+    gap: f64,
+) -> Option<(f64, f64)> {
     // Bbox of THIS cluster only — distant unrelated clusters shouldn't
     // bias growth direction.
     let cluster_set: HashSet<usize> = order.iter().copied().collect();
@@ -627,6 +725,32 @@ mod tests {
         let ws = vec![r(0.0, 0.0, 100.0, 100.0)];
         let eligible = HashSet::new(); // empty
         assert!(place_auto(&ws, 0, &eligible, 50.0, 50.0, (0.0, 0.0), 4.0).is_none());
+    }
+
+    #[test]
+    fn falls_back_to_another_cluster_when_preferred_is_walled_off() {
+        // F is boxed in by ineligible obstacles, so its cluster has no slot.
+        // G is a separate eligible cluster with a free edge.
+        let ws = vec![
+            r(0.0, 0.0, 200.0, 200.0),         // F (preferred)
+            r(204.0, -2000.0, 300.0, 4000.0),  // right wall
+            r(-504.0, -2000.0, 500.0, 4000.0), // left wall
+            r(-500.0, 204.0, 1000.0, 300.0),   // bottom wall
+            r(-500.0, -504.0, 1000.0, 500.0),  // top wall
+            r(1000.0, 0.0, 200.0, 200.0),      // G
+        ];
+        let mut eligible = HashSet::new();
+        eligible.insert(0);
+        eligible.insert(5);
+
+        let blocked = place_auto(&ws, 0, &eligible, 100.0, 100.0, (100.0, 100.0), 4.0);
+        assert!(
+            blocked.is_none(),
+            "the preferred cluster is fully walled off, got {blocked:?}"
+        );
+        let pos = place_auto_any(&ws, Some(0), &eligible, 100.0, 100.0, (100.0, 100.0), 4.0)
+            .expect("the fallback finds room beside the other cluster");
+        assert_eq!(pos, (896.0, 50.0));
     }
 
     #[test]
