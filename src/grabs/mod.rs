@@ -133,6 +133,7 @@ pub(crate) fn drag_map_window(
     data.map_window(element, pos, false);
 }
 
+mod back_pan_grab;
 mod move_grab;
 mod navigate_grab;
 mod pan_grab;
@@ -141,6 +142,7 @@ mod screen_space_click;
 mod touch_gesture_grab;
 mod touch_recognizer;
 
+pub use back_pan_grab::BackPanGrab;
 pub use move_grab::MoveGrab;
 pub use navigate_grab::NavigateGrab;
 pub use pan_grab::PanGrab;
