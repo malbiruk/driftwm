@@ -141,7 +141,7 @@
 
       nixosModules.default = self.nixosModules.driftwm;
 
-      homeManagerModules.driftwm =
+      homeModules.driftwm =
         {
           config,
           lib,
@@ -155,6 +155,8 @@
               self.packages.${pkgs.stdenv.hostPlatform.system}.default;
         };
 
-      homeManagerModules.default = self.homeManagerModules.driftwm;
+      homeModules.default = self.homeModules.driftwm;
+
+      homeManagerModules = self.homeModules;
     };
 }
