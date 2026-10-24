@@ -186,6 +186,11 @@ impl DriftWm {
             &dh,
             client_is_unrestricted,
         );
+        let server_decoration_state =
+            driftwm::protocols::server_decoration::ServerDecorationManagerState::new::<Self, _>(
+                &dh,
+                client_is_unrestricted,
+            );
         let session_lock_manager_state =
             SessionLockManagerState::new::<Self, _>(&dh, client_is_unrestricted);
         let tablet_state = smithay::wayland::tablet_manager::TabletManagerState::new::<Self>(&dh);
@@ -328,6 +333,7 @@ impl DriftWm {
             screencopy_state,
             output_management_state,
             output_power_state,
+            server_decoration_state,
             dpms_off_outputs: HashSet::new(),
             pending_dpms: HashMap::new(),
             pending_screencopies: Vec::new(),
