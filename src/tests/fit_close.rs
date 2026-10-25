@@ -107,11 +107,10 @@ fn closing_a_snapped_fit_window_pulls_its_neighbour_back() {
     );
 }
 
-/// Under the defaults, an app that opens maximized is placed beside the
-/// focused window and its queued maximize fits the cluster, pushing that window
-/// aside. Closing the app puts it back.
+/// Auto placement reserves the maximized rect beside the focused window, so
+/// neither the queued fit nor closing the app should shift that window.
 #[test]
-fn closing_an_app_that_opened_maximized_puts_its_neighbour_back() {
+fn opening_and_closing_a_maximized_app_leaves_its_neighbour_in_place() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
@@ -135,10 +134,10 @@ fn closing_an_app_that_opened_maximized_puts_its_neighbour_back() {
     window.ack_last_and_commit();
     f.double_roundtrip(id);
     settle(&mut f);
-    assert_ne!(
+    assert_eq!(
         position(&mut f, &terminal),
         before,
-        "precondition: the browser's maximize pushed the terminal aside"
+        "the browser's maximize must not push the terminal aside"
     );
 
     client_close(&mut f, id, &surface);

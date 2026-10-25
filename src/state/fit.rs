@@ -368,15 +368,17 @@ impl DriftWm {
         let old_rect = snap_rect_at(old_loc, old_size, bar, bw);
         let new_rect = snap_rect_at(fit.new_loc, fit.target_size, bar, bw);
         let primary_id = self.stage.id_of(window);
-        self.shift_fit_cluster(window, old_rect, new_rect, primary_id);
+        let pushed = self.shift_fit_cluster(window, old_rect, new_rect, primary_id);
         self.fit_window(window);
-        self.stage.set_fit_push(
-            window,
-            FitPush {
-                fitted: new_rect,
-                home: old_rect,
-            },
-        );
+        if pushed {
+            self.stage.set_fit_push(
+                window,
+                FitPush {
+                    fitted: new_rect,
+                    home: old_rect,
+                },
+            );
+        }
         // Insert the primary's post-fit rect explicitly: `geometry().size`
         // is still pre-fit until the client acks the configure, so
         // `refresh_stable_snap_rect` would cache wrong dimensions.
@@ -423,13 +425,14 @@ impl DriftWm {
 
     /// Move `window`'s snap cluster, found around `from`, so it sits around `to`
     /// instead, the members' slide waiting on `waits_for`'s resize.
+    /// Returns whether any cluster member moved.
     fn shift_fit_cluster(
         &mut self,
         window: &Window,
         from: driftwm::layout::snap::SnapRect,
         to: driftwm::layout::snap::SnapRect,
         waits_for: Option<ElementId>,
-    ) {
+    ) -> bool {
         let primary = StageWindow::Client(window.clone());
         // Capture the cluster before shifting — members' caches must follow
         // their new live positions, or close-time `cluster_of` sees stale
@@ -444,10 +447,14 @@ impl DriftWm {
         };
         let old_member_locs = self.cluster_member_positions(&cluster_members);
         self.shift_cluster_around_primary(window, from, to);
+        let pushed = old_member_locs
+            .iter()
+            .any(|(member, old_loc)| self.stage.position_of(member) != Some(*old_loc));
         self.animate_cluster_shift(old_member_locs, waits_for);
         for member in &cluster_members {
             self.refresh_stable_snap_rect(member);
         }
+        pushed
     }
 
     /// Snapshot each cluster member's pre-shift canvas position, so the shift

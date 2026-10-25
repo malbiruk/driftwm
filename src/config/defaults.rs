@@ -122,28 +122,28 @@ pub(super) fn default_bindings(mod_key: ModKey) -> HashMap<KeyCombo, Action> {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_1),
             },
-            Action::GoToWorkspace(1),
+            Action::GoToBookmark("1".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_2),
             },
-            Action::GoToWorkspace(2),
+            Action::GoToBookmark("2".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_3),
             },
-            Action::GoToWorkspace(3),
+            Action::GoToBookmark("3".into()),
         ),
         (
             KeyCombo {
                 modifiers: m.clone(),
                 sym: Keysym::from(keysyms::KEY_4),
             },
-            Action::GoToWorkspace(4),
+            Action::GoToBookmark("4".into()),
         ),
         (
             KeyCombo {

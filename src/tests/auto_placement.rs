@@ -95,12 +95,7 @@ fn map_into_fit(
     (window_by_app_id(f, app_id).unwrap(), surface)
 }
 
-/// A maximized window is still committed by the client at its preferred
-/// windowed size first. Auto placement must reserve the size it will actually
-/// fit into; otherwise the fit expands around that smaller pre-fit rect and
-/// overlaps the cluster it just docked against.
-#[test]
-fn an_initially_maximized_window_docks_its_fit_rect_against_the_group() {
+fn initial_fit_fixture() -> (Fixture, ClientId, Window) {
     let mut f = Fixture::with_config(config(r#"window_placement = "auto""#));
     f.add_output(1, (1920, 1080));
     let id = f.add_client();
@@ -114,10 +109,24 @@ fn an_initially_maximized_window_docks_its_fit_rect_against_the_group() {
     let serial = SERIAL_COUNTER.next_serial();
     f.state().raise_and_focus(&anchor, serial);
     origin_view(&mut f);
+    (f, id, anchor)
+}
+
+/// Reserve the final fit rect instead of expanding into the anchor's cluster,
+/// and return the windowed rect to a docked position when the client restores.
+#[test]
+fn an_initially_maximized_window_docks_its_fit_rect_against_the_group() {
+    let (mut f, id, anchor) = initial_fit_fixture();
+    let anchor_position = f.state().stage.position_of(&anchor);
 
     let (fitted, surface) = map_into_fit(&mut f, id, "fitted", (400, 300));
     assert!(f.state().stage.is_fit(&fitted), "the client is maximized");
     super::adopt_last_configure(&mut f, id, &surface);
+    assert_eq!(
+        f.state().stage.position_of(&anchor),
+        anchor_position,
+        "opening maximized must not push the anchor's cluster aside"
+    );
 
     let fitted_rect = f
         .state()
@@ -137,9 +146,11 @@ fn an_initially_maximized_window_docks_its_fit_rect_against_the_group() {
         "the fit rect docks against the group it was anchored to"
     );
 
-    f.state().unfit_window(&fitted);
+    f.client(id).window(&surface).unset_maximized();
     f.double_roundtrip(id);
     super::adopt_last_configure(&mut f, id, &surface);
+    assert!(!f.state().stage.is_fit(&fitted));
+    assert_eq!(fitted.geometry().size, Size::from((400, 300)));
     let restored_rect = f
         .state()
         .visual_frame_rect(&StageWindow::Client(fitted.clone()))
@@ -155,67 +166,25 @@ fn an_initially_maximized_window_docks_its_fit_rect_against_the_group() {
     );
 }
 
-/// The preferred cluster is boxed in by other groups. Auto placement must not
-/// give up and fall back to the viewport center — it finds a free edge on one
-/// of the neighboring groups instead.
 #[test]
-fn a_walled_off_group_hands_the_placement_to_another_group() {
-    let mut f = Fixture::with_config(config(r#"window_placement = "auto""#));
-    f.add_output(1, (1920, 1080));
-    let id = f.add_client();
-
-    let gap = f.state().config.snap_gap.round() as i32;
-    let off = gap - 1;
-    let blockers = [
-        ("right", (200, 2000), (200 + off, -1000)),
-        ("left", (200, 2000), (-off - 200, -1000)),
-        ("bottom", (2000, 200), (-1000, 200 + off)),
-        ("top", (2000, 200), (-1000, -off - 200)),
-    ];
-    for (app_id, size, pos) in blockers {
-        map_window(&mut f, id, app_id, size);
-        let window = window_by_app_id(&mut f, app_id).unwrap();
-        f.state()
-            .map_window(StageWindow::Client(window), Point::from(pos), true);
-    }
-
-    map_window(&mut f, id, "anchor", (200, 200));
-    let anchor = window_by_app_id(&mut f, "anchor").unwrap();
-    f.state().map_window(
-        StageWindow::Client(anchor.clone()),
-        Point::from((0, 0)),
-        true,
-    );
-    let serial = SERIAL_COUNTER.next_serial();
-    f.state().raise_and_focus(&anchor, serial);
-    origin_view(&mut f);
-
-    let placing = map_placing(&mut f, id);
-    let pos = auto_pos(&mut f, &placing, Some(StageWindow::Client(anchor.clone())))
-        .expect("the fallback finds a free edge on another group");
+fn moving_an_initially_maximized_window_restores_at_its_new_center() {
+    let (mut f, id, _) = initial_fit_fixture();
+    let (fitted, surface) = map_into_fit(&mut f, id, "fitted", (400, 300));
+    super::adopt_last_configure(&mut f, id, &surface);
     f.state()
-        .map_window(StageWindow::Client(placing.clone()), Point::from(pos), true);
+        .map_window(fitted.clone(), Point::from((4000, -2000)), false);
+    let center = f.state().window_visual_center(&fitted).unwrap();
 
-    let new_rect = f
-        .state()
-        .visual_frame_rect(&StageWindow::Client(placing.clone()))
-        .unwrap();
-    let mut docks = false;
-    for w in f.state().stage.windows().cloned().collect::<Vec<_>>() {
-        if w == StageWindow::Client(placing.clone()) {
-            continue;
-        }
-        let Some(rect) = f.state().visual_frame_rect(&w) else {
-            continue;
-        };
-        let overlaps = new_rect.x_low < rect.x_high
-            && rect.x_low < new_rect.x_high
-            && new_rect.y_low < rect.y_high
-            && rect.y_low < new_rect.y_high;
-        assert!(!overlaps, "the new window must not cover {w:?}");
-        docks |= adjacent_side(&new_rect, &rect, f.state().config.snap_gap).is_some();
-    }
-    assert!(docks, "the new window docks against a neighboring group");
+    f.client(id).window(&surface).unset_maximized();
+    f.double_roundtrip(id);
+    super::adopt_last_configure(&mut f, id, &surface);
+
+    assert_eq!(fitted.geometry().size, Size::from((400, 300)));
+    assert_eq!(
+        f.state().window_visual_center(&fitted),
+        Some(center),
+        "a moved window must not jump back to the original cluster on restore"
+    );
 }
 
 /// A stand-in — the element a restored session leaves on screen before its app

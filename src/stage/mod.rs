@@ -598,11 +598,10 @@ impl<W: StageElement> Stage<W> {
     where
         W: PartialEq<Q>,
     {
-        self.entry_mut(window).and_then(|e| {
-            e.fit_restore = None;
-            e.fit_push = None;
-            e.fit_saved_size.take()
-        })
+        let e = self.entry_mut(window)?;
+        e.fit_restore = None;
+        e.fit_push = None;
+        e.fit_saved_size.take()
     }
 
     pub fn clear_fit<Q>(&mut self, window: &Q)

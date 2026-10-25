@@ -300,73 +300,67 @@ cursor opacity on non-active outputs (0.0–1.0)
 
 Default: `1.5`
 
-trackpad (scroll/gestures) pan multiplier (1.0 = direct, 0 = off)
+trackpad pan multiplier (1.0 = direct, 0 = off)
 
 ### `mouse_speed`
 
 Default: `1.0`
 
-mouse (drag) pan multiplier (1.0 = direct, 0 = off)
+mouse drag pan multiplier (1.0 = direct, 0 = off)
 
 ### `touch_speed`
 
 Default: `1.0`
 
-touchscreen gesture pan multiplier (1.0 = direct, 0 = off)
+touchscreen pan multiplier (1.0 = direct, 0 = off)
 
 ### `drift`
 
 Default: `0.5`
 
-momentum coast: 0 = off, 0.5 = default, 1 = floatiest
+momentum coast: 0 = off, 1 = floatiest
 
 ### `camera_speed`
 
 Default: `0.3`
 
-camera lerp factor, 0-1 (higher = faster, 1 = instant)
+camera lerp factor, 0-1 (1 = instant)
 
 ### `auto_navigate_on_close`
 
 Default: `true`
 
-on close, pan to the newly focused window if off-screen false = camera stays put; focus only moves to a visible window
+on close, pan to the newly focused window if it's off screen (false = focus only a visible one)
 
 ### `auto_navigate_on_click`
 
 Default: `false`
 
-completed click on a partially off-screen window also pans it in fully visible → focus only
+a click on a partly off-screen window scrolls it just into view
 
 ### `nudge_step`
 
 Default: `20`
 
-px per nudge-window action (mod-shift-arrow by default)
+px per nudge-window step
 
 ### `resize_step`
 
 Default: `20`
 
-px per grow-window/shrink-window action (both unbound by default; does not affect drag-resize)
+px per grow-window / shrink-window step
 
 ### `pan_step`
 
 Default: `100.0`
 
-px per pan-viewport action (mod-ctrl-arrow by default)
-
-### `workspace_source`
-
-Default: `"bookmarks"`
-
-What ext-workspace pills represent. "bookmarks" keeps one pill per named bookmark and mod+1..4 jump to bookmarks 1..4. "zones" exports one pill per connected snap cluster (with a synthetic pill on an empty canvas), and mod+1..4 frame zones 1..4.
+px per pan-viewport step
 
 ### `anchors`
 
 Default: `[]`
 
-Anchors: canvas points discoverable by focus-nearest / center-nearest (4-finger swipe / Mod+Arrow) even when no window is there. Uses Y-up.
+Canvas points (Y-up) focus-nearest and center-nearest can land on with no window there.
 
 **Example: origin + 4 corners**
 
@@ -773,20 +767,19 @@ Actions:
 - `zoom-in` — step zoom in
 - `zoom-out` — step zoom out
 - `zoom-reset` — zoom to 1.0
-- `go-to-bookmark <name>` — jump the camera to a saved bookmark
-- `go-to-workspace <n>` — frame zone <n> in zones mode; in bookmarks mode, jump to bookmark "<n>" (alias: go-to-zone)
-- `set-bookmark <name>` — save the current camera center as a bookmark (create or overwrite)
-- `move-to-bookmark <name>` — move the focused window's center to a bookmark point
-- `zoom-to-fit` — fit all windows in viewport
-- `zoom-to-fit-snapped` — fit only the focused window's snap cluster
-- `toggle-fullscreen` — toggle focused window fullscreen
-- `fit-window` — toggle maximize: centers + resets zoom + fills viewport; restore only resizes back
-- `fit-window-snapped` — fit-window for the focused window's whole snap cluster
-- `fill-window` — grow in place to fill free space, up to snap.outer_gap from the usable area's edge and snap.gap from a neighbour; edges past those pull back; clears maximize; press again to restore
-- `toggle-pin-to-screen` — pin/unpin the focused window to the screen (ignores pan/zoom, floats above)
-- `reload-config` — hot-reload config file
-- `toggle-cursor-pan` — toggle cursor edge-pan (see [navigation.edge_pan])
-- `set-trackpad on|off|toggle` — enable/disable every trackpad for the rest of the session (see [input.trackpad] enable)
+- `go-to-bookmark <name>` — jump to a bookmark
+- `set-bookmark <name>` — save the view's center as a bookmark
+- `move-to-bookmark <name>` — move the focused window to a bookmark
+- `zoom-to-fit` — zoom out to show every window
+- `zoom-to-fit-snapped` — zoom to the focused window's snap cluster
+- `toggle-fullscreen` — toggle the focused window fullscreen
+- `fit-window` — maximize the focused window edge to edge; again to restore
+- `fit-window-snapped` — fit-window, moving its snap cluster along
+- `fill-window` — grow the focused window into the free space around it; again to restore
+- `toggle-pin-to-screen` — pin the focused window to the screen, ignoring pan and zoom
+- `reload-config` — hot-reload the config file
+- `toggle-cursor-pan` — toggle bare-cursor edge-pan (see [navigation.edge_pan])
+- `set-trackpad on|off|toggle` — turn every trackpad on or off for this session
 - `quit` — exit the compositor
 - `send-to-output <dir>` — move the focused window to the adjacent output
 - `send-cursor-to-output <dir>` — move the cursor to the adjacent output
@@ -827,10 +820,10 @@ Directions: up, down, left, right, up-left, up-right, down-left, down-right
 | `"mod+0"` | `zoom-reset` |  |
 | `"mod+w"` | `zoom-to-fit` |  |
 | `"mod+shift+w"` | `zoom-to-fit-snapped` |  |
-| `"mod+1"` | `go-to-workspace 1` | zones: frame zone 1; bookmarks: jump to bookmark 1 (top-left by default) |
-| `"mod+2"` | `go-to-workspace 2` | zones: frame zone 2; bookmarks: jump to bookmark 2 (top-right) |
-| `"mod+3"` | `go-to-workspace 3` | zones: frame zone 3; bookmarks: jump to bookmark 3 (bottom-right) |
-| `"mod+4"` | `go-to-workspace 4` | zones: frame zone 4; bookmarks: jump to bookmark 4 (bottom-left) |
+| `"mod+1"` | `go-to-bookmark 1` | jump to bookmark 1 (top-left corner by default) |
+| `"mod+2"` | `go-to-bookmark 2` | jump to bookmark 2 (top-right corner) |
+| `"mod+3"` | `go-to-bookmark 3` | jump to bookmark 3 (bottom-right corner) |
+| `"mod+4"` | `go-to-bookmark 4` | jump to bookmark 4 (bottom-left corner) |
 | `"mod+shift+1"` | `set-bookmark 1` | overwrite bookmark 1 at the current view |
 | `"mod+shift+2"` | `set-bookmark 2` |  |
 | `"mod+shift+3"` | `set-bookmark 3` |  |

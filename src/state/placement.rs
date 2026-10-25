@@ -214,9 +214,9 @@ impl DriftWm {
         let vc_screen = self.usable_center_screen();
         let vc = (camera.x + vc_screen.x / zoom, camera.y + vc_screen.y / zoom);
 
-        let pos = driftwm::layout::auto_placement::place_auto_any(
+        let pos = driftwm::layout::auto_placement::place_auto(
             &rects,
-            Some(anchor_idx),
+            anchor_idx,
             &eligible,
             new_w_f,
             new_h_f,

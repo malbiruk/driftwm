@@ -766,23 +766,11 @@ impl ExtWorkspaceHandler for DriftWm {
             .collect()
     }
 
-    fn workspace_activate(&mut self, id: String) {
-        match self.config.workspace_source {
-            driftwm::config::WorkspaceSource::Bookmarks => {
-                self.execute_action(&driftwm::config::Action::GoToBookmark(id));
-            }
-            driftwm::config::WorkspaceSource::Zones => {
-                if !self.activate_zone(&id) {
-                    tracing::info!("ext-workspace activate: no snap zone '{id}'");
-                }
-            }
-        }
+    fn workspace_activate(&mut self, name: String) {
+        self.execute_action(&driftwm::config::Action::GoToBookmark(name));
     }
 
     fn workspace_create(&mut self, name: String) {
-        if self.config.workspace_source != driftwm::config::WorkspaceSource::Bookmarks {
-            return;
-        }
         if name.is_empty() {
             tracing::info!("ext-workspace create_workspace: ignoring empty name");
             return;
@@ -795,11 +783,8 @@ impl ExtWorkspaceHandler for DriftWm {
         self.mark_all_dirty();
     }
 
-    fn workspace_remove(&mut self, id: String) {
-        if self.config.workspace_source != driftwm::config::WorkspaceSource::Bookmarks {
-            return;
-        }
-        if self.bookmarks.remove(&id).is_some() {
+    fn workspace_remove(&mut self, name: String) {
+        if self.bookmarks.remove(&name).is_some() {
             self.session_store_mark_dirty();
             self.mark_all_dirty();
         }
