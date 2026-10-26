@@ -86,6 +86,12 @@ use wayland_protocols::xdg::shell::client::xdg_positioner::{
 use wayland_protocols::xdg::shell::client::xdg_surface::{self, XdgSurface};
 use wayland_protocols::xdg::shell::client::xdg_toplevel::{self, XdgToplevel};
 use wayland_protocols::xdg::shell::client::xdg_wm_base::{self, XdgWmBase};
+use wayland_protocols_misc::server_decoration::client::org_kde_kwin_server_decoration::{
+    self, OrgKdeKwinServerDecoration,
+};
+use wayland_protocols_misc::server_decoration::client::org_kde_kwin_server_decoration_manager::{
+    self, OrgKdeKwinServerDecorationManager,
+};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1;
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{self, ZwlrLayerShellV1};
@@ -135,6 +141,7 @@ pub struct State {
     pub data_device_manager: Option<WlDataDeviceManager>,
     /// Created by [`Client::get_data_device`], not at bind time.
     pub data_device: Option<WlDataDevice>,
+    pub kde_decoration_manager: Option<OrgKdeKwinServerDecorationManager>,
 
     pub windows: Vec<Window>,
     pub layers: Vec<LayerSurface>,
@@ -182,6 +189,11 @@ pub struct State {
     /// Every `wl_data_device` enter, leave and drop this client's data device
     /// has received, oldest first.
     pub data_device_events: Vec<DataDeviceEvent>,
+    /// Every `default_mode` the KDE decoration manager has announced, oldest
+    /// first.
+    pub kde_default_modes: Vec<org_kde_kwin_server_decoration_manager::Mode>,
+    /// Every `mode` this client's KDE decorations have received, oldest first.
+    pub kde_decoration_modes: Vec<org_kde_kwin_server_decoration::Mode>,
 
     /// The token string from the most recent `xdg_activation_token_v1.done`.
     pub activation_token: Option<String>,
@@ -585,6 +597,7 @@ impl Client {
             tablet_manager: None,
             data_device_manager: None,
             data_device: None,
+            kde_decoration_manager: None,
             windows: Vec::new(),
             layers: Vec::new(),
             popups: Vec::new(),
@@ -602,6 +615,8 @@ impl Client {
             tablet_down_serial: None,
             pointer_enter_serial: None,
             data_device_events: Vec::new(),
+            kde_default_modes: Vec::new(),
+            kde_decoration_modes: Vec::new(),
             activation_token: None,
             ext_workspace: ExtWorkspace::default(),
         };
@@ -926,6 +941,14 @@ impl Client {
     /// the interaction a scenario cares about.
     pub fn drain_keyboard_events(&mut self) -> Vec<KeyboardEvent> {
         std::mem::take(&mut self.state.keyboard_events)
+    }
+
+    /// `org_kde_kwin_server_decoration_manager.create` for `surface`.
+    pub fn create_kde_decoration(&mut self, surface: &WlSurface) -> OrgKdeKwinServerDecoration {
+        let manager = self.state.kde_decoration_manager.as_ref().unwrap();
+        let decoration = manager.create(surface, &self.qh, ());
+        self.connection.flush().unwrap();
+        decoration
     }
 
     /// `zwp_virtual_keyboard_manager_v1.create_virtual_keyboard` on this
@@ -1954,6 +1977,12 @@ impl Dispatch<WlRegistry, ()> for State {
                 } else if interface == ZwpTabletManagerV2::interface().name {
                     let version = min(version, ZwpTabletManagerV2::interface().version);
                     state.tablet_manager = Some(registry.bind(name, version, qh, ()));
+                } else if interface == OrgKdeKwinServerDecorationManager::interface().name {
+                    let version = min(
+                        version,
+                        OrgKdeKwinServerDecorationManager::interface().version,
+                    );
+                    state.kde_decoration_manager = Some(registry.bind(name, version, qh, ()));
                 }
 
                 let global = Global {
@@ -2756,6 +2785,42 @@ impl Dispatch<ZwpVirtualKeyboardV1, ()> for State {
         _qhandle: &QueueHandle<Self>,
     ) {
         unreachable!()
+    }
+}
+
+impl Dispatch<OrgKdeKwinServerDecorationManager, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &OrgKdeKwinServerDecorationManager,
+        event: <OrgKdeKwinServerDecorationManager as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            org_kde_kwin_server_decoration_manager::Event::DefaultMode { mode } => {
+                state.kde_default_modes.push(mode.into_result().unwrap());
+            }
+            _ => unreachable!(),
+        }
+    }
+}
+
+impl Dispatch<OrgKdeKwinServerDecoration, ()> for State {
+    fn event(
+        state: &mut Self,
+        _proxy: &OrgKdeKwinServerDecoration,
+        event: <OrgKdeKwinServerDecoration as wayland_client::Proxy>::Event,
+        _data: &(),
+        _conn: &Connection,
+        _qhandle: &QueueHandle<Self>,
+    ) {
+        match event {
+            org_kde_kwin_server_decoration::Event::Mode { mode } => {
+                state.kde_decoration_modes.push(mode.into_result().unwrap());
+            }
+            _ => unreachable!(),
+        }
     }
 }
 

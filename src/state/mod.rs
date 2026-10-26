@@ -113,6 +113,7 @@ use smithay::wayland::selection::ext_data_control::DataControlState as ExtDataCo
 use smithay::wayland::selection::primary_selection::PrimarySelectionState;
 use smithay::wayland::selection::wlr_data_control::DataControlState;
 use smithay::wayland::session_lock::{LockSurface, SessionLockManagerState, SessionLocker};
+use smithay::wayland::shell::kde::decoration::KdeDecorationState;
 use smithay::wayland::shell::wlr_layer::WlrLayerShellState;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationState;
 use smithay::wayland::viewporter::ViewporterState;
@@ -717,6 +718,7 @@ pub struct DriftWm {
     pub screencopy_state: driftwm::protocols::screencopy::ScreencopyManagerState,
     pub output_management_state: driftwm::protocols::output_management::OutputManagementState,
     pub output_power_state: driftwm::protocols::output_power::OutputPowerState,
+    pub kde_decoration_state: KdeDecorationState,
     /// Outputs currently in DPMS off; render loop skips these.
     pub dpms_off_outputs: HashSet<Output>,
     /// Client-requested DPMS transitions awaiting the udev render loop —

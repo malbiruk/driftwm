@@ -217,6 +217,11 @@ impl DriftWm {
 
         self.config = new_config;
 
+        let kde_mode = driftwm::window_ext::decoration_mode_to_kde_manager(
+            &self.config.decorations.default_mode,
+        );
+        self.kde_decoration_state.set_default_mode(kde_mode);
+
         // Must stay below the swap: `configure_mouse` and `configure_trackpad`
         // read `self.config`, so running this any earlier applies the settings
         // being replaced.

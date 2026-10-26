@@ -581,6 +581,8 @@ Decoration mode for windows without a rule:
 
 "server" (driftwm's title bar) is per window only, via [[window_rules]]: many toolkits draw their own anyway, which would double the title bar.
 
+GTK apps without a header bar hide their own title bar under "minimal" and "none". driftwm tells GTK the mode when the app starts, so a reload reaches only apps started after it; window rules can't change what GTK draws.
+
 ### `border_width`
 
 Default: `0`

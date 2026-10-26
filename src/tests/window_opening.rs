@@ -1,4 +1,5 @@
 use insta::assert_snapshot;
+use wayland_protocols_misc::server_decoration::client::org_kde_kwin_server_decoration::Mode as KdeMode;
 
 use driftwm::config::Config;
 
@@ -400,5 +401,28 @@ fn raise_parent_with_activated_child_is_quiet() {
         p_after.is_empty() && c_after.is_empty(),
         "re-raising a parent with an already-activated child must emit no configures, \
          got parent:\n{p_after}\nchild:\n{c_after}"
+    );
+}
+
+/// A KDE server decoration — the only decoration protocol GTK speaks — hears
+/// the configured default as its mode when created, and a request for another
+/// mode is granted.
+#[test]
+fn a_kde_decoration_hears_the_default_mode_then_the_mode_it_requests() {
+    let mut f = Fixture::with_config(
+        Config::from_toml("[decorations]\ndefault_mode = \"minimal\"\n").unwrap(),
+    );
+    let id = f.add_client();
+    let surface = f.client(id).create_window().surface.clone();
+
+    let decoration = f.client(id).create_kde_decoration(&surface);
+    f.roundtrip(id);
+    assert_eq!(f.client(id).state.kde_decoration_modes, [KdeMode::Server]);
+
+    decoration.request_mode(KdeMode::Client);
+    f.roundtrip(id);
+    assert_eq!(
+        f.client(id).state.kde_decoration_modes,
+        [KdeMode::Server, KdeMode::Client]
     );
 }

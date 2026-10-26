@@ -579,7 +579,9 @@ impl XdgDialogHandler for DriftWm {
 use smithay::wayland::shell::xdg::ToplevelSurface;
 use smithay::wayland::shell::xdg::decoration::XdgDecorationHandler;
 
-pub use driftwm::window_ext::{decoration_mode_to_wire, set_tiled_states, unset_tiled_states};
+pub use driftwm::window_ext::{
+    decoration_mode_to_kde, decoration_mode_to_wire, set_tiled_states, unset_tiled_states,
+};
 
 impl XdgDecorationHandler for DriftWm {
     fn new_decoration(&mut self, toplevel: ToplevelSurface) {
@@ -674,6 +676,20 @@ impl XdgDecorationHandler for DriftWm {
         if toplevel.is_initial_configure_sent() {
             toplevel.send_configure();
         }
+    }
+}
+
+use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::OrgKdeKwinServerDecoration;
+use smithay::wayland::shell::kde::decoration::{KdeDecorationHandler, KdeDecorationState};
+
+impl KdeDecorationHandler for DriftWm {
+    fn kde_decoration_state(&self) -> &KdeDecorationState {
+        &self.kde_decoration_state
+    }
+
+    fn new_decoration(&mut self, _surface: &WlSurface, decoration: &OrgKdeKwinServerDecoration) {
+        let mode = decoration_mode_to_kde(&self.config.decorations.default_mode);
+        decoration.mode(mode);
     }
 }
 

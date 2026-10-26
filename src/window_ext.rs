@@ -42,6 +42,28 @@ pub fn decoration_mode_to_wire(
     }
 }
 
+/// KDE server decoration manager mode for a given decoration mode.
+pub fn decoration_mode_to_kde_manager(
+    mode: &crate::config::DecorationMode,
+) -> smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode{
+    use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode;
+    match mode {
+        crate::config::DecorationMode::Client => Mode::Client,
+        _ => Mode::Server,
+    }
+}
+
+/// KDE server decoration mode for a given decoration mode.
+pub fn decoration_mode_to_kde(
+    mode: &crate::config::DecorationMode,
+) -> smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode{
+    use smithay::reexports::wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration::Mode;
+    match mode {
+        crate::config::DecorationMode::Client => Mode::Client,
+        _ => Mode::Server,
+    }
+}
+
 /// Window operations not directly available on smithay's shape, or that
 /// need to read xdg-toplevel surface state.
 pub trait WindowExt {

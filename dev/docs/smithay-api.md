@@ -544,6 +544,11 @@ driftwm's synthetic backend for tests lives in `src/tests/input_backend.rs`.
 
 - **`XdgDecorationState`** at `smithay::wayland::shell::xdg::decoration::XdgDecorationState`. Mode enum at `wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode` (`ServerSide`/`ClientSide`).
 - **Minimal windows**: force `Mode::ServerSide` on the toplevel — client removes its CSD. Compositor draws no titlebar (still draws shadow + corner clip).
+- **KDE server decoration (`org_kde_kwin_server_decoration`, rev `4cf0b620`)** — `smithay::wayland::shell::kde::decoration::{KdeDecorationState, KdeDecorationHandler}`. Two mode enums, both `None`/`Client`/`Server`: the manager's at `wayland_protocols_misc::server_decoration::server::org_kde_kwin_server_decoration_manager::Mode`, the per-surface one at `…::org_kde_kwin_server_decoration::Mode`. GTK negotiates decorations only over this protocol, never xdg-decoration.
+  - `KdeDecorationState::new::<D>(display: &DisplayHandle, default_mode: manager::Mode) -> Self` (`new_with_filter` takes a client filter too). `set_default_mode(&mut self, default_mode: manager::Mode)` only stores the field, and there is no getter.
+  - The manager sends `default_mode` in `bind` and never again, so a changed default reaches future binds only. The protocol allows a re-announce, but smithay keeps no list of bound managers to send it to.
+  - `KdeDecorationHandler`: `kde_decoration_state(&self) -> &KdeDecorationState` is the one required method. `new_decoration(&mut self, &WlSurface, &OrgKdeKwinServerDecoration)` defaults to a no-op — the protocol has the server send `mode` right after create, so that event is ours to send. `request_mode(&mut self, &WlSurface, &OrgKdeKwinServerDecoration, WEnum<Mode>)` defaults to echoing the client's mode back; `release` defaults to a no-op.
+  - Dispatch is `GlobalDispatch2`/`Dispatch2` on smithay's own data types (`KdeDecorationManagerGlobalData`, `GlobalData`, `KwinServerDecorationData`), so `delegate_dispatch2!` covers it.
 
 ### Udev/DRM Backend
 
