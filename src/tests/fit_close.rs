@@ -107,10 +107,11 @@ fn closing_a_snapped_fit_window_pulls_its_neighbour_back() {
     );
 }
 
-/// Auto placement reserves the maximized rect beside the focused window, so
-/// neither the queued fit nor closing the app should shift that window.
+/// Under the defaults, an app that opens maximized is placed beside the
+/// focused window and its queued maximize fits the cluster, pushing that window
+/// aside. Closing the app puts it back.
 #[test]
-fn opening_and_closing_a_maximized_app_leaves_its_neighbour_in_place() {
+fn closing_an_app_that_opened_maximized_puts_its_neighbour_back() {
     let mut f = Fixture::new();
     f.add_output(1, (1920, 1080));
     f.skip_baseline_check();
@@ -134,15 +135,68 @@ fn opening_and_closing_a_maximized_app_leaves_its_neighbour_in_place() {
     window.ack_last_and_commit();
     f.double_roundtrip(id);
     settle(&mut f);
-    assert_eq!(
+    assert_ne!(
         position(&mut f, &terminal),
         before,
-        "the browser's maximize must not push the terminal aside"
+        "precondition: the browser's maximize pushed the terminal aside"
     );
 
     client_close(&mut f, id, &surface);
 
     assert_eq!(position(&mut f, &terminal), before);
+}
+
+#[test]
+fn closing_an_initially_maximized_window_leaves_later_neighbours_in_place() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.skip_baseline_check();
+    let id = f.add_client();
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("browser");
+    window.set_maximized();
+    window.commit();
+    f.roundtrip(id);
+    let window = f.client(id).window(&surface);
+    window.set_size(800, 600);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    adopt_last_configure(&mut f, id, &surface);
+    settle(&mut f);
+
+    let browser = window_by_app_id(&mut f, "browser").unwrap();
+    map_window(&mut f, id, "terminal", (600, 400));
+    let terminal = window_by_app_id(&mut f, "terminal").unwrap();
+    settle(&mut f);
+    let before = position(&mut f, &terminal);
+    let browser_rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(browser))
+        .unwrap();
+    let terminal_rect = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(terminal.clone()))
+        .unwrap();
+    assert!(
+        driftwm::layout::cluster::adjacent_side(
+            &browser_rect,
+            &terminal_rect,
+            f.state().config.snap_gap
+        )
+        .is_some(),
+        "the terminal docked against the maximized browser"
+    );
+
+    client_close(&mut f, id, &surface);
+
+    assert_eq!(
+        position(&mut f, &terminal),
+        before,
+        "the browser never pushed this terminal, so closing must not pull it back"
+    );
 }
 
 #[test]

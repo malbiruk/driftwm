@@ -1,7 +1,7 @@
 use smithay::utils::{Point, Size};
 
 use super::mock::TestWindow;
-use super::{ElementId, FitPush, FitRestore, PinnedSite, Stage, StageElement, subtree_raise_order};
+use super::{ElementId, FitPush, PinnedSite, Stage, StageElement, subtree_raise_order};
 use crate::layout::snap::SnapRect;
 
 fn stage_with(n: u64) -> (Stage<TestWindow>, Vec<TestWindow>) {
@@ -399,30 +399,6 @@ fn a_fit_push_lives_and_dies_with_fit_membership() {
         assert!(stage.fit_push(w).is_some());
         clear(&mut stage, w);
         assert!(stage.fit_push(w).is_none());
-    }
-}
-
-#[test]
-fn a_fit_restore_is_discarded_on_exit_or_a_new_fit() {
-    let (mut stage, windows) = stage_with(1);
-    let w = &windows[0];
-    let restore = FitRestore {
-        center: Point::from((500.0, 300.0)),
-        at: Point::from((0, 0)),
-    };
-
-    for clear in [
-        |s: &mut Stage<TestWindow>, w: &TestWindow| s.clear_fit(w),
-        |s: &mut Stage<TestWindow>, w: &TestWindow| {
-            s.take_fit_saved_size(w);
-        },
-        |s: &mut Stage<TestWindow>, w: &TestWindow| s.set_fit(w, Size::from((640, 480))),
-    ] {
-        stage.set_fit(w, Size::from((640, 480)));
-        stage.set_fit_restore(w, restore);
-        assert_eq!(stage.fit_restore(w), Some(restore));
-        clear(&mut stage, w);
-        assert_eq!(stage.fit_restore(w), None);
     }
 }
 

@@ -98,24 +98,12 @@ pub struct FillSaved {
     pub filled_at: Point<i32, Logical>,
 }
 
-/// A placement an initially maximized window should return to when it leaves
-/// fit, instead of the center-preserving default. `at` is the fit location it
-/// was recorded against: once the window has moved away, the saved center
-/// describes a different spot and the default takes over.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct FitRestore {
-    pub center: Point<f64, Logical>,
-    pub at: Point<i32, Logical>,
-}
-
 struct Entry<W> {
     window: W,
     id: ElementId,
     position: Point<i32, Logical>,
     /// `Some(pre-fit size)` while the window is fit to the viewport.
     fit_saved_size: Option<Size<i32, Logical>>,
-    /// Initial-fit only: where the windowed rect was docked before the fit.
-    fit_restore: Option<FitRestore>,
     /// Set while fit by a snapped fit, which pushed its cluster.
     fit_push: Option<FitPush>,
     /// The size fit/fullscreen restore to. Tracked separately from live
@@ -197,7 +185,6 @@ impl<W: StageElement> Stage<W> {
                 id,
                 position,
                 fit_saved_size: None,
-                fit_restore: None,
                 fit_push: None,
                 restore_size: None,
                 fill_saved: None,
@@ -535,26 +522,8 @@ impl<W: StageElement> Stage<W> {
     {
         if let Some(e) = self.entry_mut(window) {
             e.fit_saved_size = Some(saved_size);
-            e.fit_restore = None;
             e.fit_push = None;
         }
-    }
-
-    /// Record a non-centered restore for an initially maximized window.
-    pub fn set_fit_restore<Q>(&mut self, window: &Q, restore: FitRestore)
-    where
-        W: PartialEq<Q>,
-    {
-        if let Some(e) = self.entry_mut(window) {
-            e.fit_restore = Some(restore);
-        }
-    }
-
-    pub fn fit_restore<Q>(&self, window: &Q) -> Option<FitRestore>
-    where
-        W: PartialEq<Q>,
-    {
-        self.entry(window).and_then(|e| e.fit_restore)
     }
 
     /// Record the cluster push of the snapped fit that made `window` fit.
@@ -599,7 +568,6 @@ impl<W: StageElement> Stage<W> {
         W: PartialEq<Q>,
     {
         let e = self.entry_mut(window)?;
-        e.fit_restore = None;
         e.fit_push = None;
         e.fit_saved_size.take()
     }
@@ -610,7 +578,6 @@ impl<W: StageElement> Stage<W> {
     {
         if let Some(e) = self.entry_mut(window) {
             e.fit_saved_size = None;
-            e.fit_restore = None;
             e.fit_push = None;
         }
     }
