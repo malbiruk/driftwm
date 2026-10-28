@@ -206,6 +206,12 @@ Default: `true`
 
 palm rejection
 
+### `scroll_liftoff_damping`
+
+Default: `false`
+
+damp the delta burst a trackpad emits as contact breaks. Lifting fingers shifts the contact centroid, and some pads report a run of accelerating deltas; a client reads those as a fast flick and keeps scrolling after the gesture ended, and the canvas flings the same way. Each finger delta is capped against the sliding average of the deltas before it, and the lift parts with a fraction of that average ahead of the stop. Wheels are never capped.
+
 ### `enable`
 
 Default: `true`

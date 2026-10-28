@@ -469,6 +469,9 @@ pub struct TrackpadSettings {
     pub click_method: Option<String>,
     pub disable_while_typing: bool,
     pub send_events: SendEvents,
+    /// Damp the delta burst a trackpad emits as contact breaks. Off by
+    /// default; only pads that report the burst need it.
+    pub scroll_liftoff_damping: bool,
 }
 
 impl Default for TrackpadSettings {
@@ -481,6 +484,7 @@ impl Default for TrackpadSettings {
             accel_profile: AccelProfile::Adaptive,
             click_method: None,
             disable_while_typing: true,
+            scroll_liftoff_damping: false,
             send_events: SendEvents::Enabled,
         }
     }

@@ -806,6 +806,7 @@ impl Config {
                 // `"none"` means "use the libinput device default", same as unset.
                 click_method: t.click_method.clone().filter(|m| m.as_str() != "none"),
                 disable_while_typing: t.disable_while_typing.unwrap_or(true),
+                scroll_liftoff_damping: t.scroll_liftoff_damping.unwrap_or(false),
                 // `enable = false` wins: a trackpad the user turned off outright
                 // shouldn't come back the moment the mouse is unplugged.
                 send_events: match (
