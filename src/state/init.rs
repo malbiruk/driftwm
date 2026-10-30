@@ -383,6 +383,8 @@ impl DriftWm {
             tap: TapTracker::default(),
             pending_tap_action: None,
             suppressed_keys: HashSet::new(),
+            held_bindings: Vec::new(),
+            held_cancel_actions: Vec::new(),
             held_buttons: HashSet::new(),
             swallowed_buttons: HashSet::new(),
             gesture_state: None,

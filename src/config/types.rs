@@ -46,6 +46,23 @@ impl Direction {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum HoldUntil {
+    #[default]
+    Key,
+    Modifiers,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeldKeyBinding {
+    pub press: Action,
+    pub release: Action,
+    pub cancel: Option<Action>,
+    pub hold: HoldUntil,
+    pub modifiers: Modifiers,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
     Exec(String),
