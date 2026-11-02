@@ -86,6 +86,7 @@ mod step_units;
 mod suspend_flows;
 mod suspended;
 mod tablet;
+mod touch_output;
 mod trackpad_send_events;
 mod translucent_fullscreen;
 mod virtual_keyboard;

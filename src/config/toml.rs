@@ -83,6 +83,20 @@ pub(super) struct TabletDeviceFileConfig {
 pub(super) struct TouchDeviceFileConfig {
     pub enable: Option<bool>,
     pub map_to_output: Option<String>,
+    /// `[[input.touch.devices]]` per-device output overrides, first match
+    /// wins over the scalar `map_to_output` above.
+    pub devices: Option<Vec<TouchDeviceMapFile>>,
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct TouchDeviceMapFile {
+    /// Input device name: a glob (`*` wildcards) or a `/regex/`, matched like
+    /// window rules against the name libinput reports. A missing or empty
+    /// name is dropped with a warning — it could never match.
+    pub name: Option<String>,
+    /// Connector name to pin this device to; `"none"` auto-detects.
+    pub map_to_output: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]

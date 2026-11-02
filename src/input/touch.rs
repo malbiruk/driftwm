@@ -12,7 +12,7 @@ use crate::state::{
 use driftwm::canvas::{CanvasPos, ScreenPos, canvas_to_screen, screen_to_canvas};
 use driftwm::window_ext::WindowExt;
 use smithay::{
-    backend::input::{Event, InputBackend, TouchEvent, TouchSlot},
+    backend::input::{Device, Event, InputBackend, TouchEvent, TouchSlot},
     desktop::Window,
     input::touch::{DownEvent, GrabStartData as TouchGrabStartData, MotionEvent, UpEvent},
     output::Output,
@@ -149,15 +149,19 @@ impl TouchState {
 
 impl DriftWm {
     /// Output a touch from `device` maps to. Resolved per-device so multiple
-    /// touchscreens each drive their own monitor. Resolution order: explicit
-    /// config first, then libinput's output tag, then a single-output shortcut,
-    /// then physical-size match (a digitizer is the same physical size as the
-    /// panel it overlays), then the internal panel, then the first output.
+    /// touchscreens each drive their own monitor. Resolution order: a matching
+    /// `[[input.touch.devices]]` entry (glob/regex on the device name) claims
+    /// the device outright, then the global `[input.touch] map_to_output`, then
+    /// libinput's output tag, then a single-output shortcut, then
+    /// physical-size match (a digitizer is the same physical size as the panel
+    /// it overlays), then the internal panel, then the first output.
     ///
-    /// The last two steps are best-effort guesses: a device that reports no
-    /// output tag and no physical size on a multi-output system falls back to
-    /// the internal panel even if it's an external touchscreen. Set
-    /// `[touch] map_to_output` to pin such a device explicitly.
+    /// A matched entry whose `map_to_output` is unset (or `"none"`, or names an
+    /// output that isn't connected) skips the global override and runs the
+    /// auto-detect chain. The chain's last steps are best-effort guesses: a
+    /// device that reports no output tag and no physical size on a multi-output
+    /// system falls back to the internal panel even if it's an external
+    /// touchscreen. Pin such a device with an entry or the global override.
     pub(crate) fn touch_output_for_device<I: InputBackend>(
         &self,
         device: &I::Device,
@@ -165,13 +169,24 @@ impl DriftWm {
     where
         I::Device: 'static,
     {
-        if let Some(name) = self.config.touch.map_to_output.as_deref()
+        let libinput_device = as_libinput_device::<I>(device);
+
+        // A `[[input.touch.devices]]` entry claims its device outright: pin to
+        // the entry's output when it exists, else run the auto-detect chain
+        // below — the global `map_to_output` no longer applies to a matched
+        // device, so an entry with `map_to_output = "none"` can opt one
+        // touchscreen out of a global pin.
+        if let Some(entry) = self.config.touch.device_mapping_for(&device.name()) {
+            if let Some(name) = entry.map_to_output.as_deref()
+                && let Some(o) = self.output_by_name(name)
+            {
+                return Some(o);
+            }
+        } else if let Some(name) = self.config.touch.map_to_output.as_deref()
             && let Some(o) = self.output_by_name(name)
         {
             return Some(o);
         }
-
-        let libinput_device = as_libinput_device::<I>(device);
 
         if let Some(name) = libinput_device.and_then(LibinputDevice::output_name)
             && let Some(o) = self.output_by_name(&name)

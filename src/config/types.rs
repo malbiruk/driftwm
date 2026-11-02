@@ -493,6 +493,9 @@ pub struct TouchSettings {
     /// auto-detect the touchscreen's output. Only needed to disambiguate
     /// multiple identically-sized touchscreens.
     pub map_to_output: Option<String>,
+    /// Per-device overrides (`[[input.touch.devices]]`), first match wins.
+    /// A matched device never consults [`Self::map_to_output`].
+    pub devices: Vec<TouchDeviceMapping>,
 }
 
 impl Default for TouchSettings {
@@ -500,8 +503,29 @@ impl Default for TouchSettings {
         Self {
             enable: true,
             map_to_output: None,
+            devices: Vec::new(),
         }
     }
+}
+
+impl TouchSettings {
+    /// The first per-device entry whose `name` pattern matches `device_name`.
+    pub fn device_mapping_for(&self, device_name: &str) -> Option<&TouchDeviceMapping> {
+        self.devices.iter().find(|d| d.name.matches(device_name))
+    }
+}
+
+/// One `[[input.touch.devices]]` entry: pin one touchscreen to an output
+/// without pinning every touchscreen to it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TouchDeviceMapping {
+    /// Input device name, window-rule pattern syntax: a glob (`*` wildcards)
+    /// or a `/regex/`, case-sensitive.
+    pub name: Pattern,
+    /// Connector name this device pins to; `None` = auto-detect. The `"none"`
+    /// config value normalizes to `None`, so an entry can opt a device out of
+    /// the global `map_to_output`.
+    pub map_to_output: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]

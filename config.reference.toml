@@ -125,10 +125,32 @@
 [input.touch]
 # # Touchscreen hardware. Gesture thresholds and bindings live in [touch].
 # enable = true               # enable touchscreen support
-# map_to_output = "none"      # connector name; "none" auto-detects. Set it only
-                              # to tell two same-size touchscreens apart.
+# map_to_output = "none"      # connector name; "none" auto-detects. Applied to
+                              # every touchscreen; [[input.touch.devices]]
+                              # entries below override it per device.
 # # Example:
 # # map_to_output = "DP-2"
+
+# ## Touchscreen device overrides
+# # Route specific touchscreens to specific outputs by their input device
+# # name (what `libinput list-devices` prints). The pattern syntax is
+# # window-rule glob (`*` wildcards) or /regex/, case-sensitive. First
+# # matching entry wins; a matched device never consults the scalar
+# # map_to_output above, so an entry with map_to_output = "none" pins that
+# # device to auto-detection while everything else keeps the global value.
+# #
+# # Supported fields:
+# #   name — device-name pattern: a glob or /regex/, as in [[window_rules]]
+# #   map_to_output — connector name for this device; "none" auto-detects
+# #
+# # Example: two touchscreens, two outputs
+# # [[input.touch.devices]]
+# # name = "ELAN*Touchscreen"
+# # map_to_output = "DP-2"
+# #
+# # [[input.touch.devices]]
+# # name = "Wacom*"
+# # map_to_output = "HDMI-A-1"
 
 [input.tablet]
 # # Output this tablet maps to; "none" auto-detects (libinput tags, physical

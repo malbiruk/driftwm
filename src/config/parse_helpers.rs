@@ -341,7 +341,7 @@ pub(super) fn parse_decoration_config(
     }
 }
 
-fn parse_pattern(s: String, errors: &mut Warnings) -> Pattern {
+pub(super) fn parse_pattern(s: String, errors: &mut Warnings) -> Pattern {
     // Strings wrapped in `/…/` are treated as regular expressions.
     // Everything else is a glob pattern (`*` = any sequence of chars).
     if s.len() >= 2 && s.starts_with('/') && s.ends_with('/') {
