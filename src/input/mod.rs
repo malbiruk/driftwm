@@ -1230,9 +1230,19 @@ impl DriftWm {
         // viewport the user is looking around in. A pull it holds back still
         // stamps the view, so a later restore re-checks only what moves after
         // it, never the navigation's own move.
+        //
+        // The third keeps a touch-driven viewport away from the cursor too, but
+        // for the opposite reason: there sloppy focus would *follow* a pointer
+        // nobody is steering. Touch hides the cursor and leaves it parked, so a
+        // finger pan or pinch slides whichever window happens to sit at that
+        // stale spot under a pointer that is not the one the user is holding —
+        // the keyboard would chase an invisible cursor while the finger is
+        // elsewhere. Touch's own focus comes from taps, at the finger. Any real
+        // pointer motion clears the hidden flag and hover focus at the cursor
+        // resumes on that same event.
         let view = Some((self.camera(), self.zoom()));
         if self.hover_viewport != view {
-            if self.hover_follows_camera {
+            if self.hover_follows_camera && !self.cursor.hidden_by_touch {
                 self.maybe_hover_focus(canvas_pos);
             } else {
                 self.hover_viewport = view;
