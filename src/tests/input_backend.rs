@@ -821,6 +821,43 @@ pub fn touch_motion(f: &mut Fixture, at: Point<f64, Logical>, slot: u32) {
         });
 }
 
+/// Put one finger down at the raw screen position `at`, with the timestamp
+/// pinned. Screen positions, not canvas ones: the canvas-space pair above
+/// re-derives screen points from the live camera, which a pan in progress
+/// invalidates between events — a scenario driving a drag across its own
+/// camera moves reports screen positions directly, as a touchscreen does.
+/// The timestamp is an argument for the same reason as
+/// [`pointer_relative_motion_at`]'s: the fake clock's 1 ms step reads a
+/// multi-event drag at many times real speed, and the velocity the drag
+/// banks comes back as a coast of thousands of pixels.
+pub fn touch_down_screen_at(f: &mut Fixture, at: Point<f64, Logical>, slot: u32, time_ms: u32) {
+    assert_on_viewport(f, at);
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::TouchDown {
+            event: FakeTouchDownEvent {
+                device: FakeDevice::touchscreen(),
+                screen: at,
+                slot: TouchSlot::from(Some(slot)),
+                time: time_ms,
+            },
+        });
+}
+
+/// Move the finger holding `slot` to the raw screen position `at`, with the
+/// timestamp pinned (see [`touch_down_screen_at`]).
+pub fn touch_motion_screen_at(f: &mut Fixture, at: Point<f64, Logical>, slot: u32, time_ms: u32) {
+    assert_on_viewport(f, at);
+    f.state()
+        .process_input_event::<FakeInput>(InputEvent::TouchMotion {
+            event: FakeTouchMotionEvent {
+                device: FakeDevice::touchscreen(),
+                screen: at,
+                slot: TouchSlot::from(Some(slot)),
+                time: time_ms,
+            },
+        });
+}
+
 /// The event a finger lifting arrives as, for scenarios that classify an event
 /// rather than dispatch one.
 pub fn touch_up_event(slot: u32) -> InputEvent<FakeInput> {
