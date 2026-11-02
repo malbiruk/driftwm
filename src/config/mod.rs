@@ -28,7 +28,7 @@ use defaults::{
 use parse_helpers::{
     Warnings, clamp_warn, collect_warn, non_negative, parse_backend_config,
     parse_decoration_config, parse_effects_config, parse_focus_placement, parse_output_outline,
-    parse_output_rule, parse_window_rule, positive_or_default,
+    parse_output_rule, parse_pattern, parse_window_rule, positive_or_default,
 };
 use toml::{ConfigFile, expand_tilde};
 
@@ -849,6 +849,29 @@ impl Config {
                 enable: t.enable.unwrap_or(true),
                 // `"none"` means auto-detect the touchscreen's output, same as unset.
                 map_to_output: t.map_to_output.clone().filter(|o| o.as_str() != "none"),
+                devices: t
+                    .devices
+                    .iter()
+                    .flatten()
+                    .filter_map(|d| {
+                        // A nameless entry can never match anything; keeping
+                        // it would silently do nothing, so drop it like a
+                        // window rule with no criteria.
+                        let Some(name) = d.name.as_deref().map(str::trim).filter(|n| !n.is_empty())
+                        else {
+                            warn_and_collect!(
+                                "config: [[input.touch.devices]] entry with no name, ignoring"
+                            );
+                            return None;
+                        };
+                        Some(TouchDeviceMapping {
+                            name: parse_pattern(name.to_string(), &mut errors),
+                            // `"none"` opts this device out of the global
+                            // `map_to_output`, same sentinel as the scalar.
+                            map_to_output: d.map_to_output.clone().filter(|o| o.as_str() != "none"),
+                        })
+                    })
+                    .collect(),
             }
         };
 
