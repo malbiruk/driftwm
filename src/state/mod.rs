@@ -1042,6 +1042,10 @@ pub struct DriftWm {
     pub active_outputs: HashSet<Output>,
     pub redraws_needed: HashSet<Output>,
     pub frames_pending: HashSet<crtc::Handle>,
+    /// CRTCs whose rejected flip has already armed its one retry, until a flip
+    /// lands. Bounds the retry, which would otherwise spin at refresh rate on a
+    /// failure a full repaint can't cure.
+    pub rejected_flip_retried: HashSet<crtc::Handle>,
     /// One-shot timers armed when queue_frame returned EmptyFrame so the loop
     /// still wakes at ~refresh rate to advance animations (e.g. xcursor frames).
     pub estimated_vblank_timers: HashMap<crtc::Handle, RegistrationToken>,
