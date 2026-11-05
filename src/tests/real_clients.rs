@@ -9,6 +9,8 @@
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use smithay::wayland::seat::WaylandFocus;
+
 use driftwm::window_ext::WindowExt;
 
 use super::Fixture;
@@ -77,12 +79,15 @@ fn real_client_over_ipc() {
             .expect("spawn client binary"),
     );
 
-    // Cold process startup: give it a generous window to connect, map, and set
-    // its app_id.
+    // Cold process startup: give it a generous window to connect, map, set
+    // its app_id, and complete its initial placement commit.
     f.wait_until(Duration::from_secs(15), |s| {
-        s.stage
-            .windows()
-            .any(|w| w.app_id_or_class().is_some_and(|a| !a.is_empty()))
+        s.stage.windows().any(|w| {
+            w.app_id_or_class().is_some_and(|a| !a.is_empty())
+                && w.client()
+                    .and_then(|c| c.wl_surface())
+                    .is_some_and(|surf| !s.pending_center.contains(surf.as_ref()))
+        })
     });
     eprintln!(
         "real_client_over_ipc: window mapped after {:?}",
