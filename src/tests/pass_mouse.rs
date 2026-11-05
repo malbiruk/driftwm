@@ -8,7 +8,7 @@
 //! applies without remapping the window; the SSD title bar stays with the
 //! compositor whatever the rule says.
 
-use driftwm::config::{BTN_LEFT, BTN_RIGHT};
+use driftwm::config::{BTN_LEFT, BTN_MIDDLE, BTN_RIGHT};
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point};
 
@@ -763,5 +763,48 @@ fn pass_mouse_fullscreen_reaches_client_while_fullscreen() {
     assert!(
         f.state().is_fullscreen(),
         "a claimed click must not exit fullscreen"
+    );
+
+    press(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+    release(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+
+    assert_eq!(
+        client_buttons(&mut f, id),
+        vec![
+            (BTN_LEFT, PRESSED),
+            (BTN_LEFT, RELEASED),
+            (BTN_MIDDLE, PRESSED),
+            (BTN_MIDDLE, RELEASED)
+        ],
+        "pass_mouse = fullscreen claims alt+middle while fullscreen"
+    );
+    assert!(
+        f.state().is_fullscreen(),
+        "alt+middle must reach client and not exit fullscreen"
+    );
+}
+
+#[test]
+fn pass_mouse_fullscreen_leaves_super_bindings_with_compositor() {
+    let mut f = Fixture::with_config(config(CLAIM_FULLSCREEN));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTMETA, target);
+    press(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+    release(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+
+    assert_eq!(
+        client_buttons(&mut f, id),
+        Vec::new(),
+        "super bindings must not be forwarded by pass_mouse = fullscreen"
+    );
+    assert!(
+        !f.state().is_fullscreen(),
+        "mod+middle runs FillWindow, which exits fullscreen"
     );
 }

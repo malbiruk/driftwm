@@ -813,7 +813,7 @@ impl PassList<MouseBinding> {
         match self {
             PassList::None => false,
             PassList::All => true,
-            PassList::Fullscreen => is_fullscreen,
+            PassList::Fullscreen => is_fullscreen && !modifiers.logo,
             PassList::Only(list) => list.contains(&MouseBinding {
                 modifiers: Modifiers::from_state(modifiers),
                 trigger,

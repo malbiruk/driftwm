@@ -667,6 +667,7 @@ impl DriftWm {
                         return;
                     }
                     MouseAction::Action(ref action) => {
+                        self.swallowed_buttons.insert(button);
                         if let Some((window, _)) =
                             self.element_under(pos).map(|(w, l)| (w.clone(), l))
                         {
