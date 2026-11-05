@@ -321,10 +321,20 @@ impl<E: Element> Element for PixelSnapRescaleElement<E> {
                 let y0 = ((rect.loc.y as f64) * self.scale.y).ceil() as i32;
                 let x1 = (((rect.loc.x + rect.size.w) as f64) * self.scale.x).floor() as i32;
                 let y1 = (((rect.loc.y + rect.size.h) as f64) * self.scale.y).floor() as i32;
-                Rectangle::new(
+                let shrunk = Rectangle::new(
                     Point::from((x0, y0)),
                     Size::from(((x1 - x0).max(0), (y1 - y0).max(0))),
-                )
+                );
+                if shrunk.is_empty() {
+                    static LOGGED: std::sync::Once = std::sync::Once::new();
+                    LOGGED.call_once(|| {
+                        tracing::warn!(
+                            "TEMP: dropped an empty opaque rect {rect:?} at zoom {:?}",
+                            self.scale
+                        );
+                    });
+                }
+                shrunk
             })
             // An empty rect doesn't overlap itself, so smithay's damage tracker
             // never sees it as still covered and re-adds it as damage every frame.
