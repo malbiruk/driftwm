@@ -95,6 +95,7 @@ mod window_opening;
 mod window_pid;
 mod window_rules;
 mod zoom_to_fit;
+mod zoomed_damage;
 
 use fixture::Fixture;
 
