@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::io;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Once;
@@ -13,7 +14,7 @@ use smithay::{
             gbm::{GbmAllocator, GbmBufferFlags, GbmDevice},
         },
         drm::{
-            DrmDevice, DrmDeviceFd, DrmEvent, DrmNode, NodeType,
+            DrmDevice, DrmDeviceFd, DrmError, DrmEvent, DrmNode, NodeType,
             compositor::{DrmCompositor, FrameError, FrameFlags, PrimaryPlaneElement},
             exporter::gbm::GbmFramebufferExporter,
         },
@@ -279,6 +280,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
                         // the next VBlank to the wrong frame.
                         data.redraws_needed.remove(output);
                         data.frames_pending.remove(&crtc);
+                        data.rejected_flip_retried.remove(&crtc);
                         if let Some(token) = data.estimated_vblank_timers.remove(&crtc) {
                             data.loop_handle.remove(token);
                         }
@@ -790,6 +792,7 @@ pub fn init_udev(
                     // VBlanks for pre-switch frames never arrive, so nothing
                     // would ever retire their provenance either.
                     data.frames_pending.clear();
+                    data.rejected_flip_retried.clear();
                     // Whatever wedged the GPU has had a suspend/resume or a VT
                     // round-trip to clear, and the first frame back is the
                     // slowest of the session — the tier that survived the switch
@@ -906,6 +909,7 @@ pub fn init_udev(
                                         teardown_output(data, surface, is_last);
                                     }
                                     data.frames_pending.remove(&crtc);
+                                    data.rejected_flip_retried.remove(&crtc);
                                     data.fence_failures.remove(&crtc);
                                     data.forget_lock_frame(crtc);
                                     if let Some(token) = data.estimated_vblank_timers.remove(&crtc)
@@ -1600,6 +1604,7 @@ fn render_frame(
             match queue_result {
                 Ok(()) => {
                     data.frames_pending.insert(crtc);
+                    data.rejected_flip_retried.remove(&crtc);
                     if lock_frame {
                         data.lock_frame_queued.insert(crtc);
                     } else {
@@ -1630,6 +1635,20 @@ fn render_frame(
                 }
                 Err(e) => {
                     tracing::warn!("Failed to queue frame: {e:?}");
+                    if flip_rejected(&e) {
+                        // Smithay advanced its damage and buffer ages before the
+                        // commit failed and nothing rewinds them, so this frame's
+                        // damage is lost unless the next one repaints everything.
+                        //
+                        // The result still holds the failed swapchain slot, and a
+                        // held slot is evicted rather than reset to age 0, which
+                        // would allocate a new buffer on every failure.
+                        drop(render_result);
+                        compositor.reset_buffer_ages();
+                        if data.rejected_flip_retried.insert(crtc) {
+                            data.redraws_needed.insert(output.clone());
+                        }
+                    }
                     retry_dropped_lock_frame(data, output);
                     queue_estimated_vblank_timer(data, output, crtc);
                 }
@@ -1733,10 +1752,30 @@ fn deliver_presentation(
 /// the timeout — re-arm it so the post-dispatch `render_if_needed` in `main`
 /// composites again (the estimated-VBlank timer only supplies the wake-up; its
 /// callback does nothing but drop its own token). Scoped to the awaiting case;
-/// dropped frames are otherwise not retried.
+/// outside it only a rejected flip is retried, once per CRTC until a flip lands.
 fn retry_dropped_lock_frame(data: &mut DriftWm, output: &Output) {
     if data.is_awaiting_lock_frame(output) {
         data.redraws_needed.insert(output.clone());
+    }
+}
+
+fn is_einval(e: &io::Error) -> bool {
+    e.kind() == io::ErrorKind::InvalidInput
+}
+
+/// The kernel refused the commit itself. On the flip path EACCES and EBUSY stay out:
+/// they happen on session changes. The commit path's failed test has no errno to tell
+/// them apart, so any failure there counts; the one-retry bound keeps that harmless.
+fn flip_rejected<A, B, F>(e: &FrameError<A, B, F>) -> bool
+where
+    A: std::error::Error + Send + Sync + 'static,
+    B: std::error::Error + Send + Sync + 'static,
+    F: std::error::Error + Send + Sync + 'static,
+{
+    match e {
+        FrameError::DrmError(DrmError::TestFailed(_)) => true,
+        FrameError::DrmError(DrmError::Access(a)) => is_einval(&a.source),
+        _ => false,
     }
 }
 
@@ -1932,5 +1971,29 @@ fn convert_subpixel(sp: connector::SubPixel) -> Subpixel {
         connector::SubPixel::VerticalBgr => Subpixel::VerticalBgr,
         connector::SubPixel::None => Subpixel::None,
         _ => Subpixel::Unknown,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::num::NonZeroU32;
+
+    #[test]
+    fn only_einval_is_einval() {
+        let errno = io::Error::from_raw_os_error;
+        assert!(is_einval(&errno(libc::EINVAL)));
+        assert!(!is_einval(&errno(libc::EACCES)));
+        assert!(!is_einval(&errno(libc::EBUSY)));
+    }
+
+    #[test]
+    fn a_failed_test_commit_is_a_rejection_but_an_empty_frame_or_paused_device_is_not() {
+        let rejected = flip_rejected::<io::Error, io::Error, io::Error>;
+        let crtc = crtc::Handle::from(NonZeroU32::new(1).unwrap());
+
+        assert!(rejected(&FrameError::DrmError(DrmError::TestFailed(crtc))));
+        assert!(!rejected(&FrameError::EmptyFrame));
+        assert!(!rejected(&FrameError::DrmError(DrmError::DeviceInactive)));
     }
 }
