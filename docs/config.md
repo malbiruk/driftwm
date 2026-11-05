@@ -1312,6 +1312,7 @@ Supported fields:
   - VT switching (Ctrl+Alt+F1–F12) — always stays with the compositor
 - `pass_mouse` — compositor mouse bindings ([mouse.*]) to forward to the app:
   - pass_mouse = true — forward ALL mouse bindings over this window
+  - pass_mouse = "fullscreen" — forward ALL mouse bindings only while fullscreen
   - pass_mouse = ["alt+left", "alt+right"] — forward ONLY these combos
   - pass_mouse = false / omit — compositor handles everything (default)
   - SSD title bar, resize borders and close button — always stay with the compositor

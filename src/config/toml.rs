@@ -275,19 +275,21 @@ pub(super) struct DecorationFileConfig {
     pub title_align: Option<String>,
 }
 
-/// Flexible `pass_keys` / `pass_mouse` TOML value: `true`/`false` OR a list of
-/// combo strings.
+/// Flexible `pass_keys` / `pass_mouse` TOML value: `true`/`false`, `"fullscreen"`
+/// (for `pass_mouse`), OR a list of combo strings.
 ///
 /// Examples:
 /// ```toml
 /// pass_keys  = true                        # forward ALL keys
 /// pass_keys  = ["mod+q", "ctrl+q"]         # forward only these combos
+/// pass_mouse = "fullscreen"                # forward all mouse bindings only while fullscreen
 /// pass_mouse = ["alt+left"]                # forward only this mouse combo
 /// ```
 #[derive(Serialize, Deserialize)]
 #[serde(untagged)]
 pub(super) enum PassListFile {
     Bool(bool),
+    String(String),
     List(Vec<String>),
 }
 
@@ -330,6 +332,7 @@ pub(super) struct WindowRuleFile {
     /// Omit or `false` — compositor handles everything normally (default).
     pub pass_keys: Option<PassListFile>,
     /// `true` — forward all `[mouse.*]` bindings over this window to the app.
+    /// `"fullscreen"` — forward all `[mouse.*]` bindings only while fullscreen.
     /// `["alt+left"]` — forward only those combos; all others stay active.
     /// Omit or `false` — compositor handles everything normally (default).
     pub pass_mouse: Option<PassListFile>,

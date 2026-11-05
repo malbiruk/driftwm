@@ -287,8 +287,13 @@ so a *canvas window's* `pass_mouse` claims are ignored there and the compositor
 bindings stay live. A pinned window's *button* claims and a fullscreen
 window's claims still apply.
 
-When multiple rules match the same window, combo lists are **unioned** and
-`true` beats a list.
+`pass_mouse = "fullscreen"` forwards all mouse bindings over the window, but
+only while it is fullscreen — in windowed mode, compositor mouse bindings (like
+`alt+left` to move) continue to work normally. Useful for games where `Alt` is
+used for in-game actions.
+
+When multiple rules match the same window, combo lists are **unioned**,
+`"fullscreen"` beats a list, and `true` beats `"fullscreen"`.
 
 ```toml
 [[window_rules]]

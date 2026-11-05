@@ -48,6 +48,12 @@ app_id = "app"
 pass_mouse = true
 "#;
 
+const CLAIM_FULLSCREEN: &str = r#"
+[[window_rules]]
+app_id = "app"
+pass_mouse = "fullscreen"
+"#;
+
 /// The continuous scroll trigger a wheel reports, which is what the default
 /// `mod+wheel-scroll` zoom is bound to.
 const CLAIM_WHEEL_SCROLL: &str = r#"
@@ -710,5 +716,52 @@ fn an_unclaimed_notch_on_a_fullscreen_window_runs_its_action() {
     assert!(
         !f.state().is_fullscreen(),
         "an unclaimed notch runs its bound action"
+    );
+}
+
+#[test]
+fn pass_mouse_fullscreen_drags_window_while_windowed() {
+    let mut f = Fixture::with_config(config(CLAIM_FULLSCREEN));
+    let (id, window) = window_under_pointer(&mut f, KEY_LEFTALT);
+    let before = f.state().stage.position_of(&window).expect("staged");
+
+    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+    let dragged = center_of(&mut f, &window) + Point::from((100.0, 0.0));
+    motion(&mut f, dragged);
+
+    assert_ne!(
+        f.state().stage.position_of(&window).expect("staged"),
+        before,
+        "pass_mouse = fullscreen must not claim bindings while windowed, so alt+left moves the window"
+    );
+    assert_eq!(
+        client_buttons(&mut f, id),
+        Vec::new(),
+        "unclaimed drag stays off the wire"
+    );
+}
+
+#[test]
+fn pass_mouse_fullscreen_reaches_client_while_fullscreen() {
+    let mut f = Fixture::with_config(config(CLAIM_FULLSCREEN));
+    f.skip_baseline_check();
+    let (id, window) = mapped_window(&mut f);
+    let output = f.state().active_output().unwrap();
+    f.state().enter_fullscreen(&window, Some(output));
+    f.double_roundtrip(id);
+
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTALT, target);
+    press(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+    release(&mut f, &FakeDevice::mouse(), BTN_LEFT);
+
+    assert_eq!(
+        client_buttons(&mut f, id),
+        vec![(BTN_LEFT, PRESSED), (BTN_LEFT, RELEASED)],
+        "pass_mouse = fullscreen claims all mouse bindings while fullscreen"
+    );
+    assert!(
+        f.state().is_fullscreen(),
+        "a claimed click must not exit fullscreen"
     );
 }

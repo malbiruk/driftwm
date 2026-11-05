@@ -1002,3 +1002,58 @@ fn resolve_window_rules_pass_mouse_true_beats_a_list() {
     "#;
     assert_eq!(pass_mouse_of(toml), PassMouse::All);
 }
+
+#[test]
+fn pass_mouse_fullscreen_parses_from_toml() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = "fullscreen"
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::Fullscreen);
+}
+
+#[test]
+fn pass_mouse_unknown_string_warns_and_defaults_to_none() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = "bogus"
+    "#;
+    let warnings = warnings_for(toml);
+    assert!(
+        warnings
+            .iter()
+            .any(|w| w.contains("pass_mouse") && w.contains("bogus")),
+        "the warning must name the field and the mode: {warnings:?}"
+    );
+    assert_eq!(pass_mouse_of(toml), PassMouse::None);
+}
+
+#[test]
+fn resolve_window_rules_pass_mouse_fullscreen_beats_a_list() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "*"
+        pass_mouse = ["alt+left"]
+
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = "fullscreen"
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::Fullscreen);
+}
+
+#[test]
+fn resolve_window_rules_pass_mouse_true_beats_fullscreen() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "*"
+        pass_mouse = "fullscreen"
+
+        [[window_rules]]
+        app_id = "app"
+        pass_mouse = true
+    "#;
+    assert_eq!(pass_mouse_of(toml), PassMouse::All);
+}

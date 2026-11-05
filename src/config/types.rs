@@ -739,14 +739,16 @@ pub fn glob_matches(pat: &str, val: &str) -> bool {
 /// Controls which compositor bindings of one kind are forwarded to the app
 /// instead of being handled by the compositor.
 ///
-/// - `None`  — default; compositor handles everything.
-/// - `All`   — every binding of that kind is forwarded (game-friendly).
-/// - `Only`  — only the listed combos are forwarded; all others stay active.
+/// - `None`       — default; compositor handles everything.
+/// - `All`        — every binding of that kind is forwarded (game-friendly).
+/// - `Fullscreen` — forwards bindings only while the window is fullscreen (`pass_mouse`).
+/// - `Only`       — only the listed combos are forwarded; all others stay active.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum PassList<C> {
     #[default]
     None,
     All,
+    Fullscreen,
     Only(Vec<C>),
 }
 
@@ -755,12 +757,15 @@ pub type PassMouse = PassList<MouseBinding>;
 
 impl<C: Clone + PartialEq> PassList<C> {
     /// Merge `other` into `self`.
-    /// `All` is sticky-on; `Only` lists are unioned; `None` is a no-op.
+    /// `All` is sticky-on; `Fullscreen` is sticky-on over `Only` / `None`;
+    /// `Only` lists are unioned; `None` is a no-op.
     pub fn merge_from(&mut self, other: &PassList<C>) {
         match (&*self, other) {
             (_, PassList::None) => {} // other adds nothing
             (PassList::All, _) => {}  // already maximally permissive
             (_, PassList::All) => *self = PassList::All,
+            (PassList::Fullscreen, _) => {} // already fullscreen permissive
+            (_, PassList::Fullscreen) => *self = PassList::Fullscreen,
             (PassList::None, PassList::Only(v)) => *self = PassList::Only(v.clone()),
             (PassList::Only(existing), PassList::Only(extra)) => {
                 let mut merged = existing.clone();
@@ -780,7 +785,7 @@ impl PassList<KeyCombo> {
     /// Constructs and normalises a `KeyCombo` internally — no import needed at call sites.
     pub fn allows_raw(&self, modifiers: &ModifiersState, sym: Keysym) -> bool {
         match self {
-            PassList::None => false,
+            PassList::None | PassList::Fullscreen => false,
             PassList::All => true,
             PassList::Only(combos) => {
                 let mut current = KeyCombo {
@@ -799,10 +804,16 @@ impl PassList<MouseBinding> {
     /// be forwarded to the app. `MouseBinding` has no normalisation step, and the
     /// `Config::mouse_*_lookup_ctx` methods build the same key verbatim, so exact
     /// equality is the right test.
-    pub fn allows(&self, modifiers: &ModifiersState, trigger: MouseTrigger) -> bool {
+    pub fn allows(
+        &self,
+        modifiers: &ModifiersState,
+        trigger: MouseTrigger,
+        is_fullscreen: bool,
+    ) -> bool {
         match self {
             PassList::None => false,
             PassList::All => true,
+            PassList::Fullscreen => is_fullscreen,
             PassList::Only(list) => list.contains(&MouseBinding {
                 modifiers: Modifiers::from_state(modifiers),
                 trigger,
@@ -927,8 +938,8 @@ pub struct AppliedWindowRule {
 impl AppliedWindowRule {
     /// Overlay `rule`'s effects on top of `self`.
     /// Boolean flags (widget, blur) are sticky-on.
-    /// `pass_keys` / `pass_mouse`: `All` is sticky-on; `Only` lists are unioned
-    /// (see `PassList::merge_from`).
+    /// `pass_keys` / `pass_mouse`: `All` is sticky-on; `Fullscreen` is sticky-on
+    /// over `Only` / `None`; `Only` lists are unioned (see `PassList::merge_from`).
     /// Scalar fields (decoration, opacity, position, size) use last-wins.
     pub fn merge_from(&mut self, rule: &WindowRule) {
         if rule.widget {

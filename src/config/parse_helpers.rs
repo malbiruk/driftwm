@@ -357,10 +357,10 @@ fn parse_pattern(s: String, errors: &mut Warnings) -> Pattern {
     Pattern::Glob(s)
 }
 
-/// Parse a `pass_keys` / `pass_mouse` value: `true` is `All`, a list keeps the
-/// combos `parse` accepts and warns about the rest, and a list left with none
-/// usable is `None`. `field` names the key in the warning, `kind` the combo it
-/// wanted ("key", "mouse").
+/// Parse a `pass_keys` / `pass_mouse` value: `true` is `All`, `"fullscreen"` (for
+/// `pass_mouse`) is `Fullscreen`, a list keeps the combos `parse` accepts and warns
+/// about the rest, and a list left with none usable is `None`. `field` names the
+/// key in the warning, `kind` the combo it wanted ("key", "mouse").
 fn parse_pass_list<C>(
     value: Option<PassListFile>,
     field: &str,
@@ -371,6 +371,21 @@ fn parse_pass_list<C>(
     match value {
         None | Some(PassListFile::Bool(false)) => PassList::None,
         Some(PassListFile::Bool(true)) => PassList::All,
+        Some(PassListFile::String(s)) if field == "pass_mouse" && s == "fullscreen" => {
+            PassList::Fullscreen
+        }
+        Some(PassListFile::String(s)) => {
+            let expected = if field == "pass_mouse" {
+                "true, false, \"fullscreen\", or a list of combos"
+            } else {
+                "true, false, or a list of combos"
+            };
+            collect_warn(
+                errors,
+                format!("config: unknown {field} mode '{s}', expected {expected}"),
+            );
+            PassList::None
+        }
         Some(PassListFile::List(strs)) => {
             let combos: Vec<C> = strs
                 .iter()

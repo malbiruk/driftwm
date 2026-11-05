@@ -96,8 +96,9 @@ impl DriftWm {
         mods: &smithay::input::keyboard::ModifiersState,
         trigger: config::MouseTrigger,
     ) -> bool {
+        let is_fullscreen = self.is_window_fullscreen(window);
         self.live_rule_for(window)
-            .is_some_and(|r| r.pass_mouse.allows(mods, trigger))
+            .is_some_and(|r| r.pass_mouse.allows(mods, trigger, is_fullscreen))
     }
 
     /// The toplevel whose content is under `pos`, and so can claim a binding
