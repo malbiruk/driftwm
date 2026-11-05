@@ -326,6 +326,10 @@ impl<E: Element> Element for PixelSnapRescaleElement<E> {
                     Size::from(((x1 - x0).max(0), (y1 - y0).max(0))),
                 )
             })
+            // An empty rect doesn't overlap itself, so smithay's damage tracker
+            // never sees it as still covered and re-adds it as damage every frame.
+            // As a plane damage clip it then fails the whole atomic commit.
+            .filter(|rect| !rect.is_empty())
             .collect()
     }
 
@@ -903,6 +907,7 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use smithay::backend::renderer::damage::OutputDamageTracker;
 
     fn logical(x: f64, y: f64, w: f64, h: f64) -> Rectangle<f64, Logical> {
         Rectangle::new(Point::from((x, y)), Size::from((w, h)))
@@ -1078,5 +1083,55 @@ mod tests {
 
         let regions: Vec<_> = element.opaque_regions(scale).into_iter().collect();
         assert_eq!(regions, vec![Rectangle::from_size(dst.size)]);
+    }
+
+    /// The band must be the element's only opaque rect, since a larger one would
+    /// swallow it, and the second frame must be age 1, since age 2 with one
+    /// history entry damages the whole output and hides the band.
+    #[test]
+    fn an_opaque_band_collapsed_by_zoom_leaves_an_idle_frame_undamaged() {
+        let elements = [PixelSnapRescaleElement::from_element(
+            StubElement {
+                id: Id::new(),
+                geometry: Rectangle::new(Point::from((100, 100)), Size::from((400, 400))),
+                opaque: vec![Rectangle::new(Point::from((0, 1)), Size::from((400, 1)))],
+            },
+            Point::from((0, 0)),
+            0.5,
+        )];
+        let mut tracker = OutputDamageTracker::new((1920, 1080), 1.0, Transform::Normal);
+
+        tracker.damage_output(0, &elements).unwrap();
+        let (damage, _) = tracker.damage_output(1, &elements).unwrap();
+
+        assert_eq!(damage, None);
+    }
+
+    #[test]
+    fn opaque_regions_drop_rects_that_collapse_and_keep_the_rest() {
+        let rect =
+            |x, y, w, h| Rectangle::<i32, Physical>::new(Point::from((x, y)), Size::from((w, h)));
+        let element = PixelSnapRescaleElement::from_element(
+            StubElement {
+                id: Id::new(),
+                geometry: rect(100, 100, 400, 400),
+                opaque: vec![
+                    rect(0, 1, 400, 1),
+                    rect(1, 0, 1, 400),
+                    rect(10, 10, 0, 50),
+                    rect(0, 2, 400, 396),
+                    rect(1, 3, 400, 396),
+                ],
+            },
+            Point::from((0, 0)),
+            0.5,
+        );
+
+        let regions: Vec<_> = element
+            .opaque_regions(Scale::from(1.0))
+            .into_iter()
+            .collect();
+
+        assert_eq!(regions, vec![rect(0, 1, 200, 198), rect(1, 2, 199, 197)]);
     }
 }
