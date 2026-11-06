@@ -343,10 +343,10 @@ impl DriftWm {
                     fs_lookup = None;
                 }
                 match fs_lookup {
-                    Some(MouseAction::Action(_)) => {
-                        // Deferring to execute_action keeps its was_fullscreen
-                        // snapshot live — no pre-exit stash that could strand
-                        // if the post-exit dispatch lookup missed.
+                    Some(MouseAction::Action(action)) => {
+                        self.swallowed_buttons.insert(button);
+                        self.execute_action(&action);
+                        return;
                     }
                     Some(_) => {
                         // The exit warps the pointer to keep its screen spot.

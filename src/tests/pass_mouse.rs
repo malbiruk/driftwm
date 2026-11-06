@@ -808,3 +808,47 @@ fn pass_mouse_fullscreen_leaves_super_bindings_with_compositor() {
         "mod+middle runs FillWindow, which exits fullscreen"
     );
 }
+
+#[test]
+fn super_middle_click_fills_window() {
+    let mut f = Fixture::new();
+    let (_id, window) = mapped_window(&mut f);
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTMETA, target);
+    press(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+    release(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+
+    assert!(
+        f.state().stage.is_fill(&window),
+        "mod+middle must fill the window"
+    );
+}
+
+#[test]
+fn super_middle_click_toggle_fullscreen() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[mouse.on-window]
+"mod+middle" = "toggle-fullscreen"
+"#,
+    ));
+    f.skip_baseline_check();
+    let (_id, window) = mapped_window(&mut f);
+    let target = center_of(&mut f, &window);
+    aim_and_hold(&mut f, KEY_LEFTMETA, target);
+    press(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+    release(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+
+    assert!(
+        f.state().is_fullscreen(),
+        "mod+middle must toggle window into fullscreen"
+    );
+
+    press(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+    release(&mut f, &FakeDevice::mouse(), BTN_MIDDLE);
+
+    assert!(
+        !f.state().is_fullscreen(),
+        "mod+middle must toggle window out of fullscreen"
+    );
+}
