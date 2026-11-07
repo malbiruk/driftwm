@@ -52,6 +52,11 @@ pub enum Action {
     ExecTerminal,
     ExecLauncher,
     Spawn(String),
+    /// Show or hide the window with this `app_id`, spawning `command` when none exists.
+    ToggleScratchpad {
+        app_id: String,
+        command: String,
+    },
     CloseWindow,
     SuspendWindow,
     NudgeWindow(Direction),
@@ -63,7 +68,9 @@ pub enum Action {
     CenterWindow,
     CenterNearest(Direction),
     FocusNearest(Direction),
-    CycleWindows { backward: bool },
+    CycleWindows {
+        backward: bool,
+    },
     HomeToggle,
     GoToBookmark(String),
     SetBookmark(String),

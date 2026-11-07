@@ -206,6 +206,9 @@ impl DriftWm {
                 tracing::info!("Spawning (no cursor): {cmd}");
                 crate::state::spawn_command(cmd, &self.config.child_env);
             }
+            Action::ToggleScratchpad { app_id, command } => {
+                self.toggle_scratchpad(app_id, command);
+            }
             Action::CloseWindow => match self.focused_element() {
                 // A focused stand-in has no client to close — the close binding
                 // dismisses it instead.

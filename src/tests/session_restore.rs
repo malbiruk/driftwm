@@ -2227,6 +2227,105 @@ fn restore_windows_false_rule_quit_record_carries_forward_inert() {
     }
 }
 
+const SCRATCHPAD_BINDING: &str = "[keybindings]\n\"mod+w\" = \"toggle-scratchpad pad true\"\n";
+
+/// An app a `toggle-scratchpad` binding manages is respawned by that binding,
+/// so its live window stays out of the durable save without any rule, while an
+/// ordinary app's window still saves.
+#[test]
+fn scratchpad_app_is_not_saved_without_a_rule() {
+    let cache = TempDir::new();
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let config = config_restore_with_rule(true, SCRATCHPAD_BINDING);
+    let mut f = Fixture::with_config(config);
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &cache, &["pad", "plain"]);
+    f.state().session_store.path = Some(path.clone());
+
+    let a = f.add_client();
+    map_at(&mut f, a, "pad", (400, 300), (300, 300));
+    let b = f.add_client();
+    map_at(&mut f, b, "plain", (400, 300), (800, 300));
+
+    f.state().session_store_write_now();
+
+    let saved = session::read(&path);
+    assert!(saved.entries.iter().all(|e| e.app_id != "pad"));
+    assert!(saved.entries.iter().any(|e| e.app_id == "plain"));
+}
+
+/// A saved record for a scratchpad app does not come back as a stand-in, and is
+/// carried forward inert like any other excluded record.
+#[test]
+fn scratchpad_app_quit_record_does_not_materialize() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        bookmarks: BTreeMap::new(),
+        saved_at: 0,
+        entries: vec![
+            entry(1, "alpha", Origin::Quit),
+            entry(2, "pad", Origin::Quit),
+        ],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let mut f = Fixture::with_config(config_restore_with_rule(true, SCRATCHPAD_BINDING));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(
+        restored
+            .iter()
+            .map(|(s, _)| s.identity.app_id.clone())
+            .collect::<Vec<_>>(),
+        vec!["alpha"],
+        "only the ordinary app comes back"
+    );
+
+    for (s, _) in restored {
+        f.state().dismiss_suspended(s.id);
+    }
+}
+
+/// An explicit `restore_windows = true` rule still wins over the scratchpad
+/// default, for someone who does want the stand-in.
+#[test]
+fn explicit_restore_rule_overrides_the_scratchpad_default() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+
+    let envelope = SessionEnvelope {
+        version: session::VERSION,
+        bookmarks: BTreeMap::new(),
+        saved_at: 0,
+        entries: vec![entry(1, "pad", Origin::Quit)],
+        outputs: BTreeMap::new(),
+    };
+    session::write(&path, &envelope, false).unwrap();
+
+    let rules =
+        format!("{SCRATCHPAD_BINDING}[[window_rules]]\napp_id = \"pad\"\nrestore_windows = true\n");
+    let mut f = Fixture::with_config(config_restore_with_rule(true, &rules));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(restored.len(), 1, "the explicit rule brings it back");
+
+    for (s, _) in restored {
+        f.state().dismiss_suspended(s.id);
+    }
+}
+
 /// Dropping the rule that excluded a carried `Quit` record lets it materialize
 /// again on the next load: nothing about the earlier exclusion destroyed the
 /// record, it just sat inert in the file.

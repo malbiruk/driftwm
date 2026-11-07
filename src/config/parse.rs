@@ -106,6 +106,16 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             let cmd = arg.ok_or("spawn requires a command argument")?;
             Ok(Action::Spawn(cmd.to_string()))
         }
+        "toggle-scratchpad" => {
+            let arg = arg.ok_or("toggle-scratchpad requires an app_id and a command")?;
+            let (app_id, command) = arg
+                .split_once(char::is_whitespace)
+                .ok_or("toggle-scratchpad requires a command after the app_id")?;
+            Ok(Action::ToggleScratchpad {
+                app_id: app_id.to_string(),
+                command: command.trim().to_string(),
+            })
+        }
         "exec-terminal" => Ok(Action::ExecTerminal),
         "exec-launcher" => Ok(Action::ExecLauncher),
         "close-window" => Ok(Action::CloseWindow),
@@ -273,6 +283,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("toggle-cursor-pan", "toggle-cursor-pan"),
     ("toggle-fullscreen", "toggle-fullscreen"),
     ("toggle-pin-to-screen", "toggle-pin-to-screen"),
+    ("toggle-scratchpad", "toggle-scratchpad foo foo"),
     ("zoom-in", "zoom-in"),
     ("zoom-out", "zoom-out"),
     ("zoom-reset", "zoom-reset"),
@@ -632,6 +643,7 @@ mod tests {
             Action::ExecTerminal => "exec-terminal",
             Action::ExecLauncher => "exec-launcher",
             Action::Spawn(_) => "spawn",
+            Action::ToggleScratchpad { .. } => "toggle-scratchpad",
             Action::CloseWindow => "close-window",
             Action::SuspendWindow => "suspend-window",
             Action::NudgeWindow(_) => "nudge-window",

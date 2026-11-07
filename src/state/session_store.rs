@@ -544,7 +544,14 @@ impl DriftWm {
         self.config
             .resolve_window_rules(app_id, title)
             .and_then(|r| r.restore_windows)
-            .unwrap_or(self.config.session.restore_windows)
+            .unwrap_or_else(|| self.restore_windows_default(app_id))
+    }
+
+    /// What `restore_windows` falls back to with no rule saying: off for an app
+    /// a `toggle-scratchpad` binding manages (it respawns on demand), the global
+    /// setting otherwise. An explicit rule still wins over this.
+    fn restore_windows_default(&self, app_id: &str) -> bool {
+        !self.config.is_scratchpad_app(app_id) && self.config.session.restore_windows
     }
 
     /// The effective `restore_windows` for a saved record. A record carries an
@@ -562,7 +569,7 @@ impl DriftWm {
             .rev()
             .filter(|rule| rule.app_id.as_ref().is_some_and(|p| p.matches(app_id)))
             .find_map(|rule| rule.restore_windows)
-            .unwrap_or(self.config.session.restore_windows)
+            .unwrap_or_else(|| self.restore_windows_default(app_id))
     }
 
     /// A `Quit` record for one live client window, or `None` when it can't come
