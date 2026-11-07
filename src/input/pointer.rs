@@ -1759,8 +1759,11 @@ impl DriftWm {
         // and an unbound scroll must not pan/zoom the canvas beneath. The
         // swallow lives at the tail, not ahead of the binding lookup, so a
         // bound scroll (an `anywhere` alt+wheel zoom, mod+wheel pan) still
-        // fires over a stand-in like over any window.
+        // fires over a stand-in like over any window. A screen-space window drawn
+        // over the stand-in owns the scroll: this test is canvas-space and would
+        // see only the stand-in beneath it.
         if !over_layer
+            && !self.pointer_over_screen_space
             && matches!(
                 self.decoration_under(pos),
                 Some((DecoTarget::Suspended(_), _))
