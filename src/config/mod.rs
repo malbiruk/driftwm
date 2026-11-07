@@ -321,6 +321,16 @@ impl Config {
         self.bindings.get(&combo)
     }
 
+    /// Whether a keybinding toggles `app_id` as a scratchpad. A scratchpad is
+    /// respawned by its own binding, so a restored stand-in for it is only in
+    /// the way.
+    pub fn is_scratchpad_app(&self, app_id: &str) -> bool {
+        self.bindings
+            .values()
+            .chain(self.tap_bindings.values())
+            .any(|action| matches!(action, Action::ToggleScratchpad { app_id: a, .. } if a == app_id))
+    }
+
     /// Look up a tap-modifier binding by the completed chord's modifier set.
     pub fn tap_lookup(&self, mods: &Modifiers) -> Option<&Action> {
         self.tap_bindings.get(mods)
