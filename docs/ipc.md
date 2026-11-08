@@ -9,7 +9,7 @@ JSON, so any language can speak it directly.
 
 Run `driftwm msg <command>` from inside a driftwm session. The commands —
 `camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `pin`, `close`,
-`suspend`, `relaunch`, `layout`, `cursor`, `action`, `bookmark`, `screenshot`,
+`suspend`, `relaunch`, `restore-cmd`, `layout`, `cursor`, `action`, `bookmark`, `screenshot`,
 `state`, `subscribe`, and `debug-counters` — with their arguments, flags, and
 JSON reply shapes are documented in the generated [CLI reference](cli.md);
 `driftwm msg <command> --help` prints the same for one command. The conventions
@@ -163,8 +163,8 @@ explicit path.
 
 > [!WARNING]
 > The socket is a full control surface, not a read-only one: `action` can run
-> `exec`/`spawn`, `quit`, and `reload-config`, and `relaunch` launches a
-> suspended window's app. It is `0600` for that reason — don't loosen the
+> `exec`/`spawn`, `quit`, and `reload-config`, `relaunch` launches a
+> suspended window's app, and `restore-cmd` chooses the command it launches. It is `0600` for that reason — don't loosen the
 > permissions or bridge it over a network.
 
 The protocol is one JSON **request** per line, answered by one JSON **reply**
@@ -190,6 +190,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 | close             | `{"Close":null}` / `{"Close":5}` / `{"Close":"alacritty"}`                          |
 | suspend           | `{"Suspend":null}` / `{"Suspend":5}` / `{"Suspend":"alacritty"}`                    |
 | relaunch          | `{"Relaunch":null}` / `{"Relaunch":5}` / `{"Relaunch":"alacritty"}`                 |
+| restore-cmd       | `{"RestoreCmd":{"pids":[4242]}}` (get) / `{"RestoreCmd":{"window":5,"cmd":["kitty","claude"]}}` (set) / `{"RestoreCmd":{"window":5,"clear":true}}` (clear); all fields optional |
 | layout            | `{"Layout":{"short":false}}`                                                        |
 | cursor            | `"Cursor"`                                                                          |
 | run action        | `{"Action":"switch-layout next"}`                                                   |
@@ -212,10 +213,11 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Size":{"width":800,"height":600}}}
 {"Ok":{"Opacity":0.85}}
 {"Ok":{"Pin":true}}
+{"Ok":{"RestoreCmd":["kitty","claude"]}}    // restore-cmd get (null when unset)
 {"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}   // bookmark get / set (Y-up)
 {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}     // bookmark list (sorted by name)
 {"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}
-{"Ok":"Ok"}                          // action / close / suspend / relaunch / bookmark delete
+{"Ok":"Ok"}                          // action / close / suspend / relaunch / restore-cmd set, clear / bookmark delete
 {"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}   // abridged
 {"Ok":{"State":{"camera":[-960.0,-600.0],"zoom":1.0,"layout":"English (US)",
   "layout_short":"us","windows":[

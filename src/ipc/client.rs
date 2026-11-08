@@ -148,6 +148,32 @@ pub enum Msg {
         #[arg(long, conflicts_with = "app_id")]
         id: Option<u64>,
     },
+    /// Get, set, or clear the command a window relaunches with.
+    ///
+    /// A suspended window normally relaunches from its `.desktop` entry, which
+    /// reopens the bare app. With a restore command set, the stand-in (and the
+    /// saved session) relaunch with that argv instead — e.g. a terminal running
+    /// a specific program. Give the command after `--`; with none, prints the
+    /// current one (empty when unset).
+    ///
+    /// With no `--id`/`--app-id`, the target is the window whose client process
+    /// is an ancestor of this command, so a script running inside the window can
+    /// set its own. The command is stored in the session file and run as you.
+    ///
+    /// `--json` reply: `{"Ok":{"RestoreCmd":["kitty","claude"]}}` (get),
+    /// `{"Ok":{"RestoreCmd":null}}` (unset), or `{"Ok":"Ok"}` (set/clear).
+    RestoreCmd {
+        app_id: Option<String>,
+        /// Target this window id.
+        #[arg(long, conflicts_with = "app_id")]
+        id: Option<u64>,
+        /// Remove the restore command.
+        #[arg(long, conflicts_with = "cmd")]
+        clear: bool,
+        /// The relaunch command and its arguments.
+        #[arg(last = true)]
+        cmd: Vec<String>,
+    },
     /// Get the camera position, or pan the viewport to `<x> <y>` (canvas point, Y-up).
     ///
     /// Panning is animated, and takes both coordinates or neither.
@@ -395,6 +421,31 @@ fn window_selector(app_id: &Option<String>, id: Option<u64>) -> Option<WindowSel
     }
 }
 
+/// This process's ancestors, nearest first, read from `/proc`. Stops at the
+/// first unreadable link, so a partial chain still identifies the window.
+fn ancestor_pids() -> Vec<u32> {
+    let mut pids = Vec::new();
+    let mut pid = std::process::id();
+    while pid > 1 {
+        let Some(parent) = std::fs::read_to_string(format!("/proc/{pid}/stat"))
+            .ok()
+            .and_then(|stat| {
+                // The comm field may contain spaces and parens; ppid follows the last `)`.
+                let after = stat.rsplit_once(')')?.1;
+                after.split_whitespace().nth(1)?.parse::<u32>().ok()
+            })
+        else {
+            break;
+        };
+        if parent <= 1 {
+            break;
+        }
+        pids.push(parent);
+        pid = parent;
+    }
+    pids
+}
+
 fn to_request(msg: &Msg) -> Result<Request, String> {
     Ok(match msg {
         Msg::Camera { x, y } => match (x, y) {
@@ -455,6 +506,24 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         Msg::Suspend { app_id, id } => Request::Suspend(window_selector(app_id, *id)),
         Msg::Relaunch { app_id, id } => Request::Relaunch(window_selector(app_id, *id)),
         Msg::Action { spec } => Request::Action(spec.join(" ")),
+        Msg::RestoreCmd {
+            app_id,
+            id,
+            clear,
+            cmd,
+        } => {
+            let window = window_selector(app_id, *id);
+            Request::RestoreCmd {
+                pids: if window.is_none() {
+                    ancestor_pids()
+                } else {
+                    Vec::new()
+                },
+                window,
+                cmd: (!cmd.is_empty()).then(|| cmd.clone()),
+                clear: *clear,
+            }
+        }
         Msg::Bookmark { name, x, y, delete } => {
             // serde_json serializes non-finite floats as null, which the server
             // would read back as a get instead of a set — refuse them here.
@@ -631,6 +700,8 @@ fn print_response(response: Response) {
         Response::Size { width, height } => println!("{width} {height}"),
         Response::Opacity(value) => println!("{value}"),
         Response::Pin(value) => println!("{value}"),
+        Response::RestoreCmd(Some(cmd)) => println!("{}", cmd.join(" ")),
+        Response::RestoreCmd(None) => println!(),
         Response::Bookmark { x, y } => println!("{x} {y}"),
         Response::Bookmarks(bookmarks) => {
             for (name, [x, y]) in bookmarks {
