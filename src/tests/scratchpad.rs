@@ -2,6 +2,7 @@
 //! at the pin site it left from.
 
 use smithay::desktop::Window;
+use smithay::wayland::seat::WaylandFocus;
 
 use driftwm::stage::ElementId;
 
@@ -30,12 +31,15 @@ fn hide_keeps_the_window_mapped_and_hands_focus_back() {
     let (mut f, dd, other, _) = setup();
     let site = f.state().stage.pin_of(&dd).cloned().unwrap();
     f.state().raise_and_focus(&other, 0.into());
+    f.state().raise_and_focus(&dd, 0.into());
+    assert!(is_activated(&dd), "starts focused");
 
     f.state().toggle_scratchpad("dd", "true");
 
     assert!(f.state().hidden_by_deferred_adopt(&dd), "stowed");
     assert!(f.state().stage.contains(&dd), "still on the stage");
     assert_eq!(f.state().stage.pin_of(&dd), Some(&site), "pin site kept");
+    assert!(!is_activated(&dd), "focus left the stowed window");
     assert!(is_activated(&other), "focus went to the other window");
 }
 
@@ -172,4 +176,141 @@ fn hidden_scratchpad_is_not_hit_by_the_pointer() {
         f.state().pinned_decoration_under(on_edge),
         crate::input::PinnedChrome::Miss
     ));
+}
+
+#[test]
+fn a_window_awaiting_its_first_placement_is_left_alone() {
+    let (mut f, dd, _other, _) = setup();
+    let surface = dd.wl_surface().unwrap().into_owned();
+    f.state().pending_center.insert(surface.clone());
+
+    f.state().toggle_scratchpad("dd", "true");
+
+    assert!(
+        !f.state().hidden_by_deferred_adopt(&dd),
+        "not stowed before placement"
+    );
+    f.state().pending_center.remove(&surface);
+}
+
+#[test]
+fn a_fullscreen_asked_for_while_stowed_applies_on_show() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    let surface = map_window(&mut f, client, "dd", (400, 300));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    tick_until_settled(&mut f);
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.client(client).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(client);
+    assert!(!f.state().stage.is_fullscreen(&dd), "queued while stowed");
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.double_roundtrip(client);
+
+    assert!(f.state().stage.is_fullscreen(&dd), "applied on show");
+}
+
+#[test]
+fn windows_sharing_the_app_id_and_their_children_toggle_together() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    let main = map_window(&mut f, client, "dd", (400, 300));
+    // A second top-level of the app (a compose window) and a dialog on it.
+    map_window(&mut f, client, "dd", (300, 200));
+    let toplevel = f.client(client).window(&main).xdg_toplevel.clone();
+    let dialog = f.client(client).create_window();
+    let dsurface = dialog.surface.clone();
+    dialog.set_app_id("other-app");
+    dialog.set_parent(Some(&toplevel));
+    dialog.commit();
+    f.roundtrip(client);
+    let dwin = f.client(client).window(&dsurface);
+    dwin.set_size(200, 100);
+    dwin.attach_new_buffer();
+    dwin.ack_last_and_commit();
+    f.double_roundtrip(client);
+    tick_until_settled(&mut f);
+    let all: Vec<Window> = f
+        .state()
+        .stage
+        .windows()
+        .filter_map(|w| w.client())
+        .cloned()
+        .collect();
+    assert_eq!(all.len(), 3);
+
+    f.state().toggle_scratchpad("dd", "true");
+    assert!(
+        all.iter().all(|w| f.state().hidden_by_deferred_adopt(w)),
+        "both windows and the dialog are stowed"
+    );
+
+    f.state().toggle_scratchpad("dd", "true");
+    assert!(
+        all.iter().all(|w| !f.state().hidden_by_deferred_adopt(w)),
+        "and shown together"
+    );
+}
+
+#[test]
+fn a_repeat_press_while_the_app_starts_does_not_spawn_it_again() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+
+    f.state().toggle_scratchpad("slow", "true");
+    let first = f.state().scratchpad_spawns["slow"];
+    f.state().toggle_scratchpad("slow", "true");
+
+    assert_eq!(f.state().scratchpad_spawns["slow"], first, "debounced");
+}
+
+const BOUND: &str = "[keybindings]\n\"mod+w\" = \"toggle-scratchpad dd true\"\n";
+
+#[test]
+fn reload_releases_a_stowed_window_nothing_can_reach() {
+    let mut f = Fixture::with_config(config(BOUND));
+    // A reload leaves its own mode-change intent behind.
+    f.skip_baseline_check();
+    f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    map_window(&mut f, client, "dd", (400, 300));
+    map_window(&mut f, client, "kept", (400, 300));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    let kept = window_by_app_id(&mut f, "kept").unwrap();
+    f.state().toggle_scratchpad("dd", "true");
+    f.state().toggle_scratchpad("kept", "true");
+    assert!(f.state().hidden_by_deferred_adopt(&dd));
+    assert!(f.state().hidden_by_deferred_adopt(&kept));
+
+    f.state().reload_config_from_contents(
+        "[keybindings]\n\"mod+w\" = \"toggle-scratchpad dd true\"\n\"mod+k\" = \"toggle-scratchpad kept true\"\n",
+    );
+    assert!(f.state().hidden_by_deferred_adopt(&dd), "still bound");
+    assert!(f.state().hidden_by_deferred_adopt(&kept), "still bound");
+
+    f.state().reload_config_from_contents(
+        "[keybindings]\n\"mod+k\" = \"toggle-scratchpad kept true\"\n",
+    );
+
+    assert!(!f.state().hidden_by_deferred_adopt(&dd), "released");
+    assert!(f.state().hidden_by_deferred_adopt(&kept), "bound ones stay");
+    f.state().toggle_scratchpad("kept", "true");
+}
+
+#[test]
+fn every_binding_kind_marks_a_scratchpad_app() {
+    for toml in [
+        "[keybindings]\n\"mod+w\" = \"toggle-scratchpad dd true\"\n",
+        "[mouse.anywhere]\n\"mod+middle\" = \"toggle-scratchpad dd true\"\n",
+        "[gestures.anywhere]\n\"mod+3-finger-pinch-out\" = \"toggle-scratchpad dd true\"\n",
+        "[touch.anywhere]\n\"3-finger-doubletap\" = \"toggle-scratchpad dd true\"\n",
+    ] {
+        let cfg = driftwm::config::Config::from_toml(toml).unwrap();
+        assert!(cfg.is_scratchpad_app("dd"), "{toml}");
+        assert!(!cfg.is_scratchpad_app("other"), "{toml}");
+    }
 }

@@ -412,8 +412,6 @@
 # "mod+alt+left" = "send-to-output left"
 # "mod+alt+right" = "send-to-output right"
 # "mod+l" = "spawn swaylock -f -c 000000 -kl"
-# # Example: dropdown terminal; pair with a pinned_to_screen window rule for its place
-# # "mod+grave" = "toggle-scratchpad dropdown kitty --class dropdown"
 # "mod+ctrl+shift+q" = "quit"
 # "XF86AudioRaiseVolume" = "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%+"
 # "XF86AudioLowerVolume" = "spawn wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%-"
@@ -438,6 +436,8 @@
 # # Example: set-trackpad (unbound by default)
 # # "mod+f10" = "set-trackpad toggle"   # flip the trackpad between on and off
 # # "mod+shift+f10" = "set-trackpad off"   # turn it off whatever the current state
+# # Example: dropdown terminal; pair with a pinned_to_screen window rule for its place
+# # "mod+grave" = "toggle-scratchpad dropdown kitty --class dropdown"
 # # Example: grow and shrink the right edge by resize_step screen px (unbound by default)
 # # "mod+ctrl+alt+right" = "grow-window right"
 # # "mod+ctrl+alt+left" = "shrink-window right"

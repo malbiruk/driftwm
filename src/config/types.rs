@@ -425,6 +425,14 @@ impl<K: Eq + Hash, V> ContextBindings<K, V> {
         }
     }
 
+    /// Every bound value across all three contexts.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.on_window
+            .values()
+            .chain(self.on_canvas.values())
+            .chain(self.anywhere.values())
+    }
+
     pub fn lookup(&self, key: &K, context: BindingContext) -> Option<&V> {
         let specific = match context {
             BindingContext::OnWindow => &self.on_window,

@@ -372,6 +372,7 @@ impl DriftWm {
             pending_adoptions: HashMap::new(),
             deferred_adoptions: Vec::new(),
             scratchpad_hidden: Vec::new(),
+            scratchpad_spawns: HashMap::new(),
             session_store: super::SessionStore::default(),
             bookmarks,
             window_focus: None,

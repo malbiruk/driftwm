@@ -321,14 +321,27 @@ impl Config {
         self.bindings.get(&combo)
     }
 
-    /// Whether a keybinding toggles `app_id` as a scratchpad. A scratchpad is
-    /// respawned by its own binding, so a restored stand-in for it is only in
-    /// the way.
+    /// Whether any binding (key, tap, mouse, gesture or touch) toggles `app_id`
+    /// as a scratchpad. A scratchpad is respawned by its own binding, so a
+    /// restored stand-in for it is only in the way.
     pub fn is_scratchpad_app(&self, app_id: &str) -> bool {
+        let is = |action: &Action| matches!(action, Action::ToggleScratchpad { app_id: a, .. } if a == app_id);
+        let gesture = |entry: &GestureConfigEntry| {
+            matches!(
+                entry,
+                GestureConfigEntry::Threshold(ThresholdAction::Fixed(a)) if is(a)
+            )
+        };
         self.bindings
             .values()
             .chain(self.tap_bindings.values())
-            .any(|action| matches!(action, Action::ToggleScratchpad { app_id: a, .. } if a == app_id))
+            .any(is)
+            || self
+                .mouse
+                .values()
+                .any(|m| matches!(m, MouseAction::Action(a) if is(a)))
+            || self.gestures.values().any(gesture)
+            || self.touch_gestures.values().any(gesture)
     }
 
     /// Look up a tap-modifier binding by the completed chord's modifier set.
