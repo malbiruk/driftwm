@@ -189,6 +189,9 @@ decoration       = "none"
 - **Dragging it across monitors** reassigns it to that output. Combine with
   `widget = true` to make it immovable.
 
+A pinned window also makes a [scratchpad](scratchpad.md): a key that stows and
+shows it without animation.
+
 To find the numbers for a rule, pin the window live with `toggle-pin-to-screen`
 (`Mod+T`), drag and resize it into place, then copy `position`/`size` from its
 entry in the per-output `pinned` section of `driftwm msg state` — those are
