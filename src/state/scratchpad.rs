@@ -5,7 +5,7 @@
 //! Stowing only adds it to `scratchpad_hidden`, the same off-screen,
 //! out-of-every-relation state a first-commit deferred adopt uses
 //! ([`DriftWm::root_hidden`]), so showing it again is one frame with no
-//! animation.
+//! animation. It shows on the output in use, not the one it was stowed from.
 
 use std::time::{Duration, Instant};
 
@@ -104,6 +104,13 @@ impl DriftWm {
 
     fn show_scratchpad(&mut self, windows: &[Window], surfaces: &[WlSurface]) {
         self.scratchpad_hidden.retain(|s| !surfaces.contains(s));
+        // The scratchpad follows the display in use: a pin left on another
+        // output is rebound to the active one, keeping its screen position.
+        if let Some(active) = self.active_output() {
+            for window in windows {
+                self.send_pinned_to_output(window, &active);
+            }
+        }
         for (window, surface) in windows.iter().zip(surfaces) {
             // Cancelled so a stale entry can't ease it in from where it last was.
             self.cancel_window_animation(window);

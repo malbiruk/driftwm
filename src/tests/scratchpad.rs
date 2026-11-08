@@ -341,3 +341,26 @@ fn a_fullscreen_window_comes_back_fullscreen_after_stow_and_show() {
 
     assert!(f.state().stage.is_fullscreen(&dd), "fullscreen again");
 }
+
+#[test]
+fn show_follows_the_active_output() {
+    let mut f = Fixture::with_config(config(PIN_RULE));
+    let out2 = f.add_output(2, (1920, 1080));
+    let out1 = f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    map_window(&mut f, client, "dd", (320, 240));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    assert_eq!(f.state().stage.pin_of(&dd).unwrap().output, out2.name());
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.state().focused_output = Some(out1.clone());
+    f.state().toggle_scratchpad("dd", "true");
+
+    assert!(!f.state().hidden_by_deferred_adopt(&dd), "shown");
+    assert_eq!(
+        f.state().stage.pin_of(&dd).unwrap().output,
+        out1.name(),
+        "pinned to the output in use"
+    );
+    assert!(is_activated(&dd), "focused");
+}
