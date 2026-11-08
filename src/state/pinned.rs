@@ -186,6 +186,17 @@ impl DriftWm {
     /// (clamped into the target output's bounds) and rebinding the pin to it.
     /// No-op if the window isn't pinned or is already on `target`.
     pub(crate) fn send_pinned_to_output(&mut self, window: &Window, target: &Output) {
+        self.rebind_pinned(window, target, false);
+    }
+
+    /// Like [`send_pinned_to_output`](Self::send_pinned_to_output), but keeps
+    /// the window's position *relative* to the output: a window centred on the
+    /// old output is centred on `target`, whatever the two sizes.
+    pub(crate) fn send_pinned_to_output_relative(&mut self, window: &Window, target: &Output) {
+        self.rebind_pinned(window, target, true);
+    }
+
+    fn rebind_pinned(&mut self, window: &Window, target: &Output, relative: bool) {
         let Some(mut site) = self.stage.pin_of(window).cloned() else {
             return;
         };
@@ -194,9 +205,27 @@ impl DriftWm {
         }
         let target_size = output_logical_size(target);
         let chrome = self.element_chrome(window);
+        let content_size = window.geometry().size;
+        if relative && let Some(from) = self.output_by_name(&site.output) {
+            // Scale the frame's centre, not its corner, so a centred window
+            // stays centred when the sizes differ.
+            let from_size = output_logical_size(&from);
+            let frame_size = chrome.frame_size(content_size);
+            let frame = chrome.frame_loc(site.screen_pos);
+            let scale = |pos: i32, len: i32, from: i32, to: i32| {
+                if from <= 0 {
+                    return pos;
+                }
+                let centre = (pos as f64 + len as f64 / 2.0) / from as f64;
+                (centre * to as f64 - len as f64 / 2.0).round() as i32
+            };
+            site.screen_pos = chrome.content_loc(Point::from((
+                scale(frame.x, frame_size.w, from_size.w, target_size.w),
+                scale(frame.y, frame_size.h, from_size.h, target_size.h),
+            )));
+        }
         site.output = target.name();
-        site.screen_pos =
-            clamp_pin_frame(site.screen_pos, window.geometry().size, target_size, chrome);
+        site.screen_pos = clamp_pin_frame(site.screen_pos, content_size, target_size, chrome);
         self.stage.set_pin(window, site);
         // Re-anchor the Space loc to the new output now — `sync_pinned_locs`
         // only fires on camera changes, which this rebind doesn't trigger, so

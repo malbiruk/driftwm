@@ -105,10 +105,10 @@ impl DriftWm {
     fn show_scratchpad(&mut self, windows: &[Window], surfaces: &[WlSurface]) {
         self.scratchpad_hidden.retain(|s| !surfaces.contains(s));
         // The scratchpad follows the display in use: a pin left on another
-        // output is rebound to the active one, keeping its screen position.
+        // output is rebound to the active one, at the same relative position.
         if let Some(active) = self.active_output() {
             for window in windows {
-                self.send_pinned_to_output(window, &active);
+                self.send_pinned_to_output_relative(window, &active);
             }
         }
         for (window, surface) in windows.iter().zip(surfaces) {

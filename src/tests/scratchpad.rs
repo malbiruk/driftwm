@@ -364,3 +364,30 @@ fn show_follows_the_active_output() {
     );
     assert!(is_activated(&dd), "focused");
 }
+
+#[test]
+fn show_keeps_the_position_relative_to_the_output() {
+    let mut f = Fixture::with_config(config(PIN_RULE));
+    let out2 = f.add_output(2, (1920, 1080));
+    let out1 = f.add_output(1, (3440, 1440));
+    let client = f.add_client();
+    map_window(&mut f, client, "dd", (320, 240));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    let mut site = f.state().stage.pin_of(&dd).cloned().unwrap();
+    assert_eq!(site.output, out2.name());
+    // Centred on the 1920x1080 output.
+    site.screen_pos = (1920 / 2 - 160, 1080 / 2 - 120).into();
+    f.state().stage.set_pin(&dd, site);
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.state().focused_output = Some(out1.clone());
+    f.state().toggle_scratchpad("dd", "true");
+
+    let site = f.state().stage.pin_of(&dd).cloned().unwrap();
+    assert_eq!(site.output, out1.name());
+    assert_eq!(
+        site.screen_pos,
+        (3440 / 2 - 160, 1440 / 2 - 120).into(),
+        "still centred"
+    );
+}

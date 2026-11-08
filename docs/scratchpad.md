@@ -63,8 +63,9 @@ afterwards, so close any copy that is already running), then press the key.
   resize the window while it is up, the next show restores that geometry.
 - **It follows the display.** With several monitors, showing a pinned
   scratchpad puts it on the monitor the pointer is on, not the one it was
-  stowed from. It keeps its on-screen position (clamped to fit the new
-  monitor), and that becomes its position for the next show.
+  stowed from. It keeps its position relative to the monitor (centred stays
+  centred, whatever the sizes), and that becomes its position for the next
+  show.
 - **Focus.** Showing raises and focuses the window. Stowing the focused window
   hands focus to the most recently used other window.
 - **Hidden means gone.** A stowed window is not drawn, takes no clicks, and is
