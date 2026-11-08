@@ -314,3 +314,30 @@ fn every_binding_kind_marks_a_scratchpad_app() {
         assert!(!cfg.is_scratchpad_app("other"), "{toml}");
     }
 }
+
+#[test]
+fn a_fullscreen_window_comes_back_fullscreen_after_stow_and_show() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    let surface = map_window(&mut f, client, "dd", (400, 300));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    f.client(client).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(client);
+    f.client(client).window(&surface).ack_last_and_commit();
+    f.double_roundtrip(client);
+    assert!(f.state().stage.is_fullscreen(&dd), "starts fullscreen");
+
+    // What the action guard does before the toggle runs.
+    let was = f.state().active_fullscreen_window();
+    f.state().exit_fullscreen();
+    f.state().toggle_scratchpad_from("dd", "true", was.as_ref());
+    f.double_roundtrip(client);
+    assert!(f.state().hidden_by_deferred_adopt(&dd), "stowed");
+    assert!(!f.state().stage.is_fullscreen(&dd), "desktop is showing");
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.double_roundtrip(client);
+
+    assert!(f.state().stage.is_fullscreen(&dd), "fullscreen again");
+}

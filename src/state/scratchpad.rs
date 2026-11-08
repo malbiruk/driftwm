@@ -24,7 +24,20 @@ use super::{DriftWm, StageWindow};
 const SPAWN_DEBOUNCE: Duration = Duration::from_secs(3);
 
 impl DriftWm {
+    #[cfg(test)]
     pub(crate) fn toggle_scratchpad(&mut self, app_id: &str, command: &str) {
+        self.toggle_scratchpad_from(app_id, command, None);
+    }
+
+    /// `was_fullscreen` is the window that was fullscreen on the active output
+    /// before the action guard ended it: if that is one of the windows being
+    /// stowed, it is put back into fullscreen when shown.
+    pub(crate) fn toggle_scratchpad_from(
+        &mut self,
+        app_id: &str,
+        command: &str,
+        was_fullscreen: Option<&Window>,
+    ) {
         let windows = self.scratchpad_windows(app_id);
         if windows.is_empty() {
             let recent = self
@@ -51,7 +64,7 @@ impl DriftWm {
         if surfaces.iter().all(|s| self.scratchpad_hidden.contains(s)) {
             self.show_scratchpad(&windows, &surfaces);
         } else {
-            self.hide_scratchpad(&windows, surfaces);
+            self.hide_scratchpad(&windows, surfaces, was_fullscreen);
         }
     }
 
@@ -104,13 +117,26 @@ impl DriftWm {
         }
     }
 
-    fn hide_scratchpad(&mut self, windows: &[Window], surfaces: Vec<WlSurface>) {
+    fn hide_scratchpad(
+        &mut self,
+        windows: &[Window],
+        surfaces: Vec<WlSurface>,
+        was_fullscreen: Option<&Window>,
+    ) {
         let was_focused = self.focused_window().is_some_and(|f| windows.contains(&f));
         for (window, surface) in windows.iter().zip(surfaces) {
             if !self.scratchpad_hidden.contains(&surface) {
                 self.scratchpad_hidden.push(surface);
             }
             self.cancel_window_animation(window);
+            // The guard has already ended its fullscreen so the desktop shows;
+            // queue it to be entered again on show, as for a request made
+            // while stowed.
+            if was_fullscreen == Some(window)
+                && let Some(s) = window.wl_surface()
+            {
+                self.pending_fullscreen.insert(s.into_owned(), None);
+            }
             self.stage
                 .drop_from_focus_history(&StageWindow::from(window.clone()));
         }
