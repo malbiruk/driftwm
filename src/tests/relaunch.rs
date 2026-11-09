@@ -4045,3 +4045,68 @@ fn ipc_relaunch_errors_on_unknown_selector() {
     );
     assert!(reply.is_err());
 }
+
+#[test]
+fn relaunch_uses_the_restore_cmd_over_the_desktop_entry() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    let sid = insert_suspended(&mut f, 1, "myapp", (500, 500), (600, 400));
+    *f.state()
+        .find_suspended(sid)
+        .unwrap()
+        .restore_cmd
+        .borrow_mut() = Some(vec!["myapp".into(), "--resume".into(), "a b".into()]);
+
+    assert!(f.state().relaunch_suspended(sid));
+
+    let spawns = f.state().take_relaunch_spawns_for_test();
+    assert_eq!(spawns.len(), 1);
+    assert_eq!(spawns[0].0, "'myapp' '--resume' 'a b'");
+    f.state().dismiss_suspended(sid);
+}
+
+#[test]
+fn restore_cmd_survives_suspend_and_flows_back_onto_the_adopting_window() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(Config::default());
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+    origin_view(&mut f);
+
+    let cid = f.add_client();
+    let first = map_window(&mut f, cid, "myapp", (400, 300));
+    let window = mapped_client(&mut f, "myapp").unwrap();
+    let cmd = vec!["myapp".to_string(), "--resume".to_string()];
+    crate::state::RestoreCmd::set(&window, Some(cmd.clone()));
+
+    f.state()
+        .raise_and_focus(&window, smithay::utils::SERIAL_COUNTER.next_serial());
+    f.state().execute_action(&Action::SuspendWindow);
+    client_close(&mut f, cid, &first);
+    let sid = f
+        .state()
+        .stage
+        .windows()
+        .find_map(|w| w.suspended().map(|s| s.id))
+        .expect("window was suspended");
+    assert_eq!(
+        *f.state().find_suspended(sid).unwrap().restore_cmd.borrow(),
+        Some(cmd.clone()),
+        "the stand-in carries the command"
+    );
+
+    f.state().relaunch_suspended(sid);
+    let token = f.state().pending_relaunch_token_for_test(sid).unwrap();
+    let cid2 = f.add_client();
+    let surface = begin_window(&mut f, cid2, "myapp");
+    present_token(&mut f, cid2, &surface, token);
+    finish_window(&mut f, cid2, &surface, (300, 200));
+
+    let adopted = mapped_client(&mut f, "myapp").expect("relaunched window adopted the slot");
+    assert_eq!(crate::state::RestoreCmd::get(&adopted), Some(cmd));
+    client_close(&mut f, cid2, &surface);
+}

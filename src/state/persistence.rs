@@ -147,7 +147,7 @@ impl DriftWm {
 
     /// The PID of the process that opened `surface`'s Wayland connection. Every
     /// X11 window reports xwayland-satellite's, its client.
-    fn client_pid(
+    pub(crate) fn client_pid(
         &self,
         surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
     ) -> Option<u32> {

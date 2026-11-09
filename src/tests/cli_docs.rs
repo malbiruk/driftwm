@@ -65,6 +65,13 @@ const EXAMPLES: &[(&str, &[&str])] = &[
     ("driftwm msg suspend", &["driftwm msg suspend firefox"]),
     ("driftwm msg relaunch", &["driftwm msg relaunch firefox"]),
     (
+        "driftwm msg restore-cmd",
+        &[
+            "driftwm msg restore-cmd -- kitty --directory ~/src claude --resume abc123",
+            "driftwm msg restore-cmd --clear",
+        ],
+    ),
+    (
         "driftwm msg camera",
         &["driftwm msg camera", "driftwm msg camera 500 300"],
     ),

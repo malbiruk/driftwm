@@ -217,6 +217,7 @@ impl DriftWm {
             entry.origin,
             entry.csd,
         ));
+        *s.restore_cmd.borrow_mut() = entry.restore_cmd;
         self.map_window(StageWindow::Suspended(s), loc, false);
         sid
     }
@@ -606,6 +607,7 @@ impl DriftWm {
             origin: Origin::Quit,
             csd,
             focused: false,
+            restore_cmd: crate::state::RestoreCmd::get(&client),
         })
     }
 
@@ -681,6 +683,7 @@ fn suspended_entry(s: &SuspendedWindow, loc: Point<i32, Logical>, chrome: Chrome
         origin: s.origin,
         csd: s.csd,
         focused: false,
+        restore_cmd: s.restore_cmd.borrow().clone(),
     }
 }
 
@@ -846,6 +849,7 @@ mod tests {
             origin: Origin::Explicit,
             csd: false,
             focused: false,
+            restore_cmd: None,
         }
     }
 
