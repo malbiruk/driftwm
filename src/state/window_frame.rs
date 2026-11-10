@@ -44,8 +44,6 @@ impl DriftWm {
     /// second one. The override is written into the window's stored rule, so it is
     /// not saved with the session and is gone when the window closes.
     ///
-    /// The frame changes by the bar height, so the cached snap rect is refreshed;
-    /// neighbours in a snap cluster are not re-snapped.
     pub fn toggle_window_titlebar(&mut self, window: &Window) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
@@ -89,9 +87,6 @@ impl DriftWm {
 
         if has_bar {
             self.decorations.remove(&key);
-            // With the bar gone the corners are clipped by the compositor, so the
-            // surface's opaque region has to give them up too.
-            self.trim_opaque_corners(&surface);
         } else if window.geometry().size.w > 0 {
             self.decorations.insert(
                 key,
@@ -101,6 +96,55 @@ impl DriftWm {
                     &self.config.decorations,
                 ),
             );
+        }
+        self.chrome_changed(window, &surface);
+    }
+
+    /// Hide or show `window`'s border, drop shadow and corner clip together, so
+    /// it draws as the bare client surface; again to restore whatever its rule and
+    /// `[decorations]` say. The title bar is separate (`toggle-titlebar`).
+    ///
+    /// Applies to a `client`-decorated window too, since the compositor draws
+    /// those three around it as well. Left alone for `decoration = "none"`, which
+    /// already has none of them. The flag lives on the window's stored rule, so
+    /// it is not saved with the session and is gone when the window closes.
+    pub fn toggle_window_borders(&mut self, window: &Window) {
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
+        let applied = driftwm::config::applied_rule(&surface);
+        let mode = driftwm::config::effective_decoration_mode(
+            applied.as_ref().and_then(|r| r.decoration.as_ref()),
+            &self.config.decorations.default_mode,
+        );
+        if matches!(mode, driftwm::config::DecorationMode::None) {
+            return;
+        }
+        let hidden = applied.is_some_and(|r| r.borders_hidden);
+
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            states.data_map.insert_if_missing_threadsafe(|| {
+                std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
+            });
+            states
+                .data_map
+                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .borders_hidden = !hidden;
+        });
+        self.chrome_changed(window, &surface);
+    }
+
+    /// Bookkeeping after a toggle changed what the frame is made of. The frame
+    /// size changed, so the cached snap rect is refreshed; neighbours in a snap
+    /// cluster are not re-snapped. A window without a bar has its corners clipped
+    /// by the compositor, so the opaque-region carve follows the new radius.
+    fn chrome_changed(&mut self, window: &Window, surface: &WlSurface) {
+        let key = crate::decorations::DecorationKey::Surface(surface.id());
+        if !self.decorations.contains_key(&key) {
+            self.trim_opaque_corners(surface);
         }
         self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
         self.mark_all_dirty();

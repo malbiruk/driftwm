@@ -723,7 +723,14 @@ impl DriftWm {
                 self.toggle_pin_to_screen();
             }
             Action::ToggleTitlebar => {
-                self.toggle_titlebar();
+                if let Some(window) = self.chrome_toggle_target() {
+                    self.toggle_window_titlebar(&window);
+                }
+            }
+            Action::ToggleBorders => {
+                if let Some(window) = self.chrome_toggle_target() {
+                    self.toggle_window_borders(&window);
+                }
             }
             Action::ReloadConfig => {
                 self.reload_config();
@@ -788,20 +795,17 @@ impl DriftWm {
         }
     }
 
-    /// Hide or show the focused window's driftwm title bar; see
-    /// [`DriftWm::toggle_window_titlebar`]. Fit, fill and widget windows are
-    /// left alone: their geometry was computed against the current bar (or is
-    /// rule-defined), and nothing here would redo it.
-    fn toggle_titlebar(&mut self) {
-        let Some(window) = self.focused_window().filter(|w| {
+    /// The window `toggle-titlebar` / `toggle-borders` act on: the focused one.
+    /// Fit, fill and widget windows are left alone: their geometry was computed
+    /// against the chrome they have now (or is rule-defined), and nothing here
+    /// would redo it.
+    fn chrome_toggle_target(&self) -> Option<smithay::desktop::Window> {
+        self.focused_window().filter(|w| {
             !self.is_window_fullscreen(w)
                 && !self.stage.is_fit(w)
                 && !self.stage.is_fill(w)
                 && !w.is_widget()
-        }) else {
-            return;
-        };
-        self.toggle_window_titlebar(&window);
+        })
     }
 
     /// Override `[input.trackpad]`'s send-events mode for the rest of the

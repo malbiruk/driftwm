@@ -473,9 +473,10 @@ pinned, output, … — are resolved **once, when a window maps**: reloading you
 config only affects windows opened afterwards, and a window that changes its
 title after mapping is **not** re-checked against `title` rules.
 
-Two things change a window's stored rule *after* it maps, and a config reload
-does not undo them: `msg opacity <value>` pins the opacity, and `toggle-titlebar`
-flips `decoration` between `server` and `minimal`. Both are runtime-only, so they
+Three things change a window's stored rule *after* it maps, and a config reload
+does not undo them: `msg opacity <value>` pins the opacity, `toggle-titlebar`
+flips `decoration` between `server` and `minimal`, and `toggle-borders` hides or
+restores the border, shadow and corner clip as one. All are runtime-only, so they
 are not saved with the session and end when the window closes.
 
 A few things re-resolve live against the current config instead: `pass_keys` is

@@ -82,6 +82,7 @@ pub enum Action {
     FocusCenter,
     TogglePinToScreen,
     ToggleTitlebar,
+    ToggleBorders,
     SwitchLayout(LayoutSwitch),
     ReloadConfig,
     ToggleCursorPan,
@@ -923,6 +924,10 @@ pub struct AppliedWindowRule {
     pub shadow: Option<bool>,
     pub output: Option<String>,
     pub layer_order: Option<i32>,
+    /// Runtime only (`toggle-borders`): draw the window without its border,
+    /// shadow and corner clip, whatever the rule and `[decorations]` say. A flag
+    /// rather than overwritten values, so toggling back needs nothing saved.
+    pub borders_hidden: bool,
 }
 
 impl AppliedWindowRule {
@@ -1018,6 +1023,7 @@ impl From<&WindowRule> for AppliedWindowRule {
             shadow: rule.shadow,
             output: rule.output.clone(),
             layer_order: rule.layer_order,
+            borders_hidden: false,
         }
     }
 }
@@ -1149,7 +1155,7 @@ pub fn effective_border_width(
     mode: &DecorationMode,
     decorations: &DecorationConfig,
 ) -> i32 {
-    if matches!(mode, DecorationMode::None) {
+    if matches!(mode, DecorationMode::None) || applied.is_some_and(|r| r.borders_hidden) {
         return 0;
     }
     if let Some(bw) = applied.and_then(|r| r.border_width) {
@@ -1221,7 +1227,7 @@ pub fn effective_corner_radius(
     mode: &DecorationMode,
     decorations: &DecorationConfig,
 ) -> i32 {
-    if matches!(mode, DecorationMode::None) {
+    if matches!(mode, DecorationMode::None) || applied.is_some_and(|r| r.borders_hidden) {
         return 0;
     }
     if let Some(cr) = applied.and_then(|r| r.corner_radius) {
@@ -1237,7 +1243,7 @@ pub fn effective_shadow_enabled(
     mode: &DecorationMode,
     decorations: &DecorationConfig,
 ) -> bool {
-    if matches!(mode, DecorationMode::None) {
+    if matches!(mode, DecorationMode::None) || applied.is_some_and(|r| r.borders_hidden) {
         return false;
     }
     if let Some(s) = applied.and_then(|r| r.shadow) {
@@ -1414,6 +1420,52 @@ pub struct BackgroundConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hidden_borders_zero_the_border_shadow_and_corner_clip() {
+        let decorations = DecorationConfig {
+            border_width: 4,
+            corner_radius: 12,
+            shadow: true,
+            ..DecorationConfig::default()
+        };
+        let rule = AppliedWindowRule {
+            border_width: Some(6),
+            corner_radius: Some(20),
+            shadow: Some(true),
+            ..AppliedWindowRule::default()
+        };
+        let hidden = AppliedWindowRule {
+            borders_hidden: true,
+            ..rule.clone()
+        };
+        for mode in [
+            DecorationMode::Client,
+            DecorationMode::Server,
+            DecorationMode::Minimal,
+        ] {
+            assert_eq!(effective_border_width(Some(&rule), &mode, &decorations), 6);
+            assert_eq!(
+                effective_corner_radius(Some(&rule), &mode, &decorations),
+                20
+            );
+            assert!(effective_shadow_enabled(Some(&rule), &mode, &decorations));
+
+            assert_eq!(
+                effective_border_width(Some(&hidden), &mode, &decorations),
+                0
+            );
+            assert_eq!(
+                effective_corner_radius(Some(&hidden), &mode, &decorations),
+                0
+            );
+            assert!(!effective_shadow_enabled(
+                Some(&hidden),
+                &mode,
+                &decorations
+            ));
+        }
+    }
 
     #[test]
     fn runs_during_fullscreen_allowlist() {
