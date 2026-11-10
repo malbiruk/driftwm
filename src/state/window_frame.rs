@@ -34,6 +34,78 @@ impl DriftWm {
             .map_or(0, |_| self.config.decorations.title_bar_height)
     }
 
+    /// Hide or show `window`'s driftwm title bar by flipping its decoration
+    /// between `server` and `minimal`: the bar goes, the border, corners and
+    /// shadow stay. Both are `ServerSide` on the wire, so the client is not told.
+    /// The content keeps its place; the bar is drawn above it.
+    ///
+    /// Left alone: a window that negotiated client-side decoration or draws no
+    /// chrome (`client` / `none`), so an app with its own header bar never gets a
+    /// second one. The override is written into the window's stored rule, so it is
+    /// not saved with the session and is gone when the window closes.
+    ///
+    /// The frame changes by the bar height, so the cached snap rect is refreshed;
+    /// neighbours in a snap cluster are not re-snapped.
+    pub fn toggle_window_titlebar(&mut self, window: &Window) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
+        if window
+            .toplevel()
+            .is_some_and(|t| t.with_pending_state(|s| s.decoration_mode) == Some(Mode::ClientSide))
+        {
+            return;
+        }
+        let key = crate::decorations::DecorationKey::Surface(surface.id());
+        let applied = driftwm::config::applied_rule(&surface);
+        let mode = driftwm::config::effective_decoration_mode(
+            applied.as_ref().and_then(|r| r.decoration.as_ref()),
+            &self.config.decorations.default_mode,
+        );
+        let has_bar = self.decorations.contains_key(&key);
+
+        let new_mode = match (has_bar, mode) {
+            (true, _) => driftwm::config::DecorationMode::Minimal,
+            (false, driftwm::config::DecorationMode::Minimal) => {
+                driftwm::config::DecorationMode::Server
+            }
+            _ => return,
+        };
+
+        smithay::wayland::compositor::with_states(&surface, |states| {
+            states.data_map.insert_if_missing_threadsafe(|| {
+                std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
+            });
+            states
+                .data_map
+                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                .unwrap()
+                .lock()
+                .unwrap()
+                .decoration = Some(new_mode);
+        });
+
+        if has_bar {
+            self.decorations.remove(&key);
+            // With the bar gone the corners are clipped by the compositor, so the
+            // surface's opaque region has to give them up too.
+            self.trim_opaque_corners(&surface);
+        } else if window.geometry().size.w > 0 {
+            self.decorations.insert(
+                key,
+                crate::decorations::WindowDecoration::new(
+                    window.geometry().size.w,
+                    true,
+                    &self.config.decorations,
+                ),
+            );
+        }
+        self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
+        self.mark_all_dirty();
+    }
+
     /// Border width for an element with no surface to resolve a per-rule
     /// override against — a suspended window. Uses the global default mode's
     /// width, matching what a relaunched client would get before its rule

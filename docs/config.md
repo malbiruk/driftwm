@@ -779,7 +779,7 @@ Actions:
 - `fit-window-snapped` — fit-window, moving its snap cluster along
 - `fill-window` — grow the focused window into the free space around it; again to restore
 - `toggle-pin-to-screen` — pin the focused window to the screen, ignoring pan and zoom
-- `toggle-titlebar` — hide or show the focused window's driftwm title bar (server ↔ minimal: the border, corners and shadow stay). Windows that draw their own chrome are left alone
+- `toggle-titlebar` — hide or show the focused window's driftwm title bar (server ↔ minimal: the border, corners and shadow stay). Windows that draw their own chrome, and fit, fill or fullscreen windows, are left alone
 - `reload-config` — hot-reload the config file
 - `toggle-cursor-pan` — toggle bare-cursor edge-pan (see [navigation.edge_pan])
 - `set-trackpad on|off|toggle` — turn every trackpad on or off for this session

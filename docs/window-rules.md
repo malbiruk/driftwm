@@ -473,6 +473,11 @@ pinned, output, … — are resolved **once, when a window maps**: reloading you
 config only affects windows opened afterwards, and a window that changes its
 title after mapping is **not** re-checked against `title` rules.
 
+Two things change a window's stored rule *after* it maps, and a config reload
+does not undo them: `msg opacity <value>` pins the opacity, and `toggle-titlebar`
+flips `decoration` between `server` and `minimal`. Both are runtime-only, so they
+are not saved with the session and end when the window closes.
+
 A few things re-resolve live against the current config instead: `pass_keys` is
 evaluated per keypress and `pass_mouse` per button press and scroll (so a config
 reload — and a title change — takes effect immediately), layer-surface chrome is

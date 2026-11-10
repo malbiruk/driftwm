@@ -788,70 +788,20 @@ impl DriftWm {
         }
     }
 
-    /// Hide or show the focused window's driftwm title bar. Flips the window's
-    /// decoration between `server` and `minimal`, so border, corners and shadow
-    /// stay; both map to server-side on the wire, so the client is not told.
-    /// Windows that draw their own chrome (`client`) or none are left alone.
+    /// Hide or show the focused window's driftwm title bar; see
+    /// [`DriftWm::toggle_window_titlebar`]. Fit, fill and widget windows are
+    /// left alone: their geometry was computed against the current bar (or is
+    /// rule-defined), and nothing here would redo it.
     fn toggle_titlebar(&mut self) {
-        use smithay::reexports::wayland_server::Resource;
-
-        let Some(window) = self
-            .focused_window()
-            .filter(|w| !self.is_window_fullscreen(w))
-        else {
+        let Some(window) = self.focused_window().filter(|w| {
+            !self.is_window_fullscreen(w)
+                && !self.stage.is_fit(w)
+                && !self.stage.is_fill(w)
+                && !w.is_widget()
+        }) else {
             return;
         };
-        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
-            return;
-        };
-        let key = crate::decorations::DecorationKey::Surface(surface.id());
-        let applied = driftwm::config::applied_rule(&surface);
-        let mode = driftwm::config::effective_decoration_mode(
-            applied.as_ref().and_then(|r| r.decoration.as_ref()),
-            &self.config.decorations.default_mode,
-        )
-        .clone();
-        let has_bar = self.decorations.contains_key(&key);
-
-        let new_mode = match (has_bar, &mode) {
-            (true, _) => driftwm::config::DecorationMode::Minimal,
-            (false, driftwm::config::DecorationMode::Minimal) => {
-                driftwm::config::DecorationMode::Server
-            }
-            _ => return,
-        };
-
-        smithay::wayland::compositor::with_states(&surface, |states| {
-            states.data_map.insert_if_missing_threadsafe(|| {
-                std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
-            });
-            states
-                .data_map
-                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .decoration = Some(new_mode.clone());
-        });
-
-        if has_bar {
-            self.decorations.remove(&key);
-            self.pending_ssd.remove(&surface.id());
-        } else {
-            self.pending_ssd.insert(surface.id());
-            self.decorations.insert(
-                key.clone(),
-                crate::decorations::WindowDecoration::new(
-                    window.geometry().size.w,
-                    true,
-                    &self.config.decorations,
-                ),
-            );
-        }
-        // Cached chrome is sized to the old frame (bar included).
-        self.render.shadow_cache.remove(&key);
-        self.render.border_cache.remove(&key);
-        self.mark_all_dirty();
+        self.toggle_window_titlebar(&window);
     }
 
     /// Override `[input.trackpad]`'s send-events mode for the rest of the
