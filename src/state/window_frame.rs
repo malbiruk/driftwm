@@ -17,6 +17,23 @@ use driftwm::window_ext::WindowExt;
 
 use super::{DriftWm, StageWindow};
 
+/// Mutate the window's stored rule in place, creating it if the window has none.
+fn update_applied_rule(
+    surface: &WlSurface,
+    f: impl FnOnce(&mut driftwm::config::AppliedWindowRule),
+) {
+    smithay::wayland::compositor::with_states(surface, |states| {
+        states.data_map.insert_if_missing_threadsafe(|| {
+            std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
+        });
+        let rule = states
+            .data_map
+            .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+            .unwrap();
+        f(&mut rule.lock().unwrap());
+    });
+}
+
 impl DriftWm {
     pub fn window_ssd_bar<W: WaylandFocus + WindowExt>(&self, window: &W) -> i32 {
         // Every stand-in draws the same textless bar (a CSD-origin one shrinks
@@ -40,10 +57,9 @@ impl DriftWm {
     /// The content keeps its place; the bar is drawn above it.
     ///
     /// Left alone: a window that negotiated client-side decoration or draws no
-    /// chrome (`client` / `none`), so an app with its own header bar never gets a
-    /// second one. The override is written into the window's stored rule, so it is
+    /// chrome (`client` / `none`), so an app that negotiated its own header bar
+    /// never gets a second one. The override is written into the window's stored rule, so it is
     /// not saved with the session and is gone when the window closes.
-    ///
     pub fn toggle_window_titlebar(&mut self, window: &Window) {
         use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
 
@@ -72,29 +88,20 @@ impl DriftWm {
             _ => return,
         };
 
-        smithay::wayland::compositor::with_states(&surface, |states| {
-            states.data_map.insert_if_missing_threadsafe(|| {
-                std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
-            });
-            states
-                .data_map
-                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .decoration = Some(new_mode);
-        });
+        // A bar needs a sized window; bail before the rule write so the rule
+        // and the decorations map cannot disagree.
+        let width = window.geometry().size.w;
+        if !has_bar && width <= 0 {
+            return;
+        }
+        update_applied_rule(&surface, |r| r.decoration = Some(new_mode));
 
         if has_bar {
             self.decorations.remove(&key);
-        } else if window.geometry().size.w > 0 {
+        } else {
             self.decorations.insert(
                 key,
-                crate::decorations::WindowDecoration::new(
-                    window.geometry().size.w,
-                    true,
-                    &self.config.decorations,
-                ),
+                crate::decorations::WindowDecoration::new(width, true, &self.config.decorations),
             );
         }
         self.chrome_changed(window, &surface);
@@ -122,18 +129,7 @@ impl DriftWm {
         }
         let hidden = applied.is_some_and(|r| r.borders_hidden);
 
-        smithay::wayland::compositor::with_states(&surface, |states| {
-            states.data_map.insert_if_missing_threadsafe(|| {
-                std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
-            });
-            states
-                .data_map
-                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                .unwrap()
-                .lock()
-                .unwrap()
-                .borders_hidden = !hidden;
-        });
+        update_applied_rule(&surface, |r| r.borders_hidden = !hidden);
         self.chrome_changed(window, &surface);
     }
 
@@ -143,6 +139,9 @@ impl DriftWm {
     /// by the compositor, so the opaque-region carve follows the new radius.
     fn chrome_changed(&mut self, window: &Window, surface: &WlSurface) {
         let key = crate::decorations::DecorationKey::Surface(surface.id());
+        // Drop the cached border/shadow elements; they are rebuilt on demand.
+        self.render.border_cache.remove(&key);
+        self.render.shadow_cache.remove(&key);
         if !self.decorations.contains_key(&key) {
             self.trim_opaque_corners(surface);
         }

@@ -801,7 +801,11 @@ impl DriftWm {
     /// would redo it.
     fn chrome_toggle_target(&self) -> Option<smithay::desktop::Window> {
         self.focused_window().filter(|w| {
-            !self.is_window_fullscreen(w)
+            let pending = w.wl_surface().is_some_and(|s| {
+                self.pending_fit.contains(&*s) || self.pending_fullscreen.contains_key(&*s)
+            });
+            !pending
+                && !self.is_window_fullscreen(w)
                 && !self.stage.is_fit(w)
                 && !self.stage.is_fill(w)
                 && !w.is_widget()
