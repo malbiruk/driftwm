@@ -215,6 +215,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
             Ok(Action::SwitchLayout(target))
         }
         "toggle-pin-to-screen" => Ok(Action::TogglePinToScreen),
+        "toggle-titlebar" => Ok(Action::ToggleTitlebar),
         "reload-config" => Ok(Action::ReloadConfig),
         "toggle-cursor-pan" => Ok(Action::ToggleCursorPan),
         "set-trackpad" => {
@@ -273,6 +274,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("toggle-cursor-pan", "toggle-cursor-pan"),
     ("toggle-fullscreen", "toggle-fullscreen"),
     ("toggle-pin-to-screen", "toggle-pin-to-screen"),
+    ("toggle-titlebar", "toggle-titlebar"),
     ("zoom-in", "zoom-in"),
     ("zoom-out", "zoom-out"),
     ("zoom-reset", "zoom-reset"),
@@ -661,6 +663,7 @@ mod tests {
             Action::SendCursorToOutput(_) => "send-cursor-to-output",
             Action::FocusCenter => "focus-center",
             Action::TogglePinToScreen => "toggle-pin-to-screen",
+            Action::ToggleTitlebar => "toggle-titlebar",
             Action::SwitchLayout(_) => "switch-layout",
             Action::ReloadConfig => "reload-config",
             Action::ToggleCursorPan => "toggle-cursor-pan",
