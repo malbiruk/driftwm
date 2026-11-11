@@ -6,8 +6,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use smithay::backend::input::ButtonState;
-use smithay::input::pointer::ButtonEvent;
+use smithay::backend::input::{Axis, AxisSource, ButtonState};
+use smithay::input::pointer::{AxisFrame, ButtonEvent};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::wayland_server::Resource;
@@ -271,6 +271,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
         Request::Pointer { x, y, button } => cmd_pointer(x, y, button, state),
+        Request::Axis { dx, dy } => cmd_axis(dx, dy, state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -447,6 +448,25 @@ fn cmd_pointer(x: f64, y: f64, button: Option<String>, state: &mut DriftWm) -> R
         y: origin.y as f64 + screen.y,
         output: output.name(),
     })
+}
+
+fn cmd_axis(dx: f64, dy: f64, state: &mut DriftWm) -> Reply {
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0);
+    let vertical = (dy * 120.0) as i32;
+    let horizontal = (dx * 120.0) as i32;
+    let frame = AxisFrame::new(time)
+        .source(AxisSource::Wheel)
+        .v120(Axis::Vertical, vertical)
+        .v120(Axis::Horizontal, horizontal)
+        .value(Axis::Vertical, dy * 15.0)
+        .value(Axis::Horizontal, dx * 15.0);
+    pointer.axis(state, frame);
+    pointer.frame(state);
+    Ok(Response::Axis { dx, dy })
 }
 
 fn cmd_layout(short: bool, state: &mut DriftWm) -> Reply {

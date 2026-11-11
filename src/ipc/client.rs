@@ -211,6 +211,14 @@ pub enum Msg {
         #[arg(long, value_name = "left|right|middle")]
         button: Option<String>,
     },
+    /// Scroll the focused surface by <dx> <dy> wheel notches (positive =
+    /// right/down).
+    Axis {
+        #[arg(allow_hyphen_values = true)]
+        dx: f64,
+        #[arg(allow_hyphen_values = true)]
+        dy: f64,
+    },
     /// Run a config action, e.g. `action close-window`, `action switch-layout next`.
     ///
     /// Takes the same string you would write in a config keybinding, parsed with
@@ -418,6 +426,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
             y: *y,
             button: button.clone(),
         },
+        Msg::Axis { dx, dy } => Request::Axis { dx: *dx, dy: *dy },
         Msg::State => Request::State,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
@@ -637,6 +646,7 @@ fn print_response(response: Response) {
         Response::Layout(layout) => println!("{layout}"),
         Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
         Response::Pointer { x, y, output } => println!("{x} {y} {output}"),
+        Response::Axis { dx, dy } => println!("{dx} {dy}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }

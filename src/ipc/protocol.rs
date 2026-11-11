@@ -44,6 +44,12 @@ pub enum Request {
         #[serde(default)]
         button: Option<String>,
     },
+    /// Scroll the focused surface: `dx` is horizontal, `dy` vertical, in wheel
+    /// notches (positive = right/down).
+    Axis {
+        dx: f64,
+        dy: f64,
+    },
     State,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
@@ -171,6 +177,10 @@ pub enum Response {
         x: f64,
         y: f64,
         output: String,
+    },
+    Axis {
+        dx: f64,
+        dy: f64,
     },
     /// Boxed so the whole-state snapshot doesn't bloat every other (tiny)
     /// reply variant. Serde-transparent, so the wire shape is unchanged.

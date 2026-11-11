@@ -130,6 +130,16 @@ reaches off-screen content; its four targets, flags, and caveats are in the
 [CLI reference](cli.md#driftwm-msg-screenshot) and their wire forms in
 [Requests](#requests).
 
+### Scrolling
+
+`axis <dx> <dy>` scrolls the focused surface by wheel notches (positive = right/down).
+It is what a remote viewer forwards from mouse-wheel events; the reply echoes the deltas.
+
+```bash
+driftwm msg axis 0 -1     # one notch up
+driftwm msg axis 0 3      # three notches down
+```
+
 ### Pointer injection
 
 `pointer <x> <y> [--button left|right|middle]` moves the seat pointer to a point in the

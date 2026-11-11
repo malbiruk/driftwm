@@ -37,6 +37,11 @@ function toFrame(ev) {
 cv.addEventListener('mousemove', (ev) => { if (meta.viewOnly) return; const p = toFrame(ev); ws.send(JSON.stringify({ t: 'pointer', x: p.x, y: p.y })); });
 cv.addEventListener('mousedown', (ev) => { if (meta.viewOnly) return; ev.preventDefault(); const p = toFrame(ev); ws.send(JSON.stringify({ t: 'pointer', x: p.x, y: p.y })); ws.send(JSON.stringify({ t: 'click', button: ev.button === 2 ? 'right' : ev.button === 1 ? 'middle' : 'left' })); });
 cv.addEventListener('contextmenu', e => e.preventDefault());
+cv.addEventListener('wheel', (ev) => {
+  if (meta.viewOnly) return;
+  ev.preventDefault();
+  ws.send(JSON.stringify({ t: 'axis', dx: ev.deltaX / 100, dy: ev.deltaY / 100 }));
+}, { passive: false });
 addEventListener('keydown', (ev) => {
   if (meta.viewOnly) return;
   if (ev.key.length === 1) { ws.send(JSON.stringify({ t: 'text', text: ev.key })); }

@@ -15,6 +15,8 @@ const HOST = arg("host", "127.0.0.1");
 const SCALE = Number(arg("scale", "1"));
 const TOKEN = arg("token", "");
 const VIEW_ONLY = has("view-only");
+const JPEG = has("jpeg");
+const FPS = Number(arg("fps", "6"));
 const DRIFTWM = process.env.DRIFTWM_BIN ?? `${process.env.HOME}/Playground/driftwm/target/release/driftwm`;
 
 // ydotoold is a user daemon; its socket lives in the user runtime dir, which is
@@ -53,8 +55,14 @@ function capture() {
   if (clients.size === 0) return;
   const r = run(DRIFTWM, ["msg", "screenshot", "-o", "-", "--scale", String(SCALE)]);
   if (r.status !== 0 || !r.stdout.length) return;
+  let frame: Buffer = r.stdout;
+  if (JPEG) {
+    const j = spawnSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "image2pipe", "-i", "-", "-frames:v", "1", "-f", "mjpeg", "-q:v", "5", "pipe:1"], { input: r.stdout, maxBuffer: 32 * 1024 * 1024 });
+    if (j.status !== 0 || !j.stdout?.length) return;
+    frame = j.stdout;
+  }
   lastFrameAt = Date.now();
-  for (const c of clients) { try { c.sendBinary(r.stdout); } catch {} }
+  for (const c of clients) { try { c.sendBinary(frame); } catch {} }
 }
 
 function stateMessage() {
@@ -118,6 +126,7 @@ Bun.serve({
         case "click": click(String(m.button ?? "left")); break;
         case "text": typeText(String(m.text ?? "").slice(0, 512)); break;
         case "key": keyPress(String(m.key ?? "")); break;
+        case "axis": run(DRIFTWM, ["msg", "axis", String(Number(m.dx) || 0), String(Number(m.dy) || 0)]); break;
         case "state": ws.send(stateMessage()); break;
       }
     },
@@ -126,6 +135,6 @@ Bun.serve({
 
 refreshState();
 setInterval(refreshState, 1500);
-setInterval(capture, 160);
+setInterval(capture, Math.max(50, Math.round(1000 / Math.max(1, FPS))));
 setInterval(() => { const s = stateMessage(); for (const c of clients) { try { c.send(s); } catch {} } }, 1500);
-console.log(JSON.stringify({ ok: true, listening: `http://${HOST}:${PORT}/`, scale: SCALE, token: !!TOKEN, viewOnly: VIEW_ONLY }));
+console.log(JSON.stringify({ ok: true, listening: `http://${HOST}:${PORT}/`, scale: SCALE, jpeg: JPEG, fps: FPS, token: !!TOKEN, viewOnly: VIEW_ONLY }));
