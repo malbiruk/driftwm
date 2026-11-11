@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use smithay::backend::input::ButtonState;
+use smithay::input::pointer::ButtonEvent;
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::wayland_server::Resource;
@@ -268,6 +270,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Zoom(arg) => cmd_zoom(arg, state),
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
+        Request::Pointer { x, y, button } => cmd_pointer(x, y, button, state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -392,6 +395,54 @@ fn cmd_cursor(state: &mut DriftWm) -> Reply {
         driftwm::canvas::canvas_to_screen(driftwm::canvas::CanvasPos(location), camera, zoom).0
     };
     Ok(Response::Cursor {
+        x: origin.x as f64 + screen.x,
+        y: origin.y as f64 + screen.y,
+        output: output.name(),
+    })
+}
+
+fn cmd_pointer(x: f64, y: f64, button: Option<String>, state: &mut DriftWm) -> Reply {
+    let output = state.active_output().ok_or("no output")?;
+    let (camera, zoom, origin) = {
+        let os = crate::state::output_state(&output);
+        (os.camera, os.zoom, os.layout_position)
+    };
+    let screen = Point::<f64, Logical>::from((x - origin.x as f64, y - origin.y as f64));
+    let canvas =
+        driftwm::canvas::screen_to_canvas(driftwm::canvas::ScreenPos(screen), camera, zoom).0;
+    let serial = SERIAL_COUNTER.next_serial();
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0);
+    state.dispatch_absolute_motion(&output, screen, canvas, serial, time);
+    if let Some(name) = button {
+        let code = match name.as_str() {
+            "left" => 0x110,
+            "right" => 0x111,
+            "middle" => 0x112,
+            _ => return Err(format!("unknown button {name}")),
+        };
+        let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+        for button_state in [ButtonState::Pressed, ButtonState::Released] {
+            let serial = SERIAL_COUNTER.next_serial();
+            pointer.button(
+                state,
+                &ButtonEvent {
+                    button: code,
+                    state: button_state,
+                    serial,
+                    time,
+                },
+            );
+        }
+        pointer.frame(state);
+    }
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    let location = pointer.current_location();
+    let screen =
+        driftwm::canvas::canvas_to_screen(driftwm::canvas::CanvasPos(location), camera, zoom).0;
+    Ok(Response::Pointer {
         x: origin.x as f64 + screen.x,
         y: origin.y as f64 + screen.y,
         output: output.name(),

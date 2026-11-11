@@ -1,0 +1,48 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>driftwm web</title>
+<style>
+  html,body{margin:0;height:100%;background:#0b0d12;color:#cfd6e4;font:13px ui-monospace,monospace;overflow:hidden}
+  #bar{position:fixed;top:0;left:0;right:0;height:28px;display:flex;gap:12px;align-items:center;padding:0 10px;background:#151a24;font-size:12px;z-index:2}
+  #bar b{color:#8fd3ff;font-weight:600}
+  #cv{position:absolute;top:28px;left:0;width:100vw;height:calc(100vh - 28px);object-fit:contain;cursor:crosshair}
+  #msg{position:fixed;right:10px;bottom:10px;background:#151a24aa;padding:6px 8px;border-radius:6px}
+</style></head>
+<body>
+<div id="bar"><b>driftwm</b><span id="stat">connecting…</span><span id="fps"></span><span style="opacity:.6">click to grab keyboard</span></div>
+<canvas id="cv"></canvas><div id="msg"></div>
+<script>
+const cv = document.getElementById('cv'), ctx = cv.getContext('2d');
+const stat = document.getElementById('stat'), fps = document.getElementById('fps'), msg = document.getElementById('msg');
+const token = new URLSearchParams(location.search).get('token') || '';
+const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/ws' + (token ? '?token=' + encodeURIComponent(token) : ''));
+ws.binaryType = 'arraybuffer';
+let meta = { scale: 1, viewOnly: false, output: { width: 1600, height: 900 } }, frames = 0, lastT = 0, imgW = 0, imgH = 0;
+const img = new Image();
+img.onload = () => { imgW = img.naturalWidth; imgH = img.naturalHeight; ctx.drawImage(img, 0, 0, cv.width, cv.height); frames++; };
+ws.onmessage = (e) => {
+  if (typeof e.data === 'string') { try { const m = JSON.parse(e.data); if (m.t === 'state') { meta = m; stat.textContent = `cam ${m.camera.x.toFixed(0)},${m.camera.y.toFixed(0)} zoom ${m.zoom} out ${m.output.width}x${m.output.height}`; } } catch {} return; }
+  const blob = new Blob([e.data], { type: 'image/png' });
+  img.src = URL.createObjectURL(blob);
+};
+setInterval(() => { const now = performance.now(); fps.textContent = `${frames} fps`; frames = 0; }, 1000);
+function fit() { cv.width = Math.round(innerWidth * devicePixelRatio); cv.height = Math.round((innerHeight - 28) * devicePixelRatio); }
+addEventListener('resize', fit); fit();
+function toFrame(ev) {
+  const r = cv.getBoundingClientRect();
+  const x = (ev.clientX - r.left) / r.width, y = (ev.clientY - r.top) / r.height;
+  const s = Math.max(r.width / imgW, r.height / imgH), dw = imgW * s, dh = imgH * s;
+  const ox = (r.width - dw) / 2, oy = (r.height - dh) / 2;
+  return { x: ((ev.clientX - r.left) - ox) / s, y: ((ev.clientY - r.top) - oy) / s };
+}
+cv.addEventListener('mousemove', (ev) => { if (meta.viewOnly) return; const p = toFrame(ev); ws.send(JSON.stringify({ t: 'pointer', x: p.x, y: p.y })); });
+cv.addEventListener('mousedown', (ev) => { if (meta.viewOnly) return; ev.preventDefault(); const p = toFrame(ev); ws.send(JSON.stringify({ t: 'pointer', x: p.x, y: p.y })); ws.send(JSON.stringify({ t: 'click', button: ev.button === 2 ? 'right' : ev.button === 1 ? 'middle' : 'left' })); });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+addEventListener('keydown', (ev) => {
+  if (meta.viewOnly) return;
+  if (ev.key.length === 1) { ws.send(JSON.stringify({ t: 'text', text: ev.key })); }
+  else { const map = { Enter: 'Return', Backspace: 'BackSpace', Tab: 'Tab', Escape: 'Escape', ArrowLeft: 'Left', ArrowRight: 'Right', ArrowUp: 'Up', ArrowDown: 'Down' }; if (map[ev.key]) ws.send(JSON.stringify({ t: 'key', key: map[ev.key] })); }
+  ev.preventDefault();
+});
+ws.onopen = () => msg.textContent = 'connected';
+ws.onclose = () => msg.textContent = 'disconnected';
+</script></body></html>

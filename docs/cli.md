@@ -65,6 +65,7 @@ driftwm msg --json focus --id 5
 | [`bookmark`](#driftwm-msg-bookmark) | List bookmarks, get or set one by `<name>`, or delete with `--delete` |
 | [`layout`](#driftwm-msg-layout) | Print the active keyboard layout (full XKB name, e.g. `English (US)`) |
 | [`cursor`](#driftwm-msg-cursor) | Print the pointer position in the global output layout (logical pixels, Y-down, the space slurp prints) and the output it is on |
+| [`pointer`](#driftwm-msg-pointer) | Move the seat pointer to <x> <y> in the output layout (logical pixels, Y-down, the space `cursor` reports); with --button, click there |
 | [`action`](#driftwm-msg-action) | Run a config action, e.g. `action close-window`, `action switch-layout next` |
 | [`screenshot`](#driftwm-msg-screenshot) | Capture a canvas PNG. With no subcommand, captures the active output's current view of the canvas |
 | [`debug-counters`](#driftwm-msg-debug-counters) | Print internal collection sizes for leak diagnosis (unstable keys) |
@@ -335,6 +336,21 @@ Print the pointer position in the global output layout (logical pixels, Y-down, 
 
 ```bash
 driftwm msg --json cursor
+```
+
+#### `driftwm msg pointer`
+
+```
+driftwm msg pointer [OPTIONS] <X> <Y>
+```
+
+Move the seat pointer to <x> <y> in the output layout (logical pixels, Y-down, the space `cursor` reports); with --button, click there
+
+- `--button <left|right|middle>`
+
+```bash
+driftwm msg pointer 640 400
+driftwm msg pointer 640 400 --button left
 ```
 
 #### `driftwm msg action`

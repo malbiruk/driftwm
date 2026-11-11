@@ -1,0 +1,8 @@
+{
+  "name": "driftwm-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": { "driftwm-agent": "./src/cli.ts" },
+  "scripts": { "start": "bun run src/cli.ts" }
+}

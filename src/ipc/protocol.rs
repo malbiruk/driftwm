@@ -35,6 +35,15 @@ pub enum Request {
     /// The pointer in the global output layout (screen space, not canvas), plus
     /// the output it is on.
     Cursor,
+    /// Move the seat pointer to a point in the global output layout (logical
+    /// pixels, Y-down — the space `cursor` reports), optionally clicking a
+    /// button there: `left`, `right` or `middle`.
+    Pointer {
+        x: f64,
+        y: f64,
+        #[serde(default)]
+        button: Option<String>,
+    },
     State,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
@@ -154,6 +163,11 @@ pub enum Response {
     Zoom(f64),
     Layout(String),
     Cursor {
+        x: f64,
+        y: f64,
+        output: String,
+    },
+    Pointer {
         x: f64,
         y: f64,
         output: String,
