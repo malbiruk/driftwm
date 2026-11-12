@@ -219,6 +219,7 @@ impl DriftWm {
         }
 
         self.config = new_config;
+        self.release_unreachable_scratchpads();
 
         let kde_mode = driftwm::window_ext::decoration_mode_to_kde_manager(
             &self.config.decorations.default_mode,

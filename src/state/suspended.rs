@@ -470,13 +470,14 @@ impl DriftWm {
         self.deferred_adoptions
             .iter()
             .any(|d| d.root == *surface && d.origin == AdoptOrigin::FirstCommit)
+            || self.scratchpad_hidden.contains(surface)
     }
 
     /// [`Self::root_hidden_by_deferred_adopt`] for callers holding an element
     /// rather than a surface. Guarded on the (near-always empty) stash first, so
     /// the surface lookup never runs on the per-motion hit-test walks.
     pub(crate) fn hidden_by_deferred_adopt<Q: WaylandFocus>(&self, element: &Q) -> bool {
-        !self.deferred_adoptions.is_empty()
+        (!self.deferred_adoptions.is_empty() || !self.scratchpad_hidden.is_empty())
             && element
                 .wl_surface()
                 .is_some_and(|s| self.root_hidden_by_deferred_adopt(&s))

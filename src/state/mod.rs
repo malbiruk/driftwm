@@ -34,6 +34,7 @@ mod redraw;
 mod reload;
 mod render_cache;
 mod resize;
+mod scratchpad;
 pub(crate) mod session_lock;
 mod session_store;
 mod stage_window;
@@ -925,6 +926,14 @@ pub struct DriftWm {
     /// ([`DriftWm::reveal_deferred_adopt`] hands all of that back), so an entry
     /// that outlives its purpose is an invisible window.
     pub(crate) deferred_adoptions: Vec<DeferredAdopt>,
+    /// Root surfaces of windows stowed by `toggle-scratchpad`. A stowed window
+    /// stays mapped and keeps its pin site, but is off the screen and out of
+    /// every canvas relation, like a first-commit deferred adopt; see
+    /// [`DriftWm::root_hidden`].
+    pub(crate) scratchpad_hidden: Vec<WlSurface>,
+    /// When `toggle-scratchpad` last spawned each `app_id`, so a press while the
+    /// app is still starting up does not spawn it twice.
+    pub(crate) scratchpad_spawns: HashMap<String, std::time::Instant>,
     /// Durable session store (session restore): the `session.json` path, dirty
     /// timer, carried-forward entries, and fresh-boot camera seed.
     pub session_store: SessionStore,
@@ -1434,6 +1443,7 @@ impl DriftWm {
             ("pending_relaunches", self.pending_relaunches.len()),
             ("pending_adoptions", self.pending_adoptions.len()),
             ("deferred_adoptions", self.deferred_adoptions.len()),
+            ("scratchpad_hidden", self.scratchpad_hidden.len()),
             (
                 "idle_inhibiting_surfaces",
                 self.idle_inhibiting_surfaces.len(),

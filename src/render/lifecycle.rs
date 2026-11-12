@@ -265,7 +265,9 @@ pub fn post_render(state: &mut crate::state::DriftWm, output: &Output) {
         let geom_loc = window.geometry().loc;
         let mut bbox = window.bbox_with_popups();
         bbox.loc += loc - geom_loc;
-        let on_screen = visible_rect.overlaps(bbox);
+        // A stowed scratchpad window is not drawn but keeps its client alive, so
+        // it gets the off-screen heartbeat and a terminal can keep rendering.
+        let on_screen = visible_rect.overlaps(bbox) && !state.hidden_by_deferred_adopt(window);
 
         window.send_frame(
             output,

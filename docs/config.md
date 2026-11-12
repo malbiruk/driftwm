@@ -779,6 +779,7 @@ Actions:
 - `fit-window-snapped` — fit-window, moving its snap cluster along
 - `fill-window` — grow the focused window into the free space around it; again to restore
 - `toggle-pin-to-screen` — pin the focused window to the screen, ignoring pan and zoom
+- `toggle-scratchpad <app_id> <cmd>` — hide or show the window with that app_id, spawning <cmd> if none exists; such apps are not session-restored (a `restore_windows = true` rule overrides)
 - `reload-config` — hot-reload the config file
 - `toggle-cursor-pan` — toggle bare-cursor edge-pan (see [navigation.edge_pan])
 - `set-trackpad on|off|toggle` — turn every trackpad on or off for this session
@@ -878,6 +879,12 @@ Directions: up, down, left, right, up-left, up-right, down-left, down-right
 ```toml
 "mod+f10" = "set-trackpad toggle"   # flip the trackpad between on and off
 "mod+shift+f10" = "set-trackpad off"   # turn it off whatever the current state
+```
+
+**Example: dropdown terminal; pair with a pinned_to_screen window rule for its place**
+
+```toml
+"mod+grave" = "toggle-scratchpad dropdown kitty --class dropdown"
 ```
 
 **Example: grow and shrink the right edge by resize_step screen px (unbound by default)**

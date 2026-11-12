@@ -230,6 +230,28 @@ Bookmarks are exported as workspaces over `ext-workspace-v1` — bars that suppo
 it can list them and click to jump. It's an export for tooling, not real
 workspaces; driftwm is still one canvas.
 
+### Scratchpad
+
+`toggle-scratchpad <app_id> <command>` is a one-key dropdown: it spawns the app
+if it isn't running, instantly stows its window when showing, and brings it
+back at the exact place and size you left it. Paired with a `pinned_to_screen`
+window rule, it makes a Yakuake-style dropdown terminal (or a mail client, a
+music player) with no animation and no external script. The app keeps running
+while stowed.
+
+```toml
+[keybindings]
+"mod+w" = "toggle-scratchpad dropdown-term kitty --class dropdown-term"
+
+[[window_rules]]
+app_id           = "dropdown-term"
+pinned_to_screen = true
+position         = [0, 185]
+size             = [1200, 450]
+```
+
+See [docs/scratchpad.md](docs/scratchpad.md).
+
 ### Window suspend & session restore
 
 https://github.com/user-attachments/assets/a91d92bd-55af-4646-8be8-81f35f8f38ca

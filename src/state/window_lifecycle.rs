@@ -143,6 +143,7 @@ impl DriftWm {
             let entry = self.deferred_adoptions.remove(idx);
             self.reveal_deferred_adopt(&entry.root, entry.origin, RevealCause::Abandoned);
         }
+        self.scratchpad_hidden.retain(|s| s != surface);
         self.auto_anchor_snapshot.remove(surface);
         // Drop snapshots pointing at the destroyed surface as their anchor.
         // Keep `None`-anchor entries (user had no focus) and stand-in anchors
