@@ -9,7 +9,7 @@ JSON, so any language can speak it directly.
 
 Run `driftwm msg <command>` from inside a driftwm session. The commands —
 `camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `pin`, `close`,
-`suspend`, `relaunch`, `layout`, `cursor`, `action`, `bookmark`, `screenshot`,
+`suspend`, `relaunch`, `layout`, `cursor`, `pointer`, `action`, `bookmark`, `screenshot`,
 `state`, `subscribe`, and `debug-counters` — with their arguments, flags, and
 JSON reply shapes are documented in the generated [CLI reference](cli.md);
 `driftwm msg <command> --help` prints the same for one command. The conventions
@@ -129,6 +129,36 @@ over the stand-in's slot), a snapshot lists both entries — count windows by
 reaches off-screen content; its four targets, flags, and caveats are in the
 [CLI reference](cli.md#driftwm-msg-screenshot) and their wire forms in
 [Requests](#requests).
+
+### Scrolling
+
+`axis <dx> <dy>` scrolls the focused surface by a distance in output-layout logical
+pixels — the same space `pointer <x> <y>` takes and `cursor` reports (positive =
+right/down). It is what a remote viewer forwards from mouse-wheel events; the reply
+echoes the deltas. A notch is 15 px, and the frame carries both `axis_value120` (for
+clients that scroll discretely) and `axis` (for clients that scroll smoothly), so one
+call serves both kinds of client.
+
+```bash
+driftwm msg axis 0 -15    # one notch up
+driftwm msg axis 0 45     # three notches down
+```
+
+### Pointer injection
+
+`pointer <x> <y> [--button left|right|middle]` moves the seat pointer to a point in the
+global output layout (logical pixels, Y-down — the same space `cursor` reports) and, with
+`--button`, clicks there.
+
+This is the input path for remote viewers and coordinate-based agents: it does not depend
+on uinput, so it also works in nested sessions, where host input devices are not visible
+to driftwm. The reply is the resulting pointer position:
+
+```bash
+driftwm msg pointer 640 400
+driftwm msg --json pointer 640 400 --button left
+# {"Ok":{"Pointer":{"x":640.0,"y":400.0,"output":"winit"}}}
+```
 
 ### Subscribing to changes
 

@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use smithay::backend::input::{Axis, AxisSource, ButtonState};
+use smithay::input::pointer::{AxisFrame, ButtonEvent};
 use smithay::reexports::calloop::generic::Generic;
 use smithay::reexports::calloop::{Interest, LoopHandle, Mode, PostAction};
 use smithay::reexports::wayland_server::Resource;
@@ -268,6 +270,8 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Zoom(arg) => cmd_zoom(arg, state),
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
+        Request::Pointer { x, y, button } => cmd_pointer(x, y, button, state),
+        Request::Axis { dx, dy } => cmd_axis(dx, dy, state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -398,6 +402,83 @@ fn cmd_cursor(state: &mut DriftWm) -> Reply {
     })
 }
 
+fn cmd_pointer(x: f64, y: f64, button: Option<String>, state: &mut DriftWm) -> Reply {
+    let output = state.active_output().ok_or("no output")?;
+    let (camera, zoom, origin) = {
+        let os = crate::state::output_state(&output);
+        (os.camera, os.zoom, os.layout_position)
+    };
+    let screen = Point::<f64, Logical>::from((x - origin.x as f64, y - origin.y as f64));
+    let canvas =
+        driftwm::canvas::screen_to_canvas(driftwm::canvas::ScreenPos(screen), camera, zoom).0;
+    let serial = SERIAL_COUNTER.next_serial();
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0);
+    state.dispatch_absolute_motion(&output, screen, canvas, serial, time);
+    if let Some(name) = button {
+        let code = match name.as_str() {
+            "left" => 0x110,
+            "right" => 0x111,
+            "middle" => 0x112,
+            _ => return Err(format!("unknown button {name}")),
+        };
+        let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+        for button_state in [ButtonState::Pressed, ButtonState::Released] {
+            let serial = SERIAL_COUNTER.next_serial();
+            pointer.button(
+                state,
+                &ButtonEvent {
+                    button: code,
+                    state: button_state,
+                    serial,
+                    time,
+                },
+            );
+        }
+        pointer.frame(state);
+    }
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    let location = pointer.current_location();
+    let screen =
+        driftwm::canvas::canvas_to_screen(driftwm::canvas::CanvasPos(location), camera, zoom).0;
+    Ok(Response::Pointer {
+        x: origin.x as f64 + screen.x,
+        y: origin.y as f64 + screen.y,
+        output: output.name(),
+    })
+}
+
+fn cmd_axis(dx: f64, dy: f64, state: &mut DriftWm) -> Reply {
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    let time = std::time::SystemTime::now()
+        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .map(|d| d.subsec_millis())
+        .unwrap_or(0);
+    let vertical = notches(dy);
+    let horizontal = notches(dx);
+    let frame = AxisFrame::new(time)
+        .source(AxisSource::Wheel)
+        .v120(Axis::Vertical, vertical)
+        .v120(Axis::Horizontal, horizontal)
+        .value(Axis::Vertical, dy)
+        .value(Axis::Horizontal, dx);
+    pointer.axis(state, frame);
+    pointer.frame(state);
+    Ok(Response::Axis { dx, dy })
+}
+
+/// Pixels a wheel notch is worth, so a caller that thinks in pixels still gets
+/// discrete wheel scrolling in clients that read `v120` instead of `value`.
+const AXIS_PIXELS_PER_NOTCH: f64 = 15.0;
+
+/// `v120` for a pixel distance: 120 units per notch, so one notch in lands as
+/// one notch out and a fractional pixel distance stays proportional.
+fn notches(pixels: f64) -> i32 {
+    (pixels / AXIS_PIXELS_PER_NOTCH * 120.0) as i32
+}
+
 fn cmd_layout(short: bool, state: &mut DriftWm) -> Reply {
     if !short {
         return Ok(Response::Layout(state.active_layout.clone()));
@@ -452,9 +533,14 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
         .space
         .outputs()
         .map(|output| {
-            let (cam, z, active_bookmark) = {
+            let (cam, z, active_bookmark, layout_origin) = {
                 let os = crate::state::output_state(output);
-                (os.camera, os.zoom, os.active_bookmark.clone())
+                (
+                    os.camera,
+                    os.zoom,
+                    os.active_bookmark.clone(),
+                    [os.layout_position.x, os.layout_position.y],
+                )
             };
             let logical = crate::state::output_logical_size(output);
             OutputInfo {
@@ -464,6 +550,7 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
                 size: [logical.w, logical.h],
                 active: active.as_ref() == Some(output),
                 active_bookmark,
+                layout_origin,
             }
         })
         .collect();
@@ -549,7 +636,7 @@ fn suspended_by_selector(
 }
 
 /// IPC handle + app_id for a suspended window (its stage `ElementId`), for the
-/// `Focused` reply.
+/// `Focused` reply. A stand-in has no client, so `pid` is always `None`.
 fn suspended_focused_info(state: &DriftWm, id: SuspendedId) -> Option<protocol::FocusedWindow> {
     let element = state
         .stage
@@ -558,6 +645,7 @@ fn suspended_focused_info(state: &DriftWm, id: SuspendedId) -> Option<protocol::
     Some(protocol::FocusedWindow {
         id: state.stage.id_of(element)?.0,
         app_id: element.app_id_or_class(),
+        pid: None,
     })
 }
 
@@ -613,6 +701,12 @@ fn focused_window_info(
     state: &DriftWm,
     window: &smithay::desktop::Window,
 ) -> protocol::FocusedWindow {
+    use smithay::reexports::wayland_server::Resource;
+    let pid = window.wl_surface().and_then(|s| s.client()).and_then(|c| {
+        c.get_credentials(&state.display_handle)
+            .ok()
+            .and_then(|cred| u32::try_from(cred.pid).ok())
+    });
     protocol::FocusedWindow {
         id: state
             .stage
@@ -620,6 +714,7 @@ fn focused_window_info(
             .expect("window from the stage has an id")
             .0,
         app_id: window.app_id_or_class(),
+        pid,
     }
 }
 
@@ -1464,5 +1559,13 @@ mod tests {
     fn layout_code_rejects_out_of_range_and_empty() {
         assert_eq!(layout_code("us,ru", 2), None);
         assert_eq!(layout_code("us,", 1), None);
+    }
+
+    #[test]
+    fn a_wheel_notch_is_fifteen_pixels_of_scroll() {
+        assert_eq!(super::notches(15.0), 120);
+        assert_eq!(super::notches(-15.0), -120);
+        assert_eq!(super::notches(45.0), 360);
+        assert_eq!(super::notches(0.0), 0);
     }
 }

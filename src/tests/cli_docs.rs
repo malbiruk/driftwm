@@ -68,6 +68,14 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         "driftwm msg camera",
         &["driftwm msg camera", "driftwm msg camera 500 300"],
     ),
+    (
+        "driftwm msg pointer",
+        &[
+            "driftwm msg pointer 640 400",
+            "driftwm msg pointer 640 400 --button left",
+        ],
+    ),
+    ("driftwm msg axis", &["driftwm msg axis 0 -1"]),
     ("driftwm msg zoom", &["driftwm msg zoom 0.5"]),
     (
         "driftwm msg bookmark",

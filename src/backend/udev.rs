@@ -409,6 +409,7 @@ pub(crate) fn render_if_needed(data: &mut DriftWm) {
 pub fn init_udev(
     event_loop: &mut EventLoop<'static, DriftWm>,
     data: &mut DriftWm,
+    drm_device: Option<&std::path::Path>,
 ) -> Result<UdevDevice, Box<dyn std::error::Error>> {
     // 1. Create libseat session
     let (mut session, session_notifier) = LibSeatSession::new()
@@ -429,10 +430,14 @@ pub fn init_udev(
         tracing::info!("System primary GPU: {}", p.display());
     }
 
-    // Build ordered candidate list: primary GPU first, then all others.
-    // On hybrid graphics (iGPU + dGPU), the "primary" GPU may not have
-    // the display outputs, so we fall back to other devices.
-    let gpu_paths: Vec<PathBuf> = {
+    // Build ordered candidate list: an explicit --drm-device wins and is used
+    // alone (headless vkms must not fall back to the monitor GPU); otherwise
+    // primary GPU first, then all others (on hybrid graphics the "primary" GPU
+    // may not have the display outputs).
+    let gpu_paths: Vec<PathBuf> = if let Some(path) = drm_device {
+        tracing::info!("Using explicit DRM device: {}", path.display());
+        vec![path.to_path_buf()]
+    } else {
         let mut paths = Vec::new();
         if let Some(ref p) = primary_gpu_path {
             paths.push(p.clone());

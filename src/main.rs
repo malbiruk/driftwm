@@ -32,6 +32,10 @@ struct Cli {
     /// Backend to use (default: udev on a TTY, winit if nested)
     #[arg(long, value_name = "udev|winit")]
     backend: Option<String>,
+    /// DRM device for the udev backend (e.g. /dev/dri/card0 for vkms).
+    /// Without it the primary GPU is preferred.
+    #[arg(long, value_name = "PATH")]
+    drm_device: Option<std::path::PathBuf>,
     /// Use an alternate config file
     #[arg(long, value_name = "PATH")]
     config: Option<std::path::PathBuf>,
@@ -191,7 +195,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     match backend_name.as_str() {
         "udev" => {
-            let dev = backend::udev::init_udev(&mut event_loop, &mut data)?;
+            let dev =
+                backend::udev::init_udev(&mut event_loop, &mut data, cli.drm_device.as_deref())?;
             data.udev_device = Some(dev);
         }
         _ => backend::winit::init_winit(&mut event_loop, &mut data)?,

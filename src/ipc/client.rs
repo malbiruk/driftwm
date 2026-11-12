@@ -203,6 +203,22 @@ pub enum Msg {
     ///
     /// `--json` reply: `{"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}`.
     Cursor,
+    /// Move the seat pointer to <x> <y> in the output layout (logical pixels,
+    /// Y-down, the space `cursor` reports); with --button, click there.
+    Pointer {
+        x: f64,
+        y: f64,
+        #[arg(long, value_name = "left|right|middle")]
+        button: Option<String>,
+    },
+    /// Scroll the focused surface by <dx> <dy> in output-layout logical
+    /// pixels, the space `pointer` and `cursor` use (positive = right/down).
+    Axis {
+        #[arg(allow_hyphen_values = true)]
+        dx: f64,
+        #[arg(allow_hyphen_values = true)]
+        dy: f64,
+    },
     /// Run a config action, e.g. `action close-window`, `action switch-layout next`.
     ///
     /// Takes the same string you would write in a config keybinding, parsed with
@@ -405,6 +421,12 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         Msg::Zoom { level } => Request::Zoom(*level),
         Msg::Layout { short } => Request::Layout { short: *short },
         Msg::Cursor => Request::Cursor,
+        Msg::Pointer { x, y, button } => Request::Pointer {
+            x: *x,
+            y: *y,
+            button: button.clone(),
+        },
+        Msg::Axis { dx, dy } => Request::Axis { dx: *dx, dy: *dy },
         Msg::State => Request::State,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
@@ -623,6 +645,8 @@ fn print_response(response: Response) {
         Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
         Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
+        Response::Pointer { x, y, output } => println!("{x} {y} {output}"),
+        Response::Axis { dx, dy } => println!("{dx} {dy}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }
