@@ -573,9 +573,9 @@ If you want to support the project (or just want a shirt), this is the way.
 
 <p align="left"><img src="assets/tshirt.png" width="400"></p>
 
-XL
+XL (other sizes on request)
 
-100 GEL · 37 USD · 2800 RUB
+40 USD
 
 Ships worldwide from Tbilisi.
 
