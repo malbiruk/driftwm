@@ -8,7 +8,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use super::protocol::{
-    Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector, socket_path,
+    BindingInfo, BindingsInfo, Event, Reply, Request, Response, ScreenshotTarget, StateInfo,
+    WindowSelector, socket_path,
 };
 
 /// `driftwm msg <...>` subcommands. Variants with optional positionals read when
@@ -23,6 +24,15 @@ pub enum Msg {
     ///
     /// `--json` reply: `{"Ok":{"State":{"camera":[..],"zoom":1.0,"windows":[..],"outputs":[..]}}}`.
     State,
+    /// List the effective keybindings: built-in defaults merged with the config.
+    ///
+    /// Prints keyboard, tap and mouse bindings in config syntax; mouse
+    /// bindings are tagged with the `[mouse.*]` context they live in. Reflects the config as
+    /// currently loaded, including hot reloads. Gesture and touch bindings are
+    /// not listed.
+    ///
+    /// `--json` reply: `{"Ok":{"Bindings":{"mod_key":"super","keys":[{"trigger":"super+Return","action":"exec-terminal"}],"taps":[..],"mouse":[..]}}}`.
+    Bindings,
     /// Stream state snapshots as they change (one JSON line per event with --json).
     ///
     /// The server acks, pushes the current state immediately, then pushes a
@@ -406,6 +416,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         Msg::Layout { short } => Request::Layout { short: *short },
         Msg::Cursor => Request::Cursor,
         Msg::State => Request::State,
+        Msg::Bindings => Request::Bindings,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
         Msg::Focus { app_id, id } => Request::Focus(window_selector(app_id, *id)),
@@ -640,9 +651,33 @@ fn print_response(response: Response) {
         Response::Screenshot { path, .. } => println!("{path}"),
         Response::Ok => println!("ok"),
         Response::State(info) => print_state(&info),
+        Response::Bindings(info) => print_bindings(&info),
         Response::DebugCounters(counters) => {
             for (key, value) in counters {
                 println!("{key}: {value}");
+            }
+        }
+    }
+}
+
+fn print_bindings(info: &BindingsInfo) {
+    println!("mod {}", info.mod_key);
+    let sections = [
+        ("keys", &info.keys),
+        ("taps", &info.taps),
+        ("mouse", &info.mouse),
+    ];
+    for (name, bindings) in sections {
+        println!("{name}");
+        for BindingInfo {
+            trigger,
+            context,
+            action,
+        } in bindings
+        {
+            match context {
+                Some(context) => println!("  {trigger} [{context}] = {action}"),
+                None => println!("  {trigger} = {action}"),
             }
         }
     }
