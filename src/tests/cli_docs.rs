@@ -36,6 +36,23 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         "driftwm msg",
         &["driftwm msg state", "driftwm msg --json focus --id 5"],
     ),
+    ("driftwm msg decal", &["driftwm msg decal list"]),
+    (
+        "driftwm msg decal add",
+        &[
+            "driftwm msg decal add ~/stickers/anchor.png",
+            "driftwm msg decal add ~/stickers/anchor.png 400 -250 --scale 0.5",
+            "driftwm msg decal add ~/stickers/anchor.png --fit 256",
+        ],
+    ),
+    (
+        "driftwm msg decal list",
+        &["driftwm msg --json decal list | jq '.Ok.Decals[].path'"],
+    ),
+    (
+        "driftwm msg decal remove",
+        &["driftwm msg decal remove 3", "driftwm msg decal remove"],
+    ),
     (
         "driftwm msg state",
         &["driftwm msg --json state | jq '.Ok.State.windows'"],

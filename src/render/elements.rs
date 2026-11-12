@@ -619,6 +619,7 @@ render_elements! {
     AnimatedCsdWindow=WindowTransformElement<PixelSnapRescaleElement<RoundedCornerElement>>,
     AnimatedChrome=WindowTransformElement<RescaleRenderElement<PixelShaderElement>>,
     ClosingWindow=WindowTransformElement<TextureRenderElement<GlesTexture>>,
+    Decal=PixelSnapRescaleElement<TextureRenderElement<GlesTexture>>,
     Layer=WaylandSurfaceRenderElement<GlesRenderer>,
     Cursor=MemoryRenderBufferRenderElement<GlesRenderer>,
     CursorSurface=smithay::backend::renderer::element::Wrap<WaylandSurfaceRenderElement<GlesRenderer>>,

@@ -8,7 +8,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use super::protocol::{
-    Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector, socket_path,
+    DecalRequest, Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector,
+    socket_path,
 };
 
 /// `driftwm msg <...>` subcommands. Variants with optional positionals read when
@@ -190,6 +191,16 @@ pub enum Msg {
         #[arg(long, requires = "name", conflicts_with_all = ["x", "y"])]
         delete: bool,
     },
+    /// Pin images to the canvas: place, list, or remove decals.
+    ///
+    /// A decal is a still image drawn at canvas coordinates, below every window
+    /// and widget. It pans and zooms with the canvas, cannot be moved by drags,
+    /// snapping or fit, stays out of Alt-Tab, and is saved across restarts. It is
+    /// not a window: close it with `decal remove`, not `close-window`.
+    Decal {
+        #[command(subcommand)]
+        command: DecalCommand,
+    },
     /// Print the active keyboard layout (full XKB name, e.g. `English (US)`).
     ///
     /// `--json` reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
@@ -262,6 +273,41 @@ pub enum Msg {
 }
 
 /// What `driftwm msg screenshot` captures.
+#[derive(clap::Subcommand, Debug)]
+pub enum DecalCommand {
+    /// Place an image (PNG or JPEG, up to 32 MiB and 8192 px a side).
+    ///
+    /// With no coordinates the image is centered under the pointer. Coordinates
+    /// are canvas points, Y-up and image-center, the same convention as `move`.
+    /// Transparent pixels show the canvas background through.
+    ///
+    /// `--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+    #[command(allow_negative_numbers = true)]
+    Add {
+        /// Image file.
+        path: PathBuf,
+        /// X coordinate (Y-up). Requires `<y>`.
+        #[arg(requires = "y")]
+        x: Option<f64>,
+        /// Y coordinate (Y-up).
+        y: Option<f64>,
+        /// Multiplier on the image's pixel size, in canvas units (default 1).
+        #[arg(long)]
+        scale: Option<f64>,
+        /// Size the image's longest side to this many canvas units instead.
+        #[arg(long, conflicts_with = "scale")]
+        fit: Option<f64>,
+    },
+    /// List the placed decals, bottom to top.
+    ///
+    /// `--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0}]}}`.
+    List,
+    /// Remove a decal by `<id>`, or the topmost one under the pointer.
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    Remove { id: Option<u64> },
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum ShotTarget {
     /// The focused window, or one by `app_id` substring or `--id`.
@@ -471,6 +517,37 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
                 delete: *delete,
             }
         }
+        Msg::Decal { command } => Request::Decal(match command {
+            DecalCommand::Add {
+                path,
+                x,
+                y,
+                scale,
+                fit,
+            } => {
+                if [x, y, scale, fit]
+                    .iter()
+                    .any(|c| c.is_some_and(|v| !v.is_finite()))
+                {
+                    return Err("decal coordinates, scale and fit must be finite".to_string());
+                }
+                let abs = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    std::env::current_dir()
+                        .map_err(|e| format!("cannot resolve current directory: {e}"))?
+                        .join(path)
+                };
+                DecalRequest::Add {
+                    path: abs.to_string_lossy().into_owned(),
+                    at: x.zip(*y),
+                    scale: *scale,
+                    fit: *fit,
+                }
+            }
+            DecalCommand::List => DecalRequest::List,
+            DecalCommand::Remove { id } => DecalRequest::Remove { id: *id },
+        }),
         Msg::Screenshot {
             target,
             scale,
@@ -635,6 +712,15 @@ fn print_response(response: Response) {
         Response::Bookmarks(bookmarks) => {
             for (name, [x, y]) in bookmarks {
                 println!("{name}: [{x}, {y}]");
+            }
+        }
+        Response::Decal { id } => println!("{id}"),
+        Response::Decals(decals) => {
+            for d in decals {
+                println!(
+                    "{}: {} [{}, {}] x{}",
+                    d.id, d.path, d.position[0], d.position[1], d.scale
+                );
             }
         }
         Response::Screenshot { path, .. } => println!("{path}"),

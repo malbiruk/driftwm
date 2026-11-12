@@ -108,6 +108,8 @@ pub enum Request {
         #[serde(default)]
         delete: bool,
     },
+    /// Place, list, or remove decals: images pinned to the canvas.
+    Decal(DecalRequest),
     /// Capture to a PNG at `path` (absolute), at `scale` pixels per canvas unit.
     /// Windows render with full chrome; `region`/`all` include the background, a
     /// `window` capture stays transparent (see [`ScreenshotTarget`]).
@@ -193,7 +195,48 @@ pub enum Response {
         x: f64,
         y: f64,
     },
+    /// The id of the decal just placed.
+    Decal {
+        id: u64,
+    },
+    /// Every decal, bottom→top.
+    Decals(Vec<DecalInfo>),
     Ok,
+}
+
+/// What a `decal` request asks for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DecalRequest {
+    /// Place the image at `path` (absolute) with its center at `at` (Y-up, the
+    /// window-rule convention), or under the pointer when `at` is `None`. `scale`
+    /// multiplies the image's pixel size to give its size in canvas units; `fit`
+    /// instead sizes its longest side to that many canvas units. Giving neither
+    /// is a scale of 1, giving both is an error.
+    Add {
+        path: String,
+        #[serde(default)]
+        at: Option<(f64, f64)>,
+        #[serde(default)]
+        scale: Option<f64>,
+        #[serde(default)]
+        fit: Option<f64>,
+    },
+    List,
+    /// Remove decal `id`, or the topmost one under the pointer when `None`.
+    Remove {
+        #[serde(default)]
+        id: Option<u64>,
+    },
+}
+
+/// One placed decal, as `decal list` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecalInfo {
+    pub id: u64,
+    pub path: String,
+    /// Center, Y-up.
+    pub position: [f64; 2],
+    pub scale: f64,
 }
 
 /// The result of a request: `Ok(Response)` or a human-readable error string.

@@ -46,6 +46,7 @@ SITE_PAGES = {
     "config.md",
     "window-rules.md",
     "session.md",
+    "decals.md",
     "ipc.md",
     "cli.md",
     "shaders.md",

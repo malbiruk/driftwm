@@ -297,6 +297,7 @@ impl DriftWm {
             pending_ssd: HashSet::new(),
             decoration_scale: 1,
             render: RenderCache::new(),
+            decals: super::decals::DecalStore::default(),
             window_animations: Default::default(),
             closing_snapshots: Vec::new(),
             standin_fades: Vec::new(),
