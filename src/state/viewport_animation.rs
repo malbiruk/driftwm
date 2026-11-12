@@ -27,7 +27,12 @@ use crate::input::constraint::{ConstraintKind, deactivate_constraint, find_const
 
 /// How long after the last pan event momentum auto-launches, covering touchpads
 /// that don't send AxisStop on finger lift.
-const MOMENTUM_LAUNCH_DELAY: Duration = Duration::from_millis(50);
+///
+/// Also what the client half of the scroll damping takes as "the fingers
+/// stopped" (`src/input/pointer.rs`): past this much silence the canvas has
+/// already launched its fling and cleared its tracker, so a client that is
+/// still holding the gesture's speed would fling out of step with the canvas.
+pub(crate) const MOMENTUM_LAUNCH_DELAY: Duration = Duration::from_millis(50);
 
 impl DriftWm {
     /// Stop `output`'s camera flight where it stands: both targets, the zoom

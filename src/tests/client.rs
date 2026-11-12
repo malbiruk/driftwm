@@ -179,6 +179,10 @@ pub struct State {
     /// received, oldest first. A scroll a compositor binding consumed sends a
     /// bare frame with no axis inside it, so this stays empty for one.
     pub pointer_axes: Vec<f64>,
+    /// Horizontal scroll amounts, the counterpart of [`Self::pointer_axes`].
+    /// Kept apart rather than interleaved: what the liftoff cap does to one
+    /// axis depends on how many samples that axis has of its own.
+    pub pointer_axes_h: Vec<f64>,
     /// Every `wl_keyboard` event this client's keyboard has received, oldest
     /// first.
     pub keyboard_events: Vec<KeyboardEvent>,
@@ -623,6 +627,7 @@ impl Client {
             pointer_frames: 0,
             pointer_buttons: Vec::new(),
             pointer_axes: Vec::new(),
+            pointer_axes_h: Vec::new(),
             keyboard_events: Vec::new(),
             tablet_tool_events: Vec::new(),
             tablet_events: Vec::new(),
@@ -2543,6 +2548,11 @@ impl Dispatch<WlPointer, ()> for State {
                 value,
                 ..
             } => state.pointer_axes.push(value),
+            wl_pointer::Event::Axis {
+                axis: WEnum::Value(wl_pointer::Axis::HorizontalScroll),
+                value,
+                ..
+            } => state.pointer_axes_h.push(value),
             wl_pointer::Event::Frame => state.pointer_frames += 1,
             _ => (),
         }

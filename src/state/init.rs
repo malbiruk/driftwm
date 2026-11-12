@@ -47,7 +47,7 @@ use smithay::{
         xdg_foreign::XdgForeignState,
     },
 };
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
 use std::time::Instant;
 
 use super::{
@@ -380,6 +380,9 @@ impl DriftWm {
             deferred_views: HashMap::new(),
             held_action: None,
             wheel_notch_accum: 0.0,
+            scroll_window: VecDeque::new(),
+            scroll_window_time: None,
+            scroll_last_frame: None,
             tap: TapTracker::default(),
             pending_tap_action: None,
             suppressed_keys: HashSet::new(),
