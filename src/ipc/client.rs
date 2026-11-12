@@ -211,8 +211,8 @@ pub enum Msg {
         #[arg(long, value_name = "left|right|middle")]
         button: Option<String>,
     },
-    /// Scroll the focused surface by <dx> <dy> wheel notches (positive =
-    /// right/down).
+    /// Scroll the focused surface by <dx> <dy> in output-layout logical
+    /// pixels, the space `pointer` and `cursor` use (positive = right/down).
     Axis {
         #[arg(allow_hyphen_values = true)]
         dx: f64,

@@ -44,8 +44,8 @@ pub enum Request {
         #[serde(default)]
         button: Option<String>,
     },
-    /// Scroll the focused surface: `dx` is horizontal, `dy` vertical, in wheel
-    /// notches (positive = right/down).
+    /// Scroll the focused surface: `dx` is horizontal, `dy` vertical, in
+    /// output-layout logical pixels (positive = right/down).
     Axis {
         dx: f64,
         dy: f64,

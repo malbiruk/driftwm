@@ -456,17 +456,27 @@ fn cmd_axis(dx: f64, dy: f64, state: &mut DriftWm) -> Reply {
         .duration_since(std::time::SystemTime::UNIX_EPOCH)
         .map(|d| d.subsec_millis())
         .unwrap_or(0);
-    let vertical = (dy * 120.0) as i32;
-    let horizontal = (dx * 120.0) as i32;
+    let vertical = notches(dy);
+    let horizontal = notches(dx);
     let frame = AxisFrame::new(time)
         .source(AxisSource::Wheel)
         .v120(Axis::Vertical, vertical)
         .v120(Axis::Horizontal, horizontal)
-        .value(Axis::Vertical, dy * 15.0)
-        .value(Axis::Horizontal, dx * 15.0);
+        .value(Axis::Vertical, dy)
+        .value(Axis::Horizontal, dx);
     pointer.axis(state, frame);
     pointer.frame(state);
     Ok(Response::Axis { dx, dy })
+}
+
+/// Pixels a wheel notch is worth, so a caller that thinks in pixels still gets
+/// discrete wheel scrolling in clients that read `v120` instead of `value`.
+const AXIS_PIXELS_PER_NOTCH: f64 = 15.0;
+
+/// `v120` for a pixel distance: 120 units per notch, so one notch in lands as
+/// one notch out and a fractional pixel distance stays proportional.
+fn notches(pixels: f64) -> i32 {
+    (pixels / AXIS_PIXELS_PER_NOTCH * 120.0) as i32
 }
 
 fn cmd_layout(short: bool, state: &mut DriftWm) -> Reply {
@@ -1549,5 +1559,13 @@ mod tests {
     fn layout_code_rejects_out_of_range_and_empty() {
         assert_eq!(layout_code("us,ru", 2), None);
         assert_eq!(layout_code("us,", 1), None);
+    }
+
+    #[test]
+    fn a_wheel_notch_is_fifteen_pixels_of_scroll() {
+        assert_eq!(super::notches(15.0), 120);
+        assert_eq!(super::notches(-15.0), -120);
+        assert_eq!(super::notches(45.0), 360);
+        assert_eq!(super::notches(0.0), 0);
     }
 }

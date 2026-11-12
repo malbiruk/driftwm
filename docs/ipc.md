@@ -132,12 +132,16 @@ reaches off-screen content; its four targets, flags, and caveats are in the
 
 ### Scrolling
 
-`axis <dx> <dy>` scrolls the focused surface by wheel notches (positive = right/down).
-It is what a remote viewer forwards from mouse-wheel events; the reply echoes the deltas.
+`axis <dx> <dy>` scrolls the focused surface by a distance in output-layout logical
+pixels — the same space `pointer <x> <y>` takes and `cursor` reports (positive =
+right/down). It is what a remote viewer forwards from mouse-wheel events; the reply
+echoes the deltas. A notch is 15 px, and the frame carries both `axis_value120` (for
+clients that scroll discretely) and `axis` (for clients that scroll smoothly), so one
+call serves both kinds of client.
 
 ```bash
-driftwm msg axis 0 -1     # one notch up
-driftwm msg axis 0 3      # three notches down
+driftwm msg axis 0 -15    # one notch up
+driftwm msg axis 0 45     # three notches down
 ```
 
 ### Pointer injection
