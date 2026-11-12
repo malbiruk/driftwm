@@ -17,6 +17,23 @@ use driftwm::window_ext::WindowExt;
 
 use super::{DriftWm, StageWindow};
 
+/// Mutate the window's stored rule in place, creating it if the window has none.
+fn update_applied_rule(
+    surface: &WlSurface,
+    f: impl FnOnce(&mut driftwm::config::AppliedWindowRule),
+) {
+    smithay::wayland::compositor::with_states(surface, |states| {
+        states.data_map.insert_if_missing_threadsafe(|| {
+            std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
+        });
+        let rule = states
+            .data_map
+            .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+            .unwrap();
+        f(&mut rule.lock().unwrap());
+    });
+}
+
 impl DriftWm {
     pub fn window_ssd_bar<W: WaylandFocus + WindowExt>(&self, window: &W) -> i32 {
         // Every stand-in draws the same textless bar (a CSD-origin one shrinks
@@ -32,6 +49,104 @@ impl DriftWm {
                     .contains_key(&crate::decorations::DecorationKey::Surface(s.id()))
             })
             .map_or(0, |_| self.config.decorations.title_bar_height)
+    }
+
+    /// Hide or show `window`'s driftwm title bar by flipping its decoration
+    /// between `server` and `minimal`: the bar goes, the border, corners and
+    /// shadow stay. Both are `ServerSide` on the wire, so the client is not told.
+    /// The content keeps its place; the bar is drawn above it.
+    ///
+    /// Left alone: a window that negotiated client-side decoration or draws no
+    /// chrome (`client` / `none`), so an app that negotiated its own header bar
+    /// never gets a second one. The override is written into the window's stored rule, so it is
+    /// not saved with the session and is gone when the window closes.
+    pub fn toggle_window_titlebar(&mut self, window: &Window) {
+        use smithay::reexports::wayland_protocols::xdg::decoration::zv1::server::zxdg_toplevel_decoration_v1::Mode;
+
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
+        if window
+            .toplevel()
+            .is_some_and(|t| t.with_pending_state(|s| s.decoration_mode) == Some(Mode::ClientSide))
+        {
+            return;
+        }
+        let key = crate::decorations::DecorationKey::Surface(surface.id());
+        let applied = driftwm::config::applied_rule(&surface);
+        let mode = driftwm::config::effective_decoration_mode(
+            applied.as_ref().and_then(|r| r.decoration.as_ref()),
+            &self.config.decorations.default_mode,
+        );
+        let has_bar = self.decorations.contains_key(&key);
+
+        let new_mode = match (has_bar, mode) {
+            (true, _) => driftwm::config::DecorationMode::Minimal,
+            (false, driftwm::config::DecorationMode::Minimal) => {
+                driftwm::config::DecorationMode::Server
+            }
+            _ => return,
+        };
+
+        // A bar needs a sized window; bail before the rule write so the rule
+        // and the decorations map cannot disagree.
+        let width = window.geometry().size.w;
+        if !has_bar && width <= 0 {
+            return;
+        }
+        update_applied_rule(&surface, |r| r.decoration = Some(new_mode));
+
+        if has_bar {
+            self.decorations.remove(&key);
+        } else {
+            self.decorations.insert(
+                key,
+                crate::decorations::WindowDecoration::new(width, true, &self.config.decorations),
+            );
+        }
+        self.chrome_changed(window, &surface);
+    }
+
+    /// Hide or show `window`'s border, drop shadow and corner clip together, so
+    /// it draws as the bare client surface; again to restore whatever its rule and
+    /// `[decorations]` say. The title bar is separate (`toggle-titlebar`).
+    ///
+    /// Applies to a `client`-decorated window too, since the compositor draws
+    /// those three around it as well. Left alone for `decoration = "none"`, which
+    /// already has none of them. The flag lives on the window's stored rule, so
+    /// it is not saved with the session and is gone when the window closes.
+    pub fn toggle_window_borders(&mut self, window: &Window) {
+        let Some(surface) = window.wl_surface().map(|s| s.into_owned()) else {
+            return;
+        };
+        let applied = driftwm::config::applied_rule(&surface);
+        let mode = driftwm::config::effective_decoration_mode(
+            applied.as_ref().and_then(|r| r.decoration.as_ref()),
+            &self.config.decorations.default_mode,
+        );
+        if matches!(mode, driftwm::config::DecorationMode::None) {
+            return;
+        }
+        let hidden = applied.is_some_and(|r| r.borders_hidden);
+
+        update_applied_rule(&surface, |r| r.borders_hidden = !hidden);
+        self.chrome_changed(window, &surface);
+    }
+
+    /// Bookkeeping after a toggle changed what the frame is made of. The frame
+    /// size changed, so the cached snap rect is refreshed; neighbours in a snap
+    /// cluster are not re-snapped. A window without a bar has its corners clipped
+    /// by the compositor, so the opaque-region carve follows the new radius.
+    fn chrome_changed(&mut self, window: &Window, surface: &WlSurface) {
+        let key = crate::decorations::DecorationKey::Surface(surface.id());
+        // Drop the cached border/shadow elements; they are rebuilt on demand.
+        self.render.border_cache.remove(&key);
+        self.render.shadow_cache.remove(&key);
+        if !self.decorations.contains_key(&key) {
+            self.trim_opaque_corners(surface);
+        }
+        self.refresh_stable_snap_rect(&StageWindow::Client(window.clone()));
+        self.mark_all_dirty();
     }
 
     /// Border width for an element with no surface to resolve a per-rule
