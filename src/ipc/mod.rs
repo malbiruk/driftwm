@@ -523,9 +523,14 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
         .space
         .outputs()
         .map(|output| {
-            let (cam, z, active_bookmark) = {
+            let (cam, z, active_bookmark, layout_origin) = {
                 let os = crate::state::output_state(output);
-                (os.camera, os.zoom, os.active_bookmark.clone())
+                (
+                    os.camera,
+                    os.zoom,
+                    os.active_bookmark.clone(),
+                    [os.layout_position.x, os.layout_position.y],
+                )
             };
             let logical = crate::state::output_logical_size(output);
             OutputInfo {
@@ -535,6 +540,7 @@ pub(crate) fn state_info(state: &mut DriftWm) -> StateInfo {
                 size: [logical.w, logical.h],
                 active: active.as_ref() == Some(output),
                 active_bookmark,
+                layout_origin,
             }
         })
         .collect();
@@ -620,7 +626,7 @@ fn suspended_by_selector(
 }
 
 /// IPC handle + app_id for a suspended window (its stage `ElementId`), for the
-/// `Focused` reply.
+/// `Focused` reply. A stand-in has no client, so `pid` is always `None`.
 fn suspended_focused_info(state: &DriftWm, id: SuspendedId) -> Option<protocol::FocusedWindow> {
     let element = state
         .stage
@@ -629,6 +635,7 @@ fn suspended_focused_info(state: &DriftWm, id: SuspendedId) -> Option<protocol::
     Some(protocol::FocusedWindow {
         id: state.stage.id_of(element)?.0,
         app_id: element.app_id_or_class(),
+        pid: None,
     })
 }
 
@@ -684,6 +691,12 @@ fn focused_window_info(
     state: &DriftWm,
     window: &smithay::desktop::Window,
 ) -> protocol::FocusedWindow {
+    use smithay::reexports::wayland_server::Resource;
+    let pid = window.wl_surface().and_then(|s| s.client()).and_then(|c| {
+        c.get_credentials(&state.display_handle)
+            .ok()
+            .and_then(|cred| u32::try_from(cred.pid).ok())
+    });
     protocol::FocusedWindow {
         id: state
             .stage
@@ -691,6 +704,7 @@ fn focused_window_info(
             .expect("window from the stage has an id")
             .0,
         app_id: window.app_id_or_class(),
+        pid,
     }
 }
 

@@ -5,11 +5,10 @@
 
 use smithay::utils::{Logical, Point, Size};
 
+use super::{Fixture, map_window, settle, window_by_app_id};
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Request, Response, WindowSelector};
 use crate::state::StageWindow;
-
-use super::{Fixture, map_window, settle, window_by_app_id};
 
 /// Where an unrelated pan flight is heading: far enough right that a window
 /// near the canvas origin is off screen once it lands.
@@ -46,6 +45,40 @@ fn focus(f: &mut Fixture, element: &StageWindow) {
     assert!(
         matches!(reply, Ok(Response::Focused(Some(_)))),
         "expected a Focused reply, got {reply:?}"
+    );
+}
+
+/// The `Focused` reply carries the client pid (same value as `state`
+/// windows[]), so an agent can map focus to the AT-SPI tree without a second
+/// `msg state` round-trip. Stand-ins have no client, so theirs is `None`.
+#[test]
+fn focus_reply_carries_the_client_pid() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    map_window(&mut f, id, "app", (400, 300));
+    let window = window_by_app_id(&mut f, "app").unwrap();
+    let element = StageWindow::Client(window);
+
+    let wid = f.state().stage.id_of(&element).expect("staged").0;
+    let reply = dispatch(Request::Focus(Some(WindowSelector::Id(wid))), f.state());
+    let info = match reply {
+        Ok(Response::Focused(Some(info))) => info,
+        other => panic!("expected a Focused reply, got {other:?}"),
+    };
+    let state_pid = f
+        .state()
+        .window_inventory()
+        .into_iter()
+        .find(|w| w.id == wid)
+        .and_then(|w| w.pid);
+    assert_eq!(
+        info.pid, state_pid,
+        "Focused pid must match the state inventory pid"
+    );
+    assert!(
+        info.pid.is_some(),
+        "a live client focus reply must carry a pid"
     );
 }
 
@@ -92,4 +125,27 @@ fn focus_on_a_stand_in_a_pan_flight_is_leaving_behind_pans_to_it() {
     );
 
     f.state().dismiss_suspended(sid);
+}
+
+/// `state` outputs[] publish each output's global-layout origin (the same
+/// space `msg cursor`/`msg pointer` use), so an agent can map global screen
+/// coords to outputs. Outputs tile left-to-right by add order.
+#[test]
+fn state_outputs_publish_global_layout_origins() {
+    use crate::ipc::state_info;
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    f.add_output(2, (1280, 720));
+
+    let state = state_info(f.state());
+    assert_eq!(state.outputs.len(), 2);
+
+    // First output anchors the layout; the second sits to its right.
+    assert_eq!(state.outputs[0].layout_origin, [0, 0]);
+    assert_eq!(
+        state.outputs[1].layout_origin,
+        [1920, 0],
+        "second output must start where the 1920-wide first ends"
+    );
 }

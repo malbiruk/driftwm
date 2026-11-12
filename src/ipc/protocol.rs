@@ -228,6 +228,12 @@ pub type Reply = Result<Response, String>;
 pub struct FocusedWindow {
     pub id: u64,
     pub app_id: Option<String>,
+    /// The PID of the process that opened the window's Wayland connection, from
+    /// the socket's credentials — the same value as [`WindowInfo::pid`]. Lets an
+    /// agent map a `msg focus` reply to the AT-SPI tree without a second
+    /// `msg state` round-trip. `None` for a suspended stand-in (no client).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
 }
 
 /// The full compositor state snapshot: the payload of a [`Response::State`]
@@ -268,7 +274,10 @@ pub struct StateInfo {
 }
 
 /// One output's viewport in the `state` reply. `camera` is the viewport
-/// center, Y-up; `size` is the output's logical size.
+/// center, Y-up; `size` is the output's logical size. `layout_origin` is the
+/// output's top-left in the global layout (logical pixels, Y-down) — the same
+/// space `msg cursor`/`msg pointer` use, so an agent can map global screen
+/// coords to outputs without guessing.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OutputInfo {
     pub name: String,
@@ -276,6 +285,8 @@ pub struct OutputInfo {
     pub zoom: f64,
     pub size: [i32; 2],
     pub active: bool,
+    #[serde(default)]
+    pub layout_origin: [i32; 2],
     /// This output's active bookmark (nearest visible to its usable center),
     /// or `None` when no bookmark is in view.
     #[serde(default)]
@@ -660,6 +671,7 @@ mod tests {
                 zoom: 1.0,
                 size: [1920, 1200],
                 active: true,
+                layout_origin: [0, 0],
                 active_bookmark: Some("home".into()),
             }],
             active_bookmark: Some("home".into()),
@@ -686,6 +698,7 @@ mod tests {
             Ok(Response::Focused(Some(FocusedWindow {
                 id: 5,
                 app_id: Some("foot".into()),
+                pid: Some(4242),
             }))),
             Ok(Response::Size {
                 width: 800,
@@ -737,6 +750,10 @@ mod tests {
             assert!(obj.get(key).is_some(), "missing key {key}");
         }
         assert_eq!(obj["windows"][0]["mode"], "Normal");
+        assert!(
+            obj["outputs"][0].get("layout_origin").is_some(),
+            "missing outputs[].layout_origin"
+        );
     }
 
     /// `pid` is a plain number when the window has a client, left out for a

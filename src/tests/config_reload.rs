@@ -323,3 +323,46 @@ fn reload_keeps_the_displays_children_are_pointed_at() {
     );
     assert_eq!(env.get("DISPLAY").map(String::as_str), Some(":3"));
 }
+
+/// `msg layout` reports the display name of the loaded keymap, so a layout
+/// reload must refresh it the same way a key event does — otherwise the
+/// reported name stays stale until the next keypress.
+#[test]
+fn reload_refreshes_the_layout_display_name_msg_layout_reports() {
+    use crate::ipc::dispatch;
+    use crate::ipc::protocol::{Request, Response};
+
+    fn layout(f: &mut Fixture, short: bool) -> String {
+        match dispatch(Request::Layout { short }, f.state()) {
+            Ok(Response::Layout(name)) => name,
+            other => panic!("expected a Layout reply, got {other:?}"),
+        }
+    }
+
+    let mut f = Fixture::new();
+
+    f.state()
+        .reload_config_from_contents("[input.keyboard]\nlayout = \"de\"\n");
+    assert_eq!(
+        layout(&mut f, false),
+        "German",
+        "`msg layout` must follow the reloaded keymap, not wait for a keypress"
+    );
+    assert_eq!(layout(&mut f, true), "de");
+
+    f.state()
+        .reload_config_from_contents("[input.keyboard]\nlayout = \"us\"\n");
+    assert_eq!(layout(&mut f, false), "English (US)");
+    assert_eq!(layout(&mut f, true), "us");
+
+    // A layout the keymap compiler rejects keeps the last good config and the
+    // name that goes with it.
+    f.state()
+        .reload_config_from_contents("[input.keyboard]\nlayout = \"xx-bogus\"\n");
+    assert!(
+        f.state().errors.contains_key(&ErrorSource::Keyboard),
+        "a rejected layout must raise the keyboard error"
+    );
+    assert_eq!(f.state().config.keyboard_layout.layout, "us");
+    assert_eq!(layout(&mut f, false), "English (US)");
+}

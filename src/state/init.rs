@@ -215,6 +215,12 @@ impl DriftWm {
 
         let mut seat: Seat<Self> = seat_state.new_wl_seat(&dh, "seat-0");
         let kb = &config.keyboard_layout;
+        // Seed for `msg layout`'s display name: the compositor only learns the
+        // real display name from a live keymap read (key events,
+        // switch-layout, reload refresh), so cold boot reports the configured
+        // code until the first of those swaps in the real name. Cloned before
+        // the fallback arm below, which may pin `config.keyboard_layout` to us.
+        let initial_layout = kb.layout.clone();
         let xkb = XkbConfig {
             layout: &kb.layout,
             variant: &kb.variant,
@@ -394,7 +400,7 @@ impl DriftWm {
             trackpad_send_events: None,
             state_file_cameras: HashMap::new(),
             state_file_last_write: Instant::now(),
-            active_layout: String::new(),
+            active_layout: initial_layout,
             state_file_layout: String::new(),
             state_file_windows: Vec::new(),
             state_file_layer_count: 0,

@@ -64,6 +64,13 @@ impl DriftWm {
             } else {
                 tracing::info!("Config reload: keyboard layout updated");
                 driftwm::protocols::virtual_keyboard::seat_keymap_changed(self, &keyboard);
+                // The keymap just swapped under us, so refresh the display name
+                // `msg layout` reports — same read as the key-event path, or it
+                // stays stale until the next keypress.
+                self.active_layout = keyboard.with_xkb_state(self, |ctx| {
+                    let xkb = ctx.xkb().lock().unwrap();
+                    xkb.layout_name(xkb.active_layout()).to_owned()
+                });
                 let mut mods = keyboard.modifier_state();
                 if mods.num_lock != num_lock {
                     mods.num_lock = num_lock;
