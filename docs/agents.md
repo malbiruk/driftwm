@@ -1,8 +1,8 @@
 # Driving driftwm with AI agents
 
-driftwm is unusually well suited to computer-use agents: the canvas is queryable and
-renderable over IPC, and windows carry a stable id plus their client pid. This page
-describes the integration and the pieces added for it.
+driftwm is well suited to computer-use agents: the canvas is queryable and renderable over
+its own IPC, and windows carry a stable id plus their client pid. Everything an agent needs
+ships in the compositor — there is no adapter process, no shim and no second daemon.
 
 ## What the IPC gives an agent
 
@@ -12,6 +12,7 @@ describes the integration and the pieces added for it.
 | Canvas screenshot at arbitrary scale, including off-screen content | `driftwm msg screenshot -o - --scale N` |
 | Spatial navigation | `driftwm msg camera <x> <y>`, `driftwm msg zoom <level>`, `driftwm msg focus <app_id|--id>` |
 | Pointer input without uinput | `driftwm msg pointer <x> <y> [--button left|right|middle]` |
+| Scroll | `driftwm msg axis <dx> <dy>` |
 | Stable window identity | `state.windows[].id` / `[].pid` |
 | Bookmarks | `driftwm msg bookmark ...` |
 
@@ -21,22 +22,22 @@ OCR/vision stages.
 
 `pointer` is deliberately part of the IPC rather than a Wayland protocol: it works in
 nested sessions (where uinput events would go to the host compositor) and needs no extra
-device permissions. The socket is user-only (0600); treat it as an input-injection
-surface and keep it inside the session.
+device permissions. The socket is user-only (0600); treat it as an input-injection surface
+and keep it inside the session.
 
-## Glue for AT-SPI agents
+## Pairing with agent-desktop
 
-`agent-desktop` (AT-SPI) can see app windows inside driftwm and click them semantically
-(no pointer). Pair it with driftwm's IPC:
+`agent-desktop` is a standard AT-SPI client: it reads the accessibility tree and drives
+elements semantically. It needs no driftwm-specific glue.
 
-- map `agent-desktop` windows to driftwm ids by `pid`;
-- use `driftwm msg focus <app_id>` to bring a window into view before snapshotting;
-- use `driftwm msg screenshot` for observation (agent-desktop's own Wayland capture only
-  supports GNOME/Mutter);
-- use `driftwm msg pointer ... --button left` when a coordinate click is required.
-
-A reference implementation of this glue (CLI + WebSocket viewer) lives in
-[`contrib/driftwm-agent`](../contrib/driftwm-agent).
+- map its windows to driftwm ids by `pid`, which `state` and the `focus` reply both carry;
+- `driftwm msg focus <app_id>` activates and reveals a window (foreign-toplevel `activate`
+  and `xdg-activation` both land on the same path), then its snapshot sees the window;
+- `driftwm msg screenshot` is the observation channel. agent-desktop's own Wayland capture
+  has two known limits: display *listing* is Mutter-only, and the wlr portal's `Screenshot`
+  implementation writes to a hardcoded `/tmp/out.png`, which an agent that requires
+  home-relative files will reject. `ScreenCast` through `xdg-desktop-portal-wlr` works
+  against driftwm's `zwlr_screencopy` surface, which is what remote viewers use.
 
 ## Remaining gaps
 
