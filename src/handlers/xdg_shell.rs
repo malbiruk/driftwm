@@ -117,6 +117,18 @@ impl XdgShellHandler for DriftWm {
             return;
         };
 
+        // An `OnDemand` layer root may not hold keyboard focus yet: a shell can
+        // flip its interactivity to `OnDemand` only in the same breath as the
+        // grab — e.g. a tray menu popup whose bar was `None` at click time and
+        // is switched to `OnDemand` right before the popup maps. Focus can land
+        // on such a root, so the layer should hold it while the grab is live;
+        // otherwise the next focus recompute reads "focus left the grab root"
+        // (nothing else claims focus either) and tears the grab down, dismissing
+        // the just-opened menu.
+        if self.layer_interactivity(&root) == Some(KeyboardInteractivity::OnDemand) {
+            self.focus_layer_if_on_demand(Some(root.clone()), serial);
+        }
+
         let keyboard = self.seat.get_keyboard().unwrap();
         let pointer = self.seat.get_pointer().unwrap();
 
