@@ -54,6 +54,17 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &["driftwm msg decal remove 3", "driftwm msg decal remove"],
     ),
     (
+        "driftwm msg decal move",
+        &["driftwm msg decal move 3 400 -250"],
+    ),
+    (
+        "driftwm msg pointer",
+        &[
+            "driftwm msg pointer",
+            "driftwm msg --json pointer | jq '.Ok.Pointer'",
+        ],
+    ),
+    (
         "driftwm msg state",
         &["driftwm msg --json state | jq '.Ok.State.windows'"],
     ),

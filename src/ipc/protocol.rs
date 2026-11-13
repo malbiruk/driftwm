@@ -35,6 +35,9 @@ pub enum Request {
     /// The pointer in the global output layout (screen space, not canvas), plus
     /// the output it is on.
     Cursor,
+    /// The pointer on the canvas: Y-up, the convention `decal add --at` and
+    /// `move` take. Unlike [`Request::Cursor`] it follows the camera.
+    Pointer,
     State,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
@@ -160,6 +163,10 @@ pub enum Response {
         y: f64,
         output: String,
     },
+    Pointer {
+        x: f64,
+        y: f64,
+    },
     /// Boxed so the whole-state snapshot doesn't bloat every other (tiny)
     /// reply variant. Serde-transparent, so the wire shape is unchanged.
     State(Box<StateInfo>),
@@ -226,6 +233,11 @@ pub enum DecalRequest {
     Remove {
         #[serde(default)]
         id: Option<u64>,
+    },
+    /// Put decal `id`'s center at `to` (Y-up).
+    Move {
+        id: u64,
+        to: (f64, f64),
     },
 }
 
@@ -439,6 +451,7 @@ mod tests {
             Request::Layout { short: false },
             Request::Layout { short: true },
             Request::Cursor,
+            Request::Pointer,
             Request::State,
             Request::DebugCounters,
             Request::Subscribe,
@@ -695,6 +708,7 @@ mod tests {
                 y: 12.0,
                 output: "DP-1".into(),
             }),
+            Ok(Response::Pointer { x: -40.5, y: 310.0 }),
             Ok(Response::State(Box::new(sample_state()))),
             Ok(Response::DebugCounters(
                 [("stage_entries".to_string(), 2usize)]

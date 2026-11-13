@@ -269,6 +269,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Zoom(arg) => cmd_zoom(arg, state),
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
+        Request::Pointer => cmd_pointer(state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -311,7 +312,9 @@ fn is_mutating(request: &Request) -> bool {
             // pick it up. Bare get/list (no `to`, no `delete`) stays a pure query.
             | Request::Bookmark { to: Some(_), .. }
             | Request::Bookmark { delete: true, .. }
-            | Request::Decal(DecalRequest::Add { .. } | DecalRequest::Remove { .. })
+            | Request::Decal(
+                DecalRequest::Add { .. } | DecalRequest::Remove { .. } | DecalRequest::Move { .. }
+            )
     )
 }
 
@@ -412,6 +415,11 @@ fn pointer_canvas(
     Ok(pointer.current_location())
 }
 
+fn cmd_pointer(state: &mut DriftWm) -> Reply {
+    let p = pointer_canvas(state)?;
+    Ok(Response::Pointer { x: p.x, y: -p.y })
+}
+
 fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
     match request {
         DecalRequest::List => Ok(Response::Decals(
@@ -459,6 +467,10 @@ fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
                     .ok_or_else(|| "no decal under the pointer".to_string())?,
             };
             state.remove_decal(id)?;
+            Ok(Response::Ok)
+        }
+        DecalRequest::Move { id, to } => {
+            state.move_decal(id, [to.0, to.1])?;
             Ok(Response::Ok)
         }
     }

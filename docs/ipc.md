@@ -9,7 +9,7 @@ JSON, so any language can speak it directly.
 
 Run `driftwm msg <command>` from inside a driftwm session. The commands —
 `camera`, `zoom`, `focus`, `move`, `resize`, `opacity`, `pin`, `close`,
-`suspend`, `relaunch`, `layout`, `cursor`, `action`, `bookmark`, `screenshot`,
+`suspend`, `relaunch`, `layout`, `cursor`, `pointer`, `action`, `bookmark`, `screenshot`,
 `state`, `subscribe`, and `debug-counters` — with their arguments, flags, and
 JSON reply shapes are documented in the generated [CLI reference](cli.md);
 `driftwm msg <command> --help` prints the same for one command. The conventions
@@ -19,7 +19,7 @@ they share follow below.
 read when given no arguments and write when given arguments. The others don't
 follow that rule: `action` requires its arguments, `close`/`suspend`/`relaunch`
 act on the focused window when given no selector, and `layout`, `cursor`,
-`screenshot`, `state`, `subscribe`, and `debug-counters` need no arguments at
+`pointer`, `screenshot`, `state`, `subscribe`, and `debug-counters` need no arguments at
 all. A command that fails (bad value, no focused window, no match) prints an
 error to stderr and exits non-zero, so scripts can branch on it.
 
@@ -57,6 +57,9 @@ a fullscreen video the first time it writes. Reading is always safe; `camera` an
 output layout: the one outputs advertise their positions in and slurp prints, in
 logical pixels from the layout's origin with Y pointing down. `cursor` also
 names the output the pointer is on, and reads the same on the lock screen.
+`pointer` reports the pointer on the canvas instead, Y-up like `move` and
+`decal add`, so a script can remember a spot and use it after a menu has moved
+the pointer away.
 
 ### Sizes and the visual frame
 
@@ -192,8 +195,9 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 | relaunch          | `{"Relaunch":null}` / `{"Relaunch":5}` / `{"Relaunch":"alacritty"}`                 |
 | layout            | `{"Layout":{"short":false}}`                                                        |
 | cursor            | `"Cursor"`                                                                          |
+| pointer           | `"Pointer"`                                                                         |
 | run action        | `{"Action":"switch-layout next"}`                                                   |
-| decal             | `{"Decal":{"Add":{"path":"/abs/a.png","at":[0,0],"scale":1.0}}}` (`at` omitted: under the pointer; `"fit":256.0` in place of `scale` sizes the longest side) / `{"Decal":"List"}` / `{"Decal":{"Remove":{"id":3}}}` (`id` omitted: under the pointer) |
+| decal             | `{"Decal":{"Add":{"path":"/abs/a.png","at":[0,0],"scale":1.0}}}` (`at` omitted: under the pointer; `"fit":256.0` in place of `scale` sizes the longest side) / `{"Decal":"List"}` / `{"Decal":{"Remove":{"id":3}}}` (`id` omitted: under the pointer) / `{"Decal":{"Move":{"id":3,"to":[400,-250]}}}` |
 | bookmark          | `{"Bookmark":{}}` (list) / `{"Bookmark":{"name":"home"}}` (get) / `{"Bookmark":{"name":"home","to":[0,0]}}` (set) / `{"Bookmark":{"name":"home","delete":true}}` (delete) |
 | screenshot        | `{"Screenshot":{"target":"Viewport","scale":1.0,"path":"/abs/shot.png"}}` (all three fields required; `path` must be absolute) |
 | screenshot target | `"Viewport"` / `"All"` / `{"Window":{}}` / `{"Window":{"window":5}}` (selector optional) / `{"Region":{"x":0,"y":0,"w":640,"h":480,"from_screen":false}}` (all five required) |
@@ -208,6 +212,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Zoom":0.5}}
 {"Ok":{"Layout":"English (US)"}}    // or "us" for {"Layout":{"short":true}}
 {"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}   // global output layout, screen space, Y-down
+{"Ok":{"Pointer":{"x":-40.5,"y":310.0}}}   // canvas, Y-up
 {"Ok":{"Focused":{"id":5,"app_id":"alacritty"}}}   // or {"Ok":{"Focused":null}}
 {"Ok":{"Position":{"x":100,"y":200}}}
 {"Ok":{"Size":{"width":800,"height":600}}}
@@ -218,7 +223,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Decal":{"id":3}}}                   // decal add
 {"Ok":{"Decals":[{"id":3,"path":"/abs/a.png","position":[0.0,0.0],"scale":1.0}]}}   // decal list, bottom to top
 {"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}
-{"Ok":"Ok"}                          // action / close / suspend / relaunch / bookmark delete / decal remove
+{"Ok":"Ok"}                          // action / close / suspend / relaunch / bookmark delete / decal remove / decal move
 {"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}   // abridged
 {"Ok":{"State":{"camera":[-960.0,-600.0],"zoom":1.0,"layout":"English (US)",
   "layout_short":"us","windows":[

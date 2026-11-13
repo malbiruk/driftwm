@@ -11,6 +11,7 @@ driftwm msg decal add ~/stickers/rocket.png --fit 256   # longest side 256 canva
 driftwm msg decal list
 driftwm msg decal remove 3                       # by id
 driftwm msg decal remove                         # the topmost one under the pointer
+driftwm msg decal move 3 400 -250                # center, canvas Y-up
 ```
 
 ## Behaviour
@@ -22,8 +23,8 @@ driftwm msg decal remove                         # the topmost one under the poi
   background. A transparent PNG shows the dot grid or your shader wallpaper
   through.
 - **Immune to the window machinery.** Dragging, snapping, fit, fill, tiling-style
-  placement and navigation never see a decal, and it stays out of Alt-Tab. The
-  only things that move it are `decal remove` and a new `decal add`.
+  placement and navigation never see a decal, and it stays out of Alt-Tab. Only
+  `decal move` and the `move-decal` mouse binding move one.
 - **Pans and zooms with the canvas**, like a window, so a decal shrinks as you
   zoom out. Make anchors large and high-contrast if they need to read from far
   away.
@@ -33,6 +34,33 @@ driftwm msg decal remove                         # the topmost one under the poi
   the [session state](session.md#nested-sessions).
 - **Captured.** `driftwm msg screenshot` includes decals, except isolated
   `window` captures.
+
+## Dragging
+
+Bind the `move-decal` mouse action to drag the decal under the pointer, for
+example next to the window-move binding, which only applies over windows:
+
+```toml
+[mouse.on-canvas]
+"mod+right" = "move-decal"
+```
+
+The decal keeps its offset from the pointer, nothing snaps, and the new spot is
+saved when you let go. Decals sit below windows, so a press over a window never
+grabs the decal under it, and a press with no decal there falls through to
+whatever the click would otherwise do.
+
+## Placing where you were pointing
+
+`driftwm msg pointer` prints the pointer's canvas position (Y-up), the form
+`decal add` takes. A script that opens a menu to choose the image can read it
+first, so the choice may be made with the mouse:
+
+```bash
+read -r x y <<< "$(driftwm msg pointer)"
+img=$(pick-an-image)
+driftwm msg decal add "$img" "$x" "$y" --fit 256
+```
 
 ## Coordinates
 
@@ -56,7 +84,6 @@ the first time it comes into view.
 ## Limits
 
 - At most 256 decals.
-- A decal cannot be selected or dragged. Remove and re-add it to move it.
 - `decal remove` with no id hits the topmost decal under the pointer even when a
   window covers it.
 

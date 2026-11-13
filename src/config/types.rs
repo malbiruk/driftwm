@@ -315,6 +315,9 @@ pub struct MouseBinding {
 #[derive(Clone, Debug, PartialEq)]
 pub enum MouseAction {
     MoveWindow,
+    /// Drag the decal under the pointer. Decals sit below windows, so a press
+    /// over a window (or over no decal) falls through to the normal click.
+    MoveDecal,
     /// Drag every window connected to the focused one via snap adjacency
     /// (edge-flush with `snap_gap`). The cluster is computed on demand at
     /// drag start; use a separate binding from `MoveWindow` so that grabbing

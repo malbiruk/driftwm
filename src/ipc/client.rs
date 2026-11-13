@@ -194,8 +194,8 @@ pub enum Msg {
     /// Pin images to the canvas: place, list, or remove decals.
     ///
     /// A decal is a still image drawn at canvas coordinates, below every window
-    /// and widget. It pans and zooms with the canvas, cannot be moved by drags,
-    /// snapping or fit, stays out of Alt-Tab, and is saved across restarts. It is
+    /// and widget. It pans and zooms with the canvas, is not moved by window
+    /// drags, snapping or fit (the `move-decal` mouse binding drags one), stays out of Alt-Tab, and is saved across restarts. It is
     /// not a window: close it with `decal remove`, not `close-window`.
     Decal {
         #[command(subcommand)]
@@ -214,6 +214,12 @@ pub enum Msg {
     ///
     /// `--json` reply: `{"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}`.
     Cursor,
+    /// Print the pointer position on the canvas (Y-up, the convention `decal add`
+    /// and `move` take), so a script can remember where to place something
+    /// after a menu has moved the pointer away.
+    ///
+    /// `--json` reply: `{"Ok":{"Pointer":{"x":-40.5,"y":310.0}}}`.
+    Pointer,
     /// Run a config action, e.g. `action close-window`, `action switch-layout next`.
     ///
     /// Takes the same string you would write in a config keybinding, parsed with
@@ -306,6 +312,11 @@ pub enum DecalCommand {
     ///
     /// `--json` reply: `{"Ok":"Ok"}`.
     Remove { id: Option<u64> },
+    /// Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up).
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    #[command(allow_negative_numbers = true)]
+    Move { id: u64, x: f64, y: f64 },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -451,6 +462,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         Msg::Zoom { level } => Request::Zoom(*level),
         Msg::Layout { short } => Request::Layout { short: *short },
         Msg::Cursor => Request::Cursor,
+        Msg::Pointer => Request::Pointer,
         Msg::State => Request::State,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
@@ -547,6 +559,15 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
             }
             DecalCommand::List => DecalRequest::List,
             DecalCommand::Remove { id } => DecalRequest::Remove { id: *id },
+            DecalCommand::Move { id, x, y } => {
+                if !x.is_finite() || !y.is_finite() {
+                    return Err("decal coordinates must be finite".to_string());
+                }
+                DecalRequest::Move {
+                    id: *id,
+                    to: (*x, *y),
+                }
+            }
         }),
         Msg::Screenshot {
             target,
@@ -700,6 +721,7 @@ fn print_response(response: Response) {
         Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
         Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
+        Response::Pointer { x, y } => println!("{x} {y}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }

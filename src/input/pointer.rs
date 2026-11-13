@@ -18,7 +18,7 @@ use smithay::wayland::seat::WaylandFocus;
 use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
+use crate::grabs::{DecalGrab, MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
 use crate::input::{DecoTarget, HitKind, PinnedChrome};
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
@@ -613,6 +613,28 @@ impl DriftWm {
                             return;
                         }
                         // Empty canvas or a widget — fall through to normal click
+                    }
+                    MouseAction::MoveDecal => {
+                        // A decal sits below every window, so one under a window
+                        // is not reachable from here.
+                        if self.topmost_client_under(pos).is_none()
+                            && let Some(id) = self.decal_at(pos)
+                            && let Some(position) = self.decal_position(id)
+                        {
+                            let start_data = GrabStartData {
+                                focus: None,
+                                button,
+                                location: pos,
+                            };
+                            pointer.set_grab(
+                                self,
+                                DecalGrab::new(start_data, id, position),
+                                serial,
+                                Focus::Clear,
+                            );
+                            return;
+                        }
+                        // No decal there — fall through to normal click
                     }
                     MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped => {
                         // Opt-in cluster propagation: only

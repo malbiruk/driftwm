@@ -66,6 +66,7 @@ driftwm msg --json focus --id 5
 | [`decal`](#driftwm-msg-decal) | Pin images to the canvas: place, list, or remove decals |
 | [`layout`](#driftwm-msg-layout) | Print the active keyboard layout (full XKB name, e.g. `English (US)`) |
 | [`cursor`](#driftwm-msg-cursor) | Print the pointer position in the global output layout (logical pixels, Y-down, the space slurp prints) and the output it is on |
+| [`pointer`](#driftwm-msg-pointer) | Print the pointer position on the canvas (Y-up, the convention `decal add` and `move` take), so a script can remember where to place something after a menu has moved the pointer away |
 | [`action`](#driftwm-msg-action) | Run a config action, e.g. `action close-window`, `action switch-layout next` |
 | [`screenshot`](#driftwm-msg-screenshot) | Capture a canvas PNG. With no subcommand, captures the active output's current view of the canvas |
 | [`debug-counters`](#driftwm-msg-debug-counters) | Print internal collection sizes for leak diagnosis (unstable keys) |
@@ -316,11 +317,18 @@ driftwm msg decal <COMMAND>
 
 Pin images to the canvas: place, list, or remove decals.
 
-A decal is a still image drawn at canvas coordinates, below every window and widget. It pans and zooms with the canvas, cannot be moved by drags, snapping or fit, stays out of Alt-Tab, and is saved across restarts. It is not a window: close it with `decal remove`, not `close-window`.
+A decal is a still image drawn at canvas coordinates, below every window and widget. It pans and zooms with the canvas, is not moved by window drags, snapping or fit (the `move-decal` mouse binding drags one), stays out of Alt-Tab, and is saved across restarts. It is not a window: close it with `decal remove`, not `close-window`.
 
 ```bash
 driftwm msg decal list
 ```
+
+| Command | Description |
+| --- | --- |
+| [`add`](#driftwm-msg-decal-add) | Place an image (PNG or JPEG, up to 32 MiB and 8192 px a side) |
+| [`list`](#driftwm-msg-decal-list) | List the placed decals, bottom to top |
+| [`remove`](#driftwm-msg-decal-remove) | Remove a decal by `<id>`, or the topmost one under the pointer |
+| [`move`](#driftwm-msg-decal-move) | Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up) |
 
 ##### `driftwm msg decal add`
 
@@ -375,6 +383,20 @@ driftwm msg decal remove 3
 driftwm msg decal remove
 ```
 
+##### `driftwm msg decal move`
+
+```
+driftwm msg decal move <ID> <X> <Y>
+```
+
+Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up).
+
+`--json` reply: `{"Ok":"Ok"}`.
+
+```bash
+driftwm msg decal move 3 400 -250
+```
+
 #### `driftwm msg layout`
 
 ```
@@ -403,6 +425,21 @@ Print the pointer position in the global output layout (logical pixels, Y-down, 
 
 ```bash
 driftwm msg --json cursor
+```
+
+#### `driftwm msg pointer`
+
+```
+driftwm msg pointer
+```
+
+Print the pointer position on the canvas (Y-up, the convention `decal add` and `move` take), so a script can remember where to place something after a menu has moved the pointer away.
+
+`--json` reply: `{"Ok":{"Pointer":{"x":-40.5,"y":310.0}}}`.
+
+```bash
+driftwm msg pointer
+driftwm msg --json pointer | jq '.Ok.Pointer'
 ```
 
 #### `driftwm msg action`

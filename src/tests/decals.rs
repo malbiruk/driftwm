@@ -7,9 +7,11 @@ use std::path::{Path, PathBuf};
 use driftwm::decals;
 use smithay::utils::{Logical, Point};
 
-use super::Fixture;
-use super::input_backend::{FakeDevice, pointer_to};
+use driftwm::config::BTN_RIGHT;
+
+use super::input_backend::{FakeDevice, key_press, pointer_to, press, release};
 use super::real::TempDir;
+use super::{Fixture, config, motion};
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{DecalRequest, Request, Response};
 
@@ -295,4 +297,99 @@ fn a_decal_whose_file_vanished_is_kept_but_cannot_be_hit() {
 
     assert_eq!(listed(&mut restarted).len(), 1);
     assert!(remove(&mut restarted, None).is_err());
+}
+
+fn move_to(f: &mut Fixture, id: u64, to: (f64, f64)) -> Result<(), String> {
+    dispatch(Request::Decal(DecalRequest::Move { id, to }), f.state()).map(|_| ())
+}
+
+#[test]
+fn a_moved_decal_keeps_its_id_and_scale_and_is_saved() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 16, 16);
+    let file = tmp.path().join("decals.json");
+    let mut f = fixture();
+    f.state().decals.path = Some(file.clone());
+    let id = add(&mut f, &img, Some((0.0, 0.0)), 2.0).unwrap();
+
+    move_to(&mut f, id, (120.0, -45.0)).unwrap();
+
+    assert_eq!(listed(&mut f), vec![(id, [120.0, -45.0], 2.0)]);
+    assert_eq!(decals::read(&file).len(), 1);
+    assert_eq!(decals::read(&file)[0].position, [120.0, -45.0]);
+}
+
+#[test]
+fn moving_an_unknown_decal_or_off_the_canvas_is_an_error() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 16, 16);
+    let mut f = fixture();
+    let id = add(&mut f, &img, Some((5.0, 5.0)), 1.0).unwrap();
+
+    assert!(move_to(&mut f, id + 1, (0.0, 0.0)).is_err());
+    assert!(move_to(&mut f, id, (1e12, 0.0)).is_err());
+    assert!(move_to(&mut f, id, (f64::NAN, 0.0)).is_err());
+    assert_eq!(
+        listed(&mut f)[0].1,
+        [5.0, 5.0],
+        "a refused move changes nothing"
+    );
+}
+
+#[test]
+fn the_pointer_query_reports_canvas_coordinates_y_up() {
+    let mut f = fixture();
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        Point::<f64, Logical>::from((300.0, 200.0)),
+    );
+
+    match dispatch(Request::Pointer, f.state()).unwrap() {
+        Response::Pointer { x, y } => assert_eq!((x, y), (300.0, -200.0)),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+const KEY_LEFTMETA: u32 = 125;
+const MOVE_DECAL: &str = "[mouse.on-canvas]\n\"mod+right\" = \"move-decal\"\n";
+
+/// Hold Super, press the right button on `grab` and drag to `to` (canvas,
+/// Y-down), then let go.
+fn drag(f: &mut Fixture, grab: (f64, f64), to: (f64, f64)) {
+    key_press(f, KEY_LEFTMETA);
+    pointer_to(f, &FakeDevice::mouse(), Point::<f64, Logical>::from(grab));
+    press(f, &FakeDevice::mouse(), BTN_RIGHT);
+    motion(f, Point::<f64, Logical>::from(to));
+    release(f, &FakeDevice::mouse(), BTN_RIGHT);
+}
+
+#[test]
+fn a_bound_drag_carries_the_decal_by_the_pointer_delta_and_saves_on_release() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 100, 100);
+    let file = tmp.path().join("decals.json");
+    let mut f = Fixture::with_config(config(MOVE_DECAL));
+    f.add_output(1, (1920, 1080));
+    f.state().decals.path = Some(file.clone());
+    let id = add(&mut f, &img, Some((0.0, 0.0)), 1.0).unwrap();
+
+    drag(&mut f, (10.0, 10.0), (60.0, 40.0));
+
+    // 50 right and 30 down on a Y-down canvas is 50 right and 30 down in Y-up.
+    assert_eq!(listed(&mut f), vec![(id, [50.0, -30.0], 1.0)]);
+    assert_eq!(decals::read(&file)[0].position, [50.0, -30.0]);
+}
+
+#[test]
+fn a_bound_press_off_every_decal_moves_nothing() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 100, 100);
+    let mut f = Fixture::with_config(config(MOVE_DECAL));
+    f.add_output(1, (1920, 1080));
+    let id = add(&mut f, &img, Some((0.0, 0.0)), 1.0).unwrap();
+
+    drag(&mut f, (400.0, 400.0), (460.0, 440.0));
+
+    assert_eq!(listed(&mut f), vec![(id, [0.0, 0.0], 1.0)]);
 }

@@ -155,13 +155,50 @@ impl DriftWm {
             .map(|d| d.id)
     }
 
+    /// Put decal `id`'s center at `position` (Y-up) and save.
+    pub(crate) fn move_decal(&mut self, id: u64, position: [f64; 2]) -> Result<(), String> {
+        self.place_decal(id, position)?;
+        self.save_decals();
+        Ok(())
+    }
+
+    /// [`Self::move_decal`] without the save, for a drag that moves a decal on
+    /// every pointer event and saves once when it lets go.
+    pub(crate) fn place_decal(&mut self, id: u64, position: [f64; 2]) -> Result<(), String> {
+        let decal = self
+            .decals
+            .items
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no decal with id {id}"))?;
+        if let Some(problem) = decals::problem(position, decal.scale) {
+            return Err(problem);
+        }
+        decal.position = position;
+        self.mark_all_dirty();
+        Ok(())
+    }
+
     fn decals_changed(&mut self) {
+        self.save_decals();
+        self.mark_all_dirty();
+    }
+
+    pub(crate) fn save_decals(&mut self) {
         if let Some(path) = &self.decals.path
             && let Err(err) = decals::write(path, &self.decals.items)
         {
             tracing::warn!("decals: could not save {}: {err}", path.display());
         }
-        self.mark_all_dirty();
+    }
+
+    /// The Y-up position of decal `id`, if it exists.
+    pub(crate) fn decal_position(&self, id: u64) -> Option<[f64; 2]> {
+        self.decals
+            .items
+            .iter()
+            .find(|d| d.id == id)
+            .map(|d| d.position)
     }
 }
 
