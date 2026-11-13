@@ -20,6 +20,7 @@ impl DriftWm {
     /// session pause. `held_action` above all — its repeat would go on firing,
     /// and forcing a redraw per frame, on the VT we just left.
     pub(crate) fn reset_held_input_state(&mut self) {
+        self.clear_held_bindings();
         self.suppressed_keys.clear();
         self.held_buttons.clear();
         self.held_action = None;
@@ -110,12 +111,23 @@ impl DriftWm {
                 }
 
                 if key_state == KeyState::Released {
+                    state.held_key_released(keycode_u32);
                     // Suppress the release of any key whose press we intercepted —
                     // otherwise the focused client sees a "release without press".
                     if state.suppressed_keys.remove(&keycode_u32) {
                         return FilterResult::Intercept(None);
                     }
                     return FilterResult::Forward;
+                }
+
+                if state.has_active_held_bindings() && sym.raw() == keysyms::KEY_Escape {
+                    state.cancel_held_bindings();
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(None);
+                }
+                if state.held_trigger_latched(keycode_u32) {
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(None);
                 }
 
                 // VT switching: Ctrl+Alt+F1..F12 produces XF86Switch_VT_1..12
@@ -152,6 +164,23 @@ impl DriftWm {
                     }
                 }
 
+                if let Some(binding) = state.config.held_lookup(modifiers, sym).cloned() {
+                    let action = binding.press.clone();
+                    state.start_held_binding(keycode_u32, binding);
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(Some(action));
+                }
+                if state.config.layout_independent
+                    && let Some(raw_sym) = handle.raw_latin_sym_or_raw_current_sym()
+                    && raw_sym != sym
+                    && let Some(binding) = state.config.held_lookup(modifiers, raw_sym).cloned()
+                {
+                    let action = binding.press.clone();
+                    state.start_held_binding(keycode_u32, binding);
+                    state.suppressed_keys.insert(keycode_u32);
+                    return FilterResult::Intercept(Some(action));
+                }
+
                 if let Some(action) = state.config.lookup(modifiers, sym) {
                     state.suppressed_keys.insert(keycode_u32);
                     return FilterResult::Intercept(Some(action.clone()));
@@ -183,6 +212,8 @@ impl DriftWm {
             },
         );
 
+        self.finish_released_bindings(&keyboard.modifier_state());
+
         // Update active layout name (may have changed via XKB group switch)
         let layout_name = keyboard.with_xkb_state(self, |ctx| {
             let xkb = ctx.xkb().lock().unwrap();
@@ -195,7 +226,7 @@ impl DriftWm {
 
         if let Some(ref action) = action.flatten() {
             // Set up key repeat for repeatable actions
-            if action.is_repeatable() {
+            if action.is_repeatable() && !self.held_trigger_latched(keycode_u32) {
                 let delay = std::time::Duration::from_millis(self.config.repeat_delay as u64);
                 self.held_action = Some((
                     keycode_u32,
