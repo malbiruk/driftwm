@@ -317,6 +317,11 @@ pub enum DecalCommand {
     /// `--json` reply: `{"Ok":"Ok"}`.
     #[command(allow_negative_numbers = true)]
     Move { id: u64, x: f64, y: f64 },
+    /// Set decal `<id>`'s scale: a multiplier on its image's pixel size, as
+    /// `add --scale` takes (0.01 to 64). The center stays put.
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    Scale { id: u64, scale: f64 },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -559,6 +564,15 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
             }
             DecalCommand::List => DecalRequest::List,
             DecalCommand::Remove { id } => DecalRequest::Remove { id: *id },
+            DecalCommand::Scale { id, scale } => {
+                if !scale.is_finite() {
+                    return Err("decal scale must be finite".to_string());
+                }
+                DecalRequest::Scale {
+                    id: *id,
+                    scale: *scale,
+                }
+            }
             DecalCommand::Move { id, x, y } => {
                 if !x.is_finite() || !y.is_finite() {
                     return Err("decal coordinates must be finite".to_string());

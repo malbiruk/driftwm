@@ -38,7 +38,12 @@ pub struct DecalStore {
     /// image as still. `None` is a file that failed to decode, remembered so it
     /// is not decoded again every frame.
     pub(crate) textures: HashMap<PathBuf, Option<TextureBuffer<GlesTexture>>>,
+    /// A debounced save is waiting on its timer.
+    save_armed: bool,
 }
+
+/// How long after the last scroll step a scaled decal is written out.
+const SAVE_DEBOUNCE: std::time::Duration = std::time::Duration::from_millis(300);
 
 impl DecalStore {
     /// The canvas rect (internal, Y-down) of `decal`.
@@ -182,6 +187,72 @@ impl DriftWm {
     fn decals_changed(&mut self) {
         self.save_decals();
         self.mark_all_dirty();
+    }
+
+    /// Set decal `id`'s scale (a multiplier on its image size) and save.
+    pub(crate) fn scale_decal(&mut self, id: u64, scale: f64) -> Result<(), String> {
+        self.apply_decal_scale(id, scale)?;
+        self.save_decals();
+        Ok(())
+    }
+
+    fn apply_decal_scale(&mut self, id: u64, scale: f64) -> Result<(), String> {
+        let decal = self
+            .decals
+            .items
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no decal with id {id}"))?;
+        if let Some(problem) = decals::problem(decal.position, scale) {
+            return Err(problem);
+        }
+        decal.scale = scale;
+        self.mark_all_dirty();
+        Ok(())
+    }
+
+    /// Multiply the scale of the topmost decal under `point` (internal canvas)
+    /// by `factor`, clamped to the allowed range, about its center. Saves on a
+    /// short debounce: a scroll sends many steps. `false` when no decal is there.
+    pub(crate) fn scale_decal_at(&mut self, point: Point<f64, Logical>, factor: f64) -> bool {
+        let Some(id) = self.decal_at(point) else {
+            return false;
+        };
+        let Some(decal) = self.decals.items.iter().find(|d| d.id == id) else {
+            return false;
+        };
+        let range = decals::SCALE_RANGE;
+        let scale = (decal.scale * factor).clamp(*range.start(), *range.end());
+        if self.apply_decal_scale(id, scale).is_ok() {
+            self.save_decals_soon();
+        }
+        true
+    }
+
+    fn save_decals_soon(&mut self) {
+        if self.decals.save_armed {
+            return;
+        }
+        self.decals.save_armed = true;
+        let timer = smithay::reexports::calloop::timer::Timer::from_duration(SAVE_DEBOUNCE);
+        let armed = self
+            .loop_handle
+            .insert_source(timer, |_, _, data: &mut DriftWm| {
+                data.flush_decals();
+                smithay::reexports::calloop::timer::TimeoutAction::Drop
+            })
+            .is_ok();
+        if !armed {
+            self.flush_decals();
+        }
+    }
+
+    /// Write out a save the debounce is still holding, e.g. before the
+    /// compositor stops.
+    pub(crate) fn flush_decals(&mut self) {
+        if std::mem::take(&mut self.decals.save_armed) {
+            self.save_decals();
+        }
     }
 
     pub(crate) fn save_decals(&mut self) {

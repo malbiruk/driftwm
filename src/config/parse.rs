@@ -293,6 +293,7 @@ pub fn parse_mouse_action(s: &str) -> Result<MouseAction, String> {
     match s.trim() {
         "move-window" => Ok(MouseAction::MoveWindow),
         "move-decal" => Ok(MouseAction::MoveDecal),
+        "scale-decal" => Ok(MouseAction::ScaleDecal),
         "move-snapped-windows" => Ok(MouseAction::MoveSnappedWindows),
         "resize-window" => Ok(MouseAction::ResizeWindow),
         "resize-window-snapped" => Ok(MouseAction::ResizeWindowSnapped),

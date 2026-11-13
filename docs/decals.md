@@ -12,6 +12,7 @@ driftwm msg decal list
 driftwm msg decal remove 3                       # by id
 driftwm msg decal remove                         # the topmost one under the pointer
 driftwm msg decal move 3 400 -250                # center, canvas Y-up
+driftwm msg decal scale 3 0.5                    # multiplier on the image size
 ```
 
 ## Behaviour
@@ -24,7 +25,8 @@ driftwm msg decal move 3 400 -250                # center, canvas Y-up
   through.
 - **Immune to the window machinery.** Dragging, snapping, fit, fill, tiling-style
   placement and navigation never see a decal, and it stays out of Alt-Tab. Only
-  `decal move` and the `move-decal` mouse binding move one.
+  `decal move`, `decal scale` and the `move-decal` / `scale-decal` mouse bindings
+  change one.
 - **Pans and zooms with the canvas**, like a window, so a decal shrinks as you
   zoom out. Make anchors large and high-contrast if they need to read from far
   away.
@@ -49,6 +51,22 @@ The decal keeps its offset from the pointer, nothing snaps, and the new spot is
 saved when you let go. Decals sit below windows, so a press over a window never
 grabs the decal under it, and a press with no decal there falls through to
 whatever the click would otherwise do.
+
+## Resizing
+
+Bind `scale-decal` to a scroll trigger to grow or shrink the decal under the
+pointer. It keeps the aspect ratio and the center, one wheel notch is about 10%,
+and the size stays within the 0.01–64 scale range. The new size is saved a
+moment after the last scroll step.
+
+```toml
+[mouse.on-canvas]
+"mod+shift+wheel-scroll" = "scale-decal"       # mouse wheel
+"mod+shift+trackpad-scroll" = "scale-decal"    # trackpad
+```
+
+As with dragging, it only acts where no window is under the pointer. Scroll up
+grows, scroll down shrinks.
 
 ## Placing where you were pointing
 

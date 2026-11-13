@@ -9,7 +9,9 @@ use smithay::utils::{Logical, Point};
 
 use driftwm::config::BTN_RIGHT;
 
-use super::input_backend::{FakeDevice, key_press, pointer_to, press, release};
+use super::input_backend::{
+    FakeDevice, key_press, pointer_to, press, release, trackpad_scroll, wheel_notch_down,
+};
 use super::real::TempDir;
 use super::{Fixture, config, motion};
 use crate::ipc::dispatch;
@@ -390,6 +392,90 @@ fn a_bound_press_off_every_decal_moves_nothing() {
     let id = add(&mut f, &img, Some((0.0, 0.0)), 1.0).unwrap();
 
     drag(&mut f, (400.0, 400.0), (460.0, 440.0));
+
+    assert_eq!(listed(&mut f), vec![(id, [0.0, 0.0], 1.0)]);
+}
+
+fn scale_to(f: &mut Fixture, id: u64, scale: f64) -> Result<(), String> {
+    dispatch(Request::Decal(DecalRequest::Scale { id, scale }), f.state()).map(|_| ())
+}
+
+#[test]
+fn a_set_scale_keeps_the_center_and_is_saved() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 16, 16);
+    let file = tmp.path().join("decals.json");
+    let mut f = fixture();
+    f.state().decals.path = Some(file.clone());
+    let id = add(&mut f, &img, Some((30.0, -10.0)), 1.0).unwrap();
+
+    scale_to(&mut f, id, 0.25).unwrap();
+
+    assert_eq!(listed(&mut f), vec![(id, [30.0, -10.0], 0.25)]);
+    assert_eq!(decals::read(&file)[0].scale, 0.25);
+    assert!(scale_to(&mut f, id, 0.0).is_err());
+    assert!(scale_to(&mut f, id, 1e3).is_err());
+    assert!(scale_to(&mut f, id + 1, 1.0).is_err());
+    assert_eq!(listed(&mut f)[0].2, 0.25, "a refused scale changes nothing");
+}
+
+const KEY_LEFTSHIFT: u32 = 42;
+const SCALE_DECAL: &str = "[mouse.on-canvas]\n\"mod+shift+wheel-scroll\" = \"scale-decal\"\n\"mod+shift+trackpad-scroll\" = \"scale-decal\"\n";
+
+fn scaling_fixture(file: &Path, img: &Path) -> (Fixture, u64) {
+    let mut f = Fixture::with_config(config(SCALE_DECAL));
+    f.add_output(1, (1920, 1080));
+    f.state().decals.path = Some(file.to_path_buf());
+    let id = add(&mut f, img, Some((0.0, 0.0)), 1.0).unwrap();
+    key_press(&mut f, KEY_LEFTMETA);
+    key_press(&mut f, KEY_LEFTSHIFT);
+    (f, id)
+}
+
+#[test]
+fn scrolling_down_shrinks_and_up_grows_about_the_center_and_saves_once_settled() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 100, 100);
+    let file = tmp.path().join("decals.json");
+    let (mut f, id) = scaling_fixture(&file, &img);
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        Point::<f64, Logical>::from((10.0, 10.0)),
+    );
+
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
+    let after = listed(&mut f)[0];
+    assert_eq!(after.0, id);
+    assert_eq!(after.1, [0.0, 0.0], "the center stays put");
+    assert!(
+        (after.2 - 1.0 / 1.1).abs() < 1e-9,
+        "one notch down is one step smaller, got {}",
+        after.2
+    );
+
+    trackpad_scroll(&mut f, &FakeDevice::mouse());
+    assert!(
+        listed(&mut f)[0].2 < after.2,
+        "a trackpad scroll scales as well"
+    );
+
+    f.state().flush_decals();
+    assert_eq!(decals::read(&file)[0].scale, listed(&mut f)[0].2);
+}
+
+#[test]
+fn scrolling_off_every_decal_scales_nothing() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 100, 100);
+    let (mut f, id) = scaling_fixture(&tmp.path().join("decals.json"), &img);
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        Point::<f64, Logical>::from((500.0, 500.0)),
+    );
+
+    wheel_notch_down(&mut f, &FakeDevice::mouse());
 
     assert_eq!(listed(&mut f), vec![(id, [0.0, 0.0], 1.0)]);
 }

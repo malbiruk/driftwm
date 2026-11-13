@@ -58,6 +58,10 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &["driftwm msg decal move 3 400 -250"],
     ),
     (
+        "driftwm msg decal scale",
+        &["driftwm msg decal scale 3 0.5"],
+    ),
+    (
         "driftwm msg pointer",
         &[
             "driftwm msg pointer",

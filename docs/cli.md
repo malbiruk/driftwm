@@ -329,6 +329,7 @@ driftwm msg decal list
 | [`list`](#driftwm-msg-decal-list) | List the placed decals, bottom to top |
 | [`remove`](#driftwm-msg-decal-remove) | Remove a decal by `<id>`, or the topmost one under the pointer |
 | [`move`](#driftwm-msg-decal-move) | Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up) |
+| [`scale`](#driftwm-msg-decal-scale) | Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scale` takes (0.01 to 64). The center stays put |
 
 ##### `driftwm msg decal add`
 
@@ -395,6 +396,20 @@ Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up).
 
 ```bash
 driftwm msg decal move 3 400 -250
+```
+
+##### `driftwm msg decal scale`
+
+```
+driftwm msg decal scale <ID> <SCALE>
+```
+
+Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scale` takes (0.01 to 64). The center stays put.
+
+`--json` reply: `{"Ok":"Ok"}`.
+
+```bash
+driftwm msg decal scale 3 0.5
 ```
 
 #### `driftwm msg layout`

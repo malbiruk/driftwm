@@ -239,6 +239,11 @@ pub enum DecalRequest {
         id: u64,
         to: (f64, f64),
     },
+    /// Set decal `id`'s scale, a multiplier on its image's pixel size.
+    Scale {
+        id: u64,
+        scale: f64,
+    },
 }
 
 /// One placed decal, as `decal list` reports it.

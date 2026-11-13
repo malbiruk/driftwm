@@ -29,6 +29,9 @@ use driftwm::config::{self, Action, BindingContext, Direction, MouseAction};
 use driftwm::window_ext::WindowExt;
 use smithay::reexports::wayland_server::Resource;
 
+/// How much one wheel notch of `scale-decal` grows (or shrinks) a decal.
+const DECAL_SCROLL_STEP: f64 = 1.1;
+
 impl DriftWm {
     /// Determine the binding context for the current pointer position.
     pub(crate) fn pointer_context(
@@ -703,7 +706,7 @@ impl DriftWm {
                         self.execute_action(action);
                         return;
                     }
-                    MouseAction::Zoom => {} // n/a for button clicks
+                    MouseAction::Zoom | MouseAction::ScaleDecal => {} // n/a for button clicks
                 }
             }
 
@@ -1766,6 +1769,18 @@ impl DriftWm {
                             // animation ticks, which warp through the guarded
                             // focus path.
                         }
+                    }
+                }
+                MouseAction::ScaleDecal => {
+                    // Same scroll reading as `Zoom`: a wheel notch is 15, so one
+                    // notch is `DECAL_SCROLL_STEP`. Up (negative) grows.
+                    let v = event
+                        .amount(Axis::Vertical)
+                        .or_else(|| event.amount_v120(Axis::Vertical).map(|v| v * 15.0 / 120.0))
+                        .unwrap_or(0.0);
+                    if v != 0.0 && self.topmost_client_under(pos).is_none() {
+                        let steps = (-v / 15.0).clamp(-3.0, 3.0);
+                        self.scale_decal_at(pos, DECAL_SCROLL_STEP.powf(steps));
                     }
                 }
                 _ => {} // other mouse actions don't apply to scroll

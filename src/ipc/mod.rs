@@ -313,7 +313,10 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Bookmark { to: Some(_), .. }
             | Request::Bookmark { delete: true, .. }
             | Request::Decal(
-                DecalRequest::Add { .. } | DecalRequest::Remove { .. } | DecalRequest::Move { .. }
+                DecalRequest::Add { .. }
+                    | DecalRequest::Remove { .. }
+                    | DecalRequest::Move { .. }
+                    | DecalRequest::Scale { .. }
             )
     )
 }
@@ -471,6 +474,10 @@ fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
         }
         DecalRequest::Move { id, to } => {
             state.move_decal(id, [to.0, to.1])?;
+            Ok(Response::Ok)
+        }
+        DecalRequest::Scale { id, scale } => {
+            state.scale_decal(id, scale)?;
             Ok(Response::Ok)
         }
     }
