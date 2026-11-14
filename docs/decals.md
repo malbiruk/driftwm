@@ -13,6 +13,8 @@ driftwm msg decal remove 3                       # by id
 driftwm msg decal remove                         # the topmost one under the pointer
 driftwm msg decal move 3 400 -250                # center, canvas Y-up
 driftwm msg decal scale 3 0.5                    # multiplier on the image size
+driftwm msg decal flip 3                         # mirror left to right; again to undo
+driftwm msg decal flip                           # the topmost one under the pointer
 ```
 
 ## Behaviour
@@ -25,8 +27,8 @@ driftwm msg decal scale 3 0.5                    # multiplier on the image size
   through.
 - **Immune to the window machinery.** Dragging, snapping, fit, fill, tiling-style
   placement and navigation never see a decal, and it stays out of Alt-Tab. Only
-  `decal move`, `decal scale` and the `move-decal` / `scale-decal` mouse bindings
-  change one.
+  `decal move`, `decal scale`, `decal flip` and the `move-decal` / `scale-decal`
+  mouse bindings change one.
 - **Pans and zooms with the canvas**, like a window, so a decal shrinks as you
   zoom out. Make anchors large and high-contrast if they need to read from far
   away.
@@ -67,6 +69,14 @@ moment after the last scroll step.
 
 As with dragging, it only acts where no window is under the pointer. Scroll up
 grows, scroll down shrinks.
+
+## Flipping
+
+`driftwm msg decal flip` mirrors a decal left to right in place (the same center
+and size), and flipping again undoes it, for a sticker that faces one way. With
+no id it takes the topmost decal under the pointer; there is no mouse binding,
+so bind a key to `spawn driftwm msg decal flip`. The flip is saved with the
+decal and shows in `decal list`.
 
 ## Placing where you were pointing
 

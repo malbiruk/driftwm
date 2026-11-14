@@ -317,6 +317,7 @@ fn is_mutating(request: &Request) -> bool {
                     | DecalRequest::Remove { .. }
                     | DecalRequest::Move { .. }
                     | DecalRequest::Scale { .. }
+                    | DecalRequest::Flip { .. }
             )
     )
 }
@@ -435,6 +436,7 @@ fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
                     path: d.path.to_string_lossy().into_owned(),
                     position: d.position,
                     scale: d.scale,
+                    flip: d.flip,
                 })
                 .collect(),
         )),
@@ -475,6 +477,16 @@ fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
         DecalRequest::Move { id, to } => {
             state.move_decal(id, [to.0, to.1])?;
             Ok(Response::Ok)
+        }
+        DecalRequest::Flip { id } => {
+            let id = match id {
+                Some(id) => id,
+                None => state
+                    .decal_at(pointer_canvas(state)?)
+                    .ok_or_else(|| "no decal under the pointer".to_string())?,
+            };
+            state.flip_decal(id)?;
+            Ok(Response::Decal { id })
         }
         DecalRequest::Scale { id, scale } => {
             state.scale_decal(id, scale)?;

@@ -197,7 +197,7 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 | cursor            | `"Cursor"`                                                                          |
 | pointer           | `"Pointer"`                                                                         |
 | run action        | `{"Action":"switch-layout next"}`                                                   |
-| decal             | `{"Decal":{"Add":{"path":"/abs/a.png","at":[0,0],"scale":1.0}}}` (`at` omitted: under the pointer; `"fit":256.0` in place of `scale` sizes the longest side) / `{"Decal":"List"}` / `{"Decal":{"Remove":{"id":3}}}` (`id` omitted: under the pointer) / `{"Decal":{"Move":{"id":3,"to":[400,-250]}}}` / `{"Decal":{"Scale":{"id":3,"scale":0.5}}}` |
+| decal             | `{"Decal":{"Add":{"path":"/abs/a.png","at":[0,0],"scale":1.0}}}` (`at` omitted: under the pointer; `"fit":256.0` in place of `scale` sizes the longest side) / `{"Decal":"List"}` / `{"Decal":{"Remove":{"id":3}}}` (`id` omitted: under the pointer) / `{"Decal":{"Move":{"id":3,"to":[400,-250]}}}` / `{"Decal":{"Scale":{"id":3,"scale":0.5}}}` / `{"Decal":{"Flip":{"id":3}}}` (`id` omitted: under the pointer) |
 | bookmark          | `{"Bookmark":{}}` (list) / `{"Bookmark":{"name":"home"}}` (get) / `{"Bookmark":{"name":"home","to":[0,0]}}` (set) / `{"Bookmark":{"name":"home","delete":true}}` (delete) |
 | screenshot        | `{"Screenshot":{"target":"Viewport","scale":1.0,"path":"/abs/shot.png"}}` (all three fields required; `path` must be absolute) |
 | screenshot target | `"Viewport"` / `"All"` / `{"Window":{}}` / `{"Window":{"window":5}}` (selector optional) / `{"Region":{"x":0,"y":0,"w":640,"h":480,"from_screen":false}}` (all five required) |
@@ -220,8 +220,8 @@ A window can be targeted by a **selector**: a JSON number is its stable `id`
 {"Ok":{"Pin":true}}
 {"Ok":{"Bookmark":{"x":500.0,"y":300.0}}}   // bookmark get / set (Y-up)
 {"Ok":{"Bookmarks":{"home":[0.0,0.0]}}}     // bookmark list (sorted by name)
-{"Ok":{"Decal":{"id":3}}}                   // decal add
-{"Ok":{"Decals":[{"id":3,"path":"/abs/a.png","position":[0.0,0.0],"scale":1.0}]}}   // decal list, bottom to top
+{"Ok":{"Decal":{"id":3}}}                   // decal add / decal flip
+{"Ok":{"Decals":[{"id":3,"path":"/abs/a.png","position":[0.0,0.0],"scale":1.0,"flip":false}]}}   // decal list, bottom to top
 {"Ok":{"Screenshot":{"path":"/abs/shot.png","width":1920,"height":1080}}}
 {"Ok":"Ok"}                          // action / close / suspend / relaunch / bookmark delete / decal remove / decal move / decal scale
 {"Ok":{"DebugCounters":{"decorations":2,"stage_entries":2}}}   // abridged

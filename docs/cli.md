@@ -330,6 +330,7 @@ driftwm msg decal list
 | [`remove`](#driftwm-msg-decal-remove) | Remove a decal by `<id>`, or the topmost one under the pointer |
 | [`move`](#driftwm-msg-decal-move) | Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up) |
 | [`scale`](#driftwm-msg-decal-scale) | Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scale` takes (0.01 to 64). The center stays put |
+| [`flip`](#driftwm-msg-decal-flip) | Mirror a decal left to right by `<id>`, or the topmost one under the pointer; flip it again to undo. For a sticker that faces one way |
 
 ##### `driftwm msg decal add`
 
@@ -363,7 +364,7 @@ driftwm msg decal list
 
 List the placed decals, bottom to top.
 
-`--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0}]}}`.
+`--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0,"flip":false}]}}`.
 
 ```bash
 driftwm msg --json decal list | jq '.Ok.Decals[].path'
@@ -410,6 +411,21 @@ Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scal
 
 ```bash
 driftwm msg decal scale 3 0.5
+```
+
+##### `driftwm msg decal flip`
+
+```
+driftwm msg decal flip [ID]
+```
+
+Mirror a decal left to right by `<id>`, or the topmost one under the pointer; flip it again to undo. For a sticker that faces one way.
+
+`--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+
+```bash
+driftwm msg decal flip 3
+driftwm msg decal flip
 ```
 
 #### `driftwm msg layout`

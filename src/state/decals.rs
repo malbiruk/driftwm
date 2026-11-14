@@ -33,11 +33,13 @@ pub struct DecalStore {
     /// is placed or loaded. A decal without one (the file vanished) is not drawn
     /// and cannot be hit.
     sizes: HashMap<PathBuf, Size<i32, Logical>>,
-    /// Uploaded images by path, filled by the renderer. The buffer is kept across
+    /// Uploaded images by path and whether mirrored, filled by the renderer. A
+    /// mirrored image is a second upload of the flipped pixels, made only when a
+    /// decal asks for it. The buffer is kept across
     /// frames so its element id is stable and the damage tracker sees a still
     /// image as still. `None` is a file that failed to decode, remembered so it
     /// is not decoded again every frame.
-    pub(crate) textures: HashMap<PathBuf, Option<TextureBuffer<GlesTexture>>>,
+    pub(crate) textures: HashMap<(PathBuf, bool), Option<TextureBuffer<GlesTexture>>>,
     /// A debounced save is waiting on its timer.
     save_armed: bool,
 }
@@ -124,6 +126,7 @@ impl DriftWm {
             path,
             position,
             scale,
+            flip: false,
         });
         self.decals_changed();
         Ok(id)
@@ -139,7 +142,8 @@ impl DriftWm {
         let removed = self.decals.items.remove(index);
         if !self.decals.items.iter().any(|d| d.path == removed.path) {
             self.decals.sizes.remove(&removed.path);
-            self.decals.textures.remove(&removed.path);
+            self.decals.textures.remove(&(removed.path.clone(), false));
+            self.decals.textures.remove(&(removed.path, true));
         }
         self.decals_changed();
         Ok(())
@@ -187,6 +191,19 @@ impl DriftWm {
     fn decals_changed(&mut self) {
         self.save_decals();
         self.mark_all_dirty();
+    }
+
+    /// Mirror decal `id` left to right, or back, and save.
+    pub(crate) fn flip_decal(&mut self, id: u64) -> Result<(), String> {
+        let decal = self
+            .decals
+            .items
+            .iter_mut()
+            .find(|d| d.id == id)
+            .ok_or_else(|| format!("no decal with id {id}"))?;
+        decal.flip = !decal.flip;
+        self.decals_changed();
+        Ok(())
     }
 
     /// Set decal `id`'s scale (a multiplier on its image size) and save.

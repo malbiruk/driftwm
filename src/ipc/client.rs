@@ -306,7 +306,7 @@ pub enum DecalCommand {
     },
     /// List the placed decals, bottom to top.
     ///
-    /// `--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0}]}}`.
+    /// `--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0,"flip":false}]}}`.
     List,
     /// Remove a decal by `<id>`, or the topmost one under the pointer.
     ///
@@ -322,6 +322,11 @@ pub enum DecalCommand {
     ///
     /// `--json` reply: `{"Ok":"Ok"}`.
     Scale { id: u64, scale: f64 },
+    /// Mirror a decal left to right by `<id>`, or the topmost one under the
+    /// pointer; flip it again to undo. For a sticker that faces one way.
+    ///
+    /// `--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+    Flip { id: Option<u64> },
 }
 
 #[derive(clap::Subcommand, Debug)]
@@ -564,6 +569,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
             }
             DecalCommand::List => DecalRequest::List,
             DecalCommand::Remove { id } => DecalRequest::Remove { id: *id },
+            DecalCommand::Flip { id } => DecalRequest::Flip { id: *id },
             DecalCommand::Scale { id, scale } => {
                 if !scale.is_finite() {
                     return Err("decal scale must be finite".to_string());
@@ -754,8 +760,13 @@ fn print_response(response: Response) {
         Response::Decals(decals) => {
             for d in decals {
                 println!(
-                    "{}: {} [{}, {}] x{}",
-                    d.id, d.path, d.position[0], d.position[1], d.scale
+                    "{}: {} [{}, {}] x{}{}",
+                    d.id,
+                    d.path,
+                    d.position[0],
+                    d.position[1],
+                    d.scale,
+                    if d.flip { " flipped" } else { "" }
                 );
             }
         }

@@ -33,14 +33,15 @@ pub(super) fn build_decal_elements(
         if !visible.overlaps(rect) {
             continue;
         }
-        if !state.decals.textures.contains_key(&decal.path) {
-            let loaded = load(renderer, &decal.path);
+        let key = (decal.path.clone(), decal.flip);
+        if !state.decals.textures.contains_key(&key) {
+            let loaded = load(renderer, &decal.path, decal.flip);
             if loaded.is_none() {
                 tracing::warn!("decals: could not load {}", decal.path.display());
             }
-            state.decals.textures.insert(decal.path.clone(), loaded);
+            state.decals.textures.insert(key.clone(), loaded);
         }
-        let Some(Some(buffer)) = state.decals.textures.get(&decal.path) else {
+        let Some(Some(buffer)) = state.decals.textures.get(&key) else {
             continue;
         };
         let Some(size) = state.decals.image_size(&decal.path) else {
@@ -71,9 +72,18 @@ pub(super) fn build_decal_elements(
 
 /// Decode `path` and upload it. Pixels are premultiplied here: the renderer
 /// blends textures as premultiplied alpha, so straight alpha would leave a dark
-/// fringe around every soft edge.
-fn load(renderer: &mut GlesRenderer, path: &std::path::Path) -> Option<TextureBuffer<GlesTexture>> {
-    let img = image::open(path).ok()?.into_rgba8();
+/// fringe around every soft edge. A mirrored decal is uploaded as mirrored
+/// pixels: smithay's `Transform::Flipped` converts the source rect against the
+/// destination size, so it only samples the whole image at a scale of 1.
+fn load(
+    renderer: &mut GlesRenderer,
+    path: &std::path::Path,
+    flip: bool,
+) -> Option<TextureBuffer<GlesTexture>> {
+    let mut img = image::open(path).ok()?.into_rgba8();
+    if flip {
+        image::imageops::flip_horizontal_in_place(&mut img);
+    }
     let (w, h) = img.dimensions();
     let mut raw = img.into_raw();
     for px in raw.chunks_exact_mut(4) {

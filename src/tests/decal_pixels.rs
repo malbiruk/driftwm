@@ -115,6 +115,83 @@ fn a_decal_lands_centered_on_its_canvas_point_and_blends_premultiplied() {
 
 #[test]
 #[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_flipped_decal_is_mirrored_left_to_right_in_place() {
+    let _gl = gl::lock();
+    let Some(renderer) = gl::surfaceless_renderer("decal flip") else {
+        return;
+    };
+    let temp = TempDir::new();
+    let image_path = temp.path().join("decal.png");
+    write_test_image(&image_path);
+
+    let mut f = Fixture::with_config(super::config("[background]\ntype = \"none\"\n"));
+    f.add_output(1, (800, 600));
+    gl::install(&mut f, renderer);
+    place(&mut f, &image_path, 1.0);
+    dispatch(
+        Request::Decal(DecalRequest::Flip { id: Some(1) }),
+        f.state(),
+    )
+    .unwrap();
+
+    let img = capture(&mut f, &temp.path().join("capture.png"));
+
+    assert!(
+        near(at(&img, 5, 0), RED, 2),
+        "the red half is now on the right"
+    );
+    assert!(
+        near(at(&img, -5, 0), HALF_GREY_PREMULTIPLIED, 3),
+        "and the soft half on the left, got {:?}",
+        at(&img, -5, 0)
+    );
+    assert_eq!(at(&img, -15, 0)[3], 0, "the footprint is unchanged");
+    assert_eq!(at(&img, 15, 0)[3], 0, "the footprint is unchanged");
+
+    gl::uninstall(&mut f);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn a_flipped_decal_keeps_its_footprint_at_other_scales() {
+    let _gl = gl::lock();
+    let Some(renderer) = gl::surfaceless_renderer("decal flip scaled") else {
+        return;
+    };
+    let temp = TempDir::new();
+    let image_path = temp.path().join("decal.png");
+    write_test_image(&image_path);
+
+    let mut f = Fixture::with_config(super::config("[background]\ntype = \"none\"\n"));
+    f.add_output(1, (800, 600));
+    gl::install(&mut f, renderer);
+    place(&mut f, &image_path, 0.5);
+    dispatch(
+        Request::Decal(DecalRequest::Flip { id: Some(1) }),
+        f.state(),
+    )
+    .unwrap();
+
+    let img = capture(&mut f, &temp.path().join("capture.png"));
+    // The 20 px image at 0.5 is 10 px wide, centered: x in [-5, 5).
+    assert!(
+        near(at(&img, 2, 0), RED, 2),
+        "red half on the right, got {:?}",
+        at(&img, 2, 0)
+    );
+    assert!(
+        near(at(&img, -3, 0), HALF_GREY_PREMULTIPLIED, 4),
+        "soft half on the left, got {:?}",
+        at(&img, -3, 0)
+    );
+    assert_eq!(at(&img, -8, 0)[3], 0);
+    assert_eq!(at(&img, 8, 0)[3], 0);
+
+    gl::uninstall(&mut f);
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
 fn scale_multiplies_the_image_size_about_its_center() {
     let _gl = gl::lock();
     let Some(renderer) = gl::surfaceless_renderer("decal scale") else {

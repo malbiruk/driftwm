@@ -479,3 +479,81 @@ fn scrolling_off_every_decal_scales_nothing() {
 
     assert_eq!(listed(&mut f), vec![(id, [0.0, 0.0], 1.0)]);
 }
+
+fn flip(f: &mut Fixture, id: Option<u64>) -> Result<u64, String> {
+    match dispatch(Request::Decal(DecalRequest::Flip { id }), f.state())? {
+        Response::Decal { id } => Ok(id),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+fn flipped(f: &mut Fixture) -> Vec<bool> {
+    match dispatch(Request::Decal(DecalRequest::List), f.state()).unwrap() {
+        Response::Decals(list) => list.into_iter().map(|d| d.flip).collect(),
+        other => panic!("unexpected reply {other:?}"),
+    }
+}
+
+#[test]
+fn flipping_toggles_and_leaves_position_and_scale_alone() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 16, 16);
+    let mut f = fixture();
+    let id = add(&mut f, &img, Some((30.0, -10.0)), 2.0).unwrap();
+    assert_eq!(flipped(&mut f), vec![false]);
+
+    assert_eq!(flip(&mut f, Some(id)), Ok(id));
+    assert_eq!(flipped(&mut f), vec![true]);
+    assert_eq!(listed(&mut f), vec![(id, [30.0, -10.0], 2.0)]);
+
+    flip(&mut f, Some(id)).unwrap();
+    assert_eq!(flipped(&mut f), vec![false], "flipping again undoes it");
+    assert!(flip(&mut f, Some(id + 1)).is_err());
+}
+
+#[test]
+fn flipping_with_no_id_takes_the_topmost_decal_under_the_pointer() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 100, 100);
+    let mut f = fixture();
+    let _under = add(&mut f, &img, Some((0.0, 0.0)), 1.0).unwrap();
+    let over = add(&mut f, &img, Some((20.0, 0.0)), 1.0).unwrap();
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        Point::<f64, Logical>::from((10.0, 0.0)),
+    );
+
+    assert_eq!(flip(&mut f, None), Ok(over));
+    assert_eq!(flipped(&mut f), vec![false, true]);
+
+    pointer_to(
+        &mut f,
+        &FakeDevice::mouse(),
+        Point::<f64, Logical>::from((400.0, 400.0)),
+    );
+    assert!(flip(&mut f, None).is_err(), "nothing under the pointer");
+}
+
+#[test]
+fn a_flip_is_saved_and_a_file_without_the_field_reads_unflipped() {
+    let tmp = TempDir::new();
+    let img = png(tmp.path(), "a.png", 16, 16);
+    let file = tmp.path().join("decals.json");
+    let mut f = fixture();
+    f.state().decals.path = Some(file.clone());
+    let id = add(&mut f, &img, Some((0.0, 0.0)), 1.0).unwrap();
+    flip(&mut f, Some(id)).unwrap();
+    assert!(decals::read(&file)[0].flip);
+
+    // A file from before decals could flip has no such field.
+    std::fs::write(
+        &file,
+        format!(
+            r#"{{"version":1,"decals":[{{"id":1,"path":{:?},"position":[0.0,0.0],"scale":1.0}}]}}"#,
+            img
+        ),
+    )
+    .unwrap();
+    assert!(!decals::read(&file)[0].flip);
+}

@@ -32,6 +32,9 @@ pub struct Decal {
     pub path: PathBuf,
     pub position: [f64; 2],
     pub scale: f64,
+    /// Mirrored left to right. Absent in files written before decals could flip.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -119,6 +122,7 @@ mod tests {
             path: PathBuf::from("/img/a.png"),
             position: [100.0, -50.0],
             scale: 1.0,
+            flip: false,
         }
     }
 
