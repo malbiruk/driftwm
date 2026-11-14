@@ -928,6 +928,8 @@ Mouse actions:
 
 - `move-window` — drag the window
 - `move-snapped-windows` — drag the window and its snap cluster
+- `move-decal` — drag the decal under the pointer (decals.md)
+- `scale-decal` — scroll to grow/shrink the decal under the pointer
 - `resize-window` — drag-resize the window
 - `resize-window-snapped` — drag-resize, carrying the snap cluster
 - `pan-viewport` — drag or scroll to pan the camera

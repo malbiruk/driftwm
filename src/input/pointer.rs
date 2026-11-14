@@ -18,7 +18,7 @@ use smithay::wayland::seat::WaylandFocus;
 use std::rc::Rc;
 
 use crate::decorations::DecorationHit;
-use crate::grabs::{MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
+use crate::grabs::{DecalGrab, MoveGrab, NavigateGrab, PanGrab, ResizeGrab};
 use crate::input::{DecoTarget, HitKind, PinnedChrome};
 use crate::state::{
     CLICK_NAVIGATE_SLOP, ClusterMember, ClusterResizeSnapshot, DriftWm, FocusTarget,
@@ -28,6 +28,9 @@ use driftwm::canvas::{self, CanvasPos, canvas_to_screen};
 use driftwm::config::{self, Action, BindingContext, Direction, MouseAction};
 use driftwm::window_ext::WindowExt;
 use smithay::reexports::wayland_server::Resource;
+
+/// How much one wheel notch of `scale-decal` grows (or shrinks) a decal.
+const DECAL_SCROLL_STEP: f64 = 1.1;
 
 impl DriftWm {
     /// Determine the binding context for the current pointer position.
@@ -614,6 +617,28 @@ impl DriftWm {
                         }
                         // Empty canvas or a widget — fall through to normal click
                     }
+                    MouseAction::MoveDecal => {
+                        // A decal sits below every window, so one under a window
+                        // is not reachable from here.
+                        if self.topmost_client_under(pos).is_none()
+                            && let Some(id) = self.decal_at(pos)
+                            && let Some(position) = self.decal_position(id)
+                        {
+                            let start_data = GrabStartData {
+                                focus: None,
+                                button,
+                                location: pos,
+                            };
+                            pointer.set_grab(
+                                self,
+                                DecalGrab::new(start_data, id, position),
+                                serial,
+                                Focus::Clear,
+                            );
+                            return;
+                        }
+                        // No decal there — fall through to normal click
+                    }
                     MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped => {
                         // Opt-in cluster propagation: only
                         // `ResizeWindowSnapped` captures the cluster; plain
@@ -681,7 +706,7 @@ impl DriftWm {
                         self.execute_action(action);
                         return;
                     }
-                    MouseAction::Zoom => {} // n/a for button clicks
+                    MouseAction::Zoom | MouseAction::ScaleDecal => {} // n/a for button clicks
                 }
             }
 
@@ -1744,6 +1769,18 @@ impl DriftWm {
                             // animation ticks, which warp through the guarded
                             // focus path.
                         }
+                    }
+                }
+                MouseAction::ScaleDecal => {
+                    // Same scroll reading as `Zoom`: a wheel notch is 15, so one
+                    // notch is `DECAL_SCROLL_STEP`. Up (negative) grows.
+                    let v = event
+                        .amount(Axis::Vertical)
+                        .or_else(|| event.amount_v120(Axis::Vertical).map(|v| v * 15.0 / 120.0))
+                        .unwrap_or(0.0);
+                    if v != 0.0 && self.topmost_client_under(pos).is_none() {
+                        let steps = (-v / 15.0).clamp(-3.0, 3.0);
+                        self.scale_decal_at(pos, DECAL_SCROLL_STEP.powf(steps));
                     }
                 }
                 _ => {} // other mouse actions don't apply to scroll

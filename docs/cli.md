@@ -63,8 +63,10 @@ driftwm msg --json focus --id 5
 | [`camera`](#driftwm-msg-camera) | Get the camera position, or pan the viewport to `<x> <y>` (canvas point, Y-up) |
 | [`zoom`](#driftwm-msg-zoom) | Get the zoom level, or set it with `<level>` |
 | [`bookmark`](#driftwm-msg-bookmark) | List bookmarks, get or set one by `<name>`, or delete with `--delete` |
+| [`decal`](#driftwm-msg-decal) | Pin images to the canvas: place, list, or remove decals |
 | [`layout`](#driftwm-msg-layout) | Print the active keyboard layout (full XKB name, e.g. `English (US)`) |
 | [`cursor`](#driftwm-msg-cursor) | Print the pointer position in the global output layout (logical pixels, Y-down, the space slurp prints) and the output it is on |
+| [`pointer`](#driftwm-msg-pointer) | Print the pointer position on the canvas (Y-up, the convention `decal add` and `move` take), so a script can remember where to place something after a menu has moved the pointer away |
 | [`action`](#driftwm-msg-action) | Run a config action, e.g. `action close-window`, `action switch-layout next` |
 | [`screenshot`](#driftwm-msg-screenshot) | Capture a canvas PNG. With no subcommand, captures the active output's current view of the canvas |
 | [`debug-counters`](#driftwm-msg-debug-counters) | Print internal collection sizes for leak diagnosis (unstable keys) |
@@ -307,6 +309,125 @@ driftwm msg bookmark inbox 500 300
 driftwm msg bookmark inbox --delete
 ```
 
+#### `driftwm msg decal`
+
+```
+driftwm msg decal <COMMAND>
+```
+
+Pin images to the canvas: place, list, or remove decals.
+
+A decal is a still image drawn at canvas coordinates, below every window and widget. It pans and zooms with the canvas, is not moved by window drags, snapping or fit (the `move-decal` mouse binding drags one), stays out of Alt-Tab, and is saved across restarts. It is not a window: close it with `decal remove`, not `close-window`.
+
+```bash
+driftwm msg decal list
+```
+
+| Command | Description |
+| --- | --- |
+| [`add`](#driftwm-msg-decal-add) | Place an image (PNG or JPEG, up to 32 MiB and 8192 px a side) |
+| [`list`](#driftwm-msg-decal-list) | List the placed decals, bottom to top |
+| [`remove`](#driftwm-msg-decal-remove) | Remove a decal by `<id>`, or the topmost one under the pointer |
+| [`move`](#driftwm-msg-decal-move) | Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up) |
+| [`scale`](#driftwm-msg-decal-scale) | Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scale` takes (0.01 to 64). The center stays put |
+| [`flip`](#driftwm-msg-decal-flip) | Mirror a decal left to right by `<id>`, or the topmost one under the pointer; flip it again to undo. For a sticker that faces one way |
+
+##### `driftwm msg decal add`
+
+```
+driftwm msg decal add [OPTIONS] <PATH> [X] [Y]
+```
+
+Place an image (PNG or JPEG, up to 32 MiB and 8192 px a side).
+
+With no coordinates the image is centered under the pointer. Coordinates are canvas points, Y-up and image-center, the same convention as `move`. Transparent pixels show the canvas background through.
+
+`--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+
+- `<PATH>` — Image file
+- `[X]` — X coordinate (Y-up). Requires `<y>`
+- `[Y]` — Y coordinate (Y-up)
+- `--scale <SCALE>` — Multiplier on the image's pixel size, in canvas units (default 1)
+- `--fit <FIT>` — Size the image's longest side to this many canvas units instead
+
+```bash
+driftwm msg decal add ~/stickers/anchor.png
+driftwm msg decal add ~/stickers/anchor.png 400 -250 --scale 0.5
+driftwm msg decal add ~/stickers/anchor.png --fit 256
+```
+
+##### `driftwm msg decal list`
+
+```
+driftwm msg decal list
+```
+
+List the placed decals, bottom to top.
+
+`--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0,"flip":false}]}}`.
+
+```bash
+driftwm msg --json decal list | jq '.Ok.Decals[].path'
+```
+
+##### `driftwm msg decal remove`
+
+```
+driftwm msg decal remove [ID]
+```
+
+Remove a decal by `<id>`, or the topmost one under the pointer.
+
+`--json` reply: `{"Ok":"Ok"}`.
+
+```bash
+driftwm msg decal remove 3
+driftwm msg decal remove
+```
+
+##### `driftwm msg decal move`
+
+```
+driftwm msg decal move <ID> <X> <Y>
+```
+
+Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up).
+
+`--json` reply: `{"Ok":"Ok"}`.
+
+```bash
+driftwm msg decal move 3 400 -250
+```
+
+##### `driftwm msg decal scale`
+
+```
+driftwm msg decal scale <ID> <SCALE>
+```
+
+Set decal `<id>`'s scale: a multiplier on its image's pixel size, as `add --scale` takes (0.01 to 64). The center stays put.
+
+`--json` reply: `{"Ok":"Ok"}`.
+
+```bash
+driftwm msg decal scale 3 0.5
+```
+
+##### `driftwm msg decal flip`
+
+```
+driftwm msg decal flip [ID]
+```
+
+Mirror a decal left to right by `<id>`, or the topmost one under the pointer; flip it again to undo. For a sticker that faces one way.
+
+`--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+
+```bash
+driftwm msg decal flip 3
+driftwm msg decal flip
+```
+
 #### `driftwm msg layout`
 
 ```
@@ -335,6 +456,21 @@ Print the pointer position in the global output layout (logical pixels, Y-down, 
 
 ```bash
 driftwm msg --json cursor
+```
+
+#### `driftwm msg pointer`
+
+```
+driftwm msg pointer
+```
+
+Print the pointer position on the canvas (Y-up, the convention `decal add` and `move` take), so a script can remember where to place something after a menu has moved the pointer away.
+
+`--json` reply: `{"Ok":{"Pointer":{"x":-40.5,"y":310.0}}}`.
+
+```bash
+driftwm msg pointer
+driftwm msg --json pointer | jq '.Ok.Pointer'
 ```
 
 #### `driftwm msg action`

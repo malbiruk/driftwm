@@ -187,6 +187,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => None,
     };
     data.load_session();
+    data.decals.path = data
+        .session_store
+        .path
+        .as_ref()
+        .map(|p| p.with_file_name("decals.json"));
+    data.load_decals();
 
     // Initialize backend BEFORE setting WAYLAND_DISPLAY.
     match backend_name.as_str() {

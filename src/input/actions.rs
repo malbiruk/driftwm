@@ -742,6 +742,7 @@ impl DriftWm {
                 // too, so it can share a batch with the client disconnects of a
                 // session manager tearing everything down at once.
                 self.session_store_cancel_debounce();
+                self.flush_decals();
                 self.loop_signal.stop();
             }
         }

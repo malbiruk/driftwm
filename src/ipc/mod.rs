@@ -13,6 +13,7 @@ use smithay::utils::{Logical, Point, Rectangle, SERIAL_COUNTER, Size};
 use smithay::wayland::seat::WaylandFocus;
 
 use crate::decorations::DecorationKey;
+use crate::state::decals::DecalSize;
 use crate::state::{DriftWm, NavZoom, RevealPan, StageWindow, SuspendedId};
 use driftwm::window_ext::WindowExt;
 
@@ -20,8 +21,8 @@ pub mod client;
 pub mod protocol;
 
 use self::protocol::{
-    Event, OutputInfo, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector,
-    socket_path,
+    DecalInfo, DecalRequest, Event, OutputInfo, Reply, Request, Response, ScreenshotTarget,
+    StateInfo, WindowSelector, socket_path,
 };
 
 /// Reject a command line longer than this (without a newline) — bounds the
@@ -268,6 +269,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Zoom(arg) => cmd_zoom(arg, state),
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
+        Request::Pointer => cmd_pointer(state),
         Request::State => Ok(cmd_state(state)),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
@@ -282,6 +284,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Relaunch(sel) => cmd_relaunch(sel, state),
         Request::Action(spec) => cmd_action(&spec, state),
         Request::Bookmark { name, to, delete } => cmd_bookmark(name, to, delete, state),
+        Request::Decal(request) => cmd_decal(request, state),
         Request::Screenshot {
             target,
             scale,
@@ -309,6 +312,13 @@ fn is_mutating(request: &Request) -> bool {
             // pick it up. Bare get/list (no `to`, no `delete`) stays a pure query.
             | Request::Bookmark { to: Some(_), .. }
             | Request::Bookmark { delete: true, .. }
+            | Request::Decal(
+                DecalRequest::Add { .. }
+                    | DecalRequest::Remove { .. }
+                    | DecalRequest::Move { .. }
+                    | DecalRequest::Scale { .. }
+                    | DecalRequest::Flip { .. }
+            )
     )
 }
 
@@ -396,6 +406,93 @@ fn cmd_cursor(state: &mut DriftWm) -> Reply {
         y: origin.y as f64 + screen.y,
         output: output.name(),
     })
+}
+
+/// The pointer's position in internal canvas coordinates (Y-down).
+fn pointer_canvas(
+    state: &DriftWm,
+) -> Result<smithay::utils::Point<f64, smithay::utils::Logical>, String> {
+    let pointer = state.seat.get_pointer().ok_or("no pointer")?;
+    if state.session_lock.is_locked() {
+        return Err("the screen is locked".to_string());
+    }
+    Ok(pointer.current_location())
+}
+
+fn cmd_pointer(state: &mut DriftWm) -> Reply {
+    let p = pointer_canvas(state)?;
+    Ok(Response::Pointer { x: p.x, y: -p.y })
+}
+
+fn cmd_decal(request: DecalRequest, state: &mut DriftWm) -> Reply {
+    match request {
+        DecalRequest::List => Ok(Response::Decals(
+            state
+                .decals
+                .items
+                .iter()
+                .map(|d| DecalInfo {
+                    id: d.id,
+                    path: d.path.to_string_lossy().into_owned(),
+                    position: d.position,
+                    scale: d.scale,
+                    flip: d.flip,
+                })
+                .collect(),
+        )),
+        DecalRequest::Add {
+            path,
+            at,
+            scale,
+            fit,
+        } => {
+            let size = match (scale, fit) {
+                (Some(_), Some(_)) => {
+                    return Err("give a scale or a fit size, not both".to_string());
+                }
+                (Some(scale), None) => DecalSize::Scale(scale),
+                (None, Some(fit)) => DecalSize::Fit(fit),
+                (None, None) => DecalSize::Scale(1.0),
+            };
+            let position = match at {
+                Some((x, y)) => [x, y],
+                None => {
+                    let p = pointer_canvas(state)?;
+                    [p.x, -p.y]
+                }
+            };
+            let id = state.add_decal(path.into(), position, size)?;
+            Ok(Response::Decal { id })
+        }
+        DecalRequest::Remove { id } => {
+            let id = match id {
+                Some(id) => id,
+                None => state
+                    .decal_at(pointer_canvas(state)?)
+                    .ok_or_else(|| "no decal under the pointer".to_string())?,
+            };
+            state.remove_decal(id)?;
+            Ok(Response::Ok)
+        }
+        DecalRequest::Move { id, to } => {
+            state.move_decal(id, [to.0, to.1])?;
+            Ok(Response::Ok)
+        }
+        DecalRequest::Flip { id } => {
+            let id = match id {
+                Some(id) => id,
+                None => state
+                    .decal_at(pointer_canvas(state)?)
+                    .ok_or_else(|| "no decal under the pointer".to_string())?,
+            };
+            state.flip_decal(id)?;
+            Ok(Response::Decal { id })
+        }
+        DecalRequest::Scale { id, scale } => {
+            state.scale_decal(id, scale)?;
+            Ok(Response::Ok)
+        }
+    }
 }
 
 fn cmd_layout(short: bool, state: &mut DriftWm) -> Reply {

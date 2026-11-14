@@ -201,7 +201,7 @@ pub fn partition_for_restore(
 /// Rename a bad file aside (`.<label>.<unix-ts>`) so startup can continue from
 /// empty. Best-effort: a failed rename just means the directory isn't writable,
 /// so the next write's tmp+rename can't clobber anything either.
-fn quarantine(path: &Path, label: &str) {
+pub(crate) fn quarantine(path: &Path, label: &str) {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs())
