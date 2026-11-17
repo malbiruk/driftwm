@@ -64,7 +64,8 @@ afterwards, so close any copy that is already running), then press the key.
 - **It follows the display.** With several monitors, showing a pinned
   scratchpad puts it on the monitor the pointer is on, not the one it was
   stowed from. It keeps its position relative to the monitor (centred stays
-  centred, whatever the sizes), and that becomes its position for the next
+  centred and flush stays flush, whatever the sizes; the share of free space
+  around the window is kept, so it never ends up off a smaller monitor), and that becomes its position for the next
   show.
 - **Focus.** Showing raises and focuses the window. Stowing the focused window
   hands focus to the most recently used other window.

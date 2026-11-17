@@ -191,7 +191,8 @@ impl DriftWm {
 
     /// Like [`send_pinned_to_output`](Self::send_pinned_to_output), but keeps
     /// the window's position *relative* to the output: a window centred on the
-    /// old output is centred on `target`, whatever the two sizes.
+    /// old output is centred on `target`, and one flush to an edge stays flush,
+    /// whatever the two sizes (see the free-space scaling in `rebind_pinned`).
     pub(crate) fn send_pinned_to_output_relative(&mut self, window: &Window, target: &Output) {
         self.rebind_pinned(window, target, true);
     }
@@ -207,17 +208,21 @@ impl DriftWm {
         let chrome = self.element_chrome(window);
         let content_size = window.geometry().size;
         if relative && let Some(from) = self.output_by_name(&site.output) {
-            // Scale the frame's centre, not its corner, so a centred window
-            // stays centred when the sizes differ.
+            // Scale the share of free space (output minus frame) on each
+            // side, not the centre: a fixed-size frame is a bigger part of a
+            // smaller output, so scaling the centre pushes it off-screen.
+            // Centred stays centred, flush stays flush, and it never leaves
+            // the output while it fits.
             let from_size = output_logical_size(&from);
             let frame_size = chrome.frame_size(content_size);
             let frame = chrome.frame_loc(site.screen_pos);
             let scale = |pos: i32, len: i32, from: i32, to: i32| {
-                if from <= 0 {
-                    return pos;
+                let (from_free, to_free) = (from - len, to - len);
+                if from_free <= 0 {
+                    return to_free / 2;
                 }
-                let centre = (pos as f64 + len as f64 / 2.0) / from as f64;
-                (centre * to as f64 - len as f64 / 2.0).round() as i32
+                let share = (pos as f64 / from_free as f64).clamp(0.0, 1.0);
+                (share * to_free as f64).round() as i32
             };
             site.screen_pos = chrome.content_loc(Point::from((
                 scale(frame.x, frame_size.w, from_size.w, target_size.w),

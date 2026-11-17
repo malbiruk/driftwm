@@ -391,3 +391,27 @@ fn show_keeps_the_position_relative_to_the_output() {
         "still centred"
     );
 }
+
+#[test]
+fn show_keeps_a_large_window_inside_a_smaller_output() {
+    let mut f = Fixture::with_config(config(PIN_RULE));
+    let out2 = f.add_output(2, (3440, 1440));
+    let out1 = f.add_output(1, (1920, 1080));
+    let client = f.add_client();
+    map_window(&mut f, client, "dd", (1600, 700));
+    let dd = window_by_app_id(&mut f, "dd").unwrap();
+    let mut site = f.state().stage.pin_of(&dd).cloned().unwrap();
+    assert_eq!(site.output, out2.name());
+    // Horizontally centred, 100px down: a dropdown on the ultrawide.
+    site.screen_pos = ((3440 - 1600) / 2, 100).into();
+    f.state().stage.set_pin(&dd, site);
+
+    f.state().toggle_scratchpad("dd", "true");
+    f.state().focused_output = Some(out1.clone());
+    f.state().toggle_scratchpad("dd", "true");
+
+    let site = f.state().stage.pin_of(&dd).cloned().unwrap();
+    assert_eq!(site.output, out1.name());
+    // Same share of the free space: 0.5 of 320, 100/740 of 380.
+    assert_eq!(site.screen_pos, (160, 51).into());
+}
