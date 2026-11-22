@@ -54,6 +54,7 @@ pub enum Action {
     Spawn(String),
     CloseWindow,
     SuspendWindow,
+    ToggleObscure,
     NudgeWindow(Direction),
     MoveToSnap(Direction),
     GrowWindow(Direction),
@@ -123,6 +124,7 @@ impl Action {
         matches!(
             self,
             Action::ToggleFullscreen
+                | Action::ToggleObscure
                 | Action::Spawn(_)
                 | Action::ReloadConfig
                 | Action::SwitchLayout(_)
@@ -908,6 +910,9 @@ pub struct AppliedWindowRule {
     pub preserve_aspect_ratio: bool,
     pub decoration: Option<DecorationMode>,
     pub blur: bool,
+    /// Runtime-only: the window is drawn as a mosaic (`toggle-obscure`). Never
+    /// set by a rule, so it is not saved with the session.
+    pub obscured: bool,
     pub opacity: Option<f64>,
     pub pass_keys: PassKeys,
     pub pass_mouse: PassMouse,
@@ -1004,6 +1009,7 @@ impl From<&WindowRule> for AppliedWindowRule {
             preserve_aspect_ratio: rule.preserve_aspect_ratio,
             decoration: rule.decoration.clone(),
             blur: rule.blur,
+            obscured: false,
             opacity: rule.opacity,
             pass_keys: rule.pass_keys.clone(),
             pass_mouse: rule.pass_mouse.clone(),

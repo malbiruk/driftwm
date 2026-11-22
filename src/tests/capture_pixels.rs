@@ -8,6 +8,7 @@
 //! Mesa's surfaceless EGL, self-skipping when that is missing); each scenario
 //! takes [`gl::lock`] first.
 
+use driftwm::config::Action;
 use smithay::output::Output;
 use smithay::utils::{Logical, Physical, Rectangle, Size, Transform};
 use wayland_client::protocol::wl_shm::Format;
@@ -431,6 +432,64 @@ fn an_ext_capture_into_a_buffer_that_does_not_fit_fails_on_constraints() {
             "nothing is written into a {what} buffer"
         );
     }
+
+    teardown(f, &output);
+}
+
+/// The whole output over wlr-screencopy, as RGB rows.
+fn capture_output(f: &mut Fixture, client: ClientId, output: &Output) -> Vec<[u8; 3]> {
+    let globals = f.client(client).bind_capture_globals();
+    f.roundtrip(client);
+    let (frame, record) = f.client(client).wlr_capture(&globals, &output.name(), None);
+    f.roundtrip(client);
+    let buffer = wlr_copy(f, client, &frame, &record, 0, 0);
+    f.roundtrip(client);
+    render_captures(f, output);
+    f.roundtrip(client);
+    assert!(record.lock().unwrap().ready, "the capture completed");
+    let (w, h, stride) = wlr_params(&record);
+    rgb_pixels(&buffer.pool_bytes(), 0, stride as usize, (w, h))
+}
+
+/// How many times the colour changes between neighbouring pixels along `row`.
+fn transitions(pixels: &[[u8; 3]], row: i32) -> usize {
+    let start = (row * i32::from(OUTPUT.0)) as usize;
+    pixels[start..start + usize::from(OUTPUT.0)]
+        .windows(2)
+        .filter(|pair| pair[0] != pair[1])
+        .count()
+}
+
+#[test]
+#[ignore = "needs Mesa surfaceless EGL; run with --include-ignored"]
+fn an_obscured_window_is_a_mosaic_in_screencopy_and_restores_when_toggled_back() {
+    let _gl = gl::lock();
+    let Some((mut f, output, client)) = setup("obscure in screencopy") else {
+        return;
+    };
+    let row = i32::from(OUTPUT.1) / 2;
+
+    let sharp = capture_output(&mut f, client, &output);
+    assert!(
+        transitions(&sharp, row) > 400,
+        "the gradient changes colour at nearly every pixel"
+    );
+
+    f.state().execute_action(&Action::ToggleObscure);
+    let covered = capture_output(&mut f, client, &output);
+    let blocks = transitions(&covered, row);
+    assert!(
+        blocks > 0 && blocks * 8 < transitions(&sharp, row),
+        "an obscured row changes colour once per mosaic cell, not per pixel: {blocks}"
+    );
+    assert_ne!(covered, sharp, "the window picture changed");
+
+    f.state().execute_action(&Action::ToggleObscure);
+    assert_eq!(
+        capture_output(&mut f, client, &output),
+        sharp,
+        "toggling back restores the sharp picture"
+    );
 
     teardown(f, &output);
 }

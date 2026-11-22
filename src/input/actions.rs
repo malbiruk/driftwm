@@ -228,6 +228,7 @@ impl DriftWm {
                 // call rather than a guarded Client arm.
                 _ => self.suspend_focused_window(suspend_restore_rect),
             },
+            Action::ToggleObscure => self.toggle_obscure_focused(),
             Action::NudgeWindow(dir) => {
                 if let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e))
                     && let Some(loc) = self.stage.position_of(&element)

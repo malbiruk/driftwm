@@ -91,6 +91,7 @@ fn push_layer_chrome(
             zoom,
             output_scale,
             None,
+            false,
         );
     } else {
         push_plain(target, surface_elements);

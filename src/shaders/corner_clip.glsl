@@ -5,6 +5,12 @@
 // discarded; pixels near the rounded corners get alpha-faded.
 //
 // Combines clipped-surface and rounding-alpha logic into one fragment shader.
+//
+// With OBSCURE defined (a second compiled variant, used for windows toggled by
+// `toggle-obscure`) the sampled color is replaced by the average of its mosaic
+// cell, so the picture is unreadable while the clip and rounding below still
+// apply unchanged. Cells are laid out in geometry space, which keeps them
+// aligned across a window's subsurfaces and scaling with canvas zoom.
 //_DEFINES_
 
 #if defined(EXTERNAL)
@@ -30,6 +36,27 @@ uniform float aa_scale; // output_scale * zoom — keeps AA band ~1 output px wi
 uniform vec2 geo_size; // window geometry size (pre-zoom physical)
 uniform vec4 corner_radius; // (top_left, top_right, bottom_right, bottom_left)
 uniform mat3 input_to_geo; // buffer UV → geometry-normalized [0,1]²
+
+#if defined(OBSCURE)
+#define OBSCURE_BLOCK 16.0 // cell edge, logical px
+
+vec4 obscured_sample(vec2 coords_geo) {
+    vec2 px = coords_geo * geo_size;
+    vec2 cell = floor(px / OBSCURE_BLOCK);
+    // Buffer UV moves linearly with geometry space; input_to_geo is a pure
+    // scale + translate, so its diagonal is the whole Jacobian.
+    vec2 uv_per_geo = 1.0 / vec2(input_to_geo[0][0], input_to_geo[1][1]);
+    vec4 sum = vec4(0.0);
+    for (int i = 0; i < 3; i++) {
+        for (int j = 0; j < 3; j++) {
+            vec2 tap_px = (cell + (vec2(float(i), float(j)) + 0.5) / 3.0) * OBSCURE_BLOCK;
+            vec2 uv = v_coords + (tap_px / geo_size - coords_geo) * uv_per_geo;
+            sum += texture2D(tex, clamp(uv, 0.0, 1.0));
+        }
+    }
+    return sum / 9.0;
+}
+#endif
 
 float corner_alpha(vec2 coords, vec2 size, vec4 r) {
     vec2 center;
@@ -57,7 +84,11 @@ float corner_alpha(vec2 coords, vec2 size, vec4 r) {
 void main() {
     vec3 coords_geo = input_to_geo * vec3(v_coords, 1.0);
 
+#if defined(OBSCURE)
+    vec4 color = obscured_sample(coords_geo.xy);
+#else
     vec4 color = texture2D(tex, v_coords);
+#endif
     #ifdef NO_ALPHA
     color = vec4(color.rgb, 1.0);
     #endif

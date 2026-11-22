@@ -40,7 +40,7 @@ pub use screenshot::capture_region_to_png;
 pub use shader_chunks::ShaderChunkCache;
 pub use shaders::{
     BorderPhysKey, ShadowPhysKey, compile_border_shader, compile_corner_clip_shader,
-    compile_shadow_shader,
+    compile_obscure_shader, compile_shadow_shader,
 };
 pub use tile_chunks::BgChunkCache;
 
@@ -195,6 +195,7 @@ fn push_corner_clipped_elements(
     zoom: f64,
     output_scale: f64,
     animation: Option<WindowRenderAnimation>,
+    obscured: bool,
 ) {
     let aa_scale = (output_scale * zoom) as f32;
     // Clamp radii so a tiny window doesn't get corners wider than half its
@@ -216,7 +217,8 @@ fn push_corner_clipped_elements(
                 clamped,
                 output_scale,
                 aa_scale,
-            ),
+            )
+            .obscured(obscured),
             Point::<i32, Physical>::from((0, 0)),
             zoom,
         );
@@ -232,6 +234,75 @@ fn push_corner_clipped_elements(
         } else {
             target.push(OutputRenderElements::CsdWindow(elem));
         }
+    }
+}
+
+/// Body of a window that bypasses the corner clip (bare, fullscreen, no
+/// rounding). An obscured window still has to wear the mosaic here, so it
+/// takes the clip path with square corners over its geometry.
+fn push_body_plain(
+    target: &mut Vec<OutputRenderElements>,
+    elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    zoom: f64,
+    animation: Option<WindowRenderAnimation>,
+    obscure: Option<(&GlesTexProgram, Rectangle<f64, Logical>)>,
+    output_scale: f64,
+) {
+    match obscure {
+        Some((shader, geometry)) => push_corner_clipped_elements(
+            target,
+            elems,
+            shader,
+            geometry,
+            [0.0; 4],
+            zoom,
+            output_scale,
+            animation,
+            true,
+        ),
+        None => push_plain_elements(target, elems, zoom, animation),
+    }
+}
+
+/// Popups, which may extend outside the window's geometry: an obscured window
+/// mosaics each popup element over its own rect rather than the window's.
+fn push_popups(
+    target: &mut Vec<OutputRenderElements>,
+    elems: Vec<WaylandSurfaceRenderElement<GlesRenderer>>,
+    zoom: f64,
+    animation: Option<WindowRenderAnimation>,
+    obscure_shader: Option<&GlesTexProgram>,
+    output_scale: f64,
+) {
+    let Some(shader) = obscure_shader else {
+        return push_plain_elements(target, elems, zoom, animation);
+    };
+    let scale = Scale::from(output_scale);
+    for elem in elems {
+        let rect = smithay::backend::renderer::element::Element::geometry(&elem, scale);
+        let geometry = Rectangle::new(
+            (
+                rect.loc.x as f64 / output_scale,
+                rect.loc.y as f64 / output_scale,
+            )
+                .into(),
+            (
+                rect.size.w as f64 / output_scale,
+                rect.size.h as f64 / output_scale,
+            )
+                .into(),
+        );
+        push_corner_clipped_elements(
+            target,
+            vec![elem],
+            shader,
+            geometry,
+            [0.0; 4],
+            zoom,
+            output_scale,
+            animation,
+            true,
+        );
     }
 }
 
@@ -463,6 +534,23 @@ pub(crate) fn compose_capture_elements(
         };
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
 
+        let obscure_shader = applied
+            .as_ref()
+            .is_some_and(|r| r.obscured)
+            .then(|| state.render.obscure_shader.clone())
+            .flatten();
+        let obscured = obscure_shader.is_some();
+        let obscure_body = obscure_shader.as_ref().map(|shader| {
+            let wg = window.geometry();
+            let geometry = Rectangle::new(
+                Point::<f64, Logical>::from((
+                    render_loc.x + wg.loc.x as f64,
+                    render_loc.y + wg.loc.y as f64,
+                )),
+                Size::<f64, Logical>::from((wg.size.w as f64, wg.size.h as f64)),
+            );
+            (shader, geometry)
+        });
         let (elems, popup_elems) = if let Some(toplevel) = window.toplevel() {
             let root = toplevel.wl_surface();
             let top =
@@ -504,7 +592,14 @@ pub(crate) fn compose_capture_elements(
 
         let target = if is_widget { &mut widgets } else { &mut normal };
         // Popups push first so they sit above the title bar and window content.
-        push_plain_elements(target, popup_elems, zoom, None);
+        push_popups(
+            target,
+            popup_elems,
+            zoom,
+            None,
+            obscure_shader.as_ref(),
+            output_scale,
+        );
 
         if has_ssd {
             let bar_height = state.config.decorations.title_bar_height;
@@ -575,12 +670,13 @@ pub(crate) fn compose_capture_elements(
                         zoom,
                         output_scale,
                         None,
+                        obscured,
                     );
                 } else {
-                    push_plain_elements(target, elems, zoom, None);
+                    push_body_plain(target, elems, zoom, None, obscure_body, output_scale);
                 }
             } else {
-                push_plain_elements(target, elems, zoom, None);
+                push_body_plain(target, elems, zoom, None, obscure_body, output_scale);
             }
 
             if effective_bw > 0
@@ -646,12 +742,13 @@ pub(crate) fn compose_capture_elements(
                 push_corner_clipped_elements(
                     target,
                     elems,
-                    shader,
+                    obscure_shader.as_ref().unwrap_or(shader),
                     geometry,
                     [radius, radius, radius, radius],
                     zoom,
                     output_scale,
                     None,
+                    obscured,
                 );
 
                 if effective_bw > 0
@@ -698,10 +795,10 @@ pub(crate) fn compose_capture_elements(
                     );
                 }
             } else {
-                push_plain_elements(target, elems, zoom, None);
+                push_body_plain(target, elems, zoom, None, obscure_body, output_scale);
             }
         } else {
-            push_plain_elements(target, elems, zoom, None);
+            push_body_plain(target, elems, zoom, None, obscure_body, output_scale);
         }
     }
 
@@ -1184,6 +1281,9 @@ pub fn compose_frame(
         // then maps exactly as it maps the live content.
         let resize_overlay = element_id
             .and_then(|id| state.resize_crossfades.get(&id))
+            // The overlay is the old content's pixels, which an obscured
+            // window must not show.
+            .filter(|_| !applied.as_ref().is_some_and(|r| r.obscured))
             .map(|crossfade| {
                 let geometry_phys: Point<f64, Physical> = Point::from((
                     (render_loc.x + geom_loc.x as f64) * zoom * output_scale,
@@ -1202,6 +1302,23 @@ pub fn compose_frame(
         // `Window::render_elements` bundles popups into one vec, which is why
         // we can't use it directly for Wayland.
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
+        let obscure_shader = applied
+            .as_ref()
+            .is_some_and(|r| r.obscured)
+            .then(|| state.render.obscure_shader.clone())
+            .flatten();
+        let obscured = obscure_shader.is_some();
+        let obscure_body = obscure_shader.as_ref().map(|shader| {
+            let wg = window.geometry();
+            let geometry = Rectangle::new(
+                Point::<f64, Logical>::from((
+                    render_loc.x + wg.loc.x as f64,
+                    render_loc.y + wg.loc.y as f64,
+                )),
+                Size::<f64, Logical>::from((wg.size.w as f64, wg.size.h as f64)),
+            );
+            (shader, geometry)
+        });
         let (elems, popup_elems) = if let Some(toplevel) = window.toplevel() {
             let root = toplevel.wl_surface();
             let top =
@@ -1252,7 +1369,14 @@ pub fn compose_frame(
 
         // Popups push first (earlier in vec = on-top in smithay z-order) so
         // they sit above the title bar and clipped window content.
-        push_plain_elements(target, popup_elems, zoom, window_animation);
+        push_popups(
+            target,
+            popup_elems,
+            zoom,
+            window_animation,
+            obscure_shader.as_ref(),
+            output_scale,
+        );
         // Where a resize crossfade goes: above the live content, below the SSD
         // bar and popups. Spliced in at the end so the branches below stay one
         // content push each.
@@ -1352,18 +1476,33 @@ pub fn compose_frame(
                     push_corner_clipped_elements(
                         target,
                         elems,
-                        shader,
+                        obscure_shader.as_ref().unwrap_or(shader),
                         geometry,
                         [0.0, 0.0, radius, radius],
                         zoom,
                         output_scale,
                         window_animation,
+                        obscured,
                     );
                 } else {
-                    push_plain_elements(target, elems, zoom, window_animation);
+                    push_body_plain(
+                        target,
+                        elems,
+                        zoom,
+                        window_animation,
+                        obscure_body,
+                        output_scale,
+                    );
                 }
             } else {
-                push_plain_elements(target, elems, zoom, window_animation);
+                push_body_plain(
+                    target,
+                    elems,
+                    zoom,
+                    window_animation,
+                    obscure_body,
+                    output_scale,
+                );
             }
 
             // Border wraps title bar + content; drawn between window content
@@ -1449,12 +1588,13 @@ pub fn compose_frame(
                 push_corner_clipped_elements(
                     target,
                     elems,
-                    shader,
+                    obscure_shader.as_ref().unwrap_or(shader),
                     geometry,
                     [radius, radius, radius, radius],
                     zoom,
                     output_scale,
                     window_animation,
+                    obscured,
                 );
 
                 if effective_bw > 0
@@ -1507,10 +1647,24 @@ pub fn compose_frame(
                 }
             } else {
                 // Bare (`decoration = "none"`) or fullscreen: pass through.
-                push_plain_elements(target, elems, zoom, window_animation);
+                push_body_plain(
+                    target,
+                    elems,
+                    zoom,
+                    window_animation,
+                    obscure_body,
+                    output_scale,
+                );
             }
         } else {
-            push_plain_elements(target, elems, zoom, window_animation);
+            push_body_plain(
+                target,
+                elems,
+                zoom,
+                window_animation,
+                obscure_body,
+                output_scale,
+            );
         }
 
         // In-bucket, ahead of the trailing shadow, so the blur element counts

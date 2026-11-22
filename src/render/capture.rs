@@ -652,9 +652,16 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
         let origin = Point::<i32, smithay::utils::Logical>::from((-geo.loc.x, -geo.loc.y))
             .to_physical_precise_round(scale);
 
-        let opacity = driftwm::config::applied_rule(surface)
-            .and_then(|r| r.opacity)
-            .unwrap_or(1.0) as f32;
+        let applied = driftwm::config::applied_rule(surface);
+        let opacity = applied.as_ref().and_then(|r| r.opacity).unwrap_or(1.0) as f32;
+        let obscured = applied.as_ref().is_some_and(|r| r.obscured);
+        let obscure_shader = state.render.obscure_shader.clone();
+        // An obscured window has to leave through the mosaic or not at all.
+        if obscured && obscure_shader.is_none() {
+            capture.frame.failed(fail_reason);
+            continue;
+        }
+        let obscure_shader = obscured.then_some(obscure_shader).flatten();
 
         let surface_elems = render_elements_from_surface_tree::<
             _,
@@ -692,11 +699,29 @@ pub fn render_toplevel_captures(state: &mut crate::state::DriftWm, renderer: &mu
         // Wrap in OutputRenderElements (the Layer variant is a plain
         // WaylandSurfaceRenderElement passthrough). Popups go FIRST so
         // they sit above the surface tree in smithay's z-order.
-        let elems: Vec<OutputRenderElements> = popup_elems
-            .into_iter()
-            .chain(surface_elems)
-            .map(OutputRenderElements::Layer)
-            .collect();
+        let elems: Vec<OutputRenderElements> = match obscure_shader.as_ref() {
+            Some(shader) => {
+                let body = smithay::utils::Rectangle::from_size(
+                    (geo.size.w as f64, geo.size.h as f64).into(),
+                );
+                let mut elems = Vec::new();
+                super::push_popups(&mut elems, popup_elems, 1.0, None, Some(shader), 1.0);
+                super::push_body_plain(
+                    &mut elems,
+                    surface_elems,
+                    1.0,
+                    None,
+                    Some((shader, body)),
+                    1.0,
+                );
+                elems
+            }
+            None => popup_elems
+                .into_iter()
+                .chain(surface_elems)
+                .map(OutputRenderElements::Layer)
+                .collect(),
+        };
         let elems_refs: Vec<&OutputRenderElements> = elems.iter().collect();
 
         // Cache key derived from the captured surface — keeps GlesTexture +
