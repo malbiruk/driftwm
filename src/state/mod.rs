@@ -1111,9 +1111,10 @@ pub struct DriftWm {
     /// The viewport `(camera, zoom)` sloppy focus was last evaluated at, on the
     /// active output. Written by [`DriftWm::maybe_hover_focus`] on every path
     /// through it, and by the pull while [`Self::hover_follows_camera`] holds
-    /// it back; read by [`DriftWm::refresh_pointer_focus`] to tell a viewport
-    /// that has moved — the case where a different window slides under a cursor
-    /// that never does — from a scene change that left the one under it alone.
+    /// it back or touch hides the cursor; read by
+    /// [`DriftWm::refresh_pointer_focus`] to tell a viewport that has moved —
+    /// the case where a different window slides under a cursor that never
+    /// does — from a scene change that left the one under it alone.
     pub hover_viewport: Option<(Point<f64, Logical>, f64)>,
     /// Whether a camera move may still hand sloppy focus to whatever slides
     /// under the cursor — the viewport gate's other half, beside
@@ -1125,7 +1126,8 @@ pub struct DriftWm {
     /// camera move the user drives brings it back, since then the viewport is
     /// where they are looking and sloppy focus owes them the window it lands
     /// on. Real pointer motion never reads it: a hover the user steered to with
-    /// the cursor is unaffected.
+    /// the cursor is unaffected. The pull also declines while touch hides the
+    /// cursor, regardless of this flag.
     pub hover_follows_camera: bool,
     /// wl_surface commits since the last rendered frame. Tracy diagnostic
     /// counter (plotted as `frame.commits`); sampled and reset on every
