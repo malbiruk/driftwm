@@ -10,15 +10,18 @@
 //! unbound path to the app instead of panning the canvas — the cap sits on
 //! that path, and the claim is the shortest way to reach it.
 
+use smithay::backend::input::AxisSource;
 use smithay::desktop::Window;
 use smithay::utils::{Logical, Point};
 
+use crate::state::StageWindow;
+
 use super::client::ClientId;
 use super::input_backend::{
-    FakeDevice, key_press, pointer_to, trackpad_scroll_axes_at, trackpad_scroll_lift_at,
+    FakeDevice, axis_at, key_press, pointer_to, trackpad_scroll_axes_at, trackpad_scroll_lift_at,
     wheel_notch_down,
 };
-use super::{Fixture, config, map_window, window_by_app_id};
+use super::{Fixture, config, map_window, pointer_focus, server_surface, window_by_app_id};
 
 /// Super is the default `mod_key`, so it is what a `mod+…` claim needs held.
 const KEY_LEFTMETA: u32 = 125;
@@ -47,6 +50,12 @@ fn scroll_v(f: &mut Fixture, clock: &mut u32, amount: f64) {
 fn scroll_h(f: &mut Fixture, clock: &mut u32, amount: f64) {
     *clock += FRAME_MS;
     trackpad_scroll_axes_at(f, &FakeDevice::touchpad(), (Some(amount), None), *clock);
+}
+
+/// A frame with both axes spelled out, `FRAME_MS` after the previous one.
+fn scroll_hv(f: &mut Fixture, clock: &mut u32, amount: (Option<f64>, Option<f64>)) {
+    *clock += FRAME_MS;
+    trackpad_scroll_axes_at(f, &FakeDevice::touchpad(), amount, *clock);
 }
 
 /// Lift both fingers, `FRAME_MS` after the previous frame.
@@ -125,9 +134,9 @@ fn a_spike_reaches_the_client_capped_to_the_gesture_speed() {
     );
 }
 
-/// The lift sends a delta of its own ahead of the stop — half the gesture's
-/// average here — so the speed the client flings from is the gesture's, not
-/// whatever the pad reported last.
+/// The lift sends a delta of its own ahead of the stop — a fixed fraction of
+/// the gesture's average — so the speed the client flings from is the
+/// gesture's, not whatever the pad reported last.
 #[test]
 fn a_lift_parts_with_a_fraction_of_the_gesture_speed() {
     let mut f = Fixture::with_config(config(LIFTOFF));
@@ -142,7 +151,81 @@ fn a_lift_parts_with_a_fraction_of_the_gesture_speed() {
     assert_eq!(
         client_axes(&mut f, id),
         vec![15.0, 15.0, 15.0, 15.0, 4.5],
-        "the parting delta is half the sliding average and precedes the stop"
+        "the parting delta is a fraction of the sliding average and precedes the stop"
+    );
+}
+
+/// A lift stops both axes. A frame that stops one while the other still moves
+/// is the gesture carrying on along the other: it parts with nothing, and the
+/// frames after it are still capped against the gesture so far.
+#[test]
+fn a_stop_on_one_axis_mid_gesture_is_not_a_lift() {
+    let mut f = Fixture::with_config(config(LIFTOFF));
+    let (id, _) = window_under_pointer(&mut f);
+
+    let clock = &mut gesture_clock();
+    for _ in 0..4 {
+        scroll_hv(&mut f, clock, (Some(15.0), Some(15.0)));
+    }
+    scroll_hv(&mut f, clock, (Some(0.0), Some(15.0)));
+    scroll_v(&mut f, clock, 150.0);
+
+    assert_eq!(
+        client_axes(&mut f, id),
+        vec![15.0, 15.0, 15.0, 15.0, 15.0, 16.5],
+        "no parting delta at the sideways stop, and the spike after it arrives at the cap"
+    );
+}
+
+/// The parting delta belongs to the surface the gesture scrolled. Pointer
+/// focus is re-picked on every scroll event, so a window that comes up under
+/// a resting cursor between the last delta and the lift holds the pointer at
+/// the lift, and it never saw the gesture it would be flung from.
+#[test]
+fn a_surface_that_came_under_the_pointer_gets_no_parting_delta() {
+    let mut f = Fixture::with_config(config(LIFTOFF));
+    let (first_id, first) = window_under_pointer(&mut f);
+
+    let clock = &mut gesture_clock();
+    for _ in 0..4 {
+        scroll_v(&mut f, clock, 15.0);
+    }
+
+    // Its own client, since scroll is logged per client, and the same app_id,
+    // so the same claim keeps the lift on the path to the app.
+    let second_id = f.add_client();
+    map_window(&mut f, second_id, "app", (400, 300));
+    let second = f
+        .state()
+        .stage
+        .windows()
+        .filter_map(|w| w.client())
+        .find(|w| **w != first)
+        .cloned()
+        .expect("the second window is staged");
+    f.state().with_output_state(|os| {
+        os.camera_target = None;
+        os.zoom_target = None;
+    });
+    let loc = f.state().stage.position_of(&first).expect("staged");
+    f.state()
+        .map_window(StageWindow::Client(second.clone()), loc, true);
+    lift(&mut f, clock);
+
+    assert_eq!(
+        pointer_focus(&mut f),
+        Some(server_surface(&second)),
+        "precondition: the second window holds the pointer at the lift"
+    );
+    assert_eq!(
+        client_axes(&mut f, first_id),
+        vec![15.0, 15.0, 15.0, 15.0],
+        "precondition: the gesture scrolled the first window"
+    );
+    assert_eq!(
+        client_axes(&mut f, second_id),
+        Vec::<f64>::new(),
+        "the window that came under the pointer receives no scroll from the lift"
     );
 }
 
@@ -324,4 +407,52 @@ scroll_liftoff_damping = {damping}
         .with_output_state(|os| os.momentum.velocity)
         .expect("an output to fling on");
     (v.x * v.x + v.y * v.y).sqrt()
+}
+
+/// A wheel has no contact to break, so a wheel pan says nothing about the speed
+/// of the finger scroll after it. Counted as a sample, it would fill the window
+/// early and squash the opening of a finger flick against the wheel's speed.
+#[test]
+fn a_wheel_pan_does_not_count_toward_the_cap_of_a_finger_scroll_after_it() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[input.trackpad]
+scroll_liftoff_damping = true
+
+[mouse.on-canvas]
+"wheel-scroll" = "pan-viewport"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    f.state().with_output_state(|os| {
+        os.camera = Point::from((0.0, 0.0));
+        os.zoom = 1.0;
+        os.camera_target = None;
+        os.zoom_target = None;
+    });
+    // Empty canvas, where the trackpad pans by default and the wheel by the
+    // binding above.
+    pointer_to(&mut f, &FakeDevice::mouse(), Point::from((960.0, 540.0)));
+
+    let clock = &mut gesture_clock();
+    axis_at(
+        &mut f,
+        &FakeDevice::mouse(),
+        AxisSource::Wheel,
+        (None, Some(15.0)),
+        Some(120.0),
+        *clock,
+    );
+    scroll_v(&mut f, clock, 15.0);
+    scroll_v(&mut f, clock, 15.0);
+    let before = f.state().camera();
+    scroll_v(&mut f, clock, 150.0);
+    let moved = f.state().camera().y - before.y;
+
+    let full = 150.0 * f.state().config.trackpad_speed;
+    assert!(
+        (moved - full).abs() < 1e-9,
+        "two finger frames are too few to cap against, so the flick pans in full: \
+         expected {full} px, moved {moved} px"
+    );
 }

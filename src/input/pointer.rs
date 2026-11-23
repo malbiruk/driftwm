@@ -1691,10 +1691,15 @@ impl DriftWm {
                         if source == AxisSource::Finger {
                             self.set_last_scroll_pan(Some(std::time::Instant::now()));
                         }
-                        // Delivered, not swallowed, so it counts toward the
-                        // speed the next cap measures against.
                         panned = true;
-                        self.record_scroll_sample(amounts, Event::time_msec(&event));
+                        // A delivered finger scroll counts toward the speed the
+                        // next cap measures against; a wheel is no part of that
+                        // gesture.
+                        if source == AxisSource::Finger
+                            && self.config.trackpad.scroll_liftoff_damping
+                        {
+                            self.record_scroll_sample(amounts, Event::time_msec(&event));
+                        }
                         let s = self.config.trackpad_speed;
                         let canvas_delta: Point<f64, smithay::utils::Logical> =
                             Point::from((h * s / self.zoom(), v * s / self.zoom()));
@@ -1860,7 +1865,8 @@ impl DriftWm {
     }
 
     /// Forward a scroll frame to the client, recording `amounts` — the damped
-    /// values it was built from — as this gesture's latest sample. A
+    /// values it was built from — as this gesture's latest sample, and the
+    /// frame with the pointer focus it went to as the last delivery. A
     /// finger-lift parts with a delta of its own ahead of the stop; see
     /// [`Self::damp_axis_amounts`] for why.
     fn forward_client_axis(&mut self, frame: AxisFrame, amounts: (Option<f64>, Option<f64>)) {
@@ -1871,7 +1877,9 @@ impl DriftWm {
             return;
         }
 
-        if frame.stop.0 || frame.stop.1 {
+        // A lift stops both axes. A stop on one while the other still moves
+        // is the gesture carrying on along the other.
+        if frame.stop.0 && frame.stop.1 {
             self.send_parting_delta(frame.time);
             self.reset_scroll_window();
             self.send_axis_frame(frame);
@@ -1879,7 +1887,8 @@ impl DriftWm {
         }
 
         self.record_scroll_sample(amounts, frame.time);
-        self.scroll_last_frame = Some(frame);
+        let focus = self.seat.get_pointer().unwrap().current_focus();
+        self.scroll_last_frame = Some((frame, focus));
         self.send_axis_frame(frame);
     }
 
@@ -1907,11 +1916,16 @@ impl DriftWm {
 
     /// Send the parting delta a finger-lift gets instead of the pad's own
     /// burst: the window's signed mean scaled by [`SCROLL_FLING`], on the
-    /// source and in the direction of the frames before it.
+    /// source and in the direction of the frames before it. Only to the
+    /// surface those frames went to: focus is re-picked on every scroll, and a
+    /// surface that came under the cursor since never saw the gesture.
     fn send_parting_delta(&mut self, time: u32) {
-        let Some(template) = self.scroll_last_frame else {
+        let Some((template, focus)) = self.scroll_last_frame.clone() else {
             return;
         };
+        if self.seat.get_pointer().unwrap().current_focus() != focus {
+            return;
+        }
         if self.scroll_window.is_empty() {
             return;
         }

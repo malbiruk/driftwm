@@ -968,7 +968,8 @@ pub struct DriftWm {
 
     /// The last finger-scroll deltas delivered, newest last: the sliding
     /// window `trackpad.scroll_liftoff_damping` caps against and parts from.
-    /// Cleared at every lift; wheels and other axis sources never touch it.
+    /// Cleared at every lift; wheels and other axis sources clear it and never
+    /// add to it.
     ///
     /// Per axis the sample is `None` when the event carried no delta for it,
     /// which is not the same as a delta of zero: counting an absent axis as
@@ -983,10 +984,12 @@ pub struct DriftWm {
     /// dropped rather than used.
     pub scroll_window_time: Option<u32>,
 
-    /// The last finger-scroll frame delivered, the template the parting delta
-    /// at a lift is built from — it carries the source and per-axis relative
-    /// direction the client is already seeing.
-    pub scroll_last_frame: Option<smithay::input::pointer::AxisFrame>,
+    /// The last finger-scroll frame delivered and the pointer focus it went
+    /// to. The frame is the template the parting delta at a lift is built
+    /// from — it carries the source and per-axis relative direction the
+    /// client is already seeing — and the focus is the one surface that delta
+    /// may reach.
+    pub scroll_last_frame: Option<(smithay::input::pointer::AxisFrame, Option<FocusTarget>)>,
 
     pub tap: TapTracker,
     /// Action queued by a completed tap chord, run after the closure forwards

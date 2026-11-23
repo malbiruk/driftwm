@@ -776,7 +776,7 @@ fn axis(f: &mut Fixture, device: &FakeDevice, source: AxisSource, amount: f64, v
     axis_at(f, device, source, (None, Some(amount)), v120, next_time());
 }
 
-fn axis_at(
+pub fn axis_at(
     f: &mut Fixture,
     device: &FakeDevice,
     source: AxisSource,
