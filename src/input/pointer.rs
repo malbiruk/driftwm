@@ -1664,9 +1664,10 @@ impl DriftWm {
         // pans instead. Gated on a non-widget canvas window actually being under
         // the pointer (the same surface-tree test pick mode suppresses on), so
         // widget / canvas-layer scroll stays interactive and still reaches the
-        // client.
+        // client. Something drawn in screen space over that window (a pin) owns
+        // the scroll, so the retry declines there too.
         if action.is_none()
-            && !over_layer
+            && !self.pointer_over_screen_space
             && self.pick_mode()
             && self.pick_target_under(pos).is_some()
         {
