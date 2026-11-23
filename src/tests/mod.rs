@@ -63,6 +63,7 @@ mod outer_gap;
 mod pass_mouse;
 mod pin_ipc;
 mod pinned_phantom;
+mod pinned_scroll;
 mod pointer_constraints;
 mod pointer_motion_dedup;
 mod pointer_pull;
