@@ -837,29 +837,13 @@ pub fn trackpad_scroll_lift_at(f: &mut Fixture, device: &FakeDevice, time: u32) 
 /// Put one finger down on canvas-space `at`.
 pub fn touch_down(f: &mut Fixture, at: Point<f64, Logical>, slot: u32) {
     let screen = screen_of(f, at);
-    f.state()
-        .process_input_event::<FakeInput>(InputEvent::TouchDown {
-            event: FakeTouchDownEvent {
-                device: FakeDevice::touchscreen(),
-                screen,
-                slot: TouchSlot::from(Some(slot)),
-                time: next_time(),
-            },
-        });
+    touch_down_screen_at(f, screen, slot, next_time());
 }
 
 /// Move the finger holding `slot` to canvas-space `at`.
 pub fn touch_motion(f: &mut Fixture, at: Point<f64, Logical>, slot: u32) {
     let screen = screen_of(f, at);
-    f.state()
-        .process_input_event::<FakeInput>(InputEvent::TouchMotion {
-            event: FakeTouchMotionEvent {
-                device: FakeDevice::touchscreen(),
-                screen,
-                slot: TouchSlot::from(Some(slot)),
-                time: next_time(),
-            },
-        });
+    touch_motion_screen_at(f, screen, slot, next_time());
 }
 
 /// Put one finger down at the raw screen position `at`, with the timestamp

@@ -1273,12 +1273,11 @@ fn a_wheel_zoom_after_a_navigation_hands_the_keyboard_to_the_cursor() {
     assert!(is_activated(&decoy) && !is_activated(&b));
 }
 
-/// The touchscreen pinch used to hand the keyboard to the decoy exactly like
-/// the wheel zoom above — until the parked-cursor report did: touch hides the
-/// pointer and leaves it parked, so the pull behind both scenarios declines.
-/// Sloppy focus follows the pointer, and the pointer is not the device in
-/// play; the keyboard stays where the navigation put it. The fingers land on
-/// bare canvas below the windows.
+/// The touchscreen pinch leaves the keyboard where a navigation put it, unlike
+/// the wheel zoom above: touch hides the pointer and leaves it parked, so the
+/// pull behind both scenarios declines. Sloppy focus follows the pointer, and
+/// the pointer is not the device in play. The fingers land on bare canvas below
+/// the windows.
 #[test]
 fn a_touch_pinch_after_a_navigation_keeps_the_keyboard_on_its_window() {
     let mut f = Fixture::with_config(config(
@@ -1331,15 +1330,15 @@ focus_follows_mouse = true
     );
 }
 
-/// The report this covers: a finger flicks the viewport while the cursor sits
-/// parked where touch left it — hidden, unsteered. The coast carries the
-/// cursor along with the camera, so windows slide under that spot while the
-/// finger is elsewhere, and the per-frame pull used to hand each of them the
-/// keyboard: sloppy focus follows the pointer, and the pointer is not the
-/// device the user is holding. Touch's own focus comes from taps, at the
-/// finger. (The trackpad pan above keeps the pull, deliberately — there the
-/// cursor is live, merely resting.) Hover focus at the cursor resumes the
-/// moment real pointer motion clears the hidden flag.
+/// A finger flicks the viewport while the cursor sits parked where touch left
+/// it, hidden and unsteered. The coast carries the cursor along with the
+/// camera, so windows slide under that spot while the finger is elsewhere, and
+/// the per-frame pull must not hand each of them the keyboard: sloppy focus
+/// follows the pointer, and the pointer is not the device the user is holding.
+/// Touch focuses by the touch itself. (The trackpad pan above keeps the pull,
+/// deliberately: there the cursor is live, merely resting.) Pointer motion
+/// clears the hidden flag, and from then on a camera move that slides a window
+/// under the cursor hands it the keyboard again.
 #[test]
 fn a_touch_pan_under_a_parked_cursor_leaves_sloppy_focus_alone() {
     let mut f = Fixture::with_config(config(
@@ -1378,8 +1377,8 @@ touch_speed = 3.0
     );
 
     // One finger flicks up through bare canvas: 360 screen px over 80 ms at
-    // speed 3.0 — 1080 canvas px of pan, then a coast. The coast is what the
-    // report bites on: it moves the camera with no grab live, so every
+    // speed 3.0 — 1080 canvas px of pan, then a coast. The coast is the part
+    // under test: it moves the camera with no grab live, so every
     // frame's pointer-focus refresh re-runs the pull, and the warp the coast
     // carries the cursor through slides new windows under that spot.
     // Timestamps are pinned to a real flick's spacing — the fake clock's
@@ -1403,9 +1402,9 @@ touch_speed = 3.0
     // Momentum is driven the way the render loop drives it: one tick of
     // coast, one pointer-focus refresh, per frame. The coast warps the parked
     // cursor along with it, so windows slide under that spot as it travels —
-    // stop the drive at the tick the cursor's canvas point lands on `b`: the
-    // report is about exactly that moment, and stopping there keeps the
-    // landing deterministic.
+    // stop the drive at the tick the cursor's canvas point lands on `b`: that
+    // is the moment under test, and stopping there keeps the landing
+    // deterministic.
     let mut on_b = false;
     for _ in 0..MAX_TICKS {
         f.state().apply_scroll_momentum(TICK);
@@ -1440,18 +1439,29 @@ touch_speed = 3.0
 
     // The pointer coming back resumes sloppy focus at its live position. The
     // coast left the view far from home, so it comes back first; the hover
-    // then lands on `c` the way any hover would — proof the touch-hidden flag
-    // no longer holds the pull back.
+    // then lands on `c` the way any hover would. Hover reads no flag, so the
+    // pan after it is what shows the flag cleared: it slides `a` under the
+    // cursor, and the pull hands `a` the keyboard.
     origin_view(&mut f);
     pointer_to(&mut f, &FakeDevice::mouse(), Point::from((1100.0, 500.0)));
     f.double_roundtrip(id);
     assert_eq!(
         keyboard_focus(&mut f),
         Some(server_surface(&c)),
-        "real pointer motion must clear the touch-hidden flag and hover \
-         focus at the cursor again"
+        "real pointer motion must hover focus at the cursor"
     );
     assert!(is_activated(&c));
+
+    pan_viewport(&mut f, Point::from((-900.0, 250.0)));
+    f.state().refresh_pointer_focus();
+    f.double_roundtrip(id);
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&a)),
+        "real pointer motion must clear the touch-hidden flag, so a pan that \
+         slides a window under the cursor hands it the keyboard again"
+    );
+    assert!(is_activated(&a) && !is_activated(&c));
 }
 
 /// fit-window focuses the window it fits and flies the camera to it, so it
