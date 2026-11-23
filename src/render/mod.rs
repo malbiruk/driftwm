@@ -534,11 +534,15 @@ pub(crate) fn compose_capture_elements(
         };
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
 
-        let obscure_shader = applied
-            .as_ref()
-            .is_some_and(|r| r.obscured)
+        let want_obscure = applied.as_ref().is_some_and(|r| r.obscured);
+        let obscure_shader = want_obscure
             .then(|| state.render.obscure_shader.clone())
             .flatten();
+        // Fail closed: without the mosaic program, draw nothing rather than
+        // the window sharp.
+        if want_obscure && obscure_shader.is_none() {
+            continue;
+        }
         let obscured = obscure_shader.is_some();
         let obscure_body = obscure_shader.as_ref().map(|shader| {
             let wg = window.geometry();
@@ -1302,11 +1306,15 @@ pub fn compose_frame(
         // `Window::render_elements` bundles popups into one vec, which is why
         // we can't use it directly for Wayland.
         let loc_phys: Point<i32, Physical> = render_loc.to_physical_precise_round(scale);
-        let obscure_shader = applied
-            .as_ref()
-            .is_some_and(|r| r.obscured)
+        let want_obscure = applied.as_ref().is_some_and(|r| r.obscured);
+        let obscure_shader = want_obscure
             .then(|| state.render.obscure_shader.clone())
             .flatten();
+        // Fail closed: without the mosaic program, draw nothing rather than
+        // the window sharp.
+        if want_obscure && obscure_shader.is_none() {
+            continue;
+        }
         let obscured = obscure_shader.is_some();
         let obscure_body = obscure_shader.as_ref().map(|shader| {
             let wg = window.geometry();

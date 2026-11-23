@@ -908,6 +908,11 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
         // today; if one starts to, extend `compute_uniforms` with a
         // transform-aware UV→geo matrix.
         if self.inner.transform() != Transform::Normal {
+            // The default program would show the real pixels; an obscured
+            // element draws nothing instead.
+            if self.obscured {
+                return Ok(());
+            }
             return self
                 .inner
                 .draw(frame, src, dst, damage, opaque_regions, user_data);
@@ -921,6 +926,11 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        // Exposing the buffer would let the compositor scan it out directly,
+        // bypassing the mosaic program.
+        if self.obscured {
+            return None;
+        }
         self.inner.underlying_storage(renderer)
     }
 }
