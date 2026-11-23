@@ -251,14 +251,20 @@ impl PointerMotionEvent<FakeInput> for FakeRelativeEvent {
 pub struct FakeAxisEvent {
     device: FakeDevice,
     source: AxisSource,
-    amount: f64,
+    /// Per axis, horizontal first. `None` is an axis the event did not carry
+    /// at all, which libinput distinguishes from a delta of zero — and so does
+    /// the liftoff cap, which counts each axis's samples separately.
+    amount: (Option<f64>, Option<f64>),
     v120: Option<f64>,
     time: u32,
 }
 
 impl PointerAxisEvent<FakeInput> for FakeAxisEvent {
     fn amount(&self, axis: Axis) -> Option<f64> {
-        (axis == Axis::Vertical).then_some(self.amount)
+        match axis {
+            Axis::Horizontal => self.amount.0,
+            _ => self.amount.1,
+        }
     }
 
     fn amount_v120(&self, axis: Axis) -> Option<f64> {
@@ -767,6 +773,17 @@ pub fn click(f: &mut Fixture, device: &FakeDevice, at: Point<f64, Logical>, butt
 }
 
 fn axis(f: &mut Fixture, device: &FakeDevice, source: AxisSource, amount: f64, v120: Option<f64>) {
+    axis_at(f, device, source, (None, Some(amount)), v120, next_time());
+}
+
+fn axis_at(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    source: AxisSource,
+    amount: (Option<f64>, Option<f64>),
+    v120: Option<f64>,
+    time: u32,
+) {
     f.state()
         .process_input_event::<FakeInput>(InputEvent::PointerAxis {
             event: FakeAxisEvent {
@@ -774,7 +791,7 @@ fn axis(f: &mut Fixture, device: &FakeDevice, source: AxisSource, amount: f64, v
                 source,
                 amount,
                 v120,
-                time: next_time(),
+                time,
             },
         });
 }
@@ -791,6 +808,30 @@ pub fn wheel_notch_down(f: &mut Fixture, device: &FakeDevice) {
 /// notches — and reaches a different trigger than the wheel above.
 pub fn trackpad_scroll(f: &mut Fixture, device: &FakeDevice) {
     axis(f, device, AxisSource::Finger, 15.0, None);
+}
+
+/// A finger-scroll frame with each axis and the timestamp spelled out.
+///
+/// `None` for an axis is an event that did not carry it, the case the liftoff
+/// cap counts separately — a sideways spike must not be measured against
+/// frames that were purely vertical. The time is pinned because `next_time` is
+/// a process-global counter: two "consecutive" frames can land arbitrarily far
+/// apart once other tests run in parallel, and past the cap's idle threshold
+/// that reads as the fingers having stopped.
+pub fn trackpad_scroll_axes_at(
+    f: &mut Fixture,
+    device: &FakeDevice,
+    amount: (Option<f64>, Option<f64>),
+    time: u32,
+) {
+    axis_at(f, device, AxisSource::Finger, amount, None, time);
+}
+
+/// Lift both fingers off the trackpad at a pinned time, the counterpart of
+/// [`trackpad_scroll_axes_at`] — libinput marks the end of a finger scroll
+/// with an event carrying no distance.
+pub fn trackpad_scroll_lift_at(f: &mut Fixture, device: &FakeDevice, time: u32) {
+    axis_at(f, device, AxisSource::Finger, (None, Some(0.0)), None, time);
 }
 
 /// Put one finger down on canvas-space `at`.

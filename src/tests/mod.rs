@@ -75,6 +75,7 @@ mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
 mod screenshot_write;
+mod scroll_liftoff;
 mod send_to_output;
 mod session_lock;
 mod session_restore;

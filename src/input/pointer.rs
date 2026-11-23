@@ -1537,6 +1537,11 @@ impl DriftWm {
         let mut pos = pointer.current_location();
         let source = event.source();
 
+        // Capped once above every branch below, so whichever of them owns
+        // this scroll — a client, `drift_pan`, or nothing — sees the same
+        // amounts.
+        let amounts = self.damp_axis_amounts::<I>(&event);
+
         // Discrete wheel-notch bindings (wheel-up / wheel-down) run any
         // action once per notch — volume on mod+shift+scroll and the like.
         // Wheel sources only: finger and continuous scrolling have no
@@ -1578,6 +1583,7 @@ impl DriftWm {
                 }
                 // Consume sub-notch events too — the binding owns this
                 // scroll; forwarding the fractions would double-handle it.
+                self.reset_scroll_window();
                 let frame = AxisFrame::new(Event::time_msec(&event));
                 pointer.axis(self, frame);
                 pointer.frame(self);
@@ -1615,9 +1621,8 @@ impl DriftWm {
                 }
                 Some(_) => {}
                 None => {
-                    let frame = build_client_axis_frame::<I>(&event);
-                    pointer.axis(self, frame);
-                    pointer.frame(self);
+                    let frame = build_client_axis_frame::<I>(&event, amounts);
+                    self.forward_client_axis(frame, amounts);
                     return;
                 }
             }
@@ -1672,14 +1677,23 @@ impl DriftWm {
         }
 
         if let Some(action) = action {
+            // Set by the pan branch, so the tail below keeps the window it
+            // just recorded into.
+            let mut panned = false;
             match action {
                 MouseAction::PanViewport => {
-                    let h = event.amount(Axis::Horizontal).unwrap_or(0.0);
-                    let v = event.amount(Axis::Vertical).unwrap_or(0.0);
+                    // Damped, like a client gets: `drift_pan` feeds the
+                    // velocity tracker the canvas flings from.
+                    let h = amounts.0.unwrap_or(0.0);
+                    let v = amounts.1.unwrap_or(0.0);
                     if h != 0.0 || v != 0.0 {
                         if source == AxisSource::Finger {
                             self.set_last_scroll_pan(Some(std::time::Instant::now()));
                         }
+                        // Delivered, not swallowed, so it counts toward the
+                        // speed the next cap measures against.
+                        panned = true;
+                        self.record_scroll_sample(amounts, Event::time_msec(&event));
                         let s = self.config.trackpad_speed;
                         let canvas_delta: Point<f64, smithay::utils::Logical> =
                             Point::from((h * s / self.zoom(), v * s / self.zoom()));
@@ -1748,6 +1762,9 @@ impl DriftWm {
                 }
                 _ => {} // other mouse actions don't apply to scroll
             }
+            if !panned {
+                self.reset_scroll_window();
+            }
             let frame = AxisFrame::new(Event::time_msec(&event));
             pointer.axis(self, frame);
             pointer.frame(self);
@@ -1766,12 +1783,169 @@ impl DriftWm {
                 Some((DecoTarget::Suspended(_), _))
             )
         {
+            self.reset_scroll_window();
             let frame = AxisFrame::new(Event::time_msec(&event));
             pointer.axis(self, frame);
             pointer.frame(self);
             return;
         }
-        let frame = build_client_axis_frame::<I>(&event);
+        let frame = build_client_axis_frame::<I>(&event, amounts);
+        self.forward_client_axis(frame, amounts);
+    }
+
+    /// Drop the sliding window. Called wherever a scroll is consumed rather
+    /// than delivered: nobody saw those deltas, so they are not this gesture.
+    fn reset_scroll_window(&mut self) {
+        self.scroll_window.clear();
+        self.scroll_window_time = None;
+        self.scroll_last_frame = None;
+    }
+
+    /// Cap this event's finger amounts at [`SCROLL_CLAMP`] times the speed of
+    /// the gesture so far, and hand back what everything downstream must use.
+    ///
+    /// **Why this exists.** As fingers leave a pad the contact centroid shifts,
+    /// and some pads report that as a run of accelerating deltas — measured at
+    /// 2-5x the gesture's median on the pad this was written for. A client reads
+    /// the run as a fast flick and scrolls on after the gesture ended, and
+    /// `drift_pan`'s velocity tracker banks it as canvas momentum, so the cap
+    /// sits above the fork between the two. Nothing is delayed, dropped or
+    /// re-stamped: holding frames back to cancel them later releases them in
+    /// batches, which a client times as an even bigger flick.
+    ///
+    /// Read-only against the window; recording is
+    /// [`Self::record_scroll_sample`], which only the paths that deliver the
+    /// scroll call. Non-finger sources and damping off pass through untouched.
+    fn damp_axis_amounts<I: InputBackend>(
+        &mut self,
+        event: &I::PointerAxisEvent,
+    ) -> (Option<f64>, Option<f64>) {
+        let raw = (event.amount(Axis::Horizontal), event.amount(Axis::Vertical));
+        if event.source() != AxisSource::Finger || !self.config.trackpad.scroll_liftoff_damping {
+            self.reset_scroll_window();
+            return raw;
+        }
+
+        // Motionless fingers produce no events, so a window from before a
+        // pause describes a gesture that is already over.
+        let time = Event::time_msec(event);
+        if self
+            .scroll_window_time
+            .is_some_and(|t| time.wrapping_sub(t) > SCROLL_IDLE_MS)
+        {
+            self.reset_scroll_window();
+        }
+
+        // An axis with too few samples of its own borrows the other's speed:
+        // the centroid shifts in two dimensions, so the sideways half of the
+        // burst lands on an axis a vertical gesture never touched.
+        let (mean_h, mean_v) = self.scroll_window_mean_abs();
+        let mut damped = raw;
+        cap_axis(&mut damped.0, mean_h.or(mean_v).map(|m| m * SCROLL_CLAMP));
+        cap_axis(&mut damped.1, mean_v.or(mean_h).map(|m| m * SCROLL_CLAMP));
+        damped
+    }
+
+    /// Record a delivered finger-scroll sample in the sliding window.
+    fn record_scroll_sample(&mut self, amounts: (Option<f64>, Option<f64>), time: u32) {
+        if self.scroll_window.len() == SCROLL_WINDOW_LEN {
+            self.scroll_window.pop_front();
+        }
+        self.scroll_window.push_back(amounts);
+        self.scroll_window_time = Some(time);
+    }
+
+    /// Forward a scroll frame to the client, recording `amounts` — the damped
+    /// values it was built from — as this gesture's latest sample. A
+    /// finger-lift parts with a delta of its own ahead of the stop; see
+    /// [`Self::damp_axis_amounts`] for why.
+    fn forward_client_axis(&mut self, frame: AxisFrame, amounts: (Option<f64>, Option<f64>)) {
+        let is_finger = frame.source == Some(AxisSource::Finger);
+        if !is_finger || !self.config.trackpad.scroll_liftoff_damping {
+            self.reset_scroll_window();
+            self.send_axis_frame(frame);
+            return;
+        }
+
+        if frame.stop.0 || frame.stop.1 {
+            self.send_parting_delta(frame.time);
+            self.reset_scroll_window();
+            self.send_axis_frame(frame);
+            return;
+        }
+
+        self.record_scroll_sample(amounts, frame.time);
+        self.scroll_last_frame = Some(frame);
+        self.send_axis_frame(frame);
+    }
+
+    /// Mean absolute delta per axis, each axis counting only the events that
+    /// carried it — counting an untouched axis as zero would dilute it.
+    /// `None` below [`SCROLL_WINDOW_MIN`] samples, where the average is still
+    /// the opening of the gesture rather than its speed.
+    fn scroll_window_mean_abs(&self) -> (Option<f64>, Option<f64>) {
+        let mut sum = (0.0, 0.0);
+        let mut count = (0usize, 0usize);
+        for (h, v) in &self.scroll_window {
+            if let Some(h) = h {
+                sum.0 += h.abs();
+                count.0 += 1;
+            }
+            if let Some(v) = v {
+                sum.1 += v.abs();
+                count.1 += 1;
+            }
+        }
+        let mean =
+            |sum: f64, count: usize| (count >= SCROLL_WINDOW_MIN).then(|| sum / count as f64);
+        (mean(sum.0, count.0), mean(sum.1, count.1))
+    }
+
+    /// Send the parting delta a finger-lift gets instead of the pad's own
+    /// burst: the window's signed mean scaled by [`SCROLL_FLING`], on the
+    /// source and in the direction of the frames before it.
+    fn send_parting_delta(&mut self, time: u32) {
+        let Some(template) = self.scroll_last_frame else {
+            return;
+        };
+        if self.scroll_window.is_empty() {
+            return;
+        }
+        // Per axis over its own samples, like the cap. No minimum, unlike the
+        // cap: a short flick is exactly the gesture to report.
+        let mut sum = (0.0, 0.0);
+        let mut count = (0usize, 0usize);
+        for (dh, dv) in &self.scroll_window {
+            if let Some(dh) = dh {
+                sum.0 += dh;
+                count.0 += 1;
+            }
+            if let Some(dv) = dv {
+                sum.1 += dv;
+                count.1 += 1;
+            }
+        }
+        let mean = |sum: f64, count: usize| {
+            if count == 0 {
+                0.0
+            } else {
+                sum / count as f64 * SCROLL_FLING
+            }
+        };
+        let (h, v) = (mean(sum.0, count.0), mean(sum.1, count.1));
+        if h == 0.0 && v == 0.0 {
+            return;
+        }
+        let mut parting = template;
+        parting.time = time;
+        parting.axis = (h, v);
+        parting.v120 = None;
+        parting.stop = (false, false);
+        self.send_axis_frame(parting);
+    }
+
+    fn send_axis_frame(&mut self, frame: AxisFrame) {
+        let pointer = self.seat.get_pointer().unwrap();
         pointer.axis(self, frame);
         pointer.frame(self);
     }
@@ -1859,22 +2033,62 @@ pub(super) fn edges_from_position(
     }
 }
 
+/// Cap on a finger delta, as a multiple of the sliding average of the deltas
+/// before it. The burst runs 2-5x the gesture's median, a deliberate flick
+/// ramps up far more gently, and the average is itself built from capped
+/// deltas — so the useful range is narrow and just above 1.
+const SCROLL_CLAMP: f64 = 1.1;
+
+/// The parting delta at a finger-lift, as a fraction of that average.
+const SCROLL_FLING: f64 = 0.3;
+
+/// How many deltas the sliding average spans — at the ~4 ms a pad reports in,
+/// the last ~30 ms of the gesture.
+const SCROLL_WINDOW_LEN: usize = 8;
+
+/// Samples an axis needs before it caps anything.
+const SCROLL_WINDOW_MIN: usize = 3;
+
+/// How much silence ends a gesture, in event-time milliseconds. The same delay
+/// the canvas takes as the fingers having stopped, so the two halves agree.
+const SCROLL_IDLE_MS: u32 =
+    crate::state::viewport_animation::MOMENTUM_LAUNCH_DELAY.as_millis() as u32;
+
+/// Cap `value` at `limit`, in whichever direction it points. `None` is an axis
+/// with no measured speed yet and `Some(0.0)` a measured standstill; neither
+/// caps anything, since a cap of zero would stop the scroll dead.
+fn cap_axis(value: &mut Option<f64>, limit: Option<f64>) {
+    let (Some(v), Some(limit)) = (value.as_mut(), limit) else {
+        return;
+    };
+    if limit > 0.0 && v.abs() > limit {
+        *v = v.signum() * limit;
+    }
+}
+
 /// Build an `AxisFrame` that faithfully forwards a scroll event to a client,
 /// including `axis_stop` when the user lifts fingers from the trackpad.
 ///
 /// libinput finger-lift semantics: `amount(axis) == Some(0.0)` means the
 /// gesture ended for this axis (send `axis_stop`). `amount(axis) == None`
 /// means the axis wasn't part of this event at all (send nothing).
-fn build_client_axis_frame<I: InputBackend>(event: &I::PointerAxisEvent) -> AxisFrame {
+fn build_client_axis_frame<I: InputBackend>(
+    event: &I::PointerAxisEvent,
+    amounts: (Option<f64>, Option<f64>),
+) -> AxisFrame {
     let mut frame = AxisFrame::new(Event::time_msec(event)).source(event.source());
     let is_finger = event.source() == AxisSource::Finger;
     // Finger-lift: no axis carries non-zero data. Covers both Some(0.0)
-    // (newer libinput) and None-for-all-axes (older libinput).
-    let is_stop = is_finger
-        && !event.amount(Axis::Horizontal).is_some_and(|a| a != 0.0)
-        && !event.amount(Axis::Vertical).is_some_and(|a| a != 0.0);
+    // (newer libinput) and None-for-all-axes (older libinput). Read from
+    // `amounts` so the frame has one source for its values.
+    let is_stop =
+        is_finger && !amounts.0.is_some_and(|a| a != 0.0) && !amounts.1.is_some_and(|a| a != 0.0);
     for axis in [Axis::Horizontal, Axis::Vertical] {
-        if let Some(amount) = event.amount(axis) {
+        let amount = match axis {
+            Axis::Horizontal => amounts.0,
+            _ => amounts.1,
+        };
+        if let Some(amount) = amount {
             if amount != 0.0 {
                 frame = frame
                     .value(axis, amount)
