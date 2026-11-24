@@ -16,7 +16,7 @@ in config order and merged together:
   `border_color_focused`, `corner_radius`, `shadow`, `output`, `layer_order`,
   `suspend_on_close`, `restore_windows`): last-wins — a later rule overrides an
   earlier one.
-- **Boolean flags** (`widget`, `pinned_to_screen`, `blur`,
+- **Boolean flags** (`widget`, `widget_movable`, `pinned_to_screen`, `blur`,
   `preserve_aspect_ratio`): sticky-on — once set by any matching rule, the flag
   stays set regardless of later rules. There is no way to turn one back off:
   writing `blur = false` or `widget = false` in a rule does nothing.
@@ -187,7 +187,8 @@ decoration       = "none"
   unpins the window to fill the screen; exiting fullscreen re-pins it in place.
   Any canvas pan/zoom exits fullscreen, just like a normal window.
 - **Dragging it across monitors** reassigns it to that output. Combine with
-  `widget = true` to make it immovable.
+  `widget = true` to make it immovable (`widget_movable = true` hands the drags
+  back).
 
 To find the numbers for a rule, pin the window live with `toggle-pin-to-screen`
 (`Mod+T`), drag and resize it into place, then copy `position`/`size` from its
@@ -311,7 +312,39 @@ decoration = "none"
 A widget ignores drags, gestures and nudges, so `position` is where it stays —
 but `driftwm msg move <X> <Y> --id <ID>` still repositions one at runtime, which
 is how external desktop-icon clients scatter icons across the canvas. That move
-lasts only for the session.
+lasts only for the session. To keep one draggable by hand as well, add
+`widget_movable = true` ([Movable widget](#movable-widget-drag-it-around-the-canvas)).
+
+### Movable widget (drag it around the canvas)
+
+`widget_movable = true` lifts exactly that immunity: the widget takes its
+chrome drags, mouse bindings, gestures, keyboard nudges and `driftwm msg resize`
+back. Everything else about a widget is untouched — it still paints **below**
+normal windows, stays out of Alt-Tab and navigation, and never suspends.
+
+```toml
+[[window_rules]]
+app_id         = "my-widget"
+widget         = true
+widget_movable = true
+position       = [0, 0]        # where it opens; drag it anywhere from there
+decoration     = "minimal"     # no title bar: move it with alt+drag
+```
+
+The two flags compose like every other boolean: `widget` decides *what* the
+window is, `widget_movable` decides whether hand drags may move it — so writing
+`widget_movable = true` alone (no `widget` rule) changes nothing, and a later
+`widget = true` rule gives an ordinary window the widget treatment while a
+third rule can hand the drags back.
+
+A `decoration = "none"` widget has no title bar to grab, so move it with the
+`move-window` mouse binding (`alt+drag` by default) and resize it with the
+compositor-side resize margin (`[mouse] resize_on_border`, default on).
+
+Like any widget move, a drag lasts for the session: widgets never enter the
+session store, so the rule's `position` is where the window lands on the next
+compositor start. Copy the dragged coordinates — `driftwm msg move --id <ID>`
+reads them back — into the rule to make the new spot durable.
 
 ### Pictures and text on the canvas (decals)
 

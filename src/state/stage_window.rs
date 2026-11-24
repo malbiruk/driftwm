@@ -278,6 +278,13 @@ impl WindowExt for StageWindow {
         }
     }
 
+    fn widget_is_immovable(&self) -> bool {
+        match self {
+            Self::Client(w) => WindowExt::widget_is_immovable(w),
+            Self::Suspended(_) => false,
+        }
+    }
+
     fn is_suspended(&self) -> bool {
         matches!(self, Self::Suspended(_))
     }

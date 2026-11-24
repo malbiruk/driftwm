@@ -179,7 +179,8 @@ combine freely.
 
 Two special placement modes: **`widget = true`** fixes a window to the canvas
 (immovable, below normal windows, out of Alt-Tab — clocks, trays, and
-layer-shell surfaces like waybar); **`pinned_to_screen = true`** fixes it to the
+layer-shell surfaces like waybar), with **`widget_movable = true`** if you still
+want to drag and resize it by hand; **`pinned_to_screen = true`** fixes it to the
 screen instead, so it ignores pan/zoom and floats above normal windows
 (Picture-in-Picture, call toolbars) — toggleable live with `Mod+T`.
 

@@ -12,6 +12,7 @@ use crate::ipc::dispatch;
 use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
 use crate::state::{NavZoom, StageWindow};
 use driftwm::config::Action;
+use driftwm::window_ext::WindowExt;
 
 use super::{Fixture, config, map_window, settle, window_by_app_id};
 
@@ -503,5 +504,98 @@ app_id = "normal"
     assert!(
         widget_idx < normal_idx,
         "widget must remain stacked below normal windows"
+    );
+}
+
+/// `widget_movable = true` hands a widget's geometry back without changing what
+/// it is: drags and `msg resize` reach it, while it stays stacked below normal
+/// windows and out of the focus chain.
+#[test]
+fn a_movable_widget_takes_geometry_back_but_keeps_its_class() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "widget"
+widget = true
+widget_movable = true
+
+[[window_rules]]
+app_id = "normal"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    map_window(&mut f, id, "normal", (400, 300));
+    let normal = window_by_app_id(&mut f, "normal").unwrap();
+    f.state().map_window(
+        StageWindow::Client(normal.clone()),
+        Point::from((3000, 3000)),
+        false,
+    );
+
+    map_window(&mut f, id, "widget", (200, 100));
+    let widget = window_by_app_id(&mut f, "widget").unwrap();
+    let widget_element = StageWindow::Client(widget.clone());
+    f.state()
+        .map_window(widget_element.clone(), Point::from((0, 0)), true);
+    let widget_id = f.state().stage.id_of(&widget).unwrap().0;
+
+    // The widget still *is* a widget: focusable, never in the switcher.
+    assert!(widget.is_widget(), "the widget flag is untouched");
+    assert!(
+        !f.state().stage.focus_history().iter().any(|w| w == &widget),
+        "a movable widget stays out of the focus chain"
+    );
+
+    // `msg resize` refuses an immovable widget; a movable one has a canvas rect.
+    assert_eq!(
+        resize(
+            &mut f,
+            Some(WindowSelector::Id(widget_id)),
+            Some((400, 200))
+        ),
+        Ok(Response::Size {
+            width: 400,
+            height: 200
+        }),
+        "a movable widget has a canvas size to set"
+    );
+
+    // And so do the pickers the plain widget stopped. Grab the live rect: the
+    // resize above re-centered the window, and its client has not committed.
+    let loc = f.state().stage.position_of(&widget_element).unwrap();
+    let size = widget.geometry().size;
+    let center = Point::from((
+        loc.x as f64 + size.w as f64 / 2.0,
+        loc.y as f64 + size.h as f64 / 2.0,
+    ));
+    assert!(
+        f.state().draggable_element_under(center).is_some(),
+        "draggable_element_under offers the movable widget"
+    );
+    assert!(
+        f.state().try_start_gesture_move(center, false),
+        "gesture move accepts it"
+    );
+    let pointer = f.state().seat.get_pointer().unwrap();
+    let serial = SERIAL_COUNTER.next_serial();
+    pointer.unset_grab(f.state(), serial, 0);
+
+    // Stacking survived both the resize's raise and the move grab's.
+    let entries: Vec<_> = f
+        .state()
+        .stage
+        .entries()
+        .map(|e| e.window.clone())
+        .collect();
+    assert!(
+        entries.iter().position(|w| *w == widget_element).unwrap()
+            < entries
+                .iter()
+                .position(|w| *w == StageWindow::Client(normal.clone()))
+                .unwrap(),
+        "the widget stayed below the normal window"
     );
 }

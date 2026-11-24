@@ -418,6 +418,58 @@ widget = true
     );
 }
 
+/// `widget_movable = true` gives a widget its resize gestures back: the swipe
+/// configures it at the dragged size and the touch handoff follows, exactly as
+/// they would for an ordinary window.
+#[test]
+fn gesture_resize_grows_a_movable_widget() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "w"
+widget = true
+widget_movable = true
+"#,
+    ));
+    let out = f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    let wsurface = map_window(&mut f, id, "w", (400, 300));
+    let widget = window_by_app_id(&mut f, "w").unwrap();
+    f.state()
+        .map_window(StageWindow::Client(widget), INITIAL, true);
+    f.double_roundtrip(id);
+
+    assert!(
+        f.state().try_start_gesture_resize(grab_point(), false),
+        "the trackpad gesture finds a movable widget to resize"
+    );
+    motion(&mut f, drag_to());
+    f.double_roundtrip(id);
+    assert_eq!(
+        last_configured_size(&mut f, id, &wsurface),
+        (600, 300),
+        "the movable widget was configured at the dragged size"
+    );
+    end_swipe(&mut f);
+
+    // The swipe's configure is what the grab started from, not a committed
+    // buffer the test client never sends, so the touch leg only asserts growth
+    // from wherever the swipe left the number.
+    let before_touch = last_configured_size(&mut f, id, &wsurface);
+    assert!(
+        start_touch_gesture_resize(&mut f, grab_point(), out),
+        "the touch handoff resizes it too"
+    );
+    touch_motion(&mut f, pt(1000.0, 450.0));
+    f.double_roundtrip(id);
+    assert!(
+        last_configured_size(&mut f, id, &wsurface).0 > before_touch.0,
+        "the finger grew the movable widget as well"
+    );
+    lift_finger(&mut f);
+}
+
 /// Occlusion is a stop, not a skip. A widget covering the grab point makes both
 /// resize gestures find nothing at all — they must never reach past it to resize
 /// the client underneath, which the user cannot see.

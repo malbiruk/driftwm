@@ -519,6 +519,118 @@ widget = true
     );
 }
 
+/// `widget_movable = true` lifts the drag lock: the movable widget takes the
+/// drag the plain one stopped at, the client behind it never moves, and the
+/// widget still ends up below that client in raw stage order — movable changes
+/// the lock, never the stacking class. The hit-test follows the stacking: once
+/// the widget is pushed below the client, the overlap belongs to the client.
+#[test]
+fn swipe_move_drags_a_movable_widget() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "w"
+widget = true
+widget_movable = true
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+
+    let idc = f.add_client();
+    map_window(&mut f, idc, "c", (400, 300));
+    let client = window_by_app_id(&mut f, "c").unwrap();
+    f.state()
+        .map_window(StageWindow::Client(client.clone()), INITIAL, true);
+
+    let idw = f.add_client();
+    map_window(&mut f, idw, "w", (400, 300));
+    let widget = window_by_app_id(&mut f, "w").unwrap();
+    let widget_element = StageWindow::Client(widget.clone());
+    f.state().map_window(widget_element.clone(), INITIAL, true);
+
+    assert!(
+        f.state().try_start_gesture_move(grab_point(), false),
+        "the trackpad gesture finds the movable widget to drag"
+    );
+    for m in drag_path() {
+        motion(&mut f, m);
+    }
+    assert_eq!(
+        f.state().stage.position_of(&widget_element),
+        Some(EXPECTED),
+        "the widget followed the pointer"
+    );
+    assert_eq!(
+        f.state()
+            .stage
+            .position_of(&StageWindow::Client(client.clone())),
+        Some(INITIAL),
+        "the client behind it never moved"
+    );
+    end_swipe(&mut f);
+
+    let entries: Vec<_> = f
+        .state()
+        .stage
+        .entries()
+        .map(|e| e.window.clone())
+        .collect();
+    assert!(
+        entries.iter().position(|w| *w == widget_element).unwrap()
+            < entries
+                .iter()
+                .position(|w| *w == StageWindow::Client(client.clone()))
+                .unwrap(),
+        "the drag left the widget stacked below the normal window"
+    );
+    assert!(
+        !f.state().stage.focus_history().iter().any(|w| w == &widget),
+        "dragging it focuses it without putting it in the switcher"
+    );
+    assert_eq!(
+        f.state().draggable_element_under(grab_point()),
+        Some(StageWindow::Client(client)),
+        "the overlap the widget paints under belongs to the window above it"
+    );
+}
+
+/// The touch channel drags a movable widget to where the finger lifts, exactly
+/// as it does a window: the picker and `MoveGrab::new_touch` are both
+/// widget-agnostic once the lock is lifted.
+#[test]
+fn touch_gesture_move_drops_a_movable_widget_where_the_finger_leaves_it() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "w"
+widget = true
+widget_movable = true
+"#,
+    ));
+    let out = f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    map_window(&mut f, id, "w", (400, 300));
+    let widget = window_by_app_id(&mut f, "w").unwrap();
+    let widget_element = StageWindow::Client(widget);
+    f.state().map_window(widget_element.clone(), INITIAL, true);
+
+    assert!(
+        start_touch_gesture_move(&mut f, grab_point(), out),
+        "the touch gesture found the movable widget under the finger"
+    );
+    for m in drag_path() {
+        touch_motion(&mut f, m);
+    }
+    assert_eq!(
+        f.state().stage.position_of(&widget_element),
+        Some(EXPECTED),
+        "the widget followed the finger to the same destination a window would"
+    );
+    lift_finger(&mut f);
+}
+
 /// A stand-in covering a client claims the drag: the gesture moves the stand-in
 /// and the hidden client stays where it was.
 #[test]

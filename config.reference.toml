@@ -719,13 +719,17 @@
 # #                pinned_to_screen.
 # #   size       — [width, height] of the visual frame (content plus driftwm's
 # #                title bar and border) at open; you and the app can resize
-# #                it later (widget = true blocks resizing by hand).
+# #                it later (an immovable widget blocks resizing by hand).
 # #   fullscreen — true: open the window fullscreen.
 # #   focus_on_open — false: map the window without focusing it or moving the
 # #                camera to it (default: true).
 # #   widget     — true: can't be moved by hand (`msg move` still works), sits
 # #                below normal windows, skipped by navigation and Alt-Tab
 # #                (default: false).
+# #   widget_movable — true: a `widget` window takes its geometry back — drags,
+# #                gestures, nudges and `msg resize` move and size it — while it
+# #                stays below normal windows and off Alt-Tab. Ignored without
+# #                `widget = true` (default: false).
 # #   pinned_to_screen — true: lock the window to the screen, ignoring pan and
 # #                zoom; `position` becomes output-relative. Toggle with
 # #                toggle-pin-to-screen (Mod+T). (default: false)

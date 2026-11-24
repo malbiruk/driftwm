@@ -57,6 +57,22 @@ impl DriftWm {
         }
     }
 
+    /// Move an already-mapped element to `pos` without touching its z-slot.
+    /// `stage.map` doubles as a raise, and a widget raised above the windows it
+    /// goes on *painting* beneath steals their clicks: the input hit-tests walk
+    /// raw stage order, the render buckets do not.
+    pub(crate) fn move_element_in_place(
+        &mut self,
+        element: &StageWindow,
+        pos: Point<i32, Logical>,
+    ) {
+        if element.is_widget() {
+            self.stage.set_position(element, pos);
+        } else {
+            self.stage.map(element.clone(), pos);
+        }
+    }
+
     /// The one z-raise with no deferred-adopt gate of its own. Its callers each
     /// establish that separately — one runs before a window can be stashed at
     /// all, the other only on a path a queued geometry request has already

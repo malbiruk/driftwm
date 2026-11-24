@@ -1858,8 +1858,8 @@ impl DriftWm {
     /// `decoration_hit_for` reports. Shared by `try_pick_button`, the hover
     /// affordance, and the scroll fallback so the three agree on exactly what a
     /// click below the threshold hits and where the affordance appears. Pinned,
-    /// fullscreen and widget windows are excluded (the walk skips pins and
-    /// off-output fullscreen; `is_canvas_window` rejects the rest).
+    /// fullscreen and immovable-widget windows are excluded (the walk skips pins
+    /// and off-output fullscreen; `is_movable_window` rejects the rest).
     pub(crate) fn pick_target_under(
         &self,
         canvas_pos: Point<f64, smithay::utils::Logical>,
@@ -1877,15 +1877,16 @@ impl DriftWm {
     /// first.
     ///
     /// Pinned is a *skip* inside the walk — a pinned window's stale canvas rect
-    /// never masks what is really rendered beneath it. Widget and fullscreen are
-    /// *stops* via the canvas gate: either one on top makes the gesture find
-    /// nothing rather than reaching through to the window underneath.
+    /// never masks what is really rendered beneath it. An immovable widget
+    /// (`widget = true` without `widget_movable`) and fullscreen are *stops* via
+    /// the movable-window gate: either one on top makes the gesture find nothing
+    /// rather than reaching through to the window underneath.
     pub(crate) fn draggable_element_under(
         &self,
         canvas_pos: Point<f64, smithay::utils::Logical>,
     ) -> Option<StageWindow> {
         let (element, _) = self.topmost_under(canvas_pos, |_, _| true)?;
-        self.is_canvas_window(&element).then_some(element)
+        self.is_movable_window(&element).then_some(element)
     }
 
     /// The screen-pinned window whose content — popups and subsurfaces
@@ -2025,9 +2026,9 @@ impl DriftWm {
                 // rect. Catches Zed-class clients that drop their own edge handles
                 // on seeing our Tiled hint. Clients that kept their handles
                 // (Brave, Nautilus) own the inside; we own the outside — no overlap.
-                let is_widget = rule.as_ref().is_some_and(|r| r.widget);
+                let immovable = rule.as_ref().is_some_and(|r| r.widget_is_immovable());
                 let is_fullscreen = self.is_window_fullscreen(window);
-                if !is_widget
+                if !immovable
                     && !is_fullscreen
                     && crate::decorations::resize_edge_at(pos, loc, size, 0, border_width).is_some()
                 {
@@ -2121,9 +2122,9 @@ impl DriftWm {
                     return None;
                 }
             } else {
-                let is_widget =
-                    driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
-                if !is_widget
+                let immovable = driftwm::config::applied_rule(&wl_surface)
+                    .is_some_and(|r| r.widget_is_immovable());
+                if !immovable
                     && crate::decorations::resize_edge_at(
                         screen_pos,
                         p.screen_pos,
@@ -2206,10 +2207,10 @@ impl DriftWm {
                     return PinnedChrome::Hit(window.clone(), DecorationHit::ResizeBorder(edge));
                 }
             } else {
-                let is_widget =
-                    driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
+                let immovable = driftwm::config::applied_rule(&wl_surface)
+                    .is_some_and(|r| r.widget_is_immovable());
                 if self.config.resize_on_border
-                    && !is_widget
+                    && !immovable
                     && let Some(edge) =
                         crate::decorations::resize_edge_at(screen_pos, loc, size, 0, border_width)
                 {

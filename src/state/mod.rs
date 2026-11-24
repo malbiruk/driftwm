@@ -1392,6 +1392,21 @@ impl DriftWm {
             && !self.hidden_by_deferred_adopt(window)
     }
 
+    /// [`Self::is_canvas_window`] with the widget immunity lifted where
+    /// `widget_movable` says so: a movable widget is still canvas furniture —
+    /// below windows, out of navigation and alt-tab — but its geometry is the
+    /// user's to change, so drags, gestures, nudges and `msg resize` reach it.
+    pub fn is_movable_window<Q>(&self, window: &Q) -> bool
+    where
+        Q: WindowExt + WaylandFocus,
+        StageWindow: PartialEq<Q>,
+    {
+        !window.widget_is_immovable()
+            && !self.is_pinned(window)
+            && !self.is_window_fullscreen(window)
+            && !self.hidden_by_deferred_adopt(window)
+    }
+
     pub fn load_xcursor(&mut self, name: &str) -> Option<&CursorFrames> {
         let theme = self.config.cursor_theme.as_deref().unwrap_or("default");
         let size = self.config.cursor_size.unwrap_or(24);

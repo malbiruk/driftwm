@@ -183,12 +183,12 @@ impl TouchGestureGrab {
         cluster: bool,
     ) -> bool {
         // Pinned windows sit above canvas content and drag in screen space;
-        // cluster doesn't apply (they don't participate in snap), and widgets
-        // stay grab-proof like on the canvas.
+        // cluster doesn't apply (they don't participate in snap), and an
+        // immovable widget stays grab-proof like on the canvas.
         let (camera, zoom) = self.camera_zoom();
         let finger_screen = canvas_to_screen(CanvasPos(event.location), camera, zoom).0;
         if let Some(window) = data.pinned_owner_under(finger_screen) {
-            if window.is_widget() {
+            if window.widget_is_immovable() {
                 return false;
             }
             let start = TouchGrabStartData {
@@ -248,7 +248,7 @@ impl TouchGestureGrab {
         // Pinned windows resize in screen space; `build_touch_resize_grab`
         // resolves the pinned anchor itself (snapped is moot — no cluster).
         if let Some(window) = data.pinned_owner_under(screen_centroid) {
-            if window.is_widget() {
+            if window.widget_is_immovable() {
                 return false;
             }
             let Some(site) = data.stage.pin_of(&window).cloned() else {

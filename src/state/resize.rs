@@ -286,8 +286,10 @@ impl DriftWm {
             StageWindow::Suspended(s) => s.size.set(size),
         }
 
+        // `map_window` doubles as this resize's z-raise, which a widget must not
+        // take — `move_element_in_place` holds it in its slot.
         if raise {
-            self.map_window(element.clone(), loc, false);
+            self.move_element_in_place(element, loc);
         } else {
             self.stage.set_position(element, loc);
         }
@@ -368,7 +370,7 @@ impl DriftWm {
     pub(super) fn step_target(&self) -> Option<(StageWindow, StepStart)> {
         let element = self
             .focused_element()
-            .filter(|e| self.is_canvas_window(e))?;
+            .filter(|e| self.is_movable_window(e))?;
         // A grab recomputes the rect absolutely from its own start anchors on
         // every motion tick, so a step landing mid-drag is erased by the next
         // one — and the settling tail still owes a top/left compensation this

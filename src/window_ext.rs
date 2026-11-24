@@ -83,6 +83,12 @@ pub trait WindowExt {
     /// Widgets are persistent canvas furniture (excluded from close, nudge,
     /// focus-cycle, etc).
     fn is_widget(&self) -> bool;
+    /// A widget is nailed to the canvas — drags, gestures, resize borders and
+    /// keyboard nudges decline it — unless its rule also set
+    /// `widget_movable = true`. False for a non-widget.
+    fn widget_is_immovable(&self) -> bool {
+        self.is_widget()
+    }
     /// True only for a compositor-drawn suspended window (no client surface).
     fn is_suspended(&self) -> bool {
         false
@@ -207,5 +213,13 @@ impl WindowExt for Window {
             .as_deref()
             .and_then(crate::config::applied_rule)
             .is_some_and(|r| r.widget)
+    }
+
+    fn widget_is_immovable(&self) -> bool {
+        use smithay::wayland::seat::WaylandFocus;
+        self.wl_surface()
+            .as_deref()
+            .and_then(crate::config::applied_rule)
+            .is_some_and(|r| r.widget_is_immovable())
     }
 }

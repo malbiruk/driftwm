@@ -229,7 +229,7 @@ impl DriftWm {
                 _ => self.suspend_focused_window(suspend_restore_rect),
             },
             Action::NudgeWindow(dir) => {
-                if let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e))
+                if let Some(element) = self.focused_element().filter(|e| self.is_movable_window(e))
                     && let Some(loc) = self.stage.position_of(&element)
                 {
                     let step = self.canvas_step(&element, self.config.nudge_step);
@@ -435,13 +435,13 @@ impl DriftWm {
                     return;
                 };
                 let (rx, ry) = (x.round() as i32, y.round() as i32);
-                match self.focused_element().filter(|e| !e.is_widget()) {
+                match self.focused_element().filter(|e| !e.widget_is_immovable()) {
                     Some(StageWindow::Client(window)) => {
                         // Pinned/fullscreen windows live in screen space — no
                         // canvas position to move (same rule as `msg move`).
                         // Early return here (not a match guard), so the log
                         // still fires before bailing.
-                        if !self.is_canvas_window(&window) {
+                        if !self.is_movable_window(&window) {
                             tracing::info!(
                                 "cannot move a pinned or fullscreen window to a bookmark"
                             );
@@ -451,6 +451,12 @@ impl DriftWm {
                         // window, and a fit or fill exit can be settling too; the
                         // shared placement re-aims what that exit still owes.
                         self.map_window_to_rule_point(&window, rx, ry, true);
+                        // The placement above raises; a widget must keep its
+                        // slot below the windows it paints beneath (the same
+                        // repair `msg move` makes).
+                        if window.is_widget() {
+                            self.enforce_below_windows();
+                        }
                         // The new canvas position is durable — persist the move
                         // on the session-store debounce, like the stand-in arm.
                         self.session_store_mark_dirty();
