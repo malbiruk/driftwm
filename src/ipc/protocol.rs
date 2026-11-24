@@ -36,6 +36,9 @@ pub enum Request {
     /// the output it is on.
     Cursor,
     State,
+    /// The effective keyboard, tap and mouse bindings: built-in defaults merged
+    /// with the user's config, as currently loaded.
+    Bindings,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
     /// implementation detail, not a compatibility surface.
@@ -162,6 +165,7 @@ pub enum Response {
     /// reply variant. Serde-transparent, so the wire shape is unchanged.
     State(Box<StateInfo>),
     DebugCounters(BTreeMap<String, usize>),
+    Bindings(BindingsInfo),
     Focused(Option<FocusedWindow>),
     /// Visible-frame center, Y-up coordinates.
     Position {
@@ -198,6 +202,31 @@ pub enum Response {
 
 /// The result of a request: `Ok(Response)` or a human-readable error string.
 pub type Reply = Result<Response, String>;
+
+/// One binding in a [`Response::Bindings`] reply, in config syntax.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindingInfo {
+    /// The trigger as written in the config, e.g. `super+Return` or `super+left`.
+    pub trigger: String,
+    /// `on-window` or `on-canvas` for a mouse binding limited to one; absent for
+    /// keys, taps and mouse bindings that apply everywhere.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<String>,
+    /// The action as written in the config, e.g. `focus-nearest up`.
+    pub action: String,
+}
+
+/// The payload of a [`Response::Bindings`] reply. Each list is sorted by trigger
+/// so the reply is stable across runs.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BindingsInfo {
+    /// The key `super`, `alt` or `mod3` that `mod` stands for in the config.
+    pub mod_key: String,
+    pub keys: Vec<BindingInfo>,
+    /// Bare modifier chords that fire when released with no other key pressed.
+    pub taps: Vec<BindingInfo>,
+    pub mouse: Vec<BindingInfo>,
+}
 
 /// The focused window in a [`Response::Focused`] reply.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -397,6 +426,7 @@ mod tests {
             Request::Layout { short: true },
             Request::Cursor,
             Request::State,
+            Request::Bindings,
             Request::DebugCounters,
             Request::Subscribe,
             Request::Focus(None),
@@ -653,6 +683,20 @@ mod tests {
                 output: "DP-1".into(),
             }),
             Ok(Response::State(Box::new(sample_state()))),
+            Ok(Response::Bindings(BindingsInfo {
+                mod_key: "super".into(),
+                keys: vec![BindingInfo {
+                    trigger: "super+Return".into(),
+                    context: None,
+                    action: "exec-terminal".into(),
+                }],
+                taps: vec![],
+                mouse: vec![BindingInfo {
+                    trigger: "super+left".into(),
+                    context: Some("on-window".into()),
+                    action: "move-window".into(),
+                }],
+            })),
             Ok(Response::DebugCounters(
                 [("stage_entries".to_string(), 2usize)]
                     .into_iter()

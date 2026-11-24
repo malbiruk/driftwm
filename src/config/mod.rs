@@ -1,4 +1,5 @@
 mod defaults;
+mod display;
 
 mod parse;
 mod parse_helpers;
@@ -319,6 +320,14 @@ impl Config {
         };
         combo.normalize();
         self.bindings.get(&combo)
+    }
+
+    pub fn iter_key_bindings(&self) -> impl Iterator<Item = (&KeyCombo, &Action)> {
+        self.bindings.iter()
+    }
+
+    pub fn iter_tap_bindings(&self) -> impl Iterator<Item = (&Modifiers, &Action)> {
+        self.tap_bindings.iter()
     }
 
     /// Look up a tap-modifier binding by the completed chord's modifier set.

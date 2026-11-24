@@ -49,6 +49,7 @@ mod hotplug;
 mod hover_focus;
 mod input_dispatch;
 mod interact_min;
+mod ipc_bindings;
 mod ipc_bounds;
 mod ipc_cursor;
 mod ipc_focus;

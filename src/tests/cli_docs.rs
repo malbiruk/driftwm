@@ -41,6 +41,12 @@ const EXAMPLES: &[(&str, &[&str])] = &[
         &["driftwm msg --json state | jq '.Ok.State.windows'"],
     ),
     (
+        "driftwm msg bindings",
+        &[
+            "driftwm msg --json bindings | jq -r '.Ok.Bindings.keys[] | \"\\(.trigger)\\t\\(.action)\"'",
+        ],
+    ),
+    (
         "driftwm msg subscribe",
         &["driftwm msg --json subscribe | jq --unbuffered -r '.State.zoom'"],
     ),

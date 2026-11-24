@@ -51,6 +51,7 @@ driftwm msg --json focus --id 5
 | Command | Description |
 | --- | --- |
 | [`state`](#driftwm-msg-state) | Dump camera, zoom, and the window inventory |
+| [`bindings`](#driftwm-msg-bindings) | List the effective keybindings: built-in defaults merged with the config |
 | [`subscribe`](#driftwm-msg-subscribe) | Stream state snapshots as they change (one JSON line per event with --json) |
 | [`focus`](#driftwm-msg-focus) | Print the focused window, or focus one by `app_id` substring or `--id` |
 | [`move`](#driftwm-msg-move) | Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up) |
@@ -83,6 +84,22 @@ Also prints the keyboard layout, the fullscreen and pinned screen-space inventor
 
 ```bash
 driftwm msg --json state | jq '.Ok.State.windows'
+```
+
+#### `driftwm msg bindings`
+
+```
+driftwm msg bindings
+```
+
+List the effective keybindings: built-in defaults merged with the config.
+
+Prints keyboard, tap and mouse bindings in config syntax; mouse bindings are tagged with the `[mouse.*]` context they live in. Reflects the config as currently loaded, including hot reloads. Gesture and touch bindings are not listed.
+
+`--json` reply: `{"Ok":{"Bindings":{"mod_key":"super","keys":[{"trigger":"super+Return","action":"exec-terminal"}],"taps":[..],"mouse":[..]}}}`.
+
+```bash
+driftwm msg --json bindings | jq -r '.Ok.Bindings.keys[] | "\(.trigger)\t\(.action)"'
 ```
 
 #### `driftwm msg subscribe`

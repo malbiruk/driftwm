@@ -14,14 +14,15 @@ use smithay::wayland::seat::WaylandFocus;
 
 use crate::decorations::DecorationKey;
 use crate::state::{DriftWm, NavZoom, RevealPan, StageWindow, SuspendedId};
+use driftwm::config::{Config, ModKey};
 use driftwm::window_ext::WindowExt;
 
 pub mod client;
 pub mod protocol;
 
 use self::protocol::{
-    Event, OutputInfo, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector,
-    socket_path,
+    BindingInfo, BindingsInfo, Event, OutputInfo, Reply, Request, Response, ScreenshotTarget,
+    StateInfo, WindowSelector, socket_path,
 };
 
 /// Reject a command line longer than this (without a newline) — bounds the
@@ -269,6 +270,7 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Layout { short } => cmd_layout(short, state),
         Request::Cursor => cmd_cursor(state),
         Request::State => Ok(cmd_state(state)),
+        Request::Bindings => Ok(Response::Bindings(bindings_info(&state.config))),
         Request::DebugCounters => Ok(Response::DebugCounters(state.debug_counters())),
         // Handled in serve_connection, which has the raw stream Subscribe needs.
         Request::Subscribe => unreachable!("Subscribe is handled before dispatch"),
@@ -430,6 +432,50 @@ fn layout_code(layout_list: &str, index: usize) -> Option<String> {
         .map(str::trim)
         .filter(|code| !code.is_empty())
         .map(str::to_owned)
+}
+
+fn bindings_info(config: &Config) -> BindingsInfo {
+    fn sorted(mut list: Vec<BindingInfo>) -> Vec<BindingInfo> {
+        list.sort_by(|a, b| (&a.trigger, &a.context).cmp(&(&b.trigger, &b.context)));
+        list
+    }
+    let binding = |trigger: String, context: Option<&str>, action: String| BindingInfo {
+        trigger,
+        context: context.map(str::to_owned),
+        action,
+    };
+
+    let keys = config
+        .iter_key_bindings()
+        .map(|(combo, action)| binding(combo.to_string(), None, action.to_string()))
+        .collect();
+    let taps = config
+        .iter_tap_bindings()
+        .map(|(mods, action)| binding(mods.to_string(), None, action.to_string()))
+        .collect();
+    let mouse = [
+        (&config.mouse.anywhere, None),
+        (&config.mouse.on_window, Some("on-window")),
+        (&config.mouse.on_canvas, Some("on-canvas")),
+    ]
+    .into_iter()
+    .flat_map(|(map, context)| {
+        map.iter()
+            .map(move |(trigger, action)| binding(trigger.to_string(), context, action.to_string()))
+    })
+    .collect();
+
+    BindingsInfo {
+        mod_key: match config.mod_key {
+            ModKey::Alt => "alt",
+            ModKey::Super => "super",
+            ModKey::Mod3 => "mod3",
+        }
+        .to_owned(),
+        keys: sorted(keys),
+        taps: sorted(taps),
+        mouse: sorted(mouse),
+    }
 }
 
 fn cmd_state(state: &mut DriftWm) -> Response {
