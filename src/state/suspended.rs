@@ -25,7 +25,7 @@ use driftwm::window_ext::WindowExt;
 
 use crate::decorations::DecorationKey;
 use crate::grabs::ResizeState;
-use crate::state::{DriftWm, NavZoom, StageWindow, SuspendedId, SuspendedWindow};
+use crate::state::{DriftWm, NavZoom, RestoreCmd, StageWindow, SuspendedId, SuspendedWindow};
 use crate::surface_tree::focus_belongs_to_toplevel;
 
 /// A close whose `toplevel_destroyed` should convert into a suspended window,
@@ -202,7 +202,8 @@ impl DriftWm {
         // Resolve the command fresh — the app may have been uninstalled since
         // the window was suspended.
         let desktop_id = s.identity.desktop_id.clone();
-        let argv = {
+        let restore_cmd = s.restore_cmd.borrow().clone();
+        let argv = restore_cmd.or_else(|| {
             let cache = self.desktop_entry_cache.get_or_insert_with(|| {
                 tracing::info!(
                     "desktop-entry cache used before warm completed; building synchronously"
@@ -211,7 +212,7 @@ impl DriftWm {
             });
             cache.refresh();
             cache.launch_command(&desktop_id)
-        };
+        });
         let Some(argv) = argv else {
             tracing::info!(
                 "relaunch of {id:?}: '{desktop_id}' no longer resolves to a launchable entry"
@@ -893,6 +894,12 @@ impl DriftWm {
 
         self.cancel_pending_relaunch(sid);
 
+        // The adopting window inherits the stand-in's command unless the app has
+        // already set its own.
+        if RestoreCmd::get(window).is_none() {
+            RestoreCmd::set(window, s.restore_cmd.borrow().clone());
+        }
+
         if refocus {
             let serial = SERIAL_COUNTER.next_serial();
             self.set_window_focus(Some(crate::state::FocusTarget(root.clone())), serial);
@@ -1555,6 +1562,7 @@ impl DriftWm {
             driftwm::session::Origin::Explicit,
             conv.csd,
         ));
+        *suspended.restore_cmd.borrow_mut() = RestoreCmd::get(window);
         let new_element = StageWindow::Suspended(suspended);
 
         // Cleanup checklist: drop the dead client from focus history, clear the

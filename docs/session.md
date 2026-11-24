@@ -182,6 +182,34 @@ resets to the config seeds on every launch, so a `set-bookmark` or `driftwm msg
 bookmark` edit lasts only for the session. Like the camera flag, it's read at
 launch.
 
+## Restore commands
+
+A stand-in normally relaunches from its `.desktop` entry, which reopens the bare
+app — a terminal comes back as an empty shell. A **restore command** replaces
+that `Exec=` line for one window, so a relaunch can reopen what the window held:
+
+```bash
+driftwm msg restore-cmd -- kitty --directory ~/src claude --resume abc123
+```
+
+Run from inside the window (a hook, a shell prompt), the command targets the
+window whose client process is an ancestor of the caller; pass `--id` or an
+`app_id` to target another window or a stand-in. `--clear` removes it, and
+with no command it prints the current one. Where one process owns several
+windows (a single-instance terminal), the focused one wins, else the first.
+
+The command rides along everywhere the window does: it is saved in the session
+file for open windows, kept on the stand-in when the window is suspended or
+closed, and handed to the window that adopts the stand-in's slot on relaunch
+(unless the app set its own by then). The activation token is still passed in
+the environment, and the 5-second `app_id` fallback still matches the new window
+for apps that ignore it. The window must still resolve to a `.desktop` entry to
+become a stand-in at all.
+
+The command is run as you, from the compositor's environment — anything that can
+reach the IPC socket (mode `0600`) can already run commands through `exec`, so
+this adds no new access.
+
 ## The session file
 
 The session lives at `~/.local/state/driftwm/session.json` (respects

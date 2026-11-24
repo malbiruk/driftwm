@@ -93,6 +93,20 @@ pub enum Request {
     Suspend(Option<WindowSelector>),
     /// Relaunch a suspended window (the focused stand-in when `None`).
     Relaunch(Option<WindowSelector>),
+    /// Get, set, or clear the command a window relaunches with. With no
+    /// `window`, the target is the window whose client process is one of `pids`
+    /// (the caller's ancestors, nearest first). `cmd` sets, `clear` removes, and
+    /// neither gets. Live windows and suspended stand-ins both qualify.
+    RestoreCmd {
+        #[serde(default)]
+        window: Option<WindowSelector>,
+        #[serde(default)]
+        pids: Vec<u32>,
+        #[serde(default)]
+        cmd: Option<Vec<String>>,
+        #[serde(default)]
+        clear: bool,
+    },
     /// Run a config action by its config-grammar string, e.g. `"switch-layout
     /// next"`. Any keybindable action is reachable, so one-shot ops live here
     /// rather than as their own commands.
@@ -186,6 +200,9 @@ pub enum Response {
         width: u32,
         height: u32,
     },
+    /// A window's relaunch command; `None` when it relaunches from its
+    /// `.desktop` entry.
+    RestoreCmd(Option<Vec<String>>),
     /// Every bookmark, name → [x, y] (Y-up), sorted by name.
     Bookmarks(BTreeMap<String, [f64; 2]>),
     /// One bookmark's canvas point (Y-up), echoed on get and set.
@@ -469,6 +486,18 @@ mod tests {
             Request::Relaunch(None),
             Request::Relaunch(Some(WindowSelector::AppId("foot".into()))),
             Request::Action("switch-layout next".into()),
+            Request::RestoreCmd {
+                window: None,
+                pids: vec![42, 7],
+                cmd: Some(vec!["kitty".into(), "claude".into()]),
+                clear: false,
+            },
+            Request::RestoreCmd {
+                window: Some(WindowSelector::Id(3)),
+                pids: vec![],
+                cmd: None,
+                clear: true,
+            },
             Request::Bookmark {
                 name: None,
                 to: None,

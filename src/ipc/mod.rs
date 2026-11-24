@@ -280,6 +280,12 @@ pub(crate) fn dispatch(request: Request, state: &mut DriftWm) -> Reply {
         Request::Close(sel) => cmd_close(sel, state),
         Request::Suspend(sel) => cmd_suspend(sel, state),
         Request::Relaunch(sel) => cmd_relaunch(sel, state),
+        Request::RestoreCmd {
+            window,
+            pids,
+            cmd,
+            clear,
+        } => cmd_restore_cmd(window, &pids, cmd, clear, state),
         Request::Action(spec) => cmd_action(&spec, state),
         Request::Bookmark { name, to, delete } => cmd_bookmark(name, to, delete, state),
         Request::Screenshot {
@@ -304,6 +310,8 @@ fn is_mutating(request: &Request) -> bool {
             | Request::Suspend(_)
             | Request::Relaunch(_)
             | Request::Action(_)
+            | Request::RestoreCmd { cmd: Some(_), .. }
+            | Request::RestoreCmd { clear: true, .. }
             // Setting or deleting a bookmark can flip an active-bookmark incumbent
             // without moving the camera; the per-frame refresh needs a render to
             // pick it up. Bare get/list (no `to`, no `delete`) stays a pure query.
@@ -996,6 +1004,83 @@ fn cmd_relaunch(sel: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
         let name = name.unwrap_or_else(|| "the app".to_string());
         Err(format!("{name} is no longer installed"))
     }
+}
+
+enum RestoreTarget {
+    Live(smithay::desktop::Window),
+    Suspended(std::rc::Rc<crate::state::SuspendedWindow>),
+}
+
+/// Get, set, or clear a window's relaunch command. A selector names a live
+/// window first, then a stand-in; without one, the first window whose client
+/// process is among `pids` (the caller's ancestors) is the target, the focused
+/// one winning when a single process owns several windows.
+fn cmd_restore_cmd(
+    sel: Option<WindowSelector>,
+    pids: &[u32],
+    cmd: Option<Vec<String>>,
+    clear: bool,
+    state: &mut DriftWm,
+) -> Reply {
+    use crate::state::RestoreCmd;
+    if cmd.as_ref().is_some_and(|c| c[0].is_empty()) {
+        return Err("restore command must not start with an empty word".to_string());
+    }
+    let target = if sel.is_some() {
+        match window_by_selector(state, sel.as_ref()) {
+            Ok(window) => RestoreTarget::Live(window),
+            Err(e) => suspended_by_selector(state, sel.as_ref())
+                .and_then(|id| state.find_suspended(id))
+                .map(RestoreTarget::Suspended)
+                .ok_or(e)?,
+        }
+    } else {
+        let focused = state.focused_window();
+        let owned = |pid: u32| -> Vec<smithay::desktop::Window> {
+            state
+                .stage
+                .windows()
+                .filter_map(|w| w.client())
+                .filter(|w| {
+                    w.wl_surface()
+                        .is_some_and(|s| state.client_pid(&s) == Some(pid))
+                })
+                .cloned()
+                .collect()
+        };
+        pids.iter()
+            .map(|&pid| owned(pid))
+            .find(|windows| !windows.is_empty())
+            .and_then(|windows| {
+                windows
+                    .iter()
+                    .find(|w| focused.as_ref() == Some(*w))
+                    .or(windows.first())
+                    .cloned()
+            })
+            .map(RestoreTarget::Live)
+            .ok_or("no window owned by this process or its ancestors")?
+    };
+
+    let update = clear || cmd.is_some();
+    match target {
+        RestoreTarget::Live(window) => {
+            if update {
+                RestoreCmd::set(&window, cmd);
+            } else {
+                return Ok(Response::RestoreCmd(RestoreCmd::get(&window)));
+            }
+        }
+        RestoreTarget::Suspended(s) => {
+            if update {
+                *s.restore_cmd.borrow_mut() = cmd;
+            } else {
+                return Ok(Response::RestoreCmd(s.restore_cmd.borrow().clone()));
+            }
+        }
+    }
+    state.session_store_mark_dirty();
+    Ok(Response::Ok)
 }
 
 /// Capture a screenshot synchronously to `path`.

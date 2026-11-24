@@ -63,6 +63,12 @@ pub struct SessionEntry {
     /// Additive: a file without this field defaults to unfocused.
     #[serde(default)]
     pub focused: bool,
+    /// Command that relaunches this window in place of its `.desktop` entry's
+    /// `Exec=`, set over IPC by the app (or a hook in it) so a relaunch can
+    /// reopen what the window held, not just the bare app. Additive: a file
+    /// without this field relaunches from the `.desktop` entry.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restore_cmd: Option<Vec<String>>,
 }
 
 /// A per-output camera/zoom, mirroring the runtime state file's shape.
@@ -252,6 +258,7 @@ mod tests {
             origin,
             csd: false,
             focused: false,
+            restore_cmd: None,
         }
     }
 
@@ -523,5 +530,33 @@ mod tests {
 
         let after = read(&path);
         assert_eq!(after.entries, vec![entry(2, Origin::Quit)]);
+    }
+
+    #[test]
+    fn restore_cmd_round_trips_and_defaults_none_for_old_files() {
+        let tmp = TempDir::new();
+        let path = tmp.path.join("session.json");
+        let mut with_cmd = entry(1, Origin::Explicit);
+        with_cmd.restore_cmd = Some(vec!["kitty".into(), "claude".into()]);
+        let envelope = SessionEnvelope {
+            version: VERSION,
+            saved_at: 0,
+            entries: vec![with_cmd, entry(2, Origin::Explicit)],
+            outputs: BTreeMap::new(),
+            bookmarks: BTreeMap::new(),
+        };
+        write(&path, &envelope, false).unwrap();
+        let raw = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(raw.matches("restore_cmd").count(), 1, "None is not written");
+        assert_eq!(read(&path), envelope);
+
+        std::fs::write(
+            &path,
+            r#"{"version":2,"saved_at":0,"outputs":{},"entries":[
+                {"id":1,"app_id":"a","desktop_id":"a","display_name":"A",
+                 "position":[0,0],"size":[400,300],"origin":"explicit"}]}"#,
+        )
+        .unwrap();
+        assert_eq!(read(&path).entries[0].restore_cmd, None);
     }
 }

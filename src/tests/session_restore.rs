@@ -123,6 +123,7 @@ fn entry(id: u64, app: &str, origin: Origin) -> SessionEntry {
         origin,
         csd: false,
         focused: false,
+        restore_cmd: None,
     }
 }
 
@@ -175,6 +176,52 @@ fn quit_serialize_round_trip() {
     assert_eq!(restored[1].1, Point::from((-300, 125)));
     assert_eq!(restored[1].0.size.get(), Size::from((200, 175)));
 
+    for (s, _) in restored {
+        f.state().dismiss_suspended(s.id);
+    }
+}
+
+/// A restore command set on a live window rides into the session file and
+/// back onto the stand-in the next boot materializes.
+#[test]
+fn restore_cmd_round_trips_through_the_session_file() {
+    let tmp = TempDir::new();
+    let path = tmp.path().join("session.json");
+    let cmd = vec![
+        "alpha".to_string(),
+        "--resume".to_string(),
+        "x y".to_string(),
+    ];
+
+    {
+        let cache = TempDir::new();
+        let mut f = Fixture::with_config(config_restore(true));
+        f.add_output(1, (1920, 1080));
+        inject_cache(&mut f, &cache, &["alpha", "beta"]);
+        f.state().session_store.path = Some(path.clone());
+
+        let a = f.add_client();
+        map_at(&mut f, a, "alpha", (400, 300), (500, 500));
+        let b = f.add_client();
+        map_at(&mut f, b, "beta", (200, 200), (-300, 100));
+        let alpha = window_by_app_id(&mut f, "alpha").unwrap();
+        crate::state::RestoreCmd::set(&alpha, Some(cmd.clone()));
+
+        f.state().session_store_write_now();
+    }
+
+    let saved = session::read(&path);
+    assert_eq!(saved.entries[0].restore_cmd.as_ref(), Some(&cmd));
+    assert_eq!(saved.entries[1].restore_cmd, None);
+
+    let mut f = Fixture::with_config(config_restore(true));
+    f.add_output(1, (1920, 1080));
+    f.state().session_store.path = Some(path.clone());
+    f.state().load_session();
+
+    let restored = suspended_in_order(&mut f);
+    assert_eq!(*restored[0].0.restore_cmd.borrow(), Some(cmd));
+    assert_eq!(*restored[1].0.restore_cmd.borrow(), None);
     for (s, _) in restored {
         f.state().dismiss_suspended(s.id);
     }
@@ -938,6 +985,7 @@ fn v2_session_entry_round_trips_unchanged() {
             origin: Origin::Explicit,
             csd: false,
             focused: false,
+            restore_cmd: None,
         }],
         outputs: BTreeMap::new(),
     };

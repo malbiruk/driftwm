@@ -64,7 +64,30 @@ pub struct SuspendedWindow {
     /// the outer footprint still matches the original window), `false` for
     /// SSD-origin. Every stand-in draws the same textless bar regardless.
     pub csd: bool,
+    /// Relaunch command overriding the `.desktop` entry's `Exec=`; see
+    /// [`RestoreCmd`].
+    pub restore_cmd: RefCell<Option<Vec<String>>>,
     pub chrome: RefCell<SuspendedChrome>,
+}
+
+/// A live window's relaunch command, kept in its `Window` user data. Set over
+/// IPC (`msg restore-cmd`), carried onto the stand-in when the window is
+/// suspended and back onto the window that adopts the stand-in's slot.
+#[derive(Default)]
+pub struct RestoreCmd(pub RefCell<Option<Vec<String>>>);
+
+impl RestoreCmd {
+    pub fn get(window: &Window) -> Option<Vec<String>> {
+        window.user_data().get::<Self>()?.0.borrow().clone()
+    }
+
+    pub fn set(window: &Window, cmd: Option<Vec<String>>) {
+        *window
+            .user_data()
+            .get_or_insert(Self::default)
+            .0
+            .borrow_mut() = cmd;
+    }
 }
 
 impl std::fmt::Debug for SuspendedWindow {
@@ -91,6 +114,7 @@ impl SuspendedWindow {
             identity,
             origin,
             csd,
+            restore_cmd: RefCell::new(None),
             chrome: RefCell::new(SuspendedChrome::default()),
         }
     }

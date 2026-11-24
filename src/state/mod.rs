@@ -59,7 +59,7 @@ pub(crate) use session_store::{
     CAMERA_LIMIT, POSITION_LIMIT, valid_canvas_point, within_window_range,
 };
 pub use session_store::{CameraSeed, SessionStore};
-pub use stage_window::{StageWindow, SuspendedId, SuspendedWindow};
+pub use stage_window::{RestoreCmd, StageWindow, SuspendedId, SuspendedWindow};
 pub use suspended::{
     AdoptOrigin, DeferredAdopt, PendingRelaunch, RelaunchMarker, RevealCause, SuspendMark,
     UnmapSnapshot,
