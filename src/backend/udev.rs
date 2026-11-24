@@ -1203,7 +1203,6 @@ fn create_surface(
     // returns.
     output.change_current_state(Some(output_mode), Some(transform), Some(scale), None);
     output.set_preferred(output_mode);
-    let global = output.create_global::<DriftWm>(dh);
 
     let allocator = GbmAllocator::new(
         gbm.clone(),
@@ -1268,6 +1267,12 @@ fn create_surface(
         );
     }
 
+    // The global is created only now, after every fallible setup step
+    // succeeded: a global made before a late failure would leak — no
+    // `SurfaceData` comes back, so no teardown path ever disables it, and
+    // clients would keep seeing a phantom monitor until the compositor
+    // restarts. Each retry scan would otherwise add another copy.
+    let global = output.create_global::<DriftWm>(dh);
     Some(SurfaceData {
         compositor,
         output,
