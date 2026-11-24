@@ -696,6 +696,7 @@ pub fn init_udev(
         data.render.border_shader = crate::render::compile_border_shader(backend.renderer());
         data.render.corner_clip_shader =
             crate::render::compile_corner_clip_shader(backend.renderer());
+        data.render.obscure_shader = crate::render::compile_obscure_shader(backend.renderer());
         let (blur_down, blur_up, blur_mask) =
             crate::render::compile_blur_shaders(backend.renderer());
         data.render.blur_down_shader = blur_down;

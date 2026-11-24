@@ -658,7 +658,15 @@ pub struct RoundedCornerElement {
     corner_radius: [f32; 4],
     output_scale: f64,
     aa_scale: f32,
+    /// Drawn with the mosaic program. Changes what the element reports as its
+    /// commit and damage, see the `Element` impl.
+    obscured: bool,
 }
+
+/// Added to an obscured element's commit count so toggling the effect, in
+/// either direction, reads as a change to the damage tracker even though the
+/// client committed nothing. Far above any real commit count.
+const OBSCURE_COMMIT_SALT: usize = 1 << 40;
 
 impl RoundedCornerElement {
     pub fn new(
@@ -676,7 +684,14 @@ impl RoundedCornerElement {
             corner_radius,
             output_scale,
             aa_scale,
+            obscured: false,
         }
+    }
+
+    /// Mark the element as drawn with the mosaic program.
+    pub fn obscured(mut self, obscured: bool) -> Self {
+        self.obscured = obscured;
+        self
     }
 
     fn has_rounding(&self) -> bool {
@@ -785,7 +800,12 @@ impl Element for RoundedCornerElement {
         self.inner.id()
     }
     fn current_commit(&self) -> CommitCounter {
-        self.inner.current_commit()
+        let commit = self.inner.current_commit();
+        if !self.obscured {
+            return commit;
+        }
+        let count = commit.distance(Some(CommitCounter::default())).unwrap_or(0);
+        CommitCounter::from(count + OBSCURE_COMMIT_SALT)
     }
     fn location(&self, scale: Scale<f64>) -> Point<i32, Physical> {
         self.inner.location(scale)
@@ -805,6 +825,11 @@ impl Element for RoundedCornerElement {
         scale: Scale<f64>,
         commit: Option<CommitCounter>,
     ) -> DamageSet<i32, Physical> {
+        // A mosaic cell changes colour when any pixel in it does, so client
+        // damage understates what changed on screen: repaint the whole element.
+        if self.obscured {
+            return DamageSet::from_slice(&[Rectangle::from_size(self.geometry(scale).size)]);
+        }
         // Damage intersected with the clipped region: pixels outside geometry
         // are zeroed by the shader, so damage there can never change output.
         let damage = self.inner.damage_since(scale, commit);
@@ -887,6 +912,11 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
         // today; if one starts to, extend `compute_uniforms` with a
         // transform-aware UV→geo matrix.
         if self.inner.transform() != Transform::Normal {
+            // The default program would show the real pixels; an obscured
+            // element draws nothing instead.
+            if self.obscured {
+                return Ok(());
+            }
             return self
                 .inner
                 .draw(frame, src, dst, damage, opaque_regions, user_data);
@@ -900,6 +930,11 @@ impl RenderElement<GlesRenderer> for RoundedCornerElement {
     }
 
     fn underlying_storage(&self, renderer: &mut GlesRenderer) -> Option<UnderlyingStorage<'_>> {
+        // Exposing the buffer would let the compositor scan it out directly,
+        // bypassing the mosaic program.
+        if self.obscured {
+            return None;
+        }
         self.inner.underlying_storage(renderer)
     }
 }

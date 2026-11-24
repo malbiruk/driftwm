@@ -79,20 +79,23 @@ pub fn surfaceless_renderer(test: &str) -> Option<GlesRenderer> {
 /// shaders compiled into it. A shader that fails to compile on a working GL is
 /// a real bug, so this panics rather than skipping.
 ///
-/// Only the three chrome shaders, not the blur trio — a blur scenario would
+/// Only the chrome shaders, not the blur trio — a blur scenario would
 /// need to compile and clear those separately.
 pub fn install(f: &mut Fixture, mut renderer: GlesRenderer) {
     let shadow = crate::render::compile_shadow_shader(&mut renderer);
     let border = crate::render::compile_border_shader(&mut renderer);
     let corner_clip = crate::render::compile_corner_clip_shader(&mut renderer);
+    let obscure = crate::render::compile_obscure_shader(&mut renderer);
     assert!(shadow.is_some(), "the shadow shader compiled");
     assert!(border.is_some(), "the border shader compiled");
     assert!(corner_clip.is_some(), "the corner-clip shader compiled");
+    assert!(obscure.is_some(), "the obscure shader compiled");
 
     let state = f.state();
     state.render.shadow_shader = shadow;
     state.render.border_shader = border;
     state.render.corner_clip_shader = corner_clip;
+    state.render.obscure_shader = obscure;
     state.backend = Some(Backend::Udev(Box::new(renderer)));
 }
 
@@ -105,5 +108,6 @@ pub fn uninstall(f: &mut Fixture) {
     state.render.shadow_shader = None;
     state.render.border_shader = None;
     state.render.corner_clip_shader = None;
+    state.render.obscure_shader = None;
     state.backend = None;
 }

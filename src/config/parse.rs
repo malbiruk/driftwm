@@ -110,6 +110,7 @@ pub fn parse_action(s: &str) -> Result<Action, String> {
         "exec-launcher" => Ok(Action::ExecLauncher),
         "close-window" => Ok(Action::CloseWindow),
         "suspend-window" => Ok(Action::SuspendWindow),
+        "toggle-obscure" => Ok(Action::ToggleObscure),
         "nudge-window" => {
             let dir = parse_direction(arg.ok_or("nudge-window requires a direction")?)?;
             Ok(Action::NudgeWindow(dir))
@@ -269,6 +270,7 @@ pub const ACTION_NAMES: &[(&str, &str)] = &[
     ("shrink-window", "shrink-window up"),
     ("spawn", "spawn foo"),
     ("suspend-window", "suspend-window"),
+    ("toggle-obscure", "toggle-obscure"),
     ("switch-layout", "switch-layout next"),
     ("toggle-cursor-pan", "toggle-cursor-pan"),
     ("toggle-fullscreen", "toggle-fullscreen"),
@@ -634,6 +636,7 @@ mod tests {
             Action::Spawn(_) => "spawn",
             Action::CloseWindow => "close-window",
             Action::SuspendWindow => "suspend-window",
+            Action::ToggleObscure => "toggle-obscure",
             Action::NudgeWindow(_) => "nudge-window",
             Action::MoveToSnap(_) => "move-to-snap",
             Action::GrowWindow(_) => "grow-window",

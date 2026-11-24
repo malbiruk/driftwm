@@ -611,6 +611,20 @@ pub fn compile_corner_clip_shader(renderer: &mut GlesRenderer) -> Option<GlesTex
     }
 }
 
+/// The corner-clip program with the mosaic sampler compiled in, for windows
+/// toggled by `toggle-obscure`. Same uniforms, so it drops in wherever the
+/// plain program is used.
+pub fn compile_obscure_shader(renderer: &mut GlesRenderer) -> Option<GlesTexProgram> {
+    let src = format!("#define OBSCURE\n{CORNER_CLIP_SRC}");
+    match renderer.compile_custom_texture_shader(&src, CORNER_CLIP_UNIFORMS) {
+        Ok(shader) => Some(shader),
+        Err(e) => {
+            tracing::error!("Failed to compile obscure shader: {e}");
+            None
+        }
+    }
+}
+
 const TILE_BG_SRC: &str = include_str!("../shaders/tile_bg.glsl");
 
 pub(super) const TILE_BG_UNIFORMS: &[UniformName<'static>] = &[

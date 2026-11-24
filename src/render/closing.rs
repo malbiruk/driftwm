@@ -129,13 +129,18 @@ pub(crate) fn close_pixels_fresh(captured_at: Instant, now: Instant) -> bool {
 /// Clone the already-imported textures of `surface`'s tree. A held
 /// `GlesTexture` clone stays renderable for the renderer's lifetime even after
 /// the surface's buffers are evicted. Returns `None` for a never-drawn tree
-/// (no importable buffers).
+/// (no importable buffers) and for an obscured window.
 pub(crate) fn capture_close_pixels(
     renderer: &mut GlesRenderer,
     surface: &WlSurface,
     geometry: Rectangle<i32, Logical>,
     now: Instant,
 ) -> Option<ClosePixels> {
+    // The close animation replays the window's real pixels; an obscured window
+    // has to vanish without ever showing them.
+    if driftwm::config::applied_rule(surface).is_some_and(|r| r.obscured) {
+        return None;
+    }
     let mut surfaces: Vec<BakedSurface> = Vec::new();
     with_surface_tree_downward(
         surface,

@@ -24,6 +24,7 @@ mod keyboard_snap;
 mod layers;
 mod membership;
 mod navigation;
+mod obscure;
 mod output;
 pub mod persistence;
 mod pinned;
