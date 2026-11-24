@@ -215,69 +215,13 @@ impl CompositorHandler for DriftWm {
         self.mark_dirty_for_surface(surface);
 
         // Trim corner rects from CSD toplevels' opaque regions so the
-        // background can render through. Some CSD apps (LibreOffice/GTK3)
-        // declare the full rect opaque while rendering transparent corners,
-        // leaving black artifacts where damage tracking skips redraws.
-        // ARGB only — XRGB is handled in RoundedCornerElement::opaque_regions.
-        // Skipped for `decoration = "none"` (pass-through promise).
+        // background can render through (see `trim_opaque_corners`). Skipped for
+        // windows with a title bar: the bar's frame draws its own corners.
         if !self
             .decorations
             .contains_key(&DecorationKey::Surface(surface.id()))
         {
-            with_states(surface, |states| {
-                // Every commit of every surface lands here, and only toplevels
-                // can carve — bail before the rule read so subsurfaces, popups,
-                // layer surfaces and cursors pay a single data_map lookup.
-                if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
-                    return;
-                }
-                // `applied_rule` re-enters `with_states`, whose private-data
-                // mutex this closure already holds — read the rule off the
-                // states in hand instead.
-                let applied = states
-                    .data_map
-                    .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
-                    .and_then(|m| m.lock().ok())
-                    .map(|guard| guard.clone());
-                let mode = driftwm::config::effective_decoration_mode(
-                    applied.as_ref().and_then(|r| r.decoration.as_ref()),
-                    &self.config.decorations.default_mode,
-                );
-                if matches!(mode, driftwm::config::DecorationMode::None) {
-                    return;
-                }
-                let corner_radius = driftwm::config::effective_corner_radius(
-                    applied.as_ref(),
-                    mode,
-                    &self.config.decorations,
-                );
-                let mut guard = states.cached_state.get::<SurfaceAttributes>();
-                let attrs = guard.current();
-                if let Some(ref mut region) = attrs.opaque_region {
-                    let Some(bounds) = region
-                        .rects
-                        .iter()
-                        .filter(|(k, _)| matches!(k, RectangleKind::Add))
-                        .map(|(_, r)| *r)
-                        .reduce(|a, b| a.merge(b))
-                    else {
-                        return;
-                    };
-                    let r = corner_radius + 2;
-                    if bounds.size.w > 2 * r && bounds.size.h > 2 * r {
-                        let (x, y, w, h) =
-                            (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
-                        for corner in [
-                            Rectangle::new((x, y).into(), (r, r).into()),
-                            Rectangle::new((x + w - r, y).into(), (r, r).into()),
-                            Rectangle::new((x + w - r, y + h - r).into(), (r, r).into()),
-                            Rectangle::new((x, y + h - r).into(), (r, r).into()),
-                        ] {
-                            region.rects.push((RectangleKind::Subtract, corner));
-                        }
-                    }
-                }
-            });
+            self.trim_opaque_corners(surface);
         }
 
         // The buffer handler below rebuilds every surface in this tree, sync
@@ -1397,6 +1341,78 @@ impl DriftWm {
         }
         self.pending_adopt_settle.remove(&surface.id());
         self.refresh_stable_snap_rect(&client);
+    }
+
+    /// Trim corner rects from a CSD toplevel's opaque region so the background
+    /// can render through. Some CSD apps (LibreOffice/GTK3) declare the full rect
+    /// opaque while rendering transparent corners, leaving black artifacts where
+    /// damage tracking skips redraws. ARGB only — XRGB is handled in
+    /// `RoundedCornerElement::opaque_regions`. Skipped for `decoration = "none"`
+    /// (pass-through promise). Idempotent, so it can also run outside a commit.
+    pub(crate) fn trim_opaque_corners(
+        &self,
+        surface: &smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+    ) {
+        with_states(surface, |states| {
+            // Every commit of every surface lands here, and only toplevels
+            // can carve — bail before the rule read so subsurfaces, popups,
+            // layer surfaces and cursors pay a single data_map lookup.
+            if states.data_map.get::<XdgToplevelSurfaceData>().is_none() {
+                return;
+            }
+            // `applied_rule` re-enters `with_states`, whose private-data
+            // mutex this closure already holds — read the rule off the
+            // states in hand instead.
+            let applied = states
+                .data_map
+                .get::<std::sync::Mutex<driftwm::config::AppliedWindowRule>>()
+                .and_then(|m| m.lock().ok())
+                .map(|guard| guard.clone());
+            let mode = driftwm::config::effective_decoration_mode(
+                applied.as_ref().and_then(|r| r.decoration.as_ref()),
+                &self.config.decorations.default_mode,
+            );
+            if matches!(mode, driftwm::config::DecorationMode::None) {
+                return;
+            }
+            let corner_radius = driftwm::config::effective_corner_radius(
+                applied.as_ref(),
+                mode,
+                &self.config.decorations,
+            );
+            let mut guard = states.cached_state.get::<SurfaceAttributes>();
+            let attrs = guard.current();
+            if let Some(ref mut region) = attrs.opaque_region {
+                let Some(bounds) = region
+                    .rects
+                    .iter()
+                    .filter(|(k, _)| matches!(k, RectangleKind::Add))
+                    .map(|(_, r)| *r)
+                    .reduce(|a, b| a.merge(b))
+                else {
+                    return;
+                };
+                let r = corner_radius + 2;
+                if bounds.size.w > 2 * r && bounds.size.h > 2 * r {
+                    let (x, y, w, h) = (bounds.loc.x, bounds.loc.y, bounds.size.w, bounds.size.h);
+                    let corners = [
+                        Rectangle::new((x, y).into(), (r, r).into()),
+                        Rectangle::new((x + w - r, y).into(), (r, r).into()),
+                        Rectangle::new((x + w - r, y + h - r).into(), (r, r).into()),
+                        Rectangle::new((x, y + h - r).into(), (r, r).into()),
+                    ];
+                    for corner in corners {
+                        let carved = region
+                            .rects
+                            .iter()
+                            .any(|(k, r)| matches!(k, RectangleKind::Subtract) && *r == corner);
+                        if !carved {
+                            region.rects.push((RectangleKind::Subtract, corner));
+                        }
+                    }
+                }
+            }
+        });
     }
 
     /// A snapped window that resizes *itself* larger — not via a resize grab —
