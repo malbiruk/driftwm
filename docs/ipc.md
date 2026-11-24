@@ -35,7 +35,9 @@ point, with **Y pointing up**. `move 0 0` centers the focused window on the
 origin, `camera 0 0` centers the viewport there, and positive `y` is above.
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
-still works.
+still works. A window that is not on screen yet has no position to move either:
+`move` refuses it until it appears, so a script that launches an app and moves
+its window should retry.
 
 `pin` moves a window between the two spaces without moving it visually. Like
 `move`, it refuses a fullscreen window, whose pin reads `false` until fullscreen

@@ -10,6 +10,7 @@ use std::process::Command;
 use std::time::{Duration, Instant};
 
 use driftwm::window_ext::WindowExt;
+use smithay::wayland::seat::WaylandFocus;
 
 use super::Fixture;
 use super::real::{TempDir, ipc_request};
@@ -77,12 +78,15 @@ fn real_client_over_ipc() {
             .expect("spawn client binary"),
     );
 
-    // Cold process startup: give it a generous window to connect, map, and set
-    // its app_id.
+    // Cold process startup: give it a generous window to connect and have its
+    // first buffer placed. The app_id alone is not enough: it can arrive before
+    // that buffer, and a window with no placement yet refuses a move.
     f.wait_until(Duration::from_secs(15), |s| {
-        s.stage
-            .windows()
-            .any(|w| w.app_id_or_class().is_some_and(|a| !a.is_empty()))
+        s.stage.windows().any(|w| {
+            w.app_id_or_class().is_some_and(|a| !a.is_empty())
+                && w.wl_surface()
+                    .is_some_and(|surface| !s.queues_geometry_request(&surface))
+        })
     });
     eprintln!(
         "real_client_over_ipc: window mapped after {:?}",

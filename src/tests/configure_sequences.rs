@@ -3593,6 +3593,61 @@ fn ipc_move_refuses_pinned_and_fullscreen_windows() {
     );
 }
 
+/// A toplevel can carry its app_id before its first buffer, so a selector
+/// reaches it while its placement is still to come. That placement would
+/// overwrite a move, so `msg move` refuses until the window is placed.
+#[test]
+fn ipc_move_refuses_a_window_that_is_not_placed_yet() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+    let move_it = |f: &mut Fixture| {
+        crate::ipc::dispatch(
+            Request::Move {
+                window: Some(WindowSelector::AppId("early".into())),
+                to: Some((640, 480)),
+            },
+            f.state(),
+        )
+    };
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("early");
+    window.commit();
+    f.roundtrip(id);
+    assert!(
+        window_by_app_id(&mut f, "early").is_some(),
+        "precondition: the window is selectable before its first buffer"
+    );
+    assert!(
+        move_it(&mut f).is_err(),
+        "a window with no placement yet refuses the move"
+    );
+
+    let window = f.client(id).window(&surface);
+    window.set_size(400, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    assert!(matches!(
+        move_it(&mut f),
+        Ok(Response::Position { x: 640, y: 480 })
+    ));
+    let early = window_by_app_id(&mut f, "early").unwrap();
+    assert_eq!(
+        f.state().stage.position_of(&early),
+        Some(rule_point_loc(
+            640,
+            480,
+            Size::from((400, 300)),
+            Chrome::NONE
+        )),
+        "once placed, the move applies"
+    );
+}
+
 /// A panel that destroys its layer role and takes a fresh one on the same
 /// `wl_surface` gets an initial configure for the new role. Left in the output's
 /// map, the dead role is what the recreate's first commit finds — lookups match

@@ -734,12 +734,15 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
         }
         Some((x, y)) => {
             // A pinned window renders at its pin, a fullscreen one at its
-            // camera park, and one held back for a deferred adopt is about to be
-            // teleported into a slot — writing the canvas position would
-            // silently do nothing, displace the park, or be overwritten.
+            // camera park, and one whose placement is still to come — or that
+            // is held back for a deferred adopt — is about to be put somewhere:
+            // writing the canvas position would silently do nothing, displace
+            // the park, or be overwritten.
             if state.is_pinned(&window)
                 || state.is_window_fullscreen(&window)
-                || state.hidden_by_deferred_adopt(&window)
+                || window
+                    .wl_surface()
+                    .is_some_and(|s| state.queues_geometry_request(&s))
             {
                 return Err(
                     "this window has no canvas position to move: it is pinned, fullscreen, or \
