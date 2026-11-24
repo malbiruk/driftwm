@@ -309,6 +309,127 @@ fn toml_touch_timings_reject_negatives_with_a_warning() {
     );
 }
 
+// ── [[input.touch.devices]] per-device output overrides ─────────────────
+
+/// The fix for "cannot map multiple touchscreens to different outputs": a
+/// device entry resolves into a pattern + connector name, and the first
+/// matching entry wins.
+#[test]
+fn toml_touch_device_entries_parse_and_first_match_wins() {
+    let toml = r#"
+        [[input.touch.devices]]
+        name = "ELAN*Touchscreen"
+        map_to_output = "DP-2"
+
+        [[input.touch.devices]]
+        name = "/Wacom.*(HID|Pen)/"
+        map_to_output = "HDMI-A-1"
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert!(
+        warnings.is_empty(),
+        "valid device entries must not warn, got {warnings:?}"
+    );
+    assert_eq!(config.touch.devices.len(), 2);
+
+    // First match wins — the ELAN entry answers for anything it matches even
+    // though the second entry's regex doesn't.
+    let elan = config
+        .touch
+        .device_mapping_for("ELAN1234:00 04F3:2E2E Touchscreen")
+        .expect("glob must match the real device name");
+    assert_eq!(elan.map_to_output.as_deref(), Some("DP-2"));
+
+    let wacom = config
+        .touch
+        .device_mapping_for("Wacom HID 2.4in Pen touchscreen")
+        .expect("regex must match");
+    assert_eq!(wacom.map_to_output.as_deref(), Some("HDMI-A-1"));
+
+    assert!(
+        config.touch.device_mapping_for("Logitech K400").is_none(),
+        "an unrelated device matches no entry"
+    );
+}
+
+/// An entry with `map_to_output = "none"` opts that device out of the global
+/// pin while the global keeps answering for every other touchscreen.
+#[test]
+fn toml_touch_device_none_normalizes_to_auto_detect() {
+    let toml = r#"
+        [input.touch]
+        map_to_output = "DP-1"
+
+        [[input.touch.devices]]
+        name = "external panel"
+        map_to_output = "none"
+
+        [[input.touch.devices]]
+        name = "laptop panel*"
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert!(warnings.is_empty(), "got {warnings:?}");
+    assert_eq!(config.touch.map_to_output.as_deref(), Some("DP-1"));
+
+    // A glob without `*` is an exact match, like window rules.
+    let matched = config
+        .touch
+        .device_mapping_for("external panel")
+        .expect("exact name must match");
+    assert!(
+        matched.map_to_output.is_none(),
+        "\"none\" must normalize to auto-detect, same sentinel as the scalar"
+    );
+    let other = config
+        .touch
+        .device_mapping_for("laptop panel touchscreen")
+        .expect("wildcard suffix must match");
+    assert_eq!(
+        other.map_to_output.as_deref(),
+        None,
+        "an omitted map_to_output is also auto-detect for the matched device"
+    );
+}
+
+/// A nameless entry can never match anything; keeping it would silently do
+/// nothing, so it is dropped with a warning instead — like a window rule with
+/// no criteria.
+#[test]
+fn toml_touch_device_entry_without_name_warns_and_is_dropped() {
+    let toml = r#"
+        [[input.touch.devices]]
+        map_to_output = "DP-2"
+
+        [[input.touch.devices]]
+        name = ""
+        map_to_output = "DP-3"
+    "#;
+    let (config, warnings) = Config::from_toml_collect(toml).unwrap();
+    assert!(
+        config.touch.devices.is_empty(),
+        "the nameless entries must be dropped"
+    );
+    assert!(
+        warnings.iter().any(|w| w.contains("input.touch.devices")),
+        "a missing or empty name should warn, got {warnings:?}"
+    );
+}
+
+/// A typoed field inside a device entry must fail loudly (deny_unknown_fields),
+/// like every other config table.
+#[test]
+fn toml_touch_device_entry_rejects_unknown_fields() {
+    let toml = r#"
+        [[input.touch.devices]]
+        name = "panel"
+        output = "DP-2"
+    "#;
+    assert!(
+        Config::from_toml_collect(toml).is_err(),
+        "a misspelled field in a device entry must be a parse error"
+    );
+}
+
 // ── [bindings] disable_defaults ──────────────────────────────────────────
 
 #[test]
