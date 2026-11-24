@@ -90,7 +90,6 @@ mod suspended;
 mod tablet;
 mod trackpad_send_events;
 mod translucent_fullscreen;
-mod tray_menu_repro;
 mod virtual_keyboard;
 mod window_animation;
 mod window_mode;
