@@ -8,7 +8,8 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 
 use super::protocol::{
-    Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector, socket_path,
+    DecalRequest, Event, Reply, Request, Response, ScreenshotTarget, StateInfo, WindowSelector,
+    socket_path,
 };
 
 /// `driftwm msg <...>` subcommands. Variants with optional positionals read when
@@ -190,6 +191,16 @@ pub enum Msg {
         #[arg(long, requires = "name", conflicts_with_all = ["x", "y"])]
         delete: bool,
     },
+    /// Pin images to the canvas: place, list, or remove decals.
+    ///
+    /// A decal is a still image drawn at canvas coordinates, below every window
+    /// and widget. It pans and zooms with the canvas, is not moved by window
+    /// drags, snapping or fit (the `move-decal` mouse binding drags one), stays out of Alt-Tab, and is saved across restarts. It is
+    /// not a window: close it with `decal remove`, not `close-window`.
+    Decal {
+        #[command(subcommand)]
+        command: DecalCommand,
+    },
     /// Print the active keyboard layout (full XKB name, e.g. `English (US)`).
     ///
     /// `--json` reply: `{"Ok":{"Layout":"English (US)"}}` (or `"us"` with `--short`).
@@ -203,6 +214,12 @@ pub enum Msg {
     ///
     /// `--json` reply: `{"Ok":{"Cursor":{"x":2600.5,"y":12.0,"output":"DP-1"}}}`.
     Cursor,
+    /// Print the pointer position on the canvas (Y-up, the convention `decal add`
+    /// and `move` take), so a script can remember where to place something
+    /// after a menu has moved the pointer away.
+    ///
+    /// `--json` reply: `{"Ok":{"Pointer":{"x":-40.5,"y":310.0}}}`.
+    Pointer,
     /// Run a config action, e.g. `action close-window`, `action switch-layout next`.
     ///
     /// Takes the same string you would write in a config keybinding, parsed with
@@ -262,6 +279,56 @@ pub enum Msg {
 }
 
 /// What `driftwm msg screenshot` captures.
+#[derive(clap::Subcommand, Debug)]
+pub enum DecalCommand {
+    /// Place an image (PNG or JPEG, up to 32 MiB and 8192 px a side).
+    ///
+    /// With no coordinates the image is centered under the pointer. Coordinates
+    /// are canvas points, Y-up and image-center, the same convention as `move`.
+    /// Transparent pixels show the canvas background through.
+    ///
+    /// `--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+    #[command(allow_negative_numbers = true)]
+    Add {
+        /// Image file.
+        path: PathBuf,
+        /// X coordinate (Y-up). Requires `<y>`.
+        #[arg(requires = "y")]
+        x: Option<f64>,
+        /// Y coordinate (Y-up).
+        y: Option<f64>,
+        /// Multiplier on the image's pixel size, in canvas units (default 1).
+        #[arg(long)]
+        scale: Option<f64>,
+        /// Size the image's longest side to this many canvas units instead.
+        #[arg(long, conflicts_with = "scale")]
+        fit: Option<f64>,
+    },
+    /// List the placed decals, bottom to top.
+    ///
+    /// `--json` reply: `{"Ok":{"Decals":[{"id":3,"path":"/img/a.png","position":[0.0,0.0],"scale":1.0,"flip":false}]}}`.
+    List,
+    /// Remove a decal by `<id>`, or the topmost one under the pointer.
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    Remove { id: Option<u64> },
+    /// Move decal `<id>` so its center is at `<x> <y>` (canvas, Y-up).
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    #[command(allow_negative_numbers = true)]
+    Move { id: u64, x: f64, y: f64 },
+    /// Set decal `<id>`'s scale: a multiplier on its image's pixel size, as
+    /// `add --scale` takes (0.01 to 64). The center stays put.
+    ///
+    /// `--json` reply: `{"Ok":"Ok"}`.
+    Scale { id: u64, scale: f64 },
+    /// Mirror a decal left to right by `<id>`, or the topmost one under the
+    /// pointer; flip it again to undo. For a sticker that faces one way.
+    ///
+    /// `--json` reply: `{"Ok":{"Decal":{"id":3}}}`.
+    Flip { id: Option<u64> },
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum ShotTarget {
     /// The focused window, or one by `app_id` substring or `--id`.
@@ -405,6 +472,7 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
         Msg::Zoom { level } => Request::Zoom(*level),
         Msg::Layout { short } => Request::Layout { short: *short },
         Msg::Cursor => Request::Cursor,
+        Msg::Pointer => Request::Pointer,
         Msg::State => Request::State,
         Msg::DebugCounters => Request::DebugCounters,
         Msg::Subscribe => Request::Subscribe,
@@ -471,6 +539,56 @@ fn to_request(msg: &Msg) -> Result<Request, String> {
                 delete: *delete,
             }
         }
+        Msg::Decal { command } => Request::Decal(match command {
+            DecalCommand::Add {
+                path,
+                x,
+                y,
+                scale,
+                fit,
+            } => {
+                if [x, y, scale, fit]
+                    .iter()
+                    .any(|c| c.is_some_and(|v| !v.is_finite()))
+                {
+                    return Err("decal coordinates, scale and fit must be finite".to_string());
+                }
+                let abs = if path.is_absolute() {
+                    path.clone()
+                } else {
+                    std::env::current_dir()
+                        .map_err(|e| format!("cannot resolve current directory: {e}"))?
+                        .join(path)
+                };
+                DecalRequest::Add {
+                    path: abs.to_string_lossy().into_owned(),
+                    at: x.zip(*y),
+                    scale: *scale,
+                    fit: *fit,
+                }
+            }
+            DecalCommand::List => DecalRequest::List,
+            DecalCommand::Remove { id } => DecalRequest::Remove { id: *id },
+            DecalCommand::Flip { id } => DecalRequest::Flip { id: *id },
+            DecalCommand::Scale { id, scale } => {
+                if !scale.is_finite() {
+                    return Err("decal scale must be finite".to_string());
+                }
+                DecalRequest::Scale {
+                    id: *id,
+                    scale: *scale,
+                }
+            }
+            DecalCommand::Move { id, x, y } => {
+                if !x.is_finite() || !y.is_finite() {
+                    return Err("decal coordinates must be finite".to_string());
+                }
+                DecalRequest::Move {
+                    id: *id,
+                    to: (*x, *y),
+                }
+            }
+        }),
         Msg::Screenshot {
             target,
             scale,
@@ -623,6 +741,7 @@ fn print_response(response: Response) {
         Response::Zoom(zoom) => println!("{zoom}"),
         Response::Layout(layout) => println!("{layout}"),
         Response::Cursor { x, y, output } => println!("{x} {y} {output}"),
+        Response::Pointer { x, y } => println!("{x} {y}"),
         Response::Focused(Some(w)) => {
             println!("#{} {}", w.id, w.app_id.as_deref().unwrap_or("(no app_id)"))
         }
@@ -635,6 +754,20 @@ fn print_response(response: Response) {
         Response::Bookmarks(bookmarks) => {
             for (name, [x, y]) in bookmarks {
                 println!("{name}: [{x}, {y}]");
+            }
+        }
+        Response::Decal { id } => println!("{id}"),
+        Response::Decals(decals) => {
+            for d in decals {
+                println!(
+                    "{}: {} [{}, {}] x{}{}",
+                    d.id,
+                    d.path,
+                    d.position[0],
+                    d.position[1],
+                    d.scale,
+                    if d.flip { " flipped" } else { "" }
+                );
             }
         }
         Response::Screenshot { path, .. } => println!("{path}"),

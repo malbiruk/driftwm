@@ -35,6 +35,9 @@ pub enum Request {
     /// The pointer in the global output layout (screen space, not canvas), plus
     /// the output it is on.
     Cursor,
+    /// The pointer on the canvas: Y-up, the convention `decal add --at` and
+    /// `move` take. Unlike [`Request::Cursor`] it follows the camera.
+    Pointer,
     State,
     /// Sizes of the compositor's leak-prone internal collections, keyed by
     /// field name. A debug/introspection endpoint — the keys are unstable
@@ -108,6 +111,8 @@ pub enum Request {
         #[serde(default)]
         delete: bool,
     },
+    /// Place, list, or remove decals: images pinned to the canvas.
+    Decal(DecalRequest),
     /// Capture to a PNG at `path` (absolute), at `scale` pixels per canvas unit.
     /// Windows render with full chrome; `region`/`all` include the background, a
     /// `window` capture stays transparent (see [`ScreenshotTarget`]).
@@ -158,6 +163,10 @@ pub enum Response {
         y: f64,
         output: String,
     },
+    Pointer {
+        x: f64,
+        y: f64,
+    },
     /// Boxed so the whole-state snapshot doesn't bloat every other (tiny)
     /// reply variant. Serde-transparent, so the wire shape is unchanged.
     State(Box<StateInfo>),
@@ -193,7 +202,67 @@ pub enum Response {
         x: f64,
         y: f64,
     },
+    /// The id of the decal just placed.
+    Decal {
+        id: u64,
+    },
+    /// Every decal, bottom→top.
+    Decals(Vec<DecalInfo>),
     Ok,
+}
+
+/// What a `decal` request asks for.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum DecalRequest {
+    /// Place the image at `path` (absolute) with its center at `at` (Y-up, the
+    /// window-rule convention), or under the pointer when `at` is `None`. `scale`
+    /// multiplies the image's pixel size to give its size in canvas units; `fit`
+    /// instead sizes its longest side to that many canvas units. Giving neither
+    /// is a scale of 1, giving both is an error.
+    Add {
+        path: String,
+        #[serde(default)]
+        at: Option<(f64, f64)>,
+        #[serde(default)]
+        scale: Option<f64>,
+        #[serde(default)]
+        fit: Option<f64>,
+    },
+    List,
+    /// Remove decal `id`, or the topmost one under the pointer when `None`.
+    Remove {
+        #[serde(default)]
+        id: Option<u64>,
+    },
+    /// Put decal `id`'s center at `to` (Y-up).
+    Move {
+        id: u64,
+        to: (f64, f64),
+    },
+    /// Set decal `id`'s scale, a multiplier on its image's pixel size.
+    Scale {
+        id: u64,
+        scale: f64,
+    },
+    /// Mirror decal `id` left to right, or flip it back; the topmost one under
+    /// the pointer when `None`. Replies with the decal's id.
+    Flip {
+        #[serde(default)]
+        id: Option<u64>,
+    },
+}
+
+/// One placed decal, as `decal list` reports it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DecalInfo {
+    pub id: u64,
+    pub path: String,
+    /// Center, Y-up.
+    pub position: [f64; 2],
+    pub scale: f64,
+    /// Mirrored left to right.
+    #[serde(default)]
+    pub flip: bool,
 }
 
 /// The result of a request: `Ok(Response)` or a human-readable error string.
@@ -396,6 +465,7 @@ mod tests {
             Request::Layout { short: false },
             Request::Layout { short: true },
             Request::Cursor,
+            Request::Pointer,
             Request::State,
             Request::DebugCounters,
             Request::Subscribe,
@@ -652,6 +722,7 @@ mod tests {
                 y: 12.0,
                 output: "DP-1".into(),
             }),
+            Ok(Response::Pointer { x: -40.5, y: 310.0 }),
             Ok(Response::State(Box::new(sample_state()))),
             Ok(Response::DebugCounters(
                 [("stage_entries".to_string(), 2usize)]

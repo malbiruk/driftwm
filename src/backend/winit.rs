@@ -152,6 +152,7 @@ pub fn init_winit(
 
             if stop {
                 data.session_store_cancel_debounce();
+                data.flush_decals();
                 data.loop_signal.stop();
                 return TimeoutAction::Drop;
             }

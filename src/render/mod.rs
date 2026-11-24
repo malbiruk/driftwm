@@ -5,6 +5,7 @@ mod capture_background;
 mod chrome;
 mod closing;
 mod cursor;
+mod decals;
 mod elements;
 mod error_bar;
 mod layers;
@@ -51,6 +52,7 @@ pub(crate) use suspended::{ensure_body, ensure_label};
 
 use blur::{BlurLayer, BlurRequestData, process_blur_requests};
 use chrome::DrawnChrome;
+use decals::build_decal_elements;
 use layers::{build_canvas_layer_elements, build_layer_elements};
 use shaders::{outer_corner_radius, push_border_element, push_shadow_element};
 
@@ -713,15 +715,23 @@ pub(crate) fn compose_capture_elements(
     } else {
         build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect)
     };
+    let decal_elements = if isolate.is_some() {
+        Vec::new()
+    } else {
+        build_decal_elements(state, renderer, output_scale, camera, zoom, visible_rect)
+    };
     let bg = capture_bg.tile_elements(
         camera,
         viewport_logical,
         state.start_time.elapsed().as_secs_f32(),
     );
-    let mut all = Vec::with_capacity(normal.len() + canvas_layers.len() + widgets.len() + bg.len());
+    let mut all = Vec::with_capacity(
+        normal.len() + canvas_layers.len() + widgets.len() + decal_elements.len() + bg.len(),
+    );
     all.extend(normal);
     all.extend(canvas_layers);
     all.extend(widgets);
+    all.extend(decal_elements);
     all.extend(bg);
     all
 }
@@ -1750,6 +1760,12 @@ pub fn compose_frame(
         build_canvas_layer_elements(state, renderer, output_scale, camera, zoom, visible_rect)
     };
 
+    let decal_elements = if fullscreen_conceals {
+        Vec::new()
+    } else {
+        build_decal_elements(state, renderer, output_scale, camera, zoom, visible_rect)
+    };
+
     let outline_elements = if fullscreen_conceals {
         Vec::new()
     } else {
@@ -1832,6 +1848,7 @@ pub fn compose_frame(
             + zoomed_normal.len()
             + canvas_layer_elements.len()
             + zoomed_widgets.len()
+            + decal_elements.len()
             + bottom_elements.len()
             + outline_elements.len()
             + bg_elements.len()
@@ -1852,6 +1869,7 @@ pub fn compose_frame(
     all_elements.extend(zoomed_normal);
     all_elements.extend(canvas_layer_elements);
     all_elements.extend(zoomed_widgets);
+    all_elements.extend(decal_elements);
     all_elements.extend(bottom_elements);
     all_elements.extend(outline_elements);
     all_elements.extend(bg_elements);

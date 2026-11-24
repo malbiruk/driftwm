@@ -31,6 +31,8 @@ mod client_teardown;
 mod config_reload;
 mod configure_sequences;
 mod cycle_windows;
+mod decal_pixels;
+mod decals;
 mod exec_detect;
 mod ext_workspace;
 mod fit_close;

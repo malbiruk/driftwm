@@ -28,6 +28,7 @@ mod output;
 pub mod persistence;
 mod pinned;
 pub(crate) use pinned::clamp_pin_frame;
+pub(crate) mod decals;
 mod placement;
 mod recenter;
 mod redraw;
@@ -718,6 +719,8 @@ pub struct DriftWm {
     /// (downscaling stays crisp; only upscaling blurs).
     pub decoration_scale: i32,
     pub render: RenderCache,
+    /// Images pinned to the canvas, drawn below the windows.
+    pub decals: decals::DecalStore,
     /// Per-window open/close/move/resize/fullscreen animation bookkeeping,
     /// keyed by stable `ElementId`. Render-only; the stage stays authoritative.
     pub(crate) window_animations: window_animation::WindowAnimations,

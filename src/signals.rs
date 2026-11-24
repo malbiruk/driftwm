@@ -53,6 +53,7 @@ pub fn listen(handle: &calloop::LoopHandle<'static, DriftWm>) {
             // mid-drain, which is the same ≤1s residual as a change armed just
             // before the logout.
             state.session_store_cancel_debounce();
+            state.flush_decals();
             state.loop_signal.stop();
         })
         .expect("failed to register signal source on event loop");

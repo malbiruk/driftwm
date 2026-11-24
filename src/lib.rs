@@ -1,5 +1,6 @@
 pub mod canvas;
 pub mod config;
+pub mod decals;
 pub mod desktop_entry;
 pub mod layout;
 pub mod protocols;
