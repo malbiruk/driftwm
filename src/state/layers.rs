@@ -201,4 +201,19 @@ impl DriftWm {
         }
         None
     }
+
+    /// Whether `surface` is a screen-space layer that a fullscreen window
+    /// on its own output hides from the pointer: hit-testing there reaches
+    /// no layer but `Overlay`.
+    pub(crate) fn layer_hidden_by_fullscreen(&self, surface: &WlSurface) -> bool {
+        self.space.outputs().any(|output| {
+            self.is_output_fullscreen(output)
+                && smithay::desktop::layer_map_for_output(output)
+                    .layers()
+                    .any(|l| {
+                        l.wl_surface() == surface
+                            && l.layer() != smithay::wayland::shell::wlr_layer::Layer::Overlay
+                    })
+        })
+    }
 }

@@ -12,10 +12,15 @@ use driftwm::config::{BTN_LEFT, BTN_RIGHT};
 use smithay::utils::Point;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
-use super::client::{ClientId, LayerConfigureProps};
-use super::input_backend::{FakeDevice, key_press, pointer_to_screen, press, release};
-use super::popups::grow_popup;
-use super::{Fixture, keyboard_focus, pointer_focus};
+use super::client::{ClientId, LayerConfigureProps, TouchEvent};
+use super::input_backend::{
+    FakeDevice, key_press, pointer_to_screen, press, release, touch_down, touch_up,
+};
+use super::popups::{grow_popup, keyboard_enter_serial};
+use super::{
+    Fixture, adopt_last_configure, keyboard_focus, map_window, pointer_focus, server_surface,
+    tick_until_settled, to_canvas, window_by_app_id,
+};
 
 /// evdev code of Super, the default `mod_key`.
 const KEY_LEFTMETA: u32 = 125;
@@ -212,11 +217,21 @@ fn an_anywhere_pan_over_a_layer_with_a_grabbed_popup_leaves_the_grab_alone() {
     f.double_roundtrip(id);
 }
 
-/// Anchor to the top edge like the bar does, 300×40.
+/// A `Top` bar on the output the compositor picks.
 fn map_bar(f: &mut Fixture, id: ClientId) -> wayland_client::protocol::wl_surface::WlSurface {
-    let created = f
-        .client(id)
-        .create_layer(None, zwlr_layer_shell_v1::Layer::Top, "bar");
+    map_layer_on(f, id, None, zwlr_layer_shell_v1::Layer::Top)
+}
+
+/// A 300×40 layer on `layer`, anchored to the top edge of `output` (the
+/// compositor's pick when `None`): screen (810,0)-(1110,40) on a 1920-wide
+/// output.
+fn map_layer_on(
+    f: &mut Fixture,
+    id: ClientId,
+    output: Option<&wayland_client::protocol::wl_output::WlOutput>,
+    layer: zwlr_layer_shell_v1::Layer,
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let created = f.client(id).create_layer(output, layer, "bar");
     let surface = created.surface.clone();
     created.set_configure_props(LayerConfigureProps {
         size: Some((300, 40)),
@@ -281,11 +296,12 @@ fn tray_popup_on_none_interactivity_bar_stays_open() {
 #[test]
 fn tray_popup_after_bar_flip_to_on_demand_stays_open() {
     let mut f = Fixture::new();
-    f.add_output(1, (1920, 1080));
+    let output = f.add_output(1, (1920, 1080));
     let id = f.add_client();
     let device = FakeDevice::mouse();
 
     let bar = map_bar(&mut f, id);
+    let bar_root = layer_root_on(&output);
 
     pointer_to_screen(&mut f, &device, Point::from((900.0, 8.0)));
     press(&mut f, &device, BTN_RIGHT);
@@ -300,6 +316,11 @@ fn tray_popup_after_bar_flip_to_on_demand_stays_open() {
     });
     layer.commit();
     f.double_roundtrip(id);
+    assert_ne!(
+        keyboard_focus(&mut f),
+        Some(bar_root.clone()),
+        "test setup bug: only the grab may give the bar the keyboard"
+    );
 
     let popup = f.client(id).create_layer_popup(&bar);
     let popup_surface = popup.surface.clone();
@@ -318,6 +339,11 @@ fn tray_popup_after_bar_flip_to_on_demand_stays_open() {
     assert!(
         !f.client(id).popup(&popup_surface).popup_done,
         "a grabbed tray menu popup must survive the bar's interactivity flip"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(bar_root),
+        "the grab must give the bar on-demand keyboard focus"
     );
 
     f.client(id).popup(&popup_surface).destroy();
@@ -362,5 +388,520 @@ fn bar_flipped_to_on_demand_gains_focus_after_flip() {
         keyboard_focus(&mut f),
         Some(bar_root),
         "a clicked OnDemand layer must hold keyboard focus"
+    );
+}
+
+/// The server-side surface of the one layer mapped on `output`.
+fn layer_root_on(
+    output: &smithay::output::Output,
+) -> smithay::reexports::wayland_server::protocol::wl_surface::WlSurface {
+    let map = smithay::desktop::layer_map_for_output(output);
+    assert_eq!(
+        map.layers().count(),
+        1,
+        "test setup bug: the output must hold just the layer the test mapped"
+    );
+    map.layers().next().unwrap().wl_surface().clone()
+}
+
+/// Switch `bar`'s keyboard interactivity, as a shell does as it opens a menu.
+fn set_interactivity(
+    f: &mut Fixture,
+    id: ClientId,
+    bar: &wayland_client::protocol::wl_surface::WlSurface,
+    interactivity: zwlr_layer_surface_v1::KeyboardInteractivity,
+) {
+    let layer = f.client(id).layer(bar);
+    layer.set_configure_props(LayerConfigureProps {
+        kb_interactivity: Some(interactivity),
+        ..Default::default()
+    });
+    layer.commit();
+    f.double_roundtrip(id);
+}
+
+/// Open a popup on `bar` and grab it with `serial` before its first buffer,
+/// the order a menu opens in. Returns the popup's client surface.
+fn open_grabbed_layer_popup(
+    f: &mut Fixture,
+    id: ClientId,
+    bar: &wayland_client::protocol::wl_surface::WlSurface,
+    serial: u32,
+) -> wayland_client::protocol::wl_surface::WlSurface {
+    let popup = f.client(id).create_layer_popup(bar);
+    let popup_surface = popup.surface.clone();
+    popup.commit();
+    f.roundtrip(id);
+    let popup = f.client(id).popup(&popup_surface);
+    popup.grab(serial);
+    popup.attach_new_buffer();
+    popup.ack_last_and_commit();
+    f.double_roundtrip(id);
+    popup_surface
+}
+
+/// Map an 800×600 window and make it fullscreen on the active output. Returns
+/// its server-side surface.
+fn fullscreen_game(
+    f: &mut Fixture,
+    id: ClientId,
+) -> smithay::reexports::wayland_server::protocol::wl_surface::WlSurface {
+    let surface = map_window(f, id, "game", (800, 600));
+    f.client(id).window(&surface).set_fullscreen(None);
+    f.double_roundtrip(id);
+    adopt_last_configure(f, id, &surface);
+    tick_until_settled(f);
+    server_surface(&window_by_app_id(f, "game").unwrap())
+}
+
+/// Output `fullscreen` shows the fullscreen window `game`, which holds the
+/// keyboard; output `clear` shows none. `bar_client` has mapped nothing yet.
+struct TwoOutputs {
+    f: Fixture,
+    fullscreen: smithay::output::Output,
+    clear: smithay::output::Output,
+    bar_client: ClientId,
+    game: smithay::reexports::wayland_server::protocol::wl_surface::WlSurface,
+}
+
+fn two_outputs() -> TwoOutputs {
+    let mut f = Fixture::new();
+    let fullscreen = f.add_output(1, (1920, 1080));
+    let clear = f.add_output(2, (1920, 1080));
+    let game_client = f.add_client();
+    let bar_client = f.add_client();
+    let game = fullscreen_game(&mut f, game_client);
+    assert!(
+        f.state().is_output_fullscreen(&fullscreen),
+        "test setup bug: the first output must show the fullscreen window"
+    );
+    assert!(
+        !f.state().is_output_fullscreen(&clear),
+        "test setup bug: the second output must show no fullscreen window"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(game.clone()),
+        "test setup bug: the fullscreen window must hold the keyboard"
+    );
+    f.double_roundtrip(bar_client);
+    TwoOutputs {
+        f,
+        fullscreen,
+        clear,
+        bar_client,
+        game,
+    }
+}
+
+/// A popup grab refused for clobbering an unrelated live grab moves no focus:
+/// a bar switched to `OnDemand` must not take the keyboard for a menu that
+/// never opened.
+#[test]
+fn a_refused_popup_grab_leaves_keyboard_focus_alone() {
+    // Far from the serial counter, which every test in the process advances.
+    let earlier_grab_serial = u32::MAX - 1;
+    let refused_grab_serial = u32::MAX;
+
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let wid = f.add_client();
+    let bid = f.add_client();
+    let device = FakeDevice::mouse();
+
+    let window = map_window(&mut f, wid, "app", (400, 300));
+    let app = server_surface(&window_by_app_id(&mut f, "app").unwrap());
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(app.clone()),
+        "test setup bug: the window must hold the keyboard"
+    );
+
+    // A grab that has come and gone leaves its serial on the seat, so the
+    // bar's grab is checked against a previous serial no live grab holds.
+    let earlier = f.client(wid).create_popup(&window);
+    let earlier_surface = earlier.surface.clone();
+    earlier.commit();
+    f.roundtrip(wid);
+    let earlier = f.client(wid).popup(&earlier_surface);
+    earlier.grab(earlier_grab_serial);
+    earlier.attach_new_buffer();
+    earlier.ack_last_and_commit();
+    f.double_roundtrip(wid);
+    assert!(
+        f.state().popup_grab.is_some(),
+        "test setup bug: the window's popup grab must install"
+    );
+    f.client(wid).popup(&earlier_surface).destroy();
+    f.double_roundtrip(wid);
+    pointer_to_screen(&mut f, &device, Point::from((960.0, 540.0)));
+    assert!(
+        f.state().popup_grab.is_none(),
+        "test setup bug: the window's popup grab must end with its popup"
+    );
+    assert!(
+        !f.state().seat.get_keyboard().unwrap().is_grabbed(),
+        "test setup bug: the keyboard must be free, so only the pointer grab refuses"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(app.clone()),
+        "test setup bug: the window must hold the keyboard again"
+    );
+
+    let bar = map_bar(&mut f, bid);
+    set_interactivity(
+        &mut f,
+        bid,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(app.clone()),
+        "test setup bug: the flip alone must not move the keyboard"
+    );
+
+    // Held on the window: a live click grab under a serial of its own.
+    press(&mut f, &device, BTN_LEFT);
+    assert!(
+        f.state().seat.get_pointer().unwrap().is_grabbed(),
+        "test setup bug: the held press must be a live pointer grab"
+    );
+
+    let popup = open_grabbed_layer_popup(&mut f, bid, &bar, refused_grab_serial);
+    assert!(
+        f.client(bid).popup(&popup).popup_done,
+        "test setup bug: the bar's grab must be refused"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(app),
+        "a refused grab must leave keyboard focus where it was"
+    );
+    assert!(
+        f.state().on_demand_layer.is_none(),
+        "a refused grab must not record the bar as the on-demand layer"
+    );
+
+    release(&mut f, &device, BTN_LEFT);
+}
+
+/// A fullscreen window hides the bar, so the bar's menu must not take the
+/// keyboard from it, even with the pointer parked where the bar would be.
+#[test]
+fn a_bar_hidden_behind_a_fullscreen_window_does_not_take_the_keyboard_for_its_popup() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let wid = f.add_client();
+    let bid = f.add_client();
+    let device = FakeDevice::mouse();
+
+    let bar = map_bar(&mut f, bid);
+    let game = fullscreen_game(&mut f, wid);
+    assert!(
+        f.state().is_output_fullscreen(&output),
+        "test setup bug: the output must show the fullscreen window"
+    );
+    pointer_to_screen(&mut f, &device, Point::from((900.0, 8.0)));
+    f.double_roundtrip(wid);
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(game.clone()),
+        "test setup bug: the fullscreen window must hold the keyboard"
+    );
+
+    set_interactivity(
+        &mut f,
+        bid,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    let popup = open_grabbed_layer_popup(&mut f, bid, &bar, 1);
+
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(game),
+        "a hidden bar's menu must not take the keyboard from the fullscreen window"
+    );
+    assert!(
+        f.state().on_demand_layer.is_none(),
+        "a hidden bar must not be recorded as the on-demand layer"
+    );
+    assert!(
+        f.client(bid).popup(&popup).popup_done,
+        "with the keyboard away from its root, the hidden bar's menu closes"
+    );
+    assert!(
+        f.state().popup_grab.is_none(),
+        "the hidden bar's menu must leave no popup grab behind"
+    );
+    assert!(
+        !f.state().seat.get_pointer().unwrap().is_grabbed(),
+        "the hidden bar's menu must leave the pointer ungrabbed"
+    );
+    assert!(
+        !f.state().seat.get_keyboard().unwrap().is_grabbed(),
+        "the hidden bar's menu must leave the keyboard ungrabbed"
+    );
+}
+
+/// Whether a bar is hidden is read on the bar's own output: a fullscreen
+/// window there hides it, though the active output shows none.
+#[test]
+fn a_bar_hidden_on_its_own_output_does_not_take_the_keyboard_while_another_output_is_active() {
+    let TwoOutputs {
+        mut f,
+        fullscreen,
+        clear,
+        bar_client,
+        game,
+    } = two_outputs();
+    let device = FakeDevice::mouse();
+
+    let fullscreen_wl = f.client(bar_client).output(&fullscreen.name());
+    let bar = map_layer_on(
+        &mut f,
+        bar_client,
+        Some(&fullscreen_wl),
+        zwlr_layer_shell_v1::Layer::Top,
+    );
+    assert_eq!(
+        smithay::desktop::layer_map_for_output(&fullscreen)
+            .layers()
+            .count(),
+        1,
+        "test setup bug: the bar must map on the fullscreen output"
+    );
+    f.state().focused_output = Some(clear.clone());
+    pointer_to_screen(&mut f, &device, Point::from((900.0, 500.0)));
+    f.double_roundtrip(bar_client);
+    set_interactivity(
+        &mut f,
+        bar_client,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    assert!(
+        !f.state().is_fullscreen(),
+        "test setup bug: the active output must show no fullscreen window"
+    );
+
+    open_grabbed_layer_popup(&mut f, bar_client, &bar, 1);
+
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(game),
+        "a bar hidden on its own output must not take the keyboard"
+    );
+}
+
+/// Whether a bar is hidden is read on the bar's own output: with no
+/// fullscreen window there, its menu gets the keyboard though the active
+/// output shows one.
+#[test]
+fn a_bar_visible_on_its_own_output_gets_the_keyboard_while_a_fullscreen_output_is_active() {
+    let TwoOutputs {
+        mut f,
+        fullscreen,
+        clear,
+        bar_client,
+        ..
+    } = two_outputs();
+    let device = FakeDevice::mouse();
+
+    let clear_wl = f.client(bar_client).output(&clear.name());
+    let bar = map_layer_on(
+        &mut f,
+        bar_client,
+        Some(&clear_wl),
+        zwlr_layer_shell_v1::Layer::Top,
+    );
+    let root = layer_root_on(&clear);
+    f.state().focused_output = Some(clear.clone());
+    pointer_to_screen(&mut f, &device, Point::from((900.0, 8.0)));
+    press(&mut f, &device, BTN_RIGHT);
+    release(&mut f, &device, BTN_RIGHT);
+    f.double_roundtrip(bar_client);
+    set_interactivity(
+        &mut f,
+        bar_client,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    f.state().focused_output = Some(fullscreen.clone());
+    assert!(
+        f.state().is_fullscreen(),
+        "test setup bug: the active output must be the fullscreen one"
+    );
+    assert_ne!(
+        keyboard_focus(&mut f),
+        Some(root.clone()),
+        "test setup bug: only the grab may give the bar the keyboard"
+    );
+
+    let popup = open_grabbed_layer_popup(&mut f, bar_client, &bar, 1);
+
+    assert!(
+        !f.client(bar_client).popup(&popup).popup_done,
+        "a visible bar's menu must stay open"
+    );
+    assert!(
+        f.state().popup_grab.is_some(),
+        "a visible bar's menu must keep its grab"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(root),
+        "a visible bar's menu must get the keyboard"
+    );
+}
+
+/// An `Overlay` layer stays above a fullscreen window, so its menu gets the
+/// keyboard there.
+#[test]
+fn an_overlay_layer_over_a_fullscreen_window_gets_the_keyboard_for_its_popup() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let wid = f.add_client();
+    let bid = f.add_client();
+    let device = FakeDevice::mouse();
+
+    fullscreen_game(&mut f, wid);
+    assert!(
+        f.state().is_output_fullscreen(&output),
+        "test setup bug: the output must show the fullscreen window"
+    );
+    let overlay = map_layer_on(&mut f, bid, None, zwlr_layer_shell_v1::Layer::Overlay);
+    let root = layer_root_on(&output);
+    pointer_to_screen(&mut f, &device, Point::from((900.0, 8.0)));
+    press(&mut f, &device, BTN_RIGHT);
+    release(&mut f, &device, BTN_RIGHT);
+    f.double_roundtrip(bid);
+    set_interactivity(
+        &mut f,
+        bid,
+        &overlay,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    assert_ne!(
+        keyboard_focus(&mut f),
+        Some(root.clone()),
+        "test setup bug: only the grab may give the overlay the keyboard"
+    );
+
+    let popup = open_grabbed_layer_popup(&mut f, bid, &overlay, 1);
+
+    assert!(
+        !f.client(bid).popup(&popup).popup_done,
+        "an overlay's menu over a fullscreen window must stay open"
+    );
+    assert!(
+        f.state().popup_grab.is_some(),
+        "an overlay's menu over a fullscreen window must keep its grab"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(root),
+        "an overlay's menu over a fullscreen window must get the keyboard"
+    );
+}
+
+/// The grant does not depend on where the mouse pointer is: a menu opened by
+/// a touch tap on the bar stays open with the pointer on another client's
+/// window.
+#[test]
+fn a_tray_menu_opened_by_a_touch_tap_stays_open_while_the_pointer_rests_on_another_window() {
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let wid = f.add_client();
+    let bid = f.add_client();
+    let device = FakeDevice::mouse();
+
+    map_window(&mut f, wid, "app", (400, 300));
+    let app = server_surface(&window_by_app_id(&mut f, "app").unwrap());
+    let bar = map_bar(&mut f, bid);
+    let root = layer_root_on(&output);
+    pointer_to_screen(&mut f, &device, Point::from((960.0, 540.0)));
+    f.double_roundtrip(wid);
+
+    let tap = to_canvas(&mut f, Point::from((900.0, 8.0)));
+    touch_down(&mut f, tap, 0);
+    touch_up(&mut f, 0);
+    f.double_roundtrip(bid);
+    set_interactivity(
+        &mut f,
+        bid,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+    assert!(
+        f.client(bid).state.touch_events.contains(&TouchEvent::Down),
+        "test setup bug: the tap must reach the bar"
+    );
+    assert_eq!(
+        pointer_focus(&mut f),
+        Some(app),
+        "test setup bug: the pointer must rest on the other client's window"
+    );
+    assert_ne!(
+        keyboard_focus(&mut f),
+        Some(root.clone()),
+        "test setup bug: only the grab may give the bar the keyboard"
+    );
+
+    let popup = open_grabbed_layer_popup(&mut f, bid, &bar, 1);
+
+    assert!(
+        !f.client(bid).popup(&popup).popup_done,
+        "a touch-opened tray menu must stay open"
+    );
+    assert!(
+        f.state().popup_grab.is_some(),
+        "a touch-opened tray menu must keep its grab"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(root),
+        "a touch-opened tray menu must get the keyboard"
+    );
+}
+
+/// The grab's serial names the client's input event; the keyboard enter the
+/// grant sends takes a serial of the compositor's own.
+#[test]
+fn the_grants_keyboard_enter_carries_the_compositors_own_serial_not_the_grabs() {
+    // Far from the serial counter, which every test in the process advances.
+    let grab_serial = u32::MAX - 2;
+
+    let mut f = Fixture::new();
+    let output = f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let device = FakeDevice::mouse();
+
+    let bar = map_bar(&mut f, id);
+    let root = layer_root_on(&output);
+    pointer_to_screen(&mut f, &device, Point::from((900.0, 8.0)));
+    press(&mut f, &device, BTN_RIGHT);
+    release(&mut f, &device, BTN_RIGHT);
+    f.double_roundtrip(id);
+    set_interactivity(
+        &mut f,
+        id,
+        &bar,
+        zwlr_layer_surface_v1::KeyboardInteractivity::OnDemand,
+    );
+
+    open_grabbed_layer_popup(&mut f, id, &bar, grab_serial);
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(root),
+        "test setup bug: the grab must give the bar the keyboard"
+    );
+
+    assert_ne!(
+        keyboard_enter_serial(&mut f),
+        grab_serial,
+        "the grant's keyboard enter must not reuse the grab's serial"
     );
 }

@@ -636,7 +636,7 @@ fn activation_without_serial_does_not_move_focus() {
 
 /// The serial of the keyboard's most recent enter, as the client it entered
 /// would read it off `wl_keyboard.enter`.
-fn keyboard_enter_serial(f: &mut Fixture) -> u32 {
+pub(super) fn keyboard_enter_serial(f: &mut Fixture) -> u32 {
     let keyboard = f.state().seat.get_keyboard().unwrap();
     keyboard.last_enter().unwrap().into()
 }

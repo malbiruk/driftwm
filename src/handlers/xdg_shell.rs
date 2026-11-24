@@ -117,18 +117,6 @@ impl XdgShellHandler for DriftWm {
             return;
         };
 
-        // An `OnDemand` layer root may not hold keyboard focus yet: a shell can
-        // flip its interactivity to `OnDemand` only in the same breath as the
-        // grab — e.g. a tray menu popup whose bar was `None` at click time and
-        // is switched to `OnDemand` right before the popup maps. Focus can land
-        // on such a root, so the layer should hold it while the grab is live;
-        // otherwise the next focus recompute reads "focus left the grab root"
-        // (nothing else claims focus either) and tears the grab down, dismissing
-        // the just-opened menu.
-        if self.layer_interactivity(&root) == Some(KeyboardInteractivity::OnDemand) {
-            self.focus_layer_if_on_demand(Some(root.clone()), serial);
-        }
-
         let keyboard = self.seat.get_keyboard().unwrap();
         let pointer = self.seat.get_pointer().unwrap();
 
@@ -152,6 +140,23 @@ impl XdgShellHandler for DriftWm {
         if keyboard_mismatch || pointer_mismatch {
             grab.ungrab(PopupUngrabStrategy::All);
             return;
+        }
+
+        // A shell can switch its bar from `None` to `OnDemand` only as it
+        // opens a menu on it, after the click that would have granted
+        // on-demand focus. Grant it here, or the next focus recompute finds
+        // the keyboard away from the grab root and tears the grab down,
+        // closing the menu. Only once the grab is accepted, and before the
+        // keyboard grab is set, which would ignore the focus change. A layer
+        // hidden behind a fullscreen window is left out: it may not take the
+        // keyboard from that window.
+        if self.layer_interactivity(&root) == Some(KeyboardInteractivity::OnDemand)
+            && !self.layer_hidden_by_fullscreen(&root)
+        {
+            self.focus_layer_if_on_demand(
+                Some(root.clone()),
+                smithay::utils::SERIAL_COUNTER.next_serial(),
+            );
         }
 
         if has_keyboard_grab {
