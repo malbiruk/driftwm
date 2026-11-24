@@ -16,7 +16,7 @@ use crate::ipc::protocol::{Request, Response, WindowSelector};
 use crate::state::{StageWindow, SuspendedId};
 
 use super::real::TempDir;
-use super::{Fixture, TICK, map_window, server_surface, settle, window_by_app_id};
+use super::{Fixture, TICK, keyboard_focus, map_window, server_surface, settle, window_by_app_id};
 
 /// SSD-on config plus an optional `[session]` / per-rule `suspend_on_close` body.
 fn config_with(body: &str) -> Config {
@@ -1241,6 +1241,86 @@ fn ipc_suspend_routes_to_suspend_action() {
     assert_eq!(
         f.state().find_suspended(sid).unwrap().identity.app_id,
         "myapp"
+    );
+
+    f.state().dismiss_suspended(sid);
+    close_client(&mut f, id2);
+}
+
+/// A toplevel can carry its app_id before its first buffer, so a selector
+/// reaches it while it has no size or position to leave a stand-in at. `msg
+/// suspend` refuses it without marking it or moving the keyboard, and once the
+/// window is on screen suspends it to the footprint it was placed at.
+#[test]
+fn ipc_suspend_refuses_a_window_that_is_not_on_screen_yet() {
+    let tmp = TempDir::new();
+    let mut f = Fixture::with_config(config_with(""));
+    f.add_output(1, (1920, 1080));
+    inject_cache(&mut f, &tmp, &["myapp"]);
+
+    let id2 = f.add_client();
+    map_window(&mut f, id2, "other", (200, 200));
+    let other = window_by_app_id(&mut f, "other").unwrap();
+    let serial = SERIAL_COUNTER.next_serial();
+    f.state().raise_and_focus(&other, serial);
+
+    let id = f.add_client();
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("myapp");
+    window.commit();
+    f.roundtrip(id);
+    let target = window_by_app_id(&mut f, "myapp").unwrap();
+    let win_id = f.state().stage.id_of(&target).unwrap().0;
+    let suspend = |f: &mut Fixture| {
+        crate::ipc::dispatch(
+            Request::Suspend(Some(WindowSelector::Id(win_id))),
+            f.state(),
+        )
+    };
+    let marks = |f: &mut Fixture| {
+        let counters = f.state().debug_counters();
+        (counters["suspend_marks"], counters["real_close_marks"])
+    };
+    let marks_before = marks(&mut f);
+
+    let reply = suspend(&mut f);
+    assert!(reply.is_err(), "got {reply:?}");
+    assert_eq!(
+        marks(&mut f),
+        marks_before,
+        "neither a suspend nor a real close was marked"
+    );
+    assert_eq!(
+        keyboard_focus(&mut f),
+        Some(server_surface(&other)),
+        "the keyboard stayed where it was"
+    );
+
+    let window = f.client(id).window(&surface);
+    window.set_size(400, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    let footprint = f
+        .state()
+        .visual_frame_rect(&StageWindow::Client(target))
+        .unwrap();
+
+    assert!(matches!(suspend(&mut f), Ok(Response::Ok)));
+    client_close(&mut f, id, &surface);
+    let sid = suspended_id(&mut f).expect("myapp converted");
+    let stand_in = StageWindow::Suspended(f.state().find_suspended(sid).unwrap());
+    let frame = f.state().visual_frame_rect(&stand_in).unwrap();
+    assert_eq!(
+        (frame.x_low, frame.y_low, frame.x_high, frame.y_high),
+        (
+            footprint.x_low,
+            footprint.y_low,
+            footprint.x_high,
+            footprint.y_high
+        ),
+        "the stand-in covers the footprint the window was placed at"
     );
 
     f.state().dismiss_suspended(sid);

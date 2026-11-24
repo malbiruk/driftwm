@@ -521,6 +521,15 @@ fn window_by_selector(
     }
 }
 
+/// Whether `window` is still to be put on screen: its placement is to come, or
+/// it is held back for a deferred adopt. Until then its position and size are
+/// provisional.
+fn not_on_screen_yet(state: &DriftWm, window: &smithay::desktop::Window) -> bool {
+    window
+        .wl_surface()
+        .is_some_and(|s| state.queues_geometry_request(&s))
+}
+
 /// Resolve a selector to a suspended window's [`SuspendedId`], if it names one.
 /// `None` selector resolves to the gated-focused suspended window. Id matches
 /// the stage `ElementId` (the IPC handle, stable across suspend/relaunch);
@@ -594,13 +603,14 @@ fn cmd_focus(arg: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
         let id = focused_window_info(state, &window).id;
         return Err(format!("window #{id} is a widget and cannot be focused"));
     }
-    // A window still held back for a deferred adopt is drawn nowhere: focusing
-    // it would put the keyboard somewhere the user cannot see, and it arrives on
-    // its own once the grab holding the adopt lets go.
-    if state.hidden_by_deferred_adopt(&window) {
+    // A window not on screen yet is about to be put somewhere, and before its
+    // first buffer a keyboard enter is unusable: the placement's own focus is
+    // then a no-op, so the client could stay unfocused. Its placement or reveal
+    // decides whether it takes the keyboard.
+    if not_on_screen_yet(state, &window) {
         let id = focused_window_info(state, &window).id;
         return Err(format!(
-            "window #{id} is mid-relaunch and cannot be focused yet"
+            "window #{id} is not on screen yet and cannot be focused"
         ));
     }
     let info = focused_window_info(state, &window);
@@ -740,9 +750,7 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
             // the park, or be overwritten.
             if state.is_pinned(&window)
                 || state.is_window_fullscreen(&window)
-                || window
-                    .wl_surface()
-                    .is_some_and(|s| state.queues_geometry_request(&s))
+                || not_on_screen_yet(state, &window)
             {
                 return Err(
                     "this window has no canvas position to move: it is pinned, fullscreen, or \
@@ -867,6 +875,13 @@ fn cmd_opacity(window: Option<WindowSelector>, value: Option<f64>, state: &mut D
             if !v.is_finite() || !(0.0..=1.0).contains(&v) {
                 return Err("opacity must be between 0.0 and 1.0".to_string());
             }
+            // The placement pass still to come rewrites the stored record when a
+            // rule matches, so the value would be lost. A window only held back
+            // for a deferred adopt would keep it, and is refused anyway so every
+            // verb shares one "not on screen yet" rule.
+            if not_on_screen_yet(state, &window) {
+                return Err("this window is not on screen yet".to_string());
+            }
             smithay::wayland::compositor::with_states(&surface, |states| {
                 states.data_map.insert_if_missing_threadsafe(|| {
                     std::sync::Mutex::new(driftwm::config::AppliedWindowRule::default())
@@ -903,9 +918,10 @@ fn cmd_pin(window: Option<WindowSelector>, value: Option<bool>, state: &mut Drif
         return Ok(Response::Pin(value));
     }
     if value {
-        // Drawn nowhere until its adopt lands, and the reveal then maps it into
-        // a slot a pin would make visually inert.
-        if state.hidden_by_deferred_adopt(&window) {
+        // Not on screen yet: a pin would be taken from a provisional position,
+        // which the placement never re-derives, and the reveal maps a held-back
+        // window into a slot a pin would make visually inert.
+        if not_on_screen_yet(state, &window) {
             return Err("this window is not on screen yet".to_string());
         }
         state.pin_window(&window)?;
@@ -978,6 +994,11 @@ fn cmd_suspend(sel: Option<WindowSelector>, state: &mut DriftWm) -> Reply {
     if state.hidden_by_deferred_adopt(&window) {
         state.suspend_window(&window, None);
         return Ok(Response::Ok);
+    }
+    // A window whose placement is still to come has only a provisional size and
+    // position to make a stand-in from.
+    if not_on_screen_yet(state, &window) {
+        return Err("this window is not on screen yet".to_string());
     }
     if state.focused_window().as_ref() != Some(&window) {
         state.raise_and_focus(&window, SERIAL_COUNTER.next_serial());

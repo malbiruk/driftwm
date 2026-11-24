@@ -159,6 +159,57 @@ widget = true
     assert!(window.is_widget());
 }
 
+/// A toplevel can carry its app_id before its first buffer, and its rule is
+/// stored then, but the placement rewrites that record when it comes. A set in
+/// between would be lost, so `opacity <v>` refuses until the window is on
+/// screen, and the rule's value stands.
+#[test]
+fn set_on_a_window_that_is_not_on_screen_yet_is_refused() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "dim"
+opacity = 0.3
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let dim = || Some(WindowSelector::AppId("dim".into()));
+    let set = |f: &mut Fixture, value: f64| {
+        dispatch(
+            Request::Opacity {
+                window: dim(),
+                value: Some(value),
+            },
+            f.state(),
+        )
+    };
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("dim");
+    window.commit();
+    f.roundtrip(id);
+    let server = window_by_app_id(&mut f, "dim").unwrap();
+
+    let reply = set(&mut f, 0.7);
+    assert!(reply.is_err(), "got {reply:?}");
+    assert_eq!(
+        driftwm::config::applied_rule(&server_surface(&server)).and_then(|r| r.opacity),
+        Some(0.3),
+        "the stored record keeps the rule's opacity"
+    );
+
+    let window = f.client(id).window(&surface);
+    window.set_size(400, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    assert_eq!(read_opacity(&mut f, dim()), 0.3);
+    assert_eq!(set(&mut f, 0.7), Ok(Response::Opacity(0.7)));
+    assert_eq!(read_opacity(&mut f, dim()), 0.7);
+}
+
 #[test]
 fn app_id_selector_matches_case_insensitive_substring() {
     let mut f = Fixture::new();

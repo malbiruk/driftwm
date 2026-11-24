@@ -292,6 +292,46 @@ fn stand_ins_and_deferred_adopt_targets_refuse_to_pin() {
     f.state().dismiss_suspended(hidden_sid);
 }
 
+/// A toplevel can carry its app_id before its first buffer, so a selector
+/// reaches it at a provisional position. A pin taken from there would outlive
+/// the placement, so `pin on` refuses until the window is placed, then pins it
+/// where the placed window is drawn.
+#[test]
+fn set_on_a_window_that_is_not_on_screen_yet_is_refused() {
+    let mut f = Fixture::new();
+    f.add_output(1, (1920, 1080));
+    let id = f.add_client();
+    let early = || Some(WindowSelector::AppId("early".into()));
+
+    let window = f.client(id).create_window();
+    let surface = window.surface.clone();
+    window.set_app_id("early");
+    window.commit();
+    f.roundtrip(id);
+    let server = window_by_app_id(&mut f, "early").unwrap();
+
+    assert!(
+        pin(&mut f, early(), Some(true)).is_err_and(|e| e.contains("not on screen")),
+        "a window with no placement yet refuses the pin"
+    );
+    assert!(!f.state().is_pinned(&server), "and is left unpinned");
+
+    let window = f.client(id).window(&surface);
+    window.set_size(400, 300);
+    window.attach_new_buffer();
+    window.ack_last_and_commit();
+    f.double_roundtrip(id);
+    let (camera, zoom) = (f.state().camera(), f.state().zoom());
+    let loc = f.state().stage.position_of(&server).unwrap().to_f64();
+
+    assert_eq!(pin(&mut f, early(), Some(true)), Ok(Response::Pin(true)));
+    assert_eq!(
+        f.state().stage.pin_of(&server).unwrap().screen_pos,
+        expected_screen_site(loc, camera, zoom),
+        "pinned at the site the placed window is drawn at"
+    );
+}
+
 #[test]
 fn unpinning_by_selector_does_not_steal_activation_from_the_focused_window() {
     let (mut f, _output, client, a, _eid) = setup(0.5);

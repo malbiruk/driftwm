@@ -21,7 +21,10 @@ follow that rule: `action` requires its arguments, `close`/`suspend`/`relaunch`
 act on the focused window when given no selector, and `layout`, `cursor`,
 `screenshot`, `state`, `subscribe`, and `debug-counters` need no arguments at
 all. A command that fails (bad value, no focused window, no match) prints an
-error to stderr and exits non-zero, so scripts can branch on it.
+error to stderr and exits non-zero, so scripts can branch on it. `focus`,
+`suspend`, `pin on`, and a `move` or `opacity` that writes also fail on a window
+that is not on screen yet, so a script that launches an app and then acts on its
+window should retry until the window appears.
 
 Add `--json` to print the raw JSON reply. The default output is a human-readable
 rendering for a terminal, not a stable format — parse `--json`, or the
@@ -35,9 +38,7 @@ point, with **Y pointing up**. `move 0 0` centers the focused window on the
 origin, `camera 0 0` centers the viewport there, and positive `y` is above.
 Pinned and fullscreen windows live in screen space, not on the canvas, so `move`
 refuses to reposition them and `resize` refuses to resize them. Reading either
-still works. A window that is not on screen yet has no position to move either:
-`move` refuses it until it appears, so a script that launches an app and moves
-its window should retry.
+still works.
 
 `pin` moves a window between the two spaces without moving it visually. Like
 `move`, it refuses a fullscreen window, whose pin reads `false` until fullscreen
