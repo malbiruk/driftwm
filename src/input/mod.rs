@@ -1920,6 +1920,9 @@ impl DriftWm {
             let Some(p) = self.stage.pin_of(window) else {
                 continue;
             };
+            if self.hidden_by_deferred_adopt(window) {
+                continue;
+            }
             if p.output != output_name {
                 continue;
             }
@@ -2076,6 +2079,9 @@ impl DriftWm {
             let Some(p) = self.stage.pin_of(window) else {
                 continue;
             };
+            if self.hidden_by_deferred_adopt(window) {
+                continue;
+            }
             if p.output != output_name {
                 continue;
             }
@@ -2163,6 +2169,9 @@ impl DriftWm {
             let Some(p) = self.stage.pin_of(window) else {
                 continue;
             };
+            if self.hidden_by_deferred_adopt(window) {
+                continue;
+            }
             if p.output != output_name {
                 continue;
             }
@@ -2585,7 +2594,8 @@ impl DriftWm {
             .filter_map(|w| w.client())
             .find(|&window| {
                 self.stage.pin_of(window).is_some_and(|p| {
-                    p.output == output_name
+                    !self.hidden_by_deferred_adopt(window)
+                        && p.output == output_name
                         && self
                             .resize_margin_hit_for(window, p.screen_pos, screen_pos)
                             .is_some()

@@ -189,6 +189,9 @@ decoration       = "none"
 - **Dragging it across monitors** reassigns it to that output. Combine with
   `widget = true` to make it immovable.
 
+A pinned window also makes a [scratchpad](scratchpad.md): a key that stows and
+shows it without animation.
+
 To find the numbers for a rule, pin the window live with `toggle-pin-to-screen`
 (`Mod+T`), drag and resize it into place, then copy `position`/`size` from its
 entry in the per-output `pinned` section of `driftwm msg state` — those are
@@ -481,7 +484,8 @@ evaluated per frame (likewise),
 the session is saved or loaded. On load, `restore_windows` is matched against a
 saved record, which carries an `app_id` but no title, so only the `app_id`
 criterion is consulted there (see
-[session restore](session.md#restore_windows)).
+[session restore](session.md#restore_windows)). With no rule, an app managed by a
+`toggle-scratchpad` binding resolves to `false`.
 
 ## Debugging
 

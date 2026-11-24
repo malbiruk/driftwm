@@ -143,6 +143,11 @@ app_id          = "footclient"
 restore_windows = false
 ```
 
+A window that a `toggle-scratchpad` binding (key, tap, mouse or gesture) manages
+defaults to `false` here, since its binding respawns it on demand and a restored
+stand-in would only sit next to the fresh window. A `restore_windows = true` rule
+for that app overrides this.
+
 Two things to keep in mind:
 
 - The flag is **independent of `suspend_on_close`**: that one governs closes,

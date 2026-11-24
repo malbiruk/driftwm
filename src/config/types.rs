@@ -52,6 +52,11 @@ pub enum Action {
     ExecTerminal,
     ExecLauncher,
     Spawn(String),
+    /// Show or hide the window with this `app_id`, spawning `command` when none exists.
+    ToggleScratchpad {
+        app_id: String,
+        command: String,
+    },
     CloseWindow,
     SuspendWindow,
     NudgeWindow(Direction),
@@ -63,7 +68,9 @@ pub enum Action {
     CenterWindow,
     CenterNearest(Direction),
     FocusNearest(Direction),
-    CycleWindows { backward: bool },
+    CycleWindows {
+        backward: bool,
+    },
     HomeToggle,
     GoToBookmark(String),
     SetBookmark(String),
@@ -416,6 +423,14 @@ impl<K: Eq + Hash, V> ContextBindings<K, V> {
             on_canvas: HashMap::new(),
             anywhere: HashMap::new(),
         }
+    }
+
+    /// Every bound value across all three contexts.
+    pub fn values(&self) -> impl Iterator<Item = &V> {
+        self.on_window
+            .values()
+            .chain(self.on_canvas.values())
+            .chain(self.anywhere.values())
     }
 
     pub fn lookup(&self, key: &K, context: BindingContext) -> Option<&V> {

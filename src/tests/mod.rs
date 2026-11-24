@@ -75,6 +75,7 @@ mod render_pixels;
 mod resize_actions;
 mod resize_ipc;
 mod resize_parity;
+mod scratchpad;
 mod screenshot_write;
 mod scroll_liftoff;
 mod send_to_output;

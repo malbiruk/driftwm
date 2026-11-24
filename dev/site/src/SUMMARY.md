@@ -3,6 +3,7 @@
 - [Home](index.md)
 - [Configuration](config.md)
 - [Window rules](window-rules.md)
+- [Scratchpad](scratchpad.md)
 - [Window suspend & session restore](session.md)
 - [IPC](ipc.md)
 - [CLI](cli.md)
