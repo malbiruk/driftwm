@@ -642,11 +642,12 @@ impl DriftWm {
     /// What a move or resize gesture at `pos` landed on. Pinned windows render
     /// above the canvas and hit-test in screen space, so they take priority,
     /// chrome included; everything else goes through the stand-in-aware
-    /// `draggable_element_under`. Widgets are grab-proof on both channels.
+    /// `draggable_element_under`. An immovable widget is grab-proof on both
+    /// channels; `widget_movable` opts back in.
     fn gesture_target_under(&self, pos: Point<f64, Logical>) -> Option<GestureTarget> {
         let screen_pos = canvas_to_screen(CanvasPos(pos), self.camera(), self.zoom()).0;
         if let Some(window) = self.pinned_owner_under(screen_pos) {
-            return (!window.is_widget()).then_some(GestureTarget::Pinned(window));
+            return (!window.widget_is_immovable()).then_some(GestureTarget::Pinned(window));
         }
         self.draggable_element_under(pos).map(GestureTarget::Canvas)
     }

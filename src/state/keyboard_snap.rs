@@ -20,7 +20,7 @@ impl DriftWm {
         let Some((horizontal, forward)) = axis_of(dir) else {
             return;
         };
-        let Some(element) = self.focused_element().filter(|e| self.is_canvas_window(e)) else {
+        let Some(element) = self.focused_element().filter(|e| self.is_movable_window(e)) else {
             return;
         };
         let Some(loc) = self.stage.position_of(&element) else {
@@ -102,7 +102,10 @@ impl DriftWm {
     ) {
         self.stage.clear_fill(element);
         self.drop_owed_recenter(element);
-        self.map_window(element.clone(), to, false);
+        // The element-generic move, which holds a widget in its slot (a raise
+        // would put it ahead of the windows it paints beneath, and the input
+        // hit-tests read raw stage order).
+        self.move_element_in_place(element, to);
         self.animate_element_move_from(element, from, None);
         self.session_store_mark_dirty();
     }

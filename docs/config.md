@@ -1290,10 +1290,11 @@ Supported fields:
 - `app_id` — match: Wayland app_id (X11 apps: their WM_CLASS instance, usually lowercase). Needs app_id or title; every criterion given must match.
 - `title` — match: window title.
 - `position` — [x, y] of the visual frame's center, Y-up: canvas coords, or output-relative (origin at the output center) when pinned_to_screen.
-- `size` — [width, height] of the visual frame (content plus driftwm's title bar and border) at open; you and the app can resize it later (widget = true blocks resizing by hand).
+- `size` — [width, height] of the visual frame (content plus driftwm's title bar and border) at open; you and the app can resize it later, unless the window is an immovable widget, whose size nothing but this rule changes.
 - `fullscreen` — true: open the window fullscreen.
 - `focus_on_open` — false: map the window without focusing it or moving the camera to it (default: true).
-- `widget` — true: can't be moved by hand (`msg move` still works), sits below normal windows, skipped by navigation and Alt-Tab (default: false).
+- `widget` — true: nothing moves or sizes it: no drag, gesture, nudge, `msg move` or `msg resize`. It sits below normal windows, skipped by navigation and Alt-Tab (default: false).
+- `widget_movable` — true: a `widget` window takes its geometry back: drags, gestures, nudges, `msg move` and `msg resize`, snapping to the widgets around it. It stays below normal windows and off Alt-Tab. Ignored without `widget = true` (default: false).
 - `pinned_to_screen` — true: lock the window to the screen, ignoring pan and zoom; `position` becomes output-relative. Toggle with toggle-pin-to-screen (Mod+T). (default: false)
 - `suspend_on_close` — override [session].suspend_on_close for matched windows (default: inherit).
 - `restore_windows` — override [session].restore_windows for matched windows. Match on app_id: a title-only rule governs saving only. (default: inherit)

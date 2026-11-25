@@ -130,7 +130,9 @@ pub(crate) fn drag_map_window(
     if data.stage.position_of(&element) != Some(pos) {
         data.end_element_animation(&element);
     }
-    data.map_window(element, pos, false);
+    // `move_element_in_place`: a widget (`widget_movable`) drags without changing
+    // its slot.
+    data.move_element_in_place(&element, pos);
 }
 
 mod move_grab;

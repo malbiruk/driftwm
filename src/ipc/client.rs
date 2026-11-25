@@ -49,10 +49,11 @@ pub enum Msg {
     },
     /// Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
     ///
-    /// Pinned and fullscreen windows live in screen space, not on the canvas, so
-    /// `move` refuses to reposition them. A widget has a canvas position and
-    /// can be moved only this way, since it ignores drags and nudges — but the
-    /// new position lasts only until the compositor exits.
+    /// Pinned and fullscreen windows live in screen space, not on the canvas, and
+    /// an immovable widget is nailed to its rule position, so `move` repositions
+    /// none of them — `widget_movable = true` hands a widget its geometry back.
+    /// Reading a position always answers. A written one lasts only until the
+    /// compositor exits.
     ///
     /// `--json` reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
     #[command(allow_negative_numbers = true)]
@@ -69,8 +70,8 @@ pub enum Msg {
     /// bar and border. A request is clamped to the client's declared limits —
     /// which describe the content inside that frame — and the reply echoes what
     /// was configured, not what the client went on to commit. Refused for pinned,
-    /// fullscreen and widget windows, and while the window is under an
-    /// interactive move or resize.
+    /// fullscreen and immovable-widget windows (`widget_movable = true` lifts
+    /// that), and while the window is under an interactive move or resize.
     ///
     /// `--json` reply: `{"Ok":{"Size":{"width":800,"height":600}}}`.
     Resize {

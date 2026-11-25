@@ -2,6 +2,7 @@
 //! plus per-member offsets / classifications for the motion loop. Only reads
 //! `stage`, `decorations`, and `config.snap_gap`.
 
+use driftwm::window_ext::WindowExt;
 use smithay::{
     desktop::Window,
     reexports::{
@@ -272,8 +273,9 @@ pub type ClusterDragSnapshot = Vec<(StageWindow, Point<i32, Logical>)>;
 impl DriftWm {
     /// Snap target rects for all windows except `primary` and
     /// `cluster_excludes` (latter used during multi-window cluster drags to
-    /// stop members snapping against each other). Widgets, pinned, and
-    /// fullscreen windows are never snap targets (see `snap_rect_for`).
+    /// stop members snapping against each other). The targets are `primary`'s own
+    /// class (see [`Self::snap_rects_for_layer`]); pinned and fullscreen windows
+    /// are never snap targets (see `snap_rect_for`).
     #[allow(clippy::mutable_key_type)]
     pub fn snap_targets(
         &self,
@@ -283,19 +285,37 @@ impl DriftWm {
         let self_bar = self.window_ssd_bar(primary);
         let self_bw = self.element_border_width(primary);
 
-        // `snap_rect_for` is the single definition of a snappable window — it
-        // already drops widgets, pinned, and fullscreen windows; here we only
-        // additionally skip the primary itself and its frozen cluster.
-        let mut others = Vec::new();
-        for w in self.stage.windows() {
-            if w == primary || cluster_excludes.contains(w) {
-                continue;
-            }
-            if let Some(rect) = self.snap_rect_for(w) {
-                others.push(rect);
-            }
-        }
+        let others = self
+            .snap_rects_for_layer(primary, false)
+            .into_iter()
+            .filter(|(w, _)| w != primary && !cluster_excludes.contains(w))
+            .map(|(_, rect)| rect)
+            .collect();
         (others, self_bar, self_bw)
+    }
+
+    /// The rects of the elements `primary` may align to: its own class only.
+    /// Widgets are the class `widget_movable` hands to the pointer, and they snap
+    /// to each other — a dragged panel docks to the bar beside it, while a widget
+    /// never magnetises to an application window and a window never magnetises to
+    /// a widget. `movable_only` narrows the list to what a drag can carry along,
+    /// which is what a *cluster* wants: an immovable widget is a fine thing to
+    /// snap to and a broken thing to be moved by one.
+    pub fn snap_rects_for_layer(
+        &self,
+        primary: &StageWindow,
+        movable_only: bool,
+    ) -> Vec<(StageWindow, driftwm::layout::snap::SnapRect)> {
+        let widgets = primary.is_widget();
+        self.stage
+            .windows()
+            .filter(|w| w.is_widget() == widgets)
+            .filter(|w| !movable_only || !w.widget_is_immovable())
+            .filter_map(|w| {
+                self.snap_rect_for_with(w, widgets)
+                    .map(|rect| (w.clone(), rect))
+            })
+            .collect()
     }
 
     /// Snap a dragged element's natural content top-left to nearby windows,
@@ -391,6 +411,18 @@ impl DriftWm {
     /// body rect + `window_ssd_bar` strip + the global-default border, so other
     /// windows snap to it exactly as they would to the window it replaced.
     pub fn snap_rect_for(&self, w: &StageWindow) -> Option<driftwm::layout::snap::SnapRect> {
+        self.snap_rect_for_with(w, false)
+    }
+
+    /// [`Self::snap_rect_for`] with the widget refusal liftable, for the widget
+    /// layer's own snapping. Every other reader wants widgets absent: a relation
+    /// to something no window may move is not one worth clustering, navigating or
+    /// fitting over.
+    fn snap_rect_for_with(
+        &self,
+        w: &StageWindow,
+        widgets: bool,
+    ) -> Option<driftwm::layout::snap::SnapRect> {
         if self.is_pinned(w) || self.is_window_fullscreen(w) {
             return None;
         }
@@ -402,10 +434,14 @@ impl DriftWm {
             return None;
         }
         match w {
-            StageWindow::Client(c) => {
-                window_snap_rect(&self.stage, &self.decorations, &self.config.decorations, c)
-                    .map(|(_, r)| r)
-            }
+            StageWindow::Client(c) => window_snap_rect(
+                &self.stage,
+                &self.decorations,
+                &self.config.decorations,
+                c,
+                widgets,
+            )
+            .map(|(_, r)| r),
             StageWindow::Suspended(s) => {
                 let chrome = self.suspended_chrome();
                 Some(super::fit::snap_rect_at(
@@ -481,7 +517,7 @@ impl DriftWm {
         window: &StageWindow,
         primary_pos: Point<i32, Logical>,
     ) -> ClusterDragSnapshot {
-        let rects = self.all_windows_with_snap_rects();
+        let rects = self.snap_rects_for_layer(window, true);
         let component = driftwm::layout::cluster::cluster_of(window, &rects, self.config.snap_gap);
 
         let mut members = Vec::new();
@@ -508,7 +544,7 @@ impl DriftWm {
         self.cluster_snapshot_for_resize_with_rects(
             window,
             edges,
-            &self.all_windows_with_snap_rects(),
+            &self.snap_rects_for_layer(window, true),
         )
     }
 
@@ -667,16 +703,19 @@ impl DriftWm {
 /// `(surface, snap_rect)` for one window. Y-low includes title-bar height
 /// for SSD windows; the rect is inflated by border_width on all four sides
 /// so snap/cluster math operates on the visible footprint. `None` for
-/// widgets / unmapped / surfaceless.
+/// unmapped / surfaceless windows, and for widgets unless `widgets` is set.
+/// `widgets` lifts the widget refusal for the widget layer's own snapping
+/// ([`DriftWm::snap_rects_for_layer`]).
 fn window_snap_rect(
     stage: &driftwm::stage::Stage<crate::state::StageWindow>,
     decorations: &HashMap<DecorationKey, WindowDecoration>,
     decoration_config: &driftwm::config::DecorationConfig,
     w: &Window,
+    widgets: bool,
 ) -> Option<(WlSurface, driftwm::layout::snap::SnapRect)> {
     let surface = w.wl_surface()?.into_owned();
     let applied = driftwm::config::applied_rule(&surface);
-    if applied.as_ref().is_some_and(|r| r.widget) {
+    if !widgets && applied.as_ref().is_some_and(|r| r.widget) {
         return None;
     }
     let loc = stage.position_of(w)?;

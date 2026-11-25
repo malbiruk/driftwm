@@ -13,6 +13,7 @@ fn bare_rule(app_id: Option<&str>, title: Option<&str>) -> WindowRule {
         fullscreen: None,
         focus_on_open: None,
         widget: false,
+        widget_movable: false,
         pinned_to_screen: false,
         suspend_on_close: None,
         restore_windows: None,
@@ -259,6 +260,30 @@ fn applied_rule_bool_flags_are_sticky_on() {
 }
 
 #[test]
+fn applied_rule_widget_movable_is_sticky_on() {
+    let movable = WindowRule {
+        widget_movable: true,
+        ..bare_rule(Some("x"), None)
+    };
+    let widget = WindowRule {
+        widget: true,
+        ..bare_rule(Some("x"), None)
+    };
+
+    let mut applied = applied_from_toml_rule(&movable);
+    assert!(
+        !applied.widget_is_immovable(),
+        "widget_movable without widget locks nothing"
+    );
+    applied.merge_from(&widget);
+    assert!(applied.widget && applied.widget_movable);
+    assert!(
+        !applied.widget_is_immovable(),
+        "a sticky flag cannot be re-nailed by a later rule"
+    );
+}
+
+#[test]
 fn applied_rule_scalar_decoration_last_wins() {
     let rule1 = WindowRule {
         decoration: Some(DecorationMode::Server),
@@ -349,6 +374,63 @@ fn resolve_window_rules_single_matching_rule_returns_applied() {
     let config = Config::from_toml(toml).unwrap();
     let applied = config.resolve_window_rules("foot", "shell").unwrap();
     assert!(applied.blur);
+}
+
+/// `widget_movable` parses, sticks like every other boolean flag, and is the
+/// only thing that lifts a widget's drag lock.
+#[test]
+fn resolve_window_rules_widget_movable_lifts_the_drag_lock() {
+    let toml = r#"
+        [[window_rules]]
+        app_id = "clock"
+        widget = true
+        widget_movable = true
+
+        [[window_rules]]
+        app_id = "waybar"
+        widget = true
+
+        [[window_rules]]
+        app_id = "firefox"
+        widget_movable = true
+
+        [[window_rules]]
+        app_id = "panel"
+        widget = true
+
+        [[window_rules]]
+        title = "clock-*"
+        widget_movable = true
+    "#;
+    let config = Config::from_toml(toml).unwrap();
+    assert!(
+        !config
+            .resolve_window_rules("clock", "")
+            .unwrap()
+            .widget_is_immovable(),
+        "one rule can set both flags"
+    );
+    assert!(
+        config
+            .resolve_window_rules("waybar", "")
+            .unwrap()
+            .widget_is_immovable(),
+        "a widget with no movable rule anywhere stays nailed down"
+    );
+    assert!(
+        !config
+            .resolve_window_rules("firefox", "")
+            .unwrap()
+            .widget_is_immovable(),
+        "widget_movable alone locks nothing — it is a modifier on `widget`"
+    );
+    assert!(
+        !config
+            .resolve_window_rules("panel", "clock-1")
+            .unwrap()
+            .widget_is_immovable(),
+        "a second, title-matching rule can hand the drags back"
+    );
 }
 
 #[test]

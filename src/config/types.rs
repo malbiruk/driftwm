@@ -835,6 +835,10 @@ pub struct WindowRule {
     /// repositions them), excluded from navigation/alt-tab, and always
     /// stacked below normal windows.
     pub widget: bool,
+    /// Let a `widget` window be moved and resized by hand again — drags,
+    /// gestures and nudges reach it — while it stays stacked below normal
+    /// windows and out of navigation. Meaningless without `widget = true`.
+    pub widget_movable: bool,
     /// Pin the window to one output's screen space (ignores pan/zoom, renders
     /// above normal windows). When set, `position` is output-relative
     /// (center, Y-up). Combine with `widget = true` to make it immovable.
@@ -906,6 +910,7 @@ pub struct AppliedWindowRule {
     pub fullscreen: Option<bool>,
     pub focus_on_open: Option<bool>,
     pub widget: bool,
+    pub widget_movable: bool,
     pub pinned_to_screen: bool,
     pub suspend_on_close: Option<bool>,
     pub restore_windows: Option<bool>,
@@ -930,13 +935,16 @@ pub struct AppliedWindowRule {
 
 impl AppliedWindowRule {
     /// Overlay `rule`'s effects on top of `self`.
-    /// Boolean flags (widget, blur) are sticky-on.
+    /// Boolean flags (widget, widget_movable, blur) are sticky-on.
     /// `pass_keys` / `pass_mouse`: `All` is sticky-on; `Only` lists are unioned
     /// (see `PassList::merge_from`).
     /// Scalar fields (decoration, opacity, position, size) use last-wins.
     pub fn merge_from(&mut self, rule: &WindowRule) {
         if rule.widget {
             self.widget = true;
+        }
+        if rule.widget_movable {
+            self.widget_movable = true;
         }
         if rule.pinned_to_screen {
             self.pinned_to_screen = true;
@@ -995,6 +1003,15 @@ impl AppliedWindowRule {
             self.layer_order = Some(lo);
         }
     }
+
+    /// True for a widget the user may not reposition or resize by hand — drags,
+    /// gestures, resize borders and keyboard nudges all decline it. A
+    /// `widget_movable = true` rule lifts that immunity while leaving every
+    /// other widget property (below-window stacking, no alt-tab, no navigation)
+    /// in place; a non-widget is never locked.
+    pub fn widget_is_immovable(&self) -> bool {
+        self.widget && !self.widget_movable
+    }
 }
 
 impl From<&WindowRule> for AppliedWindowRule {
@@ -1002,6 +1019,7 @@ impl From<&WindowRule> for AppliedWindowRule {
         Self {
             focus_on_open: rule.focus_on_open,
             widget: rule.widget,
+            widget_movable: rule.widget_movable,
             pinned_to_screen: rule.pinned_to_screen,
             suspend_on_close: rule.suspend_on_close,
             restore_windows: rule.restore_windows,

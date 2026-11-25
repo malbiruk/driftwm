@@ -451,7 +451,7 @@ impl XdgShellHandler for DriftWm {
 
     fn move_request(&mut self, surface: ToplevelSurface, _seat: wl_seat::WlSeat, serial: Serial) {
         let wl_surface = surface.wl_surface().clone();
-        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget_is_immovable()) {
             return;
         }
         let Some(window) = self.window_for_surface(&wl_surface) else {
@@ -554,7 +554,7 @@ impl XdgShellHandler for DriftWm {
         edges: xdg_toplevel::ResizeEdge,
     ) {
         let wl_surface = surface.wl_surface().clone();
-        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget) {
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget_is_immovable()) {
             return;
         }
         let Some(window) = self.window_for_surface(&wl_surface) else {

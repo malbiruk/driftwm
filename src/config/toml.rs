@@ -305,6 +305,11 @@ pub(super) struct WindowRuleFile {
     pub focus_on_open: Option<bool>,
     #[serde(default)]
     pub widget: bool,
+    /// Give a `widget` window back its interactive move and resize — drags,
+    /// gestures and nudges reposition it — while it keeps every other widget
+    /// property. Ignored without `widget = true`.
+    #[serde(default)]
+    pub widget_movable: bool,
     /// Pin the window to one output's screen space: it ignores pan/zoom and
     /// renders above normal windows. `position` is then output-relative
     /// (center, Y-up), not a canvas coordinate.

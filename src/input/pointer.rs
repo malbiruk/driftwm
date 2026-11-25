@@ -475,7 +475,9 @@ impl DriftWm {
                     let Some(wl_surface) = window.wl_surface().map(|s| s.into_owned()) else {
                         return;
                     };
-                    let is_widget = config::applied_rule(&wl_surface).is_some_and(|r| r.widget);
+                    let applied = config::applied_rule(&wl_surface);
+                    let is_widget = applied.as_ref().is_some_and(|r| r.widget);
+                    let immovable = applied.as_ref().is_some_and(|r| r.widget_is_immovable());
 
                     if button == config::BTN_LEFT {
                         match hit {
@@ -483,7 +485,7 @@ impl DriftWm {
                                 window.send_close();
                                 return;
                             }
-                            DecorationHit::TitleBar if !is_widget => {
+                            DecorationHit::TitleBar if !immovable => {
                                 // Double-click → toggle fit
                                 let now = std::time::Instant::now();
                                 let surface_id = wl_surface.id();
@@ -506,8 +508,12 @@ impl DriftWm {
                                 // (a bottom-clipped SSD window may show only its
                                 // title bar); a real title-bar drag exceeds the slop.
                                 // Defer: the title bar's own double-click-fit must
-                                // beat the pan.
-                                self.arm_click_navigate(&window, pos, button, true);
+                                // beat the pan. A widget never arms it at all — a
+                                // widget click stays out of navigation even when
+                                // `widget_movable` lets the same click drag it.
+                                if !is_widget {
+                                    self.arm_click_navigate(&window, pos, button, true);
+                                }
                                 let Some(initial_window_location) = self.stage.position_of(&window)
                                 else {
                                     return;
@@ -534,7 +540,7 @@ impl DriftWm {
                                 pointer.set_grab(self, grab, serial, Focus::Clear);
                                 return;
                             }
-                            DecorationHit::ResizeBorder(edge) if !is_widget => {
+                            DecorationHit::ResizeBorder(edge) if !immovable => {
                                 self.raise_and_focus(&window, serial);
                                 // Edge-drag on the SSD border has no modifier
                                 // context, so it follows the config flag.
@@ -551,7 +557,7 @@ impl DriftWm {
                                 return;
                             }
                             _ => {
-                                // Widget title bar or other — just focus
+                                // Immovable widget title bar or other — just focus
                                 self.set_window_focus(Some(FocusTarget(wl_surface)), serial);
                             }
                         }
@@ -569,7 +575,8 @@ impl DriftWm {
                         // to its window. The walk skips pinned windows.
                         if let Some(window) = self.topmost_client_under(pos)
                             && let Some(surface) = window.wl_surface()
-                            && !config::applied_rule(&surface).is_some_and(|r| r.widget)
+                            && !config::applied_rule(&surface)
+                                .is_some_and(|r| r.widget_is_immovable())
                         {
                             self.raise_and_focus(&window, serial);
 
@@ -612,7 +619,8 @@ impl DriftWm {
                             pointer.set_grab(self, grab, serial, Focus::Clear);
                             return;
                         }
-                        // Empty canvas or a widget — fall through to normal click
+                        // Empty canvas or an immovable widget — fall through to
+                        // normal click
                     }
                     MouseAction::ResizeWindow | MouseAction::ResizeWindowSnapped => {
                         // Opt-in cluster propagation: only
@@ -624,7 +632,7 @@ impl DriftWm {
                             && !window
                                 .wl_surface()
                                 .and_then(|s| config::applied_rule(&s))
-                                .is_some_and(|r| r.widget)
+                                .is_some_and(|r| r.widget_is_immovable())
                         {
                             self.raise_and_focus(&window, serial);
 
@@ -638,7 +646,7 @@ impl DriftWm {
                             );
                             return;
                         }
-                        // Empty canvas or a widget — fall through
+                        // Empty canvas or an immovable widget — fall through
                     }
                     MouseAction::PanViewport => {
                         let from_empty = context == BindingContext::OnCanvas;
@@ -1242,17 +1250,17 @@ impl DriftWm {
             && button == config::BTN_LEFT
             && let PinnedChrome::Hit(window, hit) = self.pinned_decoration_under(screen_pos)
         {
-            let is_widget = window
+            let immovable = window
                 .wl_surface()
                 .and_then(|s| config::applied_rule(&s))
-                .is_some_and(|r| r.widget);
+                .is_some_and(|r| r.widget_is_immovable());
             match hit {
                 DecorationHit::CloseButton => window.send_close(),
-                DecorationHit::TitleBar if !is_widget => {
+                DecorationHit::TitleBar if !immovable => {
                     self.raise_and_focus(&window, serial);
                     self.start_pinned_move(pointer, &window, pos, button, serial);
                 }
-                DecorationHit::ResizeBorder(edge) if !is_widget => {
+                DecorationHit::ResizeBorder(edge) if !immovable => {
                     self.raise_and_focus(&window, serial);
                     self.start_compositor_resize_with_edge(
                         pointer,
@@ -1282,7 +1290,7 @@ impl DriftWm {
             return false;
         };
         if let Some(action) = binding
-            && !window.is_widget()
+            && !window.widget_is_immovable()
         {
             match action {
                 MouseAction::MoveWindow | MouseAction::MoveSnappedWindows => {

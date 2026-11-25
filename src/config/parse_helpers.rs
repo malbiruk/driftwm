@@ -483,6 +483,7 @@ pub(super) fn parse_window_rule(
         fullscreen: r.fullscreen,
         focus_on_open: r.focus_on_open,
         widget: r.widget,
+        widget_movable: r.widget_movable,
         pinned_to_screen: r.pinned_to_screen,
         suspend_on_close: r.suspend_on_close,
         restore_windows: r.restore_windows,

@@ -44,10 +44,13 @@ still works.
 `move`, it refuses a fullscreen window, whose pin reads `false` until fullscreen
 ends; the `toggle-pin-to-screen` action leaves fullscreen first instead.
 
-Widgets are the mirror image: they hold a canvas position but ignore drags,
-gestures and nudges, so `move` is the only way to reposition one. `resize` still
-refuses them, and the move lasts only for the session — widgets never enter the
-session store.
+Widgets are the mirror image, and `widget_movable` decides which side of it they
+are on. A plain `widget = true` window is nailed to the position its rule gives
+it: no drag, gesture or nudge, and `move` and `resize` both refuse to write its
+geometry — reading it still answers. `widget_movable = true` hands the whole
+geometry back, hand drags and IPC included, while the window keeps every other
+widget property. Either way a written position lasts only for the session:
+widgets never enter the session store.
 
 `camera` and `zoom` take the opposite policy. A fullscreen window parks the
 viewport, so **setting** either one exits fullscreen first and then applies,

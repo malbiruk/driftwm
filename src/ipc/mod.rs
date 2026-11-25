@@ -744,17 +744,19 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
         }
         Some((x, y)) => {
             // A pinned window renders at its pin, a fullscreen one at its
-            // camera park, and one whose placement is still to come — or that
-            // is held back for a deferred adopt — is about to be put somewhere:
-            // writing the canvas position would silently do nothing, displace
-            // the park, or be overwritten.
+            // camera park, an immovable widget is nailed to the canvas, and one
+            // whose placement is still to come — or that is held back for a
+            // deferred adopt — is about to be put somewhere: writing the canvas
+            // position would silently do nothing, displace the park, or be
+            // overwritten.
             if state.is_pinned(&window)
                 || state.is_window_fullscreen(&window)
+                || window.widget_is_immovable()
                 || not_on_screen_yet(state, &window)
             {
                 return Err(
-                    "this window has no canvas position to move: it is pinned, fullscreen, or \
-                     not on screen yet"
+                    "this window has no canvas position to move: it is pinned, fullscreen, an \
+                     immovable widget, or not on screen yet"
                         .into(),
                 );
             }
@@ -802,13 +804,14 @@ fn cmd_resize(
         return Err("size must be positive".to_string());
     }
     check_size(width, height)?;
-    // A pinned window renders at its pin, a fullscreen one fills its output, and
-    // one held back for a deferred adopt is about to be replaced — none of them
-    // hold a canvas rect a resize could write.
-    if !state.is_canvas_window(&element) {
+    // A pinned window renders at its pin, a fullscreen one fills its output, an
+    // immovable widget is nailed to the canvas, and one held back for a deferred
+    // adopt is about to be replaced — none of them hold a canvas rect a resize
+    // could write.
+    if !state.is_movable_window(&element) {
         return Err(
-            "this window has no canvas size to set: it is pinned, fullscreen, a widget, or not \
-             on screen yet"
+            "this window has no canvas size to set: it is pinned, fullscreen, an immovable \
+             widget, or not on screen yet"
                 .into(),
         );
     }
@@ -846,7 +849,7 @@ fn cmd_resize(
     // `move` also does.
     let raise = matches!(element, StageWindow::Client(_));
     // Absolute: this rect is the whole answer, so there is no promise for a later
-    // call to reconcile against.
+    // call to reconcile against. The z-raise inside holds a widget in its slot.
     state.resize_element_to(&element, Size::from((width, height)), loc, raise, None);
     let echo = chrome.frame_size(Size::from((width, height)));
     Ok(Response::Size {
