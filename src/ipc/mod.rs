@@ -744,17 +744,19 @@ fn cmd_move(window: Option<WindowSelector>, to: Option<(i32, i32)>, state: &mut 
         }
         Some((x, y)) => {
             // A pinned window renders at its pin, a fullscreen one at its
-            // camera park, and one whose placement is still to come — or that
-            // is held back for a deferred adopt — is about to be put somewhere:
-            // writing the canvas position would silently do nothing, displace
-            // the park, or be overwritten.
+            // camera park, an immovable widget is nailed to the canvas, and one
+            // whose placement is still to come — or that is held back for a
+            // deferred adopt — is about to be put somewhere: writing the canvas
+            // position would silently do nothing, displace the park, or be
+            // overwritten.
             if state.is_pinned(&window)
                 || state.is_window_fullscreen(&window)
+                || window.widget_is_immovable()
                 || not_on_screen_yet(state, &window)
             {
                 return Err(
-                    "this window has no canvas position to move: it is pinned, fullscreen, or \
-                     not on screen yet"
+                    "this window has no canvas position to move: it is pinned, fullscreen, an \
+                     immovable widget, or not on screen yet"
                         .into(),
                 );
             }

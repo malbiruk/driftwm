@@ -2523,7 +2523,7 @@ impl DriftWm {
         // point actually in the margin — the walks that call this visit every
         // window on every pointer motion.
         let edge = crate::decorations::resize_edge_at(pos, loc, size, 0, border_width)?;
-        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget)
+        if driftwm::config::applied_rule(&wl_surface).is_some_and(|r| r.widget_is_immovable())
             || self.is_window_fullscreen(window)
         {
             return None;

@@ -5,15 +5,19 @@
 //! frame and the content coincide, so a config without either carries no
 //! signal for this conversion at all.
 
+use smithay::desktop::Window;
 use smithay::utils::{Logical, Point, SERIAL_COUNTER, Size};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
+use crate::decorations::DecorationHit;
+use crate::input::DecoTarget;
 use crate::ipc::dispatch;
 use crate::ipc::protocol::{Reply, Request, Response, WindowSelector};
 use crate::state::{NavZoom, StageWindow};
 use driftwm::config::Action;
 use driftwm::window_ext::WindowExt;
 
+use super::input_backend::{touch_down, touch_motion, touch_up};
 use super::{Fixture, config, map_window, settle, window_by_app_id};
 
 fn mv(f: &mut Fixture, window: Option<WindowSelector>, to: Option<(i32, i32)>) -> Reply {
@@ -432,10 +436,11 @@ fn move_to_bookmark_and_msg_move_agree_for_a_stand_in() {
     f.state().dismiss_suspended(sid);
 }
 
-/// A widget cannot be moved manually (no titlebar drag, gesture, or nudge),
-/// but can be moved via IPC `msg move --id <ID> <X> <Y>`.
+/// A widget without `widget_movable` is nailed to the geometry its rule gives
+/// it: no titlebar drag, gesture or nudge, and neither `msg move` nor
+/// `msg resize` writes it either. Reading both still answers.
 #[test]
-fn widget_can_be_moved_by_ipc_but_not_manually() {
+fn an_immovable_widget_takes_no_geometry_from_anywhere() {
     let mut f = Fixture::with_config(config(
         r#"
 [[window_rules]]
@@ -450,17 +455,27 @@ app_id = "normal"
     origin_view(&mut f);
     let id = f.add_client();
 
-    map_window(&mut f, id, "normal", (400, 300));
-    let normal = window_by_app_id(&mut f, "normal").unwrap();
-
     map_window(&mut f, id, "widget", (200, 100));
     let widget = window_by_app_id(&mut f, "widget").unwrap();
+    let widget_element = StageWindow::Client(widget.clone());
+
+    map_window(&mut f, id, "normal", (400, 300));
+    let normal = window_by_app_id(&mut f, "normal").unwrap();
+    let normal_element = StageWindow::Client(normal.clone());
+    // Park it clear of the widget, so every pick below answers for the widget
+    // and not for a neighbour under the same point.
+    f.state()
+        .map_window(normal_element.clone(), Point::from((3000, 3000)), false);
 
     let widget_id = f.state().stage.id_of(&widget).unwrap().0;
+    let placed = f.state().stage.position_of(&widget).unwrap();
 
-    // Precondition: manual moves decline the widget.
-    let widget_loc = f.state().stage.position_of(&widget).unwrap();
-    let center = Point::from((widget_loc.x as f64 + 100.0, widget_loc.y as f64 + 50.0));
+    // Manual moves decline the widget.
+    let size = widget.geometry().size;
+    let center = Point::from((
+        placed.x as f64 + size.w as f64 / 2.0,
+        placed.y as f64 + size.h as f64 / 2.0,
+    ));
     assert!(
         f.state().draggable_element_under(center).is_none(),
         "draggable_element_under declines widgets"
@@ -470,20 +485,40 @@ app_id = "normal"
         "gesture move declines widgets"
     );
 
-    // IPC move by ID repositions the widget to (500, -250).
+    // And so does every IPC arm: the rule's `position` and `size` are the only
+    // writers of a widget's geometry.
+    let moved = mv(
+        &mut f,
+        Some(WindowSelector::Id(widget_id)),
+        Some((500, -250)),
+    );
+    assert!(
+        moved.is_err(),
+        "an immovable widget refuses `msg move`: {moved:?}"
+    );
+    let resized = resize(
+        &mut f,
+        Some(WindowSelector::Id(widget_id)),
+        Some((400, 200)),
+    );
+    assert!(
+        resized.is_err(),
+        "an immovable widget refuses `msg resize`: {resized:?}"
+    );
     assert_eq!(
-        mv(
-            &mut f,
-            Some(WindowSelector::Id(widget_id)),
-            Some((500, -250))
-        ),
-        Ok(Response::Position { x: 500, y: -250 })
+        f.state().stage.position_of(&widget),
+        Some(placed),
+        "the refused writes left it where the rule put it"
     );
 
-    // Querying the position via IPC matches what was written.
-    assert_eq!(
-        mv(&mut f, Some(WindowSelector::Id(widget_id)), None),
-        Ok(Response::Position { x: 500, y: -250 })
+    // Reading is not a write, so both read arms still answer.
+    assert!(
+        mv(&mut f, Some(WindowSelector::Id(widget_id)), None).is_ok(),
+        "`msg move` still reads an immovable widget's position"
+    );
+    assert!(
+        resize(&mut f, Some(WindowSelector::Id(widget_id)), None).is_ok(),
+        "`msg resize` still reads its size"
     );
 
     // Widgets must remain below normal windows in stacking.
@@ -493,16 +528,9 @@ app_id = "normal"
         .entries()
         .map(|e| e.window.clone())
         .collect();
-    let widget_idx = entries
-        .iter()
-        .position(|w| w == &StageWindow::Client(widget.clone()))
-        .unwrap();
-    let normal_idx = entries
-        .iter()
-        .position(|w| w == &StageWindow::Client(normal.clone()))
-        .unwrap();
     assert!(
-        widget_idx < normal_idx,
+        entries.iter().position(|w| w == &widget_element).unwrap()
+            < entries.iter().position(|w| w == &normal_element).unwrap(),
         "widget must remain stacked below normal windows"
     );
 }
@@ -549,7 +577,7 @@ app_id = "normal"
         "a movable widget stays out of the focus chain"
     );
 
-    // `msg resize` refuses an immovable widget; a movable one has a canvas rect.
+    // Where the plain widget was refused both arms, it now answers both.
     assert_eq!(
         resize(
             &mut f,
@@ -562,9 +590,23 @@ app_id = "normal"
         }),
         "a movable widget has a canvas size to set"
     );
+    assert_eq!(
+        mv(
+            &mut f,
+            Some(WindowSelector::Id(widget_id)),
+            Some((500, -250))
+        ),
+        Ok(Response::Position { x: 500, y: -250 }),
+        "a movable widget has a canvas position to set"
+    );
+    assert_eq!(
+        mv(&mut f, Some(WindowSelector::Id(widget_id)), None),
+        Ok(Response::Position { x: 500, y: -250 }),
+        "and reads back the point it was given"
+    );
 
     // And so do the pickers the plain widget stopped. Grab the live rect: the
-    // resize above re-centered the window, and its client has not committed.
+    // resize and move above relocated it, and its client has not committed.
     let loc = f.state().stage.position_of(&widget_element).unwrap();
     let size = widget.geometry().size;
     let center = Point::from((
@@ -583,7 +625,7 @@ app_id = "normal"
     let serial = SERIAL_COUNTER.next_serial();
     pointer.unset_grab(f.state(), serial, 0);
 
-    // Stacking survived both the resize's raise and the move grab's.
+    // Stacking survived the resize's raise, the move's, and the move grab's.
     let entries: Vec<_> = f
         .state()
         .stage
@@ -597,5 +639,133 @@ app_id = "normal"
                 .position(|w| *w == StageWindow::Client(normal.clone()))
                 .unwrap(),
         "the widget stayed below the normal window"
+    );
+}
+
+/// Mid-height of a window's right-hand resize band: four pixels outside its
+/// content rect, so inside the eight-pixel margin the compositor drags by.
+fn right_band(f: &mut Fixture, w: &Window) -> Point<f64, Logical> {
+    let loc = f.state().stage.position_of(w).unwrap();
+    let size = w.geometry().size;
+    Point::from((
+        loc.x as f64 + size.w as f64 + 4.0,
+        loc.y as f64 + size.h as f64 / 2.0,
+    ))
+}
+
+/// A borderless widget is sized by hand through the compositor's resize margin,
+/// so that band is where `widget_movable` shows up for a CSD window: it answers
+/// for a movable widget and stays inert over an immovable one.
+#[test]
+fn a_movable_widget_answers_to_its_resize_margin() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "movable"
+widget = true
+widget_movable = true
+
+[[window_rules]]
+app_id = "nailed"
+widget = true
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    map_window(&mut f, id, "movable", (200, 100));
+    let movable = window_by_app_id(&mut f, "movable").unwrap();
+    map_window(&mut f, id, "nailed", (200, 100));
+    let nailed = window_by_app_id(&mut f, "nailed").unwrap();
+    f.state()
+        .map_window(StageWindow::Client(movable.clone()), (0, 0).into(), false);
+    f.state()
+        .map_window(StageWindow::Client(nailed.clone()), (1000, 0).into(), false);
+
+    let movable_band = right_band(&mut f, &movable);
+    let nailed_band = right_band(&mut f, &nailed);
+
+    assert!(
+        matches!(
+            f.state().decoration_under(movable_band),
+            Some((DecoTarget::Client(w), DecorationHit::ResizeBorder(_))) if w == movable
+        ),
+        "the band outside a movable widget is chrome the pointer can drag"
+    );
+    assert!(
+        !matches!(
+            f.state().decoration_under(nailed_band),
+            Some((DecoTarget::Client(w), DecorationHit::ResizeBorder(_))) if w == nailed
+        ),
+        "the same band outside an immovable widget stays inert"
+    );
+}
+
+/// A finger drags a title bar, a movable widget's included. An immovable
+/// widget's bar answers with focus instead, exactly as the pointer's does.
+#[test]
+fn a_finger_drags_a_movable_widgets_title_bar_and_not_an_immovable_ones() {
+    let mut f = Fixture::with_config(config(
+        r#"
+[[window_rules]]
+app_id = "movable"
+widget = true
+widget_movable = true
+decoration = "server"
+
+[[window_rules]]
+app_id = "nailed"
+widget = true
+decoration = "server"
+"#,
+    ));
+    f.add_output(1, (1920, 1080));
+    origin_view(&mut f);
+    let id = f.add_client();
+
+    map_window(&mut f, id, "movable", (200, 100));
+    let movable = window_by_app_id(&mut f, "movable").unwrap();
+    map_window(&mut f, id, "nailed", (200, 100));
+    let nailed = window_by_app_id(&mut f, "nailed").unwrap();
+    // Low enough that a title bar — 25px above the content — stays on the
+    // viewport a device could report.
+    let movable_at = Point::from((300, 400));
+    let nailed_at = Point::from((1200, 400));
+    f.state()
+        .map_window(StageWindow::Client(movable.clone()), movable_at, false);
+    f.state()
+        .map_window(StageWindow::Client(nailed.clone()), nailed_at, false);
+
+    let title_bar = |f: &mut Fixture, w: &Window| {
+        let loc = f.state().stage.position_of(w).unwrap();
+        Point::from((loc.x as f64 + 40.0, loc.y as f64 - 6.0))
+    };
+    let movable_bar = title_bar(&mut f, &movable);
+    let nailed_bar = title_bar(&mut f, &nailed);
+    assert!(
+        matches!(
+            f.state().decoration_under(movable_bar),
+            Some((DecoTarget::Client(w), DecorationHit::TitleBar)) if w == movable
+        ),
+        "setup: the probe sits on the widget's own title bar"
+    );
+
+    for start in [movable_bar, nailed_bar] {
+        touch_down(&mut f, start, 0);
+        touch_motion(&mut f, Point::from((start.x + 120.0, start.y + 60.0)), 0);
+        touch_up(&mut f, 0);
+        f.double_roundtrip(id);
+    }
+
+    assert_ne!(
+        f.state().stage.position_of(&movable),
+        Some(movable_at),
+        "a movable widget follows the finger"
+    );
+    assert_eq!(
+        f.state().stage.position_of(&nailed),
+        Some(nailed_at),
+        "an immovable widget stays where its rule put it"
     );
 }

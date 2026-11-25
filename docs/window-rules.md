@@ -309,18 +309,19 @@ widget     = true
 decoration = "none"
 ```
 
-A widget ignores drags, gestures and nudges, so `position` is where it stays —
-but `driftwm msg move <X> <Y> --id <ID>` still repositions one at runtime, which
-is how external desktop-icon clients scatter icons across the canvas. That move
-lasts only for the session. To keep one draggable by hand as well, add
-`widget_movable = true` ([Movable widget](#movable-widget-drag-it-around-the-canvas)).
+A widget ignores drags, gestures and nudges, and `driftwm msg move` /
+`msg resize` refuse to write its geometry either: the rule's `position` and
+`size` are the only words said about where it is and how big it is. A client that
+places widgets from outside — a desktop-icon layer scattering icons across the
+canvas — needs `widget_movable = true` before `msg move` will answer.
 
 ### Movable widget (drag it around the canvas)
 
-`widget_movable = true` lifts exactly that immunity: the widget takes its
-chrome drags, mouse bindings, gestures, keyboard nudges and `driftwm msg resize`
-back. Everything else about a widget is untouched — it still paints **below**
-normal windows, stays out of Alt-Tab and navigation, and never suspends.
+`widget_movable = true` lifts exactly that immunity: the widget takes its chrome
+drags, mouse bindings, gestures, keyboard nudges, `driftwm msg move` and
+`driftwm msg resize` back. Everything else about a widget is untouched — it still
+paints **below** normal windows, stays out of Alt-Tab and navigation, and never
+suspends.
 
 ```toml
 [[window_rules]]
@@ -332,7 +333,7 @@ decoration     = "minimal"     # no title bar: move it with alt+drag
 ```
 
 The two flags compose like every other boolean: `widget` decides *what* the
-window is, `widget_movable` decides whether hand drags may move it — so writing
+window is, `widget_movable` decides whether anything may move it — so writing
 `widget_movable = true` alone (no `widget` rule) changes nothing, and a later
 `widget = true` rule gives an ordinary window the widget treatment while a
 third rule can hand the drags back.
@@ -340,6 +341,12 @@ third rule can hand the drags back.
 A `decoration = "none"` widget has no title bar to grab, so move it with the
 `move-window` mouse binding (`alt+drag` by default) and resize it with the
 compositor-side resize margin (`[mouse] resize_on_border`, default on).
+
+Movable widgets snap the way windows do — to each other. A dragged widget docks to
+the widget beside it and pulls its adjacent widgets along as a cluster; it never
+magnetises to an application window, and a window never magnetises to a widget. An
+immovable widget is still a fine thing to snap *to* — aligning a panel to the bar
+it sits against is the point — it just never joins the cluster being dragged.
 
 Like any widget move, a drag lasts for the session: widgets never enter the
 session store, so the rule's `position` is where the window lands on the next

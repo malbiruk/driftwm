@@ -575,7 +575,9 @@ impl DriftWm {
         // windows render above canvas content and hit-test their SSD in screen
         // space — the canvas-space walk nested below can't see them.
         match self.pinned_decoration_under(screen_pos) {
-            PinnedChrome::Hit(window, DecorationHit::TitleBar) => {
+            // The pin's bar drags for the same price as the canvas one: a widget
+            // pays it only with `widget_movable`.
+            PinnedChrome::Hit(window, DecorationHit::TitleBar) if !window.widget_is_immovable() => {
                 self.start_touch_pinned_move(&window, slot, canvas_pos, serial);
                 return;
             }
@@ -596,7 +598,12 @@ impl DriftWm {
             // and fall to the canvas-gesture grab below.
             PinnedChrome::Hit(..) | PinnedChrome::Covered => {}
             PinnedChrome::Miss => match self.decoration_under(canvas_pos) {
-                Some((DecoTarget::Client(window), DecorationHit::TitleBar)) => {
+                // `widget_movable` is what makes a widget draggable, here as on
+                // the pointer: an immovable one falls past this arm to the focus
+                // below instead of moving.
+                Some((DecoTarget::Client(window), DecorationHit::TitleBar))
+                    if !window.widget_is_immovable() =>
+                {
                     self.start_touch_move(
                         &StageWindow::Client(window),
                         slot,

@@ -128,7 +128,7 @@ driftwm msg move [OPTIONS] [X] [Y]
 
 Get a window's position, or move it to `<x> <y>` (visible-frame center, Y-up).
 
-Pinned and fullscreen windows live in screen space, not on the canvas, so `move` refuses to reposition them. A widget has a canvas position and can be moved this way whether or not it takes hand drags (`widget_movable = true`) — but the new position lasts only until the compositor exits.
+Pinned and fullscreen windows live in screen space, not on the canvas, and an immovable widget is nailed to its rule position, so `move` repositions none of them — `widget_movable = true` hands a widget its geometry back. Reading a position always answers. A written one lasts only until the compositor exits.
 
 `--json` reply: `{"Ok":{"Position":{"x":100,"y":200}}}`.
 
